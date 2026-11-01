@@ -532,6 +532,11 @@ export function noteImageKeys(target, plan) {
 
 // ---- applying an approved result ---------------------------------------------
 
+const castFaceReferenceId = (c) => `${CAST_SETS_REF_PREFIX}face-${c.id}`.slice(0, 64);
+const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+const protagonistFaceReference = (p, images) => ({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — face sheet`, note: trimTo([p.face, p.hair].filter(Boolean).join('; '), 1000) });
+const castFaceReference = (c, images) => ({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) });
+
 /**
  * The visual-spec references the approved check-in contributes: the character
  * sheet (conditioning) first, then set plates by song coverage (conditioning
@@ -583,17 +588,25 @@ export function castAndSetsReferences(project, stage) {
   const props = direction.props || [];
   push({ id: CAST_SETS_PROPS_REF_ID, imageId: images.props?.imageId, role: 'prop', label: 'Props', note: trimTo(props.map((item) => `${item.name}: ${item.description}`).join(' | '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
-  push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — face sheet`, note: trimTo([p.face, p.hair].filter(Boolean).join('; '), 1000) }, false);
+  push(protagonistFaceReference(p, images), false);
   // Extra cast face sheets use the remaining slots without displacing existing reference types.
   for (const c of direction.cast || []) {
-    push({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) }, false);
+    push(castFaceReference(c, images), false);
   }
   return [...existing, ...out];
 }
 
 export const CAST_SETS_PROPS_REF_ID = `${CAST_SETS_REF_PREFIX}props`;
-const castFaceReferenceId = (c) => `${CAST_SETS_REF_PREFIX}face-${c.id}`.slice(0, 64);
-const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+
+/** Face sheets omitted only because the reference list was full at approval. */
+export function castAndSetsOverflowFaceReferences(stage, references) {
+  const images = stage?.images || {};
+  const direction = stage?.direction || {};
+  const published = new Set((references || []).map((ref) => ref.id));
+  return [protagonistFaceReference(direction.protagonist || {}, images), ...(direction.cast || []).map((c) => castFaceReference(c, images))]
+    .filter((ref) => ref.imageId && !published.has(ref.id))
+    .map((ref) => ({ ...ref, condition: false, use: 'reference' }));
+}
 
 /**
  * The catalog-linked supporting characters whose rendered cast sheet is not in

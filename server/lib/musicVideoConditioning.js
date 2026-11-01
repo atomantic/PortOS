@@ -1,5 +1,6 @@
 import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
+import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
 
@@ -60,8 +61,17 @@ function featuredAuthoredCharacters(references, scene) {
     && !isOutsideMusicVideoReference(ref) && namesIn(text, String(ref.label || '').split(/\s[—-]\s|[:(]/)[0]));
 }
 
+// Only sheets that did not fit at approval are virtual choices. A published
+// sheet removed later by the director must not silently reappear here.
+function overflowFaceReferences(project) {
+  const stage = project?.castAndSets;
+  if (stage?.status !== 'approved' || !musicVideoAllowsMedia(project, 'image') || !Array.isArray(stage.overflowFaceReferences)) return [];
+  const published = new Set((project?.visualSpec?.references || []).map((ref) => ref.id));
+  return stage.overflowFaceReferences.filter((ref) => ref?.id && ref.imageId && !published.has(ref.id));
+}
+
 /** The references a director can send with a shot's frames: every one with an image except outside inspiration. */
-export const musicVideoReferenceChoices = (project) => (project?.visualSpec?.references || [])
+export const musicVideoReferenceChoices = (project) => [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)]
   .filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref));
 
 /** The cast member and variant a scene asks its frames to show, or null when it names none. */
@@ -147,7 +157,7 @@ export function musicVideoPanelArtReferences(scene) {
 }
 
 function automaticConditioningReferences(project, scene) {
-  const references = project?.visualSpec?.references || [];
+  const references = [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)];
   const stage = project?.castAndSets;
   // Legacy projects and incomplete check-ins retain the authored reference set.
   const authored = references.filter((ref) => ref?.condition && ref.imageId && !isOutsideMusicVideoReference(ref));

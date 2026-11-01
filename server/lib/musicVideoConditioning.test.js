@@ -120,6 +120,17 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
   });
 
+  // Only sheets omitted at approval may be restored as virtual references.
+  it('honors removal of a published face sheet and hides overflow outside an approved stage', () => {
+    const face = { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' };
+    const shot = scene({ framePrompt: 'Close-up of Kevin' });
+    const approved = { ...checkedIn, castAndSets: { ...checkedIn.castAndSets, images: { 'face:kevin': { imageId: face.imageId } }, overflowFaceReferences: [] } };
+    expect(ids(musicVideoConditioningReferences(approved, shot))).not.toContain(face.imageId);
+    const overflow = { ...approved, castAndSets: { ...approved.castAndSets, overflowFaceReferences: [face] } };
+    expect(ids(musicVideoConditioningReferences(overflow, shot))).toContain(face.imageId);
+    expect(ids(musicVideoConditioningReferences({ ...overflow, castAndSets: { ...overflow.castAndSets, status: 'review' } }, shot))).not.toContain(face.imageId);
+  });
+
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
