@@ -179,6 +179,11 @@ reset_universal_venv() {
     *) base="$(command -v "$base" 2>/dev/null || true)" ;;
   esac
   [[ -n "$base" && -x "$base" ]] || return 0
+  # An activated venv is the first python on PATH. Deleting it would remove
+  # the interpreter the caller uses for `python -m venv`.
+  case "$base" in
+    "$1"/*) return 0 ;;
+  esac
   [[ -e "$py" && ! -d "$py" ]] || return 0
   arches="$(lipo -archs "$py" 2>/dev/null || true)"
   case " $arches " in
@@ -227,13 +232,23 @@ python_at_least_310() {
   [[ -n "${1:-}" ]] && "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null
 }
 
-# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. Empty when the
-# machine has none.
+# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. $1, when set,
+# is a venv to skip: its interpreter cannot recreate itself. Empty when the
+# machine has none outside that directory.
 newest_supported_python() {
-  local candidate
-  if python_at_least_310 "$PYTHON_BIN"; then command -v "$PYTHON_BIN"; return 0; fi
+  local candidate found exclude="${1:-}"
+  if python_at_least_310 "$PYTHON_BIN"; then
+    found="$(command -v "$PYTHON_BIN" 2>/dev/null || true)"
+    if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then found=""; fi
+    if [[ -n "$found" ]]; then printf '%s\n' "$found"; return 0; fi
+  fi
   for candidate in python3.14 python3.13 python3.12 python3.11 python3.10; do
-    if have "$candidate" && python_at_least_310 "$candidate"; then command -v "$candidate"; return 0; fi
+    if have "$candidate" && python_at_least_310 "$candidate"; then
+      found="$(command -v "$candidate")"
+      if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then continue; fi
+      printf '%s\n' "$found"
+      return 0
+    fi
   done
   return 1
 }
@@ -1238,7 +1253,11 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
   # this venv's interpreter when the active model has runner=='flux2'.
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  if ! FLUX2_BASE_PY="$(newest_supported_python)"; then
+  # Prefer a base outside the venv. An activated universal venv is the first
+  # python3 on PATH; deleting it and then calling that path fails the rebuild.
+  # reset also refuses when the only interpreter lives inside the venv.
+  if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
+      && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
     echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
     echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
     exit 1

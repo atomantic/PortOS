@@ -361,6 +361,52 @@ printf '%s\\n' '0'
     expect(runNamed('recreate', 'arm64')).toBe(false);
     expect(runNamed('recreate', 'x86_64')).toBe(true);
     expect(runNamed('missing-python', 'arm64')).toBe(true);
+    const inside = join(dir, 'venv');
+    rmSync(inside, { recursive: true, force: true });
+    mkdirSync(join(inside, 'bin'), { recursive: true });
+    const insidePy = join(inside, 'bin', 'python3');
+    writeFileSync(insidePy, '#!/bin/bash\nexit 0\n');
+    chmodSync(insidePy, 0o755);
+    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', inside, insidePy], {
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        ARCHES: 'x86_64 arm64',
+        RECREATE_ARCHES: 'arm64',
+        MACHINE: 'arm64',
+      },
+    });
+    expect(existsSync(inside)).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {
+    const newest = source.match(/^newest_supported_python\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const atLeast = source.match(/^python_at_least_310\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const have = source.match(/^have\(\) \{.*\}\n/m)?.[0];
+    expect(newest).toBeTruthy();
+    expect(atLeast).toBeTruthy();
+    expect(have).toBeTruthy();
+    const dir = mkdtempSync(join(tmpdir(), 'portos-newest-py-'));
+    tempVenvs.push(dir);
+    const venvBin = join(dir, 'venv', 'bin');
+    const outside = join(dir, 'outside');
+    mkdirSync(venvBin, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const script = '#!/bin/bash\nexit 0\n';
+    writeFileSync(join(venvBin, 'python3'), script);
+    writeFileSync(join(outside, 'python3.12'), script);
+    chmodSync(join(venvBin, 'python3'), 0o755);
+    chmodSync(join(outside, 'python3.12'), 0o755);
+    const run = (exclude) => execFileSync(
+      'bash',
+      ['-c', `${have}\n${atLeast}\n${newest}\nnewest_supported_python "$1"`, 'bash', exclude],
+      {
+        env: { ...process.env, PATH: `${venvBin}:${outside}:/bin:/usr/bin`, PYTHON_BIN: 'python3' },
+        encoding: 'utf8',
+      },
+    );
+    expect(run('').trim()).toBe(join(venvBin, 'python3'));
+    expect(run(join(dir, 'venv')).trim()).toBe(join(outside, 'python3.12'));
   });
 
   it.skipIf(process.platform === 'win32')('points a thinned framework interpreter at its original library', () => {

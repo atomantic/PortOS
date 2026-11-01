@@ -13,6 +13,10 @@ import { sliceWav, wavDurationSec } from './lyricAlignCore.js';
 
 const SCRIPT = fileURLToPath(new URL('../../../scripts/align_lyrics_ctc.py', import.meta.url));
 let provisioning = null;
+// Probe of a venv that already imported. The hardware pin is tried every
+// time; this remembers an Intel fallback so the next line does not rediscover
+// every interpreter. It is not success: the next call runs the probe again.
+let acceptedProbe = null;
 
 // Wheel arch follows the interpreter, not the Node process. Apple Silicon
 // (including Rosetta) uses current arm64 wheels. A real Intel Mac stays on
@@ -84,9 +88,18 @@ export async function resolveLyricAlignRuntime({
 async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
   const python = process.platform === 'win32' ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python');
   const quick = lyricAlignRuntimePlan();
-  // A venv that already matches the hardware pin is ready. Interpreter
-  // discovery (every candidate's version and arch) runs only when it is not.
-  if (existsSync(python) && (await run(python, ['-c', quick.probe], null, { timeoutMs: 120_000 })).success) return python;
+  // A venv that already matches the hardware pin is ready. A healthy Intel
+  // fallback does not match that pin; try its probe before discovery so a
+  // later line does not classify every interpreter again.
+  if (existsSync(python)) {
+    const probes = acceptedProbe && acceptedProbe !== quick.probe ? [acceptedProbe, quick.probe] : [quick.probe];
+    for (const probe of probes) {
+      if ((await run(python, ['-c', probe], null, { timeoutMs: 120_000 })).success) {
+        acceptedProbe = probe;
+        return python;
+      }
+    }
+  }
   if (!provisioning) {
     provisioning = (async () => {
       const selected = await resolveRuntime();
@@ -104,7 +117,10 @@ async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
       // No arm64 interpreter: keep an existing venv that already has the
       // Intel pin instead of rebuilding it for a wheel this Mac cannot install.
       if (exists && plan.probe !== quick.probe
-          && (await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) return;
+          && (await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) {
+        acceptedProbe = plan.probe;
+        return;
+      }
       if (!compatible) {
         compatible = exists && (await run(python, ['-c', plan.versionProbe], null, { timeoutMs: 120_000 })).success;
       }
@@ -121,6 +137,7 @@ async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
       if (!result.success || !(await run(python, ['-c', plan.probe], null, { timeoutMs: 120_000 })).success) {
         throw failure(`Could not install MMS_FA dependencies. Use ${plan.pythonRange} with compatible PyTorch wheels.`, 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
       }
+      acceptedProbe = plan.probe;
     })().finally(() => { provisioning = null; });
   }
   await provisioning;

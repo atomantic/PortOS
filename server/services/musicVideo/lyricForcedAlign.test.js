@@ -96,6 +96,30 @@ describe('MMS_FA process contract', () => {
     expect(h.run.mock.calls.find(([, args]) => args[1] === 'pip')[1]).toEqual(['-m', 'pip', 'install', ...hardware.packages]);
   });
 
+  it('reuses a healthy Intel-fallback venv without rediscovering interpreters', async () => {
+    const hardware = lyricAlignRuntimePlan();
+    const fallback = lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
+    if (hardware.probe === fallback.probe) return;
+    const h = await harness((words) => words, { ownInterpreter: false });
+    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+    h.resolveRuntime.mockResolvedValue({ plan: fallback, python: null });
+    const implementation = h.run.getMockImplementation();
+    h.run.mockImplementation(async (...args) => {
+      const probe = args[1][0] === '-c' ? args[1][1] : '';
+      if (probe === hardware.probe) return { success: false };
+      if (probe === fallback.probe) return { success: true };
+      if (probe) return { success: false };
+      return implementation(...args);
+    });
+    await h.align();
+    expect(h.resolveRuntime).toHaveBeenCalledTimes(1);
+    h.resolveRuntime.mockClear();
+    await h.align();
+    expect(h.resolveRuntime).not.toHaveBeenCalled();
+  });
+
   it('does not discover a base interpreter when the venv already matches the pin', async () => {
     const h = await harness((words) => words, { ownInterpreter: false });
     const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
