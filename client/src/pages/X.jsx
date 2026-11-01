@@ -45,7 +45,9 @@ export default function XPage() {
   const [drafts, setDrafts] = useState([]);
   const [resourcesAccountId, setResourcesAccountId] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [accountsReadFailed, setAccountsReadFailed] = useState(false);
+  const [accountsReadError, setAccountsReadError] = useState('');
+  const [postRead, setPostRead] = useState({ status: 'loading', error: '' });
+  const [draftRead, setDraftRead] = useState({ status: 'loading', error: '' });
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -54,7 +56,7 @@ export default function XPage() {
   const [accountFormError, setAccountFormError] = useState('');
   const [deleteAccountId, setDeleteAccountId] = useState(null);
   const [draftBody, setDraftBody] = useState('');
-  const selectedLoadRef = useRef(0);
+  const selectedLoadRef = useRef({ posts: 0, drafts: 0 });
   const currentAccountIdRef = useRef(accountId);
   const selectedAccountIdRef = useRef(null);
   const savedAccountRef = useRef(emptyAccount);
@@ -94,31 +96,46 @@ export default function XPage() {
   };
 
   const loadAccounts = useCallback(async () => {
-    const result = await api.getXAccounts({ silent: true }).catch((err) => ({ error: err.message, accounts: [] }));
-    if (result.error) setError(result.error);
-    setAccountsReadFailed(Boolean(result.error));
-    setAccounts(result.accounts || []);
-    setLoading(false);
+    setLoading(true);
+    setAccountsReadError('');
+    try {
+      const result = await api.getXAccounts({ silent: true });
+      setAccounts(result.accounts || []);
+    } catch (err) {
+      setAccountsReadError(err.message || 'Could not load X accounts.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const loadSelected = useCallback(async () => {
-    const requestId = ++selectedLoadRef.current;
+  const loadResource = useCallback(async (kind) => {
     const requestedAccountId = accountId;
-    setResourcesAccountId(null);
+    const requestId = ++selectedLoadRef.current[kind];
+    const setRead = kind === 'posts' ? setPostRead : setDraftRead;
+    const setItems = kind === 'posts' ? setPosts : setDrafts;
+    const read = kind === 'posts' ? api.getXPosts : api.getXDrafts;
+    setRead({ status: 'loading', error: '' });
+    if (!requestedAccountId) return;
+    try {
+      const result = await read(requestedAccountId, { silent: true });
+      if (selectedLoadRef.current[kind] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
+      setItems(result[kind] || []);
+      setRead({ status: 'ready', error: '' });
+    } catch (err) {
+      if (selectedLoadRef.current[kind] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
+      setRead({ status: 'error', error: err.message || `Could not load X ${kind}.` });
+    }
+  }, [accountId]);
+
+  const loadSelected = useCallback(() => {
+    setResourcesAccountId(accountId);
     setPosts([]);
     setDrafts([]);
-    if (!accountId) return;
-    const [postResult, draftResult] = await Promise.all([
-      api.getXPosts(accountId, { silent: true }).catch((err) => ({ error: err.message, posts: [] })),
-      api.getXDrafts(accountId, { silent: true }).catch((err) => ({ error: err.message, drafts: [] })),
-    ]);
-    if (selectedLoadRef.current !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
-    const failed = [postResult, draftResult].find((result) => result.error);
-    if (failed) setError(failed.error);
-    setPosts(postResult.posts || []);
-    setDrafts(draftResult.drafts || []);
-    setResourcesAccountId(requestedAccountId);
-  }, [accountId]);
+    loadResource('posts');
+    loadResource('drafts');
+  }, [accountId, loadResource]);
+
+  const resourceError = (message, retry, label) => <div role="alert" className="mt-3 rounded border border-port-error p-3 text-sm text-port-error">{message} <button type="button" className={secondaryButton} onClick={retry}>Retry {label}</button></div>;
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadSelected(); }, [loadSelected]);
@@ -188,6 +205,7 @@ export default function XPage() {
     setAccounts((previous) => previous.map((candidate) => candidate.id === result.account.id ? result.account : candidate));
     setPosts(result.posts || []);
     setResourcesAccountId(selected.id);
+    setPostRead({ status: 'ready', error: '' });
     setNotice(`Diagnostic complete: ${result.ingested} public post(s) captured.`);
   });
 
@@ -247,7 +265,7 @@ export default function XPage() {
         {!selected.profileSnapshot?.diagnostics && <div className="mt-4 rounded border border-port-warning/40 bg-port-warning/10 p-3 text-sm text-port-warning">No snapshot yet. Run a diagnostic to capture the evidence PortOS can verify.</div>}
         {unsavedAccountNotice}
         <div className="mt-4 grid gap-3 sm:grid-cols-4">
-          {[['Followers', profile.followers], ['Following', profile.following], ['Lifetime posts', profile.postCount], ['Captured posts', visiblePosts.length]].map(([label, value]) => <div key={label} className="rounded border border-port-border p-3"><div className="text-xs uppercase tracking-wide text-gray-500">{label}</div><div className="mt-1 text-2xl font-semibold text-white">{formatCount(value)}</div></div>)}
+          {[['Followers', profile.followers], ['Following', profile.following], ['Lifetime posts', profile.postCount], ['Captured posts', resourcesAccountId === accountId && postRead.status === 'ready' ? visiblePosts.length : undefined]].map(([label, value]) => <div key={label} className="rounded border border-port-border p-3"><div className="text-xs uppercase tracking-wide text-gray-500">{label}</div><div className="mt-1 text-2xl font-semibold text-white">{formatCount(value)}</div></div>)}
         </div>
         <div className="mt-4 grid gap-2 md:grid-cols-2">
           {checkRows.map((check) => <div key={check.label} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm text-gray-200">{check.label}</span><StatusBadge value={check.value}>{check.value === true ? 'Observed' : check.value === false ? 'Not observed' : 'Unknown'}</StatusBadge></div><p className="mt-2 text-xs text-gray-500">{check.detail}</p></div>)}
@@ -258,15 +276,15 @@ export default function XPage() {
     </div>;
   };
 
-  const renderPosts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">Captured post reach</h2><p className="mt-1 text-sm text-gray-400">Public metrics from the last browser diagnostic; counts are impressions, not unique people.</p></div><button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={sync}><RefreshCw size={15} className="mr-1 inline" />Refresh</button></div>{resourcesAccountId !== selected?.id ? <div className="mt-4 text-sm text-gray-400"><BrailleSpinner text="Loading posts…" /></div> : !visiblePosts.length ? <p className="mt-4 text-sm text-gray-500">No captured posts yet. Run a diagnostic from Reach &amp; health.</p> : <div className="mt-4 space-y-2">{visiblePosts.map((post) => <article key={post.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500"><span>{post.kind === 'reply' ? 'Reply' : 'Post'} · {formatDate(post.remoteCreatedAt)}</span><span>{post.sourceUrl ? <a className="text-port-accent hover:underline" href={post.sourceUrl} target="_blank" rel="noreferrer">Open on X</a> : null}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-gray-200">{post.body || '(no text captured)'}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-400"><span><strong className="text-white">{formatCount(post.impressions)}</strong> impressions</span><span><strong className="text-white">{formatCount(post.engagements)}</strong> engagements</span><span>{formatCount(post.likes)} likes</span><span>{formatCount(post.reposts)} reposts</span><span>{formatCount(post.replies)} replies</span></div></article>)}</div>}</section>;
+  const renderPosts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">Captured post reach</h2><p className="mt-1 text-sm text-gray-400">Public metrics from the last browser diagnostic; counts are impressions, not unique people.</p></div><button type="button" className={secondaryButton} disabled={accountActionsDisabled} onClick={sync}><RefreshCw size={15} className="mr-1 inline" />Refresh</button></div>{resourcesAccountId === selected?.id && postRead.status === 'error' ? resourceError(postRead.error, () => loadResource('posts'), 'posts') : resourcesAccountId !== selected?.id || postRead.status === 'loading' ? <div className="mt-4 text-sm text-gray-400"><BrailleSpinner text="Loading posts…" /></div> : !visiblePosts.length ? <p className="mt-4 text-sm text-gray-500">No captured posts yet. Run a diagnostic from Reach &amp; health.</p> : <div className="mt-4 space-y-2">{visiblePosts.map((post) => <article key={post.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500"><span>{post.kind === 'reply' ? 'Reply' : 'Post'} · {formatDate(post.remoteCreatedAt)}</span><span>{post.sourceUrl ? <a className="text-port-accent hover:underline" href={post.sourceUrl} target="_blank" rel="noreferrer">Open on X</a> : null}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-gray-200">{post.body || '(no text captured)'}</p><div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-400"><span><strong className="text-white">{formatCount(post.impressions)}</strong> impressions</span><span><strong className="text-white">{formatCount(post.engagements)}</strong> engagements</span><span>{formatCount(post.likes)} likes</span><span>{formatCount(post.reposts)} reposts</span><span>{formatCount(post.replies)} replies</span></div></article>)}</div>}</section>;
 
-  const renderDrafts = () => <div className="space-y-4"><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft a post for review</h2><p className="mt-1 text-sm text-gray-400">Drafts stay local until you submit them to Review Hub. PortOS will never publish automatically.</p><form className="mt-3 space-y-3" onSubmit={createDraft}><label htmlFor="x-draft-body" className="sr-only">X draft text</label><textarea id="x-draft-body" className={fieldClass} rows="5" maxLength="4000" placeholder="Write something you actually want to say…" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} /><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-gray-500">{draftBody.length}/4000</span><button className={buttonClass} disabled={!draftBody.trim() || Boolean(busy)}>Save draft</button></div></form></section><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft queue</h2>{resourcesAccountId !== selected?.id ? <div className="mt-3 text-sm text-gray-400"><BrailleSpinner text="Loading drafts…" /></div> : !visibleDrafts.length ? <p className="mt-3 text-sm text-gray-500">No drafts for @{selected.username}.</p> : <div className="mt-3 space-y-2">{visibleDrafts.map((draft) => <article key={draft.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge value={draft.state === 'approved' || draft.state === 'opened'}>{stateLabel(draft.state)}</StatusBadge><span className="text-xs text-gray-500">{formatDate(draft.updatedAt)}</span></div><p className="mt-3 whitespace-pre-wrap text-sm text-gray-200">{draft.body}</p><div className="mt-3 flex flex-wrap gap-2">{draft.state === 'draft' && <button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Submit for review</button>}{draft.state === 'pending_review' && <><button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'approved')}>Approve</button><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'rejected')}>Reject</button></>}{draft.state === 'approved' && <button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => openDraft(draft)}><ExternalLink size={15} className="mr-1 inline" />Open compose in X</button>}{draft.reviewNote && <span className="self-center text-xs text-gray-500">{draft.reviewNote}</span>}</div></article>)}</div>}</section></div>;
+  const renderDrafts = () => <div className="space-y-4"><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft a post for review</h2><p className="mt-1 text-sm text-gray-400">Drafts stay local until you submit them to Review Hub. PortOS will never publish automatically.</p><form className="mt-3 space-y-3" onSubmit={createDraft}><label htmlFor="x-draft-body" className="sr-only">X draft text</label><textarea id="x-draft-body" className={fieldClass} rows="5" maxLength="4000" placeholder="Write something you actually want to say…" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} /><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-gray-500">{draftBody.length}/4000</span><button className={buttonClass} disabled={!draftBody.trim() || Boolean(busy)}>Save draft</button></div></form></section><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft queue</h2>{resourcesAccountId === selected?.id && draftRead.status === 'error' ? resourceError(draftRead.error, () => loadResource('drafts'), 'drafts') : resourcesAccountId !== selected?.id || draftRead.status === 'loading' ? <div className="mt-3 text-sm text-gray-400"><BrailleSpinner text="Loading drafts…" /></div> : !visibleDrafts.length ? <p className="mt-3 text-sm text-gray-500">No drafts for @{selected.username}.</p> : <div className="mt-3 space-y-2">{visibleDrafts.map((draft) => <article key={draft.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge value={draft.state === 'approved' || draft.state === 'opened'}>{stateLabel(draft.state)}</StatusBadge><span className="text-xs text-gray-500">{formatDate(draft.updatedAt)}</span></div><p className="mt-3 whitespace-pre-wrap text-sm text-gray-200">{draft.body}</p><div className="mt-3 flex flex-wrap gap-2">{draft.state === 'draft' && <button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Submit for review</button>}{draft.state === 'pending_review' && <><button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'approved')}>Approve</button><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'rejected')}>Reject</button></>}{draft.state === 'approved' && <button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => openDraft(draft)}><ExternalLink size={15} className="mr-1 inline" />Open compose in X</button>}{draft.reviewNote && <span className="self-center text-xs text-gray-500">{draft.reviewNote}</span>}</div></article>)}</div>}</section></div>;
 
-  const renderAccounts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">X accounts</h2><p className="mt-1 text-sm text-gray-400">Browser-only diagnostics and review-gated compose handoffs. No X credentials are stored.</p></div><button type="button" className={buttonClass} onClick={() => { setAccountForm(emptyAccount); openAccountForm('new'); }}><Plus size={15} className="mr-1 inline" />Add account</button></div>{!accounts.length ? <div className="mt-4 rounded border border-port-border p-4 text-sm text-gray-400">Add an X account to begin. Sync is manual, so nothing contacts X at boot.</div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{accounts.map((account) => <article key={account.id} className="rounded border border-port-border p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{account.label}</h3><p className="text-sm text-gray-400">@{account.username}</p></div><StatusBadge value={account.enabled}>{account.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="mt-3 text-xs text-gray-500">{account.lastSyncAt ? `Last diagnostic ${formatDate(account.lastSyncAt)}` : 'No diagnostic yet'}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryButton} onClick={() => openEditAccount(account)}>Edit</button><button type="button" className={secondaryButton} onClick={() => navigate(accountPath(account.id, 'health'))}>Open</button>{deleteAccountId === account.id ? <><button type="button" className="rounded border border-port-error px-3 py-2 text-sm text-port-error disabled:opacity-50" disabled={Boolean(busy)} onClick={() => removeAccount(account.id)}>Delete</button><button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(null)}>Cancel</button></> : <button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(account.id)}>Remove</button>}</div></article>)}</div>}</section>;
+  const renderAccounts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">X accounts</h2><p className="mt-1 text-sm text-gray-400">Browser-only diagnostics and review-gated compose handoffs. No X credentials are stored.</p></div><button type="button" className={buttonClass} onClick={() => { setAccountForm(emptyAccount); openAccountForm('new'); }}><Plus size={15} className="mr-1 inline" />Add account</button></div>{accountsReadError ? resourceError(accountsReadError, loadAccounts, 'accounts') : !accounts.length ? <div className="mt-4 rounded border border-port-border p-4 text-sm text-gray-400">Add an X account to begin. Sync is manual, so nothing contacts X at boot.</div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{accounts.map((account) => <article key={account.id} className="rounded border border-port-border p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{account.label}</h3><p className="text-sm text-gray-400">@{account.username}</p></div><StatusBadge value={account.enabled}>{account.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="mt-3 text-xs text-gray-500">{account.lastSyncAt ? `Last diagnostic ${formatDate(account.lastSyncAt)}` : 'No diagnostic yet'}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryButton} onClick={() => openEditAccount(account)}>Edit</button><button type="button" className={secondaryButton} onClick={() => navigate(accountPath(account.id, 'health'))}>Open</button>{deleteAccountId === account.id ? <><button type="button" className="rounded border border-port-error px-3 py-2 text-sm text-port-error disabled:opacity-50" disabled={Boolean(busy)} onClick={() => removeAccount(account.id)}>Delete</button><button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(null)}>Cancel</button></> : <button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(account.id)}>Remove</button>}</div></article>)}</div>}</section>;
 
   const accountDrawer = <Drawer open={accountDrawerOpen} onClose={closeAccountForm} title={accountFormMode === 'edit' ? 'Edit X account' : 'Add X account'} subtitle="Read-only diagnostics with human-reviewed drafts" size="md"><form className="space-y-4" onSubmit={saveAccount}><label className="block text-sm text-gray-300" htmlFor="x-account-label">Local label<input id="x-account-label" className={`${fieldClass} mt-1`} required value={accountForm.label} onChange={(event) => updateAccountForm('label', event.target.value)} /></label><label className="block text-sm text-gray-300" htmlFor="x-account-username">X username<input id="x-account-username" className={`${fieldClass} mt-1`} required placeholder="example_user" value={accountForm.username} onChange={(event) => updateAccountForm('username', event.target.value)} /><span className="mt-1 block text-xs text-gray-500">Enter the handle without or with @. PortOS normalizes it.</span></label><label className="block text-sm text-gray-300" htmlFor="x-account-notes">Notes<textarea id="x-account-notes" className={`${fieldClass} mt-1`} rows="4" value={accountForm.notes} onChange={(event) => updateAccountForm('notes', event.target.value)} /></label><label className="flex items-center gap-2 text-sm text-gray-300" htmlFor="x-account-enabled"><input id="x-account-enabled" type="checkbox" checked={accountForm.enabled} onChange={(event) => updateAccountForm('enabled', event.target.checked)} /> Allow diagnostics and compose handoffs</label><div className="rounded border border-port-border bg-port-bg p-3 text-xs text-gray-400">The managed browser reads public X pages. PortOS does not store your X password or API token, does not run background posting, and only opens an approved draft for final manual submission.</div>{accountFormError && <p role="alert" className="text-sm text-port-error">{accountFormError}</p>}<div className="flex justify-end gap-2"><button type="button" className={secondaryButton} onClick={closeAccountForm}>Cancel</button><button className={buttonClass} disabled={Boolean(busy) || !accountForm.label.trim() || !accountForm.username.trim()}>{accountFormMode === 'edit' ? 'Save account' : 'Add account'}</button></div></form></Drawer>;
 
-  const notFound = Boolean(accountId && !selected);
+  const notFound = Boolean(accountId && !selected && !accountsReadError);
   if (loading) return <PageSkeleton header="bar" label="Loading X" tabs={TABS.length} cards={3} />;
-  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={AtSign} title="X" subtitle="Account health, reach diagnostics, and review-gated drafts" actions={accounts.length === 0 && !accountsReadFailed ? null : accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/x')} ariaLabel="X sections" /><section className="flex-1 overflow-auto p-4">{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This X account was not found. <button type="button" className="underline" onClick={() => navigate('/x')}>Return to accounts.</button></div>}{activeTab === 'health' && selected && renderHealth()}{activeTab === 'posts' && selected && renderPosts()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'accounts' && renderAccounts()}{accountDrawer}</section></div>;
+  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={AtSign} title="X" subtitle="Account health, reach diagnostics, and review-gated drafts" actions={accounts.length === 0 && !accountsReadError ? null : accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/x')} ariaLabel="X sections" /><section className="flex-1 overflow-auto p-4">{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This X account was not found. <button type="button" className="underline" onClick={() => navigate('/x')}>Return to accounts.</button></div>}{activeTab === 'health' && selected && renderHealth()}{activeTab === 'posts' && selected && renderPosts()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'accounts' && renderAccounts()}{accountDrawer}</section></div>;
 }
