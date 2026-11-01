@@ -9,7 +9,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import IngredientPicker from '../IngredientPicker';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import { listCatalogIngredientsByIds } from '../../services/api';
+import { listCatalogIngredientMedia, listCatalogIngredientsByIds } from '../../services/api';
 import { STORYBOARD_LIMITS } from '../../../../server/lib/storyboardVocabulary.js';
 import {
   SHOT_ANGLES, SHOT_ANGLE_HINTS, SHOT_ANGLE_LABELS, SHOT_COMPOSITIONS, SHOT_COMPOSITION_HINTS, SHOT_COMPOSITION_LABELS,
@@ -274,6 +274,115 @@ function ShotTab({ board, found, panelNumber, sketchNonce, busy, handlers, timin
   );
 }
 
+const LINKED_IMAGE = /\.(png|jpe?g|webp)$/i;
+
+function linkedImageRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    if (!row || (row.kind !== 'portrait' && row.kind !== 'reference') || !LINKED_IMAGE.test(row.mediaKey || '')) continue;
+    if (seen.has(row.mediaKey)) continue;
+    seen.add(row.mediaKey);
+    out.push(row);
+  }
+  return out;
+}
+
+function imageChoiceLabel(row) {
+  const variantLabel = row.library?.variant?.label;
+  const name = (typeof variantLabel === 'string' && variantLabel.trim())
+    || (typeof row.caption === 'string' && row.caption.trim())
+    || (row.kind === 'portrait' ? 'Portrait' : 'Reference');
+  const status = row.library?.review?.status;
+  return status === 'bad' || status === 'rejected' ? `${name} (bad)` : name;
+}
+
+function choiceLabels(rows) {
+  const base = rows.map(imageChoiceLabel);
+  const counts = new Map();
+  for (const label of base) counts.set(label, (counts.get(label) || 0) + 1);
+  return rows.map((row, index) => (counts.get(base[index]) > 1 ? `${base[index]} (${row.kind})` : base[index]));
+}
+
+/** Which image of each linked record Make sends. No choice keeps the newest portrait. */
+function LinkedImagePicker({ panel, names, onPatch }) {
+  const ids = useMemo(() => {
+    const all = [...panel.environmentIds, ...panel.objectIds, ...panel.castIds];
+    return all.filter((id, index) => all.indexOf(id) === index);
+  }, [panel.environmentIds, panel.objectIds, panel.castIds]);
+  const [media, setMedia] = useState({});
+
+  useEffect(() => {
+    const missing = ids.filter((id) => !(id in media));
+    if (!missing.length) return undefined;
+    let active = true;
+    Promise.all(missing.map((id) => listCatalogIngredientMedia(id, { silent: true })
+      .then((rows) => [id, Array.isArray(rows) ? rows : null])
+      .catch(() => [id, null])))
+      .then((entries) => {
+        if (!active) return;
+        setMedia((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+      });
+    return () => { active = false; };
+  }, [ids, media]);
+
+  if (!ids.length) return null;
+  const picks = panel.linkMedia || {};
+  const choose = (id, mediaKey) => {
+    const next = { ...picks };
+    if (mediaKey) next[id] = mediaKey;
+    else delete next[id];
+    onPatch({ linkMedia: Object.keys(next).length ? next : null });
+  };
+
+  return (
+    <section aria-label="Images sent" className="space-y-3">
+      <h3 className="text-xs font-medium text-gray-300">Images sent</h3>
+      <p className="text-xs text-gray-500">Make sends the image you choose. With none chosen, it sends the newest portrait.</p>
+      {ids.map((id) => {
+        const name = names[id] || (id in names ? 'Missing record' : '…');
+        const selectId = `link-image-${panel.id}-${id}`;
+        const loaded = id in media;
+        const failed = media[id] === null;
+        const choices = linkedImageRows(media[id]);
+        const labels = choiceLabels(choices);
+        const picked = typeof picks[id] === 'string' ? picks[id] : '';
+        const known = choices.some((row) => row.mediaKey === picked);
+        const shown = choices.find((row) => row.mediaKey === picked) || choices[0];
+        const automatic = !choices.length
+          ? 'Newest portrait'
+          : choices[0].kind === 'portrait'
+            ? `Newest portrait (${labels[0]})`
+            : `Newest reference (${labels[0]})`;
+        return (
+          <div key={id} className="flex items-center gap-2">
+            {shown ? (
+              <img src={`/data/images/${encodeURIComponent(shown.mediaKey)}`} alt="" className="h-11 w-11 shrink-0 rounded object-cover bg-port-bg" />
+            ) : (
+              <span className="h-11 w-11 shrink-0 rounded bg-port-bg" aria-hidden="true" />
+            )}
+            <div className="min-w-0 flex-1">
+              <label htmlFor={selectId} className="mb-1 block truncate text-xs font-medium text-gray-300">Image for {name}</label>
+              <select
+                id={selectId}
+                value={picked || ''}
+                disabled={!loaded}
+                onChange={(e) => choose(id, e.target.value)}
+                className="w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-2 text-sm text-gray-200"
+              >
+                <option value="">{loaded ? automatic : 'Loading images…'}</option>
+                {picked && !known && <option value={picked}>{loaded && !failed ? 'Saved image missing' : 'Saved image'}</option>}
+                {choices.map((row, index) => <option key={row.mediaKey} value={row.mediaKey}>{labels[index]}</option>)}
+              </select>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 /** Which saved camera of a linked place the panel is seen from; its shot sends that camera's photo of the set. */
 function SetCameraPicker({ panel, names, cameras, onPatch }) {
   const places = panel.environmentIds.filter((id) => cameras[id]?.length);
@@ -366,6 +475,7 @@ function CastTab({ panel, onPatch }) {
           )}
         </section>
       ))}
+      <LinkedImagePicker panel={panel} names={names} onPatch={onPatch} />
       <SetCameraPicker panel={panel} names={names} cameras={cameras} onPatch={onPatch} />
       <IngredientPicker
         open={!!group}
