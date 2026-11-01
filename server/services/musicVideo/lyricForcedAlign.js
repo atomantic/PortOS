@@ -22,7 +22,8 @@ let acceptedProbe = null;
 // (including Rosetta) uses current arm64 wheels. A real Intel Mac stays on
 // torch 2.2.2 — the last release with official Intel Mac wheels. forced_align
 // was removed in torchaudio 2.9, so both pins stay below that.
-export function lyricAlignRuntimePlan({ platform = process.platform, appleSilicon } = {}) {
+// Leading underscore: the wheel-pin contract test is the only out-of-file caller.
+export function _lyricAlignRuntimePlan({ platform = process.platform, appleSilicon } = {}) {
   const silicon = appleSilicon ?? (platform === 'darwin' && isAppleSilicon({ platform }));
   const intelWheels = platform === 'darwin' && !silicon;
   const torch = intelWheels ? '2.2.2' : '2.8.0';
@@ -70,24 +71,25 @@ async function defaultFindPython(plan, { arch } = {}) {
 // On Apple Silicon, torch 2.8 has no x86_64 macOS wheel. Prefer an arm64
 // interpreter; if the only interpreter is x86_64, keep the Intel pins so pip
 // can finish instead of failing closed on a missing wheel.
-export async function resolveLyricAlignRuntime({
+// Leading underscore: the interpreter-selection test is the only out-of-file caller.
+export async function _resolveLyricAlignRuntime({
   platform = process.platform, appleSilicon, findPython = defaultFindPython,
 } = {}) {
   const silicon = appleSilicon ?? (platform === 'darwin' && isAppleSilicon({ platform }));
   if (!silicon) {
-    const plan = lyricAlignRuntimePlan({ platform, appleSilicon: false });
+    const plan = _lyricAlignRuntimePlan({ platform, appleSilicon: false });
     return { plan, python: await findPython(plan) };
   }
-  const modern = lyricAlignRuntimePlan({ platform, appleSilicon: true });
+  const modern = _lyricAlignRuntimePlan({ platform, appleSilicon: true });
   const arm = await findPython(modern, { arch: 'arm64' });
   if (arm) return { plan: modern, python: arm };
-  const legacy = lyricAlignRuntimePlan({ platform, appleSilicon: false });
+  const legacy = _lyricAlignRuntimePlan({ platform, appleSilicon: false });
   return { plan: legacy, python: await findPython(legacy) };
 }
 
 async function ensureRuntime({ run, onProgress, dir, resolveRuntime }) {
   const python = process.platform === 'win32' ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python');
-  const quick = lyricAlignRuntimePlan();
+  const quick = _lyricAlignRuntimePlan();
   // A venv that already matches the hardware pin is ready. A healthy Intel
   // fallback does not match that pin; try its probe before discovery so a
   // later line does not classify every interpreter again.
@@ -164,10 +166,10 @@ export async function forceAlignLyrics(wav, cues, {
     run, onProgress, dir,
     resolveRuntime: resolveBasePython
       ? async () => {
-          const plan = lyricAlignRuntimePlan();
+          const plan = _lyricAlignRuntimePlan();
           return { plan, python: await resolveBasePython(plan) };
         }
-      : (resolveRuntime ?? resolveLyricAlignRuntime),
+      : (resolveRuntime ?? _resolveLyricAlignRuntime),
   });
   checkCancel();
   const scratch = await mkdtemp(join(tmpdir(), 'portos-ctc-align-'));

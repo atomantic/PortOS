@@ -9,7 +9,8 @@ import { MOSS_MANIFEST, mossRuntimeRoot, mossRuntimeDirectory, mossHostProblem, 
 
 // Rosetta makes `swift build` target x86_64. MLX needs the arm64 slice of the
 // same toolchain; the image/video shell re-exec does not cover this installer.
-export function mossSwiftCommand(args, {
+// Leading underscore: the arch contract test is the only out-of-file caller.
+export function _mossSwiftCommand(args, {
   platform = process.platform,
   arch = process.arch,
   appleSilicon = isAppleSilicon({ platform, arch }),
@@ -65,10 +66,10 @@ export function installMossRuntime(emit) {
       await copyFile(join(PATHS.root, 'scripts', 'moss_image.swift'), join(source, 'Sources', 'MossImageGate', 'main.swift'));
       emit({ type: 'stage', stage: 'build', message: 'Building pinned dependencies and the PortOS adapter. Weights download separately.' });
       const buildArgs = ['build', '-c', 'release', '--product', 'MossImageGate', '--jobs', '4', '--force-resolved-versions'];
-      const [buildBin, buildCmd] = mossSwiftCommand(buildArgs);
+      const [buildBin, buildCmd] = _mossSwiftCommand(buildArgs);
       await command(buildBin, buildCmd, source);
       if (await readFile(lock, 'utf8') !== await readFile(join(source, 'Package.resolved'), 'utf8')) throw new Error('Swift changed the reviewed dependency lock.');
-      const [pathBin, pathCmd] = mossSwiftCommand([...buildArgs, '--show-bin-path']);
+      const [pathBin, pathCmd] = _mossSwiftCommand([...buildArgs, '--show-bin-path']);
       const binaryDir = (await command(pathBin, pathCmd, source, true)).trim();
       const output = join(staging, 'installed');
       await ensureDir(output);

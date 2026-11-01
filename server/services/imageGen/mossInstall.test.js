@@ -16,7 +16,7 @@ vi.mock('../../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn() }))
 vi.mock('./mossRuntime.js', async original => ({ ...await original(), mossHostProblem: () => null, probeMossBinary: vi.fn() }));
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { MOSS_MANIFEST, mossRuntimeDirectory, probeMossBinary } from './mossRuntime.js';
-import { installMossRuntime, mossSwiftCommand } from './mossInstall.js';
+import { installMossRuntime, _mossSwiftCommand } from './mossInstall.js';
 
 beforeEach(async () => {
   fixture.data = await mkdtemp(join(tmpdir(), 'portos-moss-install-'));
@@ -63,14 +63,14 @@ afterEach(async () => { await rm(fixture.data, { recursive: true, force: true })
 
 describe('MOSS Swift target', () => {
   it('builds arm64 when Node is translated on Apple Silicon', () => {
-    expect(mossSwiftCommand(['build', '--show-bin-path'], { platform: 'darwin', arch: 'x64', appleSilicon: true }))
+    expect(_mossSwiftCommand(['build', '--show-bin-path'], { platform: 'darwin', arch: 'x64', appleSilicon: true }))
       .toEqual(['/usr/bin/arch', ['-arm64', 'swift', 'build', '--show-bin-path']]);
   });
 
   it('keeps the swift binary on native arm64 and on Intel', () => {
-    expect(mossSwiftCommand(['build'], { platform: 'darwin', arch: 'arm64', appleSilicon: true })).toEqual(['swift', ['build']]);
-    expect(mossSwiftCommand(['build'], { platform: 'darwin', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
-    expect(mossSwiftCommand(['build'], { platform: 'linux', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
+    expect(_mossSwiftCommand(['build'], { platform: 'darwin', arch: 'arm64', appleSilicon: true })).toEqual(['swift', ['build']]);
+    expect(_mossSwiftCommand(['build'], { platform: 'darwin', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
+    expect(_mossSwiftCommand(['build'], { platform: 'linux', arch: 'x64', appleSilicon: false })).toEqual(['swift', ['build']]);
   });
 });
 
@@ -83,9 +83,9 @@ describe('MOSS runtime installation publication', () => {
     expect(await readFile(join(directory, 'licenses', 'dependency', 'LICENSE'), 'utf8')).toBe('fixture-dependency-license');
     expect(runStreamingCommand).toHaveBeenCalledWith('git', expect.arrayContaining(['fetch', MOSS_MANIFEST.sourceUrl, MOSS_MANIFEST.sourceRevision]), expect.any(Function), expect.any(Object));
     const buildArgs = ['build', '-c', 'release', '--product', 'MossImageGate', '--jobs', '4', '--force-resolved-versions'];
-    const [swiftBin, swiftArgs] = mossSwiftCommand(buildArgs);
+    const [swiftBin, swiftArgs] = _mossSwiftCommand(buildArgs);
     expect(runStreamingCommand).toHaveBeenCalledWith(swiftBin, swiftArgs, expect.any(Function), expect.any(Object));
-    const [pathBin, pathArgs] = mossSwiftCommand([...buildArgs, '--show-bin-path']);
+    const [pathBin, pathArgs] = _mossSwiftCommand([...buildArgs, '--show-bin-path']);
     expect(runStreamingCommand).toHaveBeenCalledWith(pathBin, pathArgs, expect.any(Function), expect.any(Object));
     expect(await readFile(join(directory, 'licenses', 'mlx-swift', 'Source', 'Cmlx', 'json', 'LICENSE.MIT'), 'utf8')).toBe('fixture-vendored-license');
     expect(probeMossBinary).toHaveBeenCalledTimes(1);

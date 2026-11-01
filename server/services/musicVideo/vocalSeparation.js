@@ -45,8 +45,9 @@ const DEMUCS_PASSES = 4;
 export const demucsVenvDir = () => process.env.PORTOS_DEMUCS_VENV_DIR || join(homedir(), '.portos', 'venvs', 'demucs');
 export const venvPython = (dir) => (IS_WIN ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python'));
 
-/** Best demucs device for this host. MPS is Apple Silicon hardware, including Rosetta. */
-export function pickDemucsDevice({
+/** Best demucs device for this host. MPS is Apple Silicon hardware, including Rosetta.
+ * Leading underscore: the device-selection test is the only out-of-file caller. */
+export function _pickDemucsDevice({
   platform = process.platform, arch = process.arch, cudaAvailable = false, appleSilicon,
 } = {}) {
   const silicon = appleSilicon ?? isAppleSilicon({ platform, arch });
@@ -227,7 +228,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
           isCancelled: () => job.cancelRequested || isCancelled(),
         });
       };
-      const device = pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
+      const device = _pickDemucsDevice({ cudaAvailable: await d.cudaAvailable() });
       let result = await separate(device);
       checkCancel();
       if (!result.success && device !== 'cpu') {
