@@ -258,7 +258,8 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
   const ids = musicVideoLimitReferenceFiles(ordered.map((ref) => ref.imageId), limit, {
     panelImageId: panel?.imageId, protectedCount: greybox?.reference ? 1 : 0,
   });
-  return ids.map((id) => ordered.find((ref) => ref.imageId === id));
+  const remaining = [...ordered];
+  return ids.map((id) => remaining.splice(remaining.findIndex((ref) => ref.imageId === id), 1)[0]);
 }
 
 /** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */

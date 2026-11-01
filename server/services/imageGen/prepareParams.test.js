@@ -324,6 +324,17 @@ it('retains automatic panel art within the renderer cap and records only the sen
   expect(data.musicVideo.castInputs.sheets).toEqual(sheets.slice(0, 3));
 });
 
+it('keeps separate strengths for repeated named references', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'same.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'a lighthouse', referenceImageFiles: ['same.png', 'same.png'], referenceStrengths: [0.3, 0.9],
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.referenceImageStrengths).toEqual([0.3, 0.9]);
+});
+
 it('names a retained overflow face sheet in the composed board prompt', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });

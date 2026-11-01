@@ -86,6 +86,12 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     expect(ids(musicVideoConditioningReferences(project(references), { ...scene, frameReferenceIds: ['r0', 'r1', 'r2', 'mvr-panel-art'] }, null, null, { limit: 3 }))).toEqual(['0.png', '1.png', '2.png']);
     expect(musicVideoConditioningReferences(project(references), scene, null, null, { limit: 0 })).toEqual([]);
   });
+
+  it('keeps distinct explicit choices that use the same image', () => {
+    const references = [{ id: 'first', imageId: 'same.png' }, { id: 'second', imageId: 'same.png' }];
+    expect(musicVideoConditioningReferences(project(references), { frameReferenceIds: ['first', 'second'] }).map((ref) => ref.id))
+      .toEqual(['first', 'second']);
+  });
 });
 
 describe('musicVideoConditioningReferences with an approved Cast & Sets check-in', () => {

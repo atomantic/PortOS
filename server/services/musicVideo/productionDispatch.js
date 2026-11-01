@@ -94,7 +94,8 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     panelImageId: !Array.isArray(scene.frameReferenceIds) ? scene.panelArt : null,
     protectedCount: available[0]?.ref.greybox ? 1 : 0,
   });
-  const selected = files.map((file) => available.find(({ ref }) => ref.imageId === file));
+  const remaining = [...available];
+  const selected = files.map((file) => remaining.splice(remaining.findIndex(({ ref }) => ref.imageId === file), 1)[0]);
   const sent = selected.map(({ ref }) => ref);
   const referenceImagePaths = selected.map(({ path }) => path);
   const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');

@@ -199,7 +199,12 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     // Trimming or retaining a panel can change positions; strengths follow the files.
     if (data.referenceStrengths) {
       const originalFiles = data.referenceImageFiles || [];
-      data.referenceStrengths = [...namedReferenceFiles.map((file) => referenceStrengthOrFull(data.referenceStrengths[originalFiles.indexOf(file)])),
+      const usedIndices = new Set();
+      data.referenceStrengths = [...namedReferenceFiles.map((file) => {
+        const index = originalFiles.findIndex((original, i) => original === file && !usedIndices.has(i));
+        if (index >= 0) usedIndices.add(index);
+        return referenceStrengthOrFull(data.referenceStrengths[index]);
+      }),
         ...referenceUploads.map(({ strength }) => referenceStrengthOrFull(strength))];
     }
     if (tag.castInputs) {

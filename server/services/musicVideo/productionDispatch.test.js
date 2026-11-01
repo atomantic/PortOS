@@ -86,6 +86,13 @@ describe('production scene dispatch (#9066)', () => {
     expect(enqueueJob.mock.calls[0][0].params.referenceImagePaths.map((path) => basename(path))).toEqual(['a.png', 'b.png', 'panel.png']);
   });
 
+  it('records both explicitly selected sheets when they share an image', async () => {
+    const references = [{ id: 'mvr-cs-first', imageId: 'same.png' }, { id: 'mvr-cs-second', imageId: 'same.png' }];
+    await dispatchProductionStep({ stepKind: 'frame', project: { ...project, visualSpec: { references } },
+      scene: { ...scene, frameReferenceIds: references.map((ref) => ref.id) }, route: { kind: 'image', mode: 'codex', model: null }, tag, settings });
+    expect(enqueueJob.mock.calls[0][0].params.musicVideo.castInputs.sheets).toEqual(references);
+  });
+
   it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {
     const outside = { ...project, visualSpec: { references: [
       { id: 'mvr-board-1', imageId: 'board-still.png', condition: true },
