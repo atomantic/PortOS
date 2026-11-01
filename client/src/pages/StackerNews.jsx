@@ -10,7 +10,7 @@ import useDrawerTab from '../hooks/useDrawerTab';
 import useLocalModels from '../hooks/useLocalModels';
 import useVisionModelIds from '../hooks/useVisionModelIds';
 import { useValidTab } from '../hooks/useValidTab';
-import { timeAgo } from '../utils/formatters';
+import { formatCount, timeAgo } from '../utils/formatters';
 import { visionLocalModelFilter } from '../utils/providers';
 
 // Stacker News analysis is hard-wired to Ollama (every call site is
@@ -113,7 +113,8 @@ export default function StackerNews() {
   const [items, setItems] = useState([]);
   const [actions, setActions] = useState([]);
   const [resourcesAccountId, setResourcesAccountId] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [accountRead, setAccountRead] = useState({ status: 'loading' });
+  const [resourceReads, setResourceReads] = useState({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -128,7 +129,8 @@ export default function StackerNews() {
   const [accountFormError, setAccountFormError] = useState('');
   const [analysisResults, setAnalysisResults] = useState({});
   const [feedbackDrafts, setFeedbackDrafts] = useState({});
-  const selectedLoadRef = useRef(0);
+  const selectedLoadRef = useRef({});
+  const accountsLoadRef = useRef(0);
   const currentAccountIdRef = useRef(accountId);
   const selectedAccountIdRef = useRef(null);
   const savedAccountRef = useRef(emptyAccount);
@@ -167,38 +169,56 @@ export default function StackerNews() {
   const visionPending = !visionLoaded || localModels.loading;
   const accountFormDirty = selected ? !sameAccountForm(editAccount, savedAccount) : false;
   const accountActionsDisabled = accountFormDirty || Boolean(busy);
-  const visibleTerritories = resourcesAccountId === accountId ? territories : [];
-  const visibleItems = resourcesAccountId === accountId ? items : [];
-  const visibleActions = resourcesAccountId === accountId ? actions : [];
+  const visibleTerritories = resourcesAccountId === accountId && resourceReads.territories?.status === 'ready' ? territories : [];
+  const visibleItems = resourcesAccountId === accountId && resourceReads.items?.status === 'ready' ? items : [];
+  const visibleActions = resourcesAccountId === accountId && resourceReads.actions?.status === 'ready' ? actions : [];
+
+  const resourceReady = (key) => resourcesAccountId === accountId && resourceReads[key]?.status === 'ready';
 
   const loadAccounts = useCallback(async () => {
+    const requestId = ++accountsLoadRef.current;
+    setAccountRead({ status: 'loading' });
     const result = await api.getStackerNewsAccounts({ silent: true }).catch((err) => ({ error: err.message }));
-    if (result?.error) setError(result.error);
-    else setAccounts(result?.accounts || []);
-    setLoading(false);
+    if (accountsLoadRef.current !== requestId) return;
+    if (result?.error) setAccountRead({ status: 'error', error: result.error });
+    else {
+      setAccounts(result?.accounts || []);
+      setAccountRead({ status: 'ready' });
+    }
   }, []);
 
-  const loadSelected = useCallback(async () => {
-    const requestId = ++selectedLoadRef.current;
+  const loadResource = useCallback(async (key) => {
     const requestedAccountId = accountId;
-    setResourcesAccountId(null);
-    setTerritories([]); setItems([]); setActions([]);
-    if (!accountId) {
-      return;
+    const requestId = (selectedLoadRef.current[key] || 0) + 1;
+    selectedLoadRef.current[key] = requestId;
+    setResourceReads((previous) => ({ ...previous, [key]: { status: 'loading' } }));
+    const readers = { territories: api.getStackerNewsTerritories, items: api.getStackerNewsItems, actions: api.getStackerNewsActions };
+    const setters = { territories: setTerritories, items: setItems, actions: setActions };
+    const result = await readers[key](requestedAccountId, { silent: true }).catch((err) => ({ error: err.message }));
+    if (selectedLoadRef.current[key] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
+    if (result?.error) setResourceReads((previous) => ({ ...previous, [key]: { status: 'error', error: result.error } }));
+    else {
+      setters[key](result?.[key] || []);
+      setResourceReads((previous) => ({ ...previous, [key]: { status: 'ready' } }));
     }
-    const [territoryResult, itemResult, actionResult] = await Promise.all([
-      api.getStackerNewsTerritories(accountId, { silent: true }).catch((err) => ({ error: err.message, territories: [] })),
-      api.getStackerNewsItems(accountId, { silent: true }).catch((err) => ({ error: err.message, items: [] })),
-      api.getStackerNewsActions(accountId, { silent: true }).catch((err) => ({ error: err.message, actions: [] })),
-    ]);
-    if (selectedLoadRef.current !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
-    const failed = [territoryResult, itemResult, actionResult].find((result) => result.error);
-    if (failed) setError(failed.error);
-    setTerritories(territoryResult.territories || []);
-    setItems(itemResult.items || []);
-    setActions(actionResult.actions || []);
-    setResourcesAccountId(requestedAccountId);
   }, [accountId]);
+
+  const loadSelected = useCallback(async () => {
+    setResourcesAccountId(accountId);
+    setTerritories([]); setItems([]); setActions([]);
+    setResourceReads({});
+    if (!accountId) return;
+    await Promise.all(['territories', 'items', 'actions'].map(loadResource));
+  }, [accountId, loadResource]);
+
+  const renderReadStatus = (key) => {
+    const read = key === 'accounts' ? accountRead : resourcesAccountId === accountId ? resourceReads[key] : null;
+    if (read?.status === 'ready') return null;
+    const label = { accounts: 'accounts', territories: 'communities', items: 'stored content', actions: 'actions' }[key];
+    return read?.status === 'error'
+      ? <div role="status" className="my-2 rounded border border-port-error p-3 text-sm text-port-error">Could not load {label}: {read.error} <button type="button" className={secondaryButton} onClick={() => key === 'accounts' ? loadAccounts() : loadResource(key)}>Retry {label}</button></div>
+      : <p role="status" className="my-2 text-sm text-gray-400">Loading {label}…</p>;
+  };
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadSelected(); }, [loadSelected]);
@@ -395,16 +415,16 @@ export default function StackerNews() {
     return (
       <div className="space-y-3">
         <section className="grid gap-2 sm:grid-cols-3">
-          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Newest items</div><div className="mt-1 text-2xl font-semibold text-white">{visibleItems.length}</div><div className="text-xs text-gray-400">Showing the newest {selected.syncItemLimit || 30} per community</div></div>
-          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Needs attention</div><div className="mt-1 text-2xl font-semibold text-port-warning">{attentionCount}</div><div className="text-xs text-gray-400">Unanalyzed, review, or escalated</div></div>
-          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Image posts</div><div className="mt-1 text-2xl font-semibold text-white">{imageCount}</div><div className="text-xs text-gray-400">Ollama vision is {selected.visionModel ? 'configured' : 'not configured'}</div></div>
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Newest items</div><div className="mt-1 text-2xl font-semibold text-white">{resourceReady('items') ? formatCount(visibleItems.length) : '—'}</div><div className="text-xs text-gray-400">Showing the newest {selected.syncItemLimit || 30} per community</div></div>
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Needs attention</div><div className="mt-1 text-2xl font-semibold text-port-warning">{resourceReady('items') ? formatCount(attentionCount) : '—'}</div><div className="text-xs text-gray-400">Unanalyzed, review, or escalated</div></div>
+          <div className="rounded border border-port-border bg-port-card p-3"><div className="text-xs uppercase tracking-wide text-gray-500">Image posts</div><div className="mt-1 text-2xl font-semibold text-white">{resourceReady('items') ? formatCount(imageCount) : '—'}</div><div className="text-xs text-gray-400">Ollama vision is {selected.visionModel ? 'configured' : 'not configured'}</div></div>
         </section>
         <section className="flex flex-wrap items-center justify-between gap-3 rounded border border-port-border bg-port-card p-3 text-sm"><div><span className="font-medium text-white">Automation:</span> <span className="text-gray-300">{selected.monitoringEnabled ? `syncs every ${selected.monitoringIntervalMinutes} minutes` : 'scheduled sync is off'}</span><span className="text-gray-500"> · </span><span className="text-gray-300">{selected.analysisEnabled ? 'new items are analyzed automatically' : 'analysis runs only when requested'}</span><span className="text-gray-500"> · </span><span className="text-gray-300">cap {selected.syncItemLimit || 30} per community</span></div><button className={secondaryButton} onClick={() => navigate(`${accountPath(selected.id, 'accounts')}?snAccount=edit&snAccountTab=monitoring`)}>Configure automation</button></section>
         <div className="grid gap-3 xl:grid-cols-2">
           <section className="rounded border border-port-border bg-port-card p-4">
-            <div className="flex items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Approval queue for {scope}</h2><p className="mt-1 text-sm text-gray-400">Human approval comes before every reply, zap, or moderation handoff.</p></div><span className="rounded-full bg-port-bg px-2 py-1 text-xs text-gray-300">{waitingActions.length} waiting</span></div>
+            <div className="flex items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Approval queue for {scope}</h2><p className="mt-1 text-sm text-gray-400">Human approval comes before every reply, zap, or moderation handoff.</p></div><span className="rounded-full bg-port-bg px-2 py-1 text-xs text-gray-300">{resourceReady('actions') ? `${formatCount(waitingActions.length)} waiting` : 'Unavailable'}</span></div>
             <div className="mt-3 space-y-2">
-              {waitingActions.map((action) => (
+              {renderReadStatus('actions')}{waitingActions.map((action) => (
                 <div key={action.id} className="rounded border border-port-border p-3 text-sm">
                   <div className="flex items-center justify-between gap-2"><span className="font-medium text-white">{action.payload?.intent ? `${action.payload.intent} handoff` : action.kind.replaceAll('_', ' ')}</span><span className="text-xs text-gray-400">{action.state.replaceAll('_', ' ')}</span></div>
                   <div className="mt-1 whitespace-pre-wrap text-gray-400">{action.payload?.title || action.payload?.body || `Fixed ${action.destination || 'local'} action`}</div>
@@ -414,13 +434,13 @@ export default function StackerNews() {
                   {action.state === 'approved' && <button className={`${buttonClass} mt-2`} disabled={busy === `execute-${action.id}`} onClick={() => executeAction(action)}>Open verified handoff</button>}
                 </div>
               ))}
-              {!waitingActions.length && <p className="text-sm text-gray-500">No actions are waiting for {scope}. Use the newest-item buttons to queue a reply, zap, or moderation handoff.</p>}
+              {resourceReady('actions') && !waitingActions.length && <p className="text-sm text-gray-500">No actions are waiting for {scope}. Use the newest-item buttons to queue a reply, zap, or moderation handoff.</p>}
             </div>
           </section>
           <section className="rounded border border-port-border bg-port-card p-4">
             <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold text-white">Monitored content for {scope}</h2><p className="text-sm text-gray-400">Remote text and images remain untrusted data. The queue is newest first.</p></div><button className={secondaryButton} disabled={accountActionsDisabled} onClick={syncNow}>Sync newest</button></div>
             <div className="mt-3 space-y-3">
-              {visibleItems.map((item) => {
+              {renderReadStatus('items')}{visibleItems.map((item) => {
                 const policy = analysisForItem(item);
                 const hasImages = Boolean(item.imageUrls?.length);
                 const itemUrl = stackerNewsItemUrl(item.remoteId);
@@ -432,10 +452,10 @@ export default function StackerNews() {
                   {hasImages && <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-400"><span>Image evidence is normalized before Ollama sees it.</span>{itemUrl && <a className="text-port-accent underline" href={itemUrl} target="_blank" rel="noreferrer">Open item</a>}</div>}
                   {policy?.reasons?.length ? <div className="mt-2 text-xs text-port-warning">Why: {policy.reasons.join(', ')}</div> : null}
                   {analysisResults[item.id] && <div className="mt-2 rounded bg-port-bg p-2 text-xs text-gray-300"><div>Latest run: {analysisResults[item.id].stale ? 'stale result discarded' : policy?.decision || 'review'}</div><div className="mt-2 flex flex-wrap gap-2"><input aria-label={`Feedback for ${item.title || item.id}`} className={`${fieldClass} min-w-0 flex-1`} placeholder="Moderator feedback" value={feedbackDrafts[item.id] || ''} onChange={(event) => setFeedbackDrafts((previous) => ({ ...previous, [item.id]: event.target.value }))} /><button className={secondaryButton} disabled={!analysisResults[item.id].analysisId || busy === `feedback-${item.id}`} onClick={() => saveFeedback(item)}>Save feedback</button></div></div>}
-                  <div className="mt-3 flex flex-wrap gap-2"><button className={buttonClass} disabled={accountActionsDisabled || busy === `analyze-${item.id}`} onClick={() => analyze(item)}>{hasImages ? 'Analyze image with Ollama' : 'Analyze with Ollama'}</button><button className={secondaryButton} disabled={accountActionsDisabled} onClick={() => prepareReply(item)}>Prepare reply</button><button className={secondaryButton} disabled={accountActionsDisabled || queuedZap || busy === `handoff-${item.id}-zap`} onClick={() => queueItemHandoff(item, 'zap')}>{queuedZap ? 'Zap queued' : 'Queue zap'}</button><button className={secondaryButton} disabled={accountActionsDisabled || queuedModeration || busy === `handoff-${item.id}-moderate`} onClick={() => queueItemHandoff(item, 'moderate')}>{queuedModeration ? 'Moderation queued' : 'Queue moderation'}</button></div>
+                  <div className="mt-3 flex flex-wrap gap-2"><button className={buttonClass} disabled={accountActionsDisabled || busy === `analyze-${item.id}`} onClick={() => analyze(item)}>{hasImages ? 'Analyze image with Ollama' : 'Analyze with Ollama'}</button><button className={secondaryButton} disabled={accountActionsDisabled} onClick={() => prepareReply(item)}>Prepare reply</button><button className={secondaryButton} disabled={accountActionsDisabled || !resourceReady('actions') || queuedZap || busy === `handoff-${item.id}-zap`} onClick={() => queueItemHandoff(item, 'zap')}>{queuedZap ? 'Zap queued' : 'Queue zap'}</button><button className={secondaryButton} disabled={accountActionsDisabled || !resourceReady('actions') || queuedModeration || busy === `handoff-${item.id}-moderate`} onClick={() => queueItemHandoff(item, 'moderate')}>{queuedModeration ? 'Moderation queued' : 'Queue moderation'}</button></div>
                 </article>;
               })}
-              {!visibleItems.length && <p className="text-sm text-gray-500">No stored content for {scope}. Add a community, then sync newest explicitly or enable scheduled monitoring.</p>}
+              {resourceReady('items') && !visibleItems.length && <p className="text-sm text-gray-500">No stored content for {scope}. Add a community, then sync newest explicitly or enable scheduled monitoring.</p>}
             </div>
           </section>
         </div>
@@ -448,7 +468,7 @@ export default function StackerNews() {
       <section className="rounded border border-port-border bg-port-card p-4">
         <h2 className="font-semibold text-white">Communities for {scope}</h2>
         <div className="mt-3 space-y-2">
-          {visibleTerritories.map((territory) => editingTerritoryId === territory.id ? (
+          {renderReadStatus('territories')}{visibleTerritories.map((territory) => editingTerritoryId === territory.id ? (
             <TerritoryForm key={territory.id} prefix={`edit-territory-${territory.id}`} title={`Edit ${territory.label || territory.slug}`} form={editTerritory} setForm={setEditTerritory} onSubmit={saveTerritory} busy={busy === `save-territory-${territory.id}`} onCancel={() => { setEditingTerritoryId(null); setEditTerritory(emptyTerritory); }} submitLabel="Save community" />
           ) : (
             <div key={territory.id} className="rounded border border-port-border p-3">
@@ -461,24 +481,24 @@ export default function StackerNews() {
               </div>
             </div>
           ))}
-          {!visibleTerritories.length && <p className="text-sm text-gray-500">Add communities {scope} monitors or owns.</p>}
+          {resourceReady('territories') && !visibleTerritories.length && <p className="text-sm text-gray-500">Add communities {scope} monitors or owns.</p>}
         </div>
       </section>
-      <TerritoryForm prefix="new-territory" title={`Add community to ${scope}`} form={newTerritory} setForm={setNewTerritory} onSubmit={createTerritory} busy={busy === 'create-territory'} submitLabel="Add community" />
+      <TerritoryForm prefix="new-territory" title={`Add community to ${scope}`} form={newTerritory} setForm={setNewTerritory} onSubmit={createTerritory} busy={busy === 'create-territory' || !resourceReady('territories')} submitLabel="Add community" />
     </div>
   );
 
   const renderDrafts = () => {
     const post = draft.kind.endsWith('_post');
     const comment = draft.kind.endsWith('_comment');
-    return <form className="mx-auto max-w-2xl rounded border border-port-border bg-port-card p-4" onSubmit={createAction}><h2 className="font-semibold text-white">Prepare a review-gated action for {scope}</h2><p className="mt-1 text-sm text-gray-400">Wallet actions are browser handoffs only. Publishing uses the constrained API after separate approval.</p><div className="mt-3 space-y-3"><Field id="action-kind" label="Action"><select id="action-kind" className={fieldClass} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="draft_comment">Local comment draft</option><option value="publish_comment">Publish comment after review</option><option value="draft_post">Local post draft</option><option value="publish_post">Publish post after review</option><option value="open_browser">Open fixed browser handoff</option></select></Field>{draft.kind === 'open_browser' && <Field id="action-destination" label="Handoff"><select id="action-destination" className={fieldClass} value={draft.destination} onChange={(event) => setDraft({ ...draft, destination: event.target.value })}><option value="item">Item (inspect, zap, or moderate manually)</option><option value="territory_settings">Territory settings</option></select></Field>}{draft.kind === 'open_browser' && draft.destination === 'item' && <Field id="action-intent" label="Human task"><select id="action-intent" className={fieldClass} value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })}><option value="inspect">Inspect item</option><option value="zap">Zap item</option><option value="moderate">Moderate item</option></select><p className="mt-1 text-xs text-gray-400">The approved step opens the verified item page; you still complete the zap or moderation yourself.</p></Field>}{(comment || (draft.kind === 'open_browser' && draft.destination === 'item')) && <Field id="action-item" label="Source item"><select id="action-item" required className={fieldClass} value={draft.itemId} onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}><option value="">Choose item</option>{visibleItems.map((item) => <option key={item.id} value={item.id}>{item.title || `${item.kind} by ${item.authorName}`}</option>)}</select></Field>}{(post || (draft.kind === 'open_browser' && draft.destination === 'territory_settings')) && <Field id="action-territory" label="Territory"><select id="action-territory" required className={fieldClass} value={draft.territoryId} onChange={(event) => setDraft({ ...draft, territoryId: event.target.value })}><option value="">Choose territory</option>{visibleTerritories.map((territory) => <option key={territory.id} value={territory.id}>{territory.label || territory.slug}</option>)}</select></Field>}{post && <Field id="action-title" label="Title"><input id="action-title" required className={fieldClass} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>}{(post || comment) && <Field id="action-body" label="Draft text"><textarea id="action-body" required className={fieldClass} rows="6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></Field>}<button className={buttonClass} disabled={busy === 'create-action'}>Send to approval queue</button></div></form>;
+    return <form className="mx-auto max-w-2xl rounded border border-port-border bg-port-card p-4" onSubmit={createAction}><h2 className="font-semibold text-white">Prepare a review-gated action for {scope}</h2><p className="mt-1 text-sm text-gray-400">Wallet actions are browser handoffs only. Publishing uses the constrained API after separate approval.</p><div className="mt-3 space-y-3"><Field id="action-kind" label="Action"><select id="action-kind" className={fieldClass} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="draft_comment">Local comment draft</option><option value="publish_comment">Publish comment after review</option><option value="draft_post">Local post draft</option><option value="publish_post">Publish post after review</option><option value="open_browser">Open fixed browser handoff</option></select></Field>{draft.kind === 'open_browser' && <Field id="action-destination" label="Handoff"><select id="action-destination" className={fieldClass} value={draft.destination} onChange={(event) => setDraft({ ...draft, destination: event.target.value })}><option value="item">Item (inspect, zap, or moderate manually)</option><option value="territory_settings">Territory settings</option></select></Field>}{draft.kind === 'open_browser' && draft.destination === 'item' && <Field id="action-intent" label="Human task"><select id="action-intent" className={fieldClass} value={draft.intent} onChange={(event) => setDraft({ ...draft, intent: event.target.value })}><option value="inspect">Inspect item</option><option value="zap">Zap item</option><option value="moderate">Moderate item</option></select><p className="mt-1 text-xs text-gray-400">The approved step opens the verified item page; you still complete the zap or moderation yourself.</p></Field>}{(comment || (draft.kind === 'open_browser' && draft.destination === 'item')) && <Field id="action-item" label="Source item">{renderReadStatus('items')}<select id="action-item" disabled={!resourceReady('items')} required className={fieldClass} value={draft.itemId} onChange={(event) => setDraft({ ...draft, itemId: event.target.value })}><option value="">Choose item</option>{visibleItems.map((item) => <option key={item.id} value={item.id}>{item.title || `${item.kind} by ${item.authorName}`}</option>)}</select></Field>}{(post || (draft.kind === 'open_browser' && draft.destination === 'territory_settings')) && <Field id="action-territory" label="Territory">{renderReadStatus('territories')}<select id="action-territory" disabled={!resourceReady('territories')} required className={fieldClass} value={draft.territoryId} onChange={(event) => setDraft({ ...draft, territoryId: event.target.value })}><option value="">Choose territory</option>{visibleTerritories.map((territory) => <option key={territory.id} value={territory.id}>{territory.label || territory.slug}</option>)}</select></Field>}{post && <Field id="action-title" label="Title"><input id="action-title" required className={fieldClass} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></Field>}{(post || comment) && <Field id="action-body" label="Draft text"><textarea id="action-body" required className={fieldClass} rows="6" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></Field>}<button className={buttonClass} disabled={busy === 'create-action' || !resourceReady(post || (draft.kind === 'open_browser' && draft.destination === 'territory_settings') ? 'territories' : 'items')}>Send to approval queue</button></div></form>;
   };
 
   const renderAccounts = () => (
     <div className="grid gap-3 lg:grid-cols-2">
       <section className="rounded border border-port-border bg-port-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold text-white">Accounts</h2><button type="button" className={buttonClass} onClick={() => openAccountForm('new')}>Add account</button></div>
-        <div className="mt-3 space-y-2">{accounts.map((account) => <button key={account.id} className={`block w-full rounded border p-3 text-left ${account.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`} onClick={() => navigate(accountPath(account.id, 'accounts'))}><div className="flex justify-between gap-2"><span className="font-medium text-white">{account.label}</span><span className="text-xs text-gray-400">{account.apiKeyConfigured ? 'Key protected' : 'No key'}</span></div><div className="mt-1 text-sm text-gray-400">@{account.username} · {account.monitoringEnabled ? `every ${account.monitoringIntervalMinutes}m · newest ${account.syncItemLimit || 30}/community` : 'monitoring off'}</div></button>)}{!accounts.length && <p className="text-sm text-gray-500">No accounts configured.</p>}</div>
+        <div className="mt-3 space-y-2">{accountRead.status === 'loading' && renderReadStatus('accounts')}{accounts.map((account) => <button key={account.id} className={`block w-full rounded border p-3 text-left ${account.id === selected?.id ? 'border-port-accent' : 'border-port-border'}`} onClick={() => navigate(accountPath(account.id, 'accounts'))}><div className="flex justify-between gap-2"><span className="font-medium text-white">{account.label}</span><span className="text-xs text-gray-400">{account.apiKeyConfigured ? 'Key protected' : 'No key'}</span></div><div className="mt-1 text-sm text-gray-400">@{account.username} · {account.monitoringEnabled ? `every ${account.monitoringIntervalMinutes}m · newest ${account.syncItemLimit || 30}/community` : 'monitoring off'}</div></button>)}{accountRead.status === 'ready' && !accounts.length && <p className="text-sm text-gray-500">No accounts configured.</p>}</div>
       </section>
       {selected ? (
         <section className="rounded border border-port-border bg-port-card p-4">
@@ -540,9 +560,9 @@ export default function StackerNews() {
     </>
   ) : null;
 
-  if (loading) return <PageSkeleton header="bar" label="Loading Stacker News" tabs={TABS.length} cards={3} />;
-  const notFound = accountId && !selected;
-  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={Newspaper} title="Stacker News" subtitle="Review-gated multi-account community stewardship" actions={accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/stacker-news')} ariaLabel="Stacker News sections" /><section className="flex-1 overflow-auto p-4">{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This Stacker News account was not found. <button className="underline" onClick={() => navigate('/stacker-news')}>Return to accounts.</button></div>}{activeTab === 'review' && selected && renderReview()}{activeTab === 'territory' && selected && renderTerritory()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'activity' && selected && <section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Action ledger for {scope}</h2><div className="mt-3 space-y-2">{visibleActions.map((action) => <div key={action.id} className="rounded border border-port-border p-3 text-sm text-gray-300"><div>{action.kind.replaceAll('_', ' ')} · {action.state}</div>{action.error && <div role="status" className="mt-1 text-port-error">{action.error}</div>}{action.result?.handoffOpened && <div className="mt-1 text-gray-400">Fixed browser handoff opened.</div>}</div>)}{!visibleActions.length && <p className="text-sm text-gray-500">No actions recorded for {scope}.</p>}</div></section>}{activeTab === 'accounts' && renderAccounts()}</section>{accountDrawer}</div>;
+  if (accountRead.status === 'loading' && !accounts.length) return <PageSkeleton header="bar" label="Loading Stacker News" tabs={TABS.length} cards={3} />;
+  const notFound = accountRead.status === 'ready' && accountId && !selected;
+  return <div className="flex h-full min-h-0 flex-col"><PageHeader icon={Newspaper} title="Stacker News" subtitle="Review-gated multi-account community stewardship" actions={accountSwitcher} /><TabPills tabs={TABS} activeTab={activeTab} onChange={(nextTab) => selected ? navigate(accountPath(selected.id, nextTab)) : navigate('/stacker-news')} ariaLabel="Stacker News sections" /><section className="flex-1 overflow-auto p-4">{accountRead.status === 'error' && renderReadStatus('accounts')}{error && <div role="status" className="mb-3 rounded border border-port-error p-3 text-sm text-port-error">{error}</div>}{notice && <div className="mb-3 rounded border border-port-border p-3 text-sm text-gray-200">{notice}</div>}{notFound && <div className="mb-3 rounded border border-port-error p-4 text-sm text-port-error">This Stacker News account was not found. <button className="underline" onClick={() => navigate('/stacker-news')}>Return to accounts.</button></div>}{activeTab === 'review' && selected && renderReview()}{activeTab === 'territory' && selected && renderTerritory()}{activeTab === 'drafts' && selected && renderDrafts()}{activeTab === 'activity' && selected && <section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Action ledger for {scope}</h2><div className="mt-3 space-y-2">{renderReadStatus('actions')}{visibleActions.map((action) => <div key={action.id} className="rounded border border-port-border p-3 text-sm text-gray-300"><div>{action.kind.replaceAll('_', ' ')} · {action.state}</div>{action.error && <div role="status" className="mt-1 text-port-error">{action.error}</div>}{action.result?.handoffOpened && <div className="mt-1 text-gray-400">Fixed browser handoff opened.</div>}</div>)}{resourceReady('actions') && !visibleActions.length && <p className="text-sm text-gray-500">No actions recorded for {scope}.</p>}</div></section>}{activeTab === 'accounts' && renderAccounts()}</section>{accountDrawer}</div>;
 }
 
 function Field({ id, label, children }) {
