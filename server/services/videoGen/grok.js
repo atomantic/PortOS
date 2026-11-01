@@ -167,8 +167,8 @@ export function buildGrokVideoPrompt({
 }
 
 // With first_frame set, reference_to_video numbers its `images` from <IMAGE_1>.
-// The name is the label before " — " ("Guest — cast sheet" is Guest).
-const castName = (label) => String(label || '').split(/\s[—-]\s/)[0].trim() || 'this person';
+// Sheet and guide labels append details after " — ", " - ", or " · ".
+const castName = (label) => String(label || '').split(/\s[—·-]\s/)[0].trim() || 'this person';
 export const grokCastNote = (castReferences) => [
   castReferences.map((ref, i) => `<IMAGE_${i + 1}> shows how ${castName(ref.label)} looks`).join('; ') + '.',
   'Keep each person\'s face, hair, build and clothing matching their reference for the whole clip, including when a face that starts hidden or turned away is revealed.',

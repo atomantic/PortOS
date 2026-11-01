@@ -178,7 +178,7 @@ describe('videoGen/grok — generateVideo', () => {
     videoGenEvents.on('started', started);
     await grok.generateVideo({
       prompt: 'a subject steps into view', sourceImagePath: '/abs/frame.png', width: 1280, height: 720,
-      castReferences: [{ path: '/abs/lead.png', label: 'Lead — character sheet' }, { path: '/abs/guest.png', label: 'Guest — cast sheet' }],
+      castReferences: [{ path: '/abs/lead.png', label: 'Lead — character sheet' }, { path: '/abs/guest.png', label: 'Guest · alternate look' }],
     });
     const prompt = posixPath(promptOf());
     expect(prompt).toContain('reference_to_video tool (not image_to_video)');
