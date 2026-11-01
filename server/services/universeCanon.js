@@ -590,6 +590,23 @@ export async function differentiateUniverseCast(universeId, options = {}) {
   };
 }
 
+// Inline edits carry only the fields the user changed. Build the array inside
+// the existing record write queue so sibling edits and render completions survive.
+export async function patchCanonEntry(universeId, kind, entryId, patch) {
+  assertCanonKind(kind);
+  const field = BIBLE_FIELD[kind];
+  const universe = await updateUniverse(universeId, (current) => {
+    const list = current[field] || [];
+    if (!list.some(entry => entry.id === entryId)) {
+      throw new ServerError(`Canon ${kind} ${entryId} not found in universe`, {
+        status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
+      });
+    }
+    return { [field]: list.map(entry => entry.id === entryId ? { ...entry, ...patch, id: entry.id } : entry) };
+  });
+  return { universe, entry: universe[field].find(entry => entry.id === entryId) };
+}
+
 // Toggle the `locked` flag on a single canon entry. Locked entries are
 // protected from AI rewrite paths — see `mergeExtractedBible` (evidence-only
 // append) and the refine/differentiate runtime guards.

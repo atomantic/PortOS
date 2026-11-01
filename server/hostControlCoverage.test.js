@@ -1254,6 +1254,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/universe-builder/:id', RECORDS],
   ['POST /api/universe-builder/:id/adopt-style', RECORDS],
   ['DELETE /api/universe-builder/:id/canon/:kind/:entryId', REMOVES_RECORD],
+  ['PATCH /api/universe-builder/:id/canon/:kind/:entryId', RECORDS],
   ['DELETE /api/universe-builder/:id/canon/:kind/:entryId/image-refs/:filename', REMOVES_RECORD],
   ['POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction', RECORDS],
   ['PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock', RECORDS],

@@ -96,6 +96,7 @@ describe('Universe Builder mutation inventory (#10669)', () => {
     'POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction',
     'POST /api/universe-builder/:id/characters/:entryId/augment/apply',
     'POST /api/universe-builder/:id/canon/backfill-descriptions',
+    'PATCH /api/universe-builder/:id/canon/:kind/:entryId',
     'PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock',
     'DELETE /api/universe-builder/:id/canon/:kind/:entryId',
     'DELETE /api/universe-builder/:id/canon/:kind/:entryId/image-refs/:filename',

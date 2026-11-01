@@ -1594,6 +1594,36 @@ describe('universe-builder routes', () => {
     });
   });
 
+  describe('PATCH /:id/canon/:kind/:entryId', () => {
+    it('persists overlapping field edits without replacing sibling entries or rendered references', async () => {
+      const app = buildApp();
+      const created = await request(app).post('/api/universe-builder').send({
+        name: 'Canon edit fixture',
+        characters: [
+          { id: 'c1', name: 'Alice', physicalDescription: 'Original', imageRefs: ['ref.png'] },
+          { id: 'c2', name: 'Bob', role: 'ally' },
+        ],
+      });
+      expect(created.status).toBe(201);
+      const url = `/api/universe-builder/${created.body.id}`;
+      const replies = await Promise.all([
+        request(app).patch(`${url}/canon/character/c1`).send({ physicalDescription: 'Revised' }),
+        request(app).patch(`${url}/canon/character/c2`).send({ role: 'rival' }),
+        request(app).patch(`${url}/canon/character/c1`).send({ name: 'Alicia' }),
+      ]);
+      expect(replies.map(reply => reply.status)).toEqual([200, 200, 200]);
+      const persisted = await request(app).get(url);
+      expect(persisted.body.characters).toEqual([
+        expect.objectContaining({ id: 'c1', name: 'Alicia', physicalDescription: 'Revised', imageRefs: ['ref.png'] }),
+        expect.objectContaining({ id: 'c2', name: 'Bob', role: 'rival' }),
+      ]);
+      const missing = await request(app).patch(`${url}/canon/character/deleted`).send({ name: 'Ghost' });
+      expect(missing.status).toBe(404);
+      const invalid = await request(app).patch(`${url}/canon/character/c1`).send({ id: 'changed' });
+      expect(invalid.status).toBe(400);
+    });
+  });
+
   describe('DELETE /:id/canon/:kind/:entryId', () => {
     it('removes the entry from its canon bucket and returns the removed record', async () => {
       removeCanonEntryMock.mockClear();

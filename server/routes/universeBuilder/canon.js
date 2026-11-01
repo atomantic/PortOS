@@ -170,6 +170,19 @@ router.patch('/:id/canon/:kind/:entryId/lock', asyncHandler(async (req, res) => 
   res.json(result);
 }));
 
+// Rich canon fields use the same service sanitizer as whole-array PATCHes.
+// Identity comes from the URL and cannot be changed by a field edit.
+const entryPatchSchema = z.record(z.unknown()).refine(patch => !Object.hasOwn(patch, 'id'), {
+  message: 'Canon entry identity cannot be edited',
+});
+router.patch('/:id/canon/:kind/:entryId', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(lockParamsSchema, req.params);
+  const patch = validateRequest(entryPatchSchema, req.body);
+  const result = await canonSvc.patchCanonEntry(req.params.id, kind, req.params.entryId, patch)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // Remove ONE canon entry from its bucket. Scoped to the universe's canon
 // array only — rendered images, character reference sheets, and the shared
 // Catalog ingredient the entry may point at are all left intact (see

@@ -1,129 +1,125 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
+import { useState } from 'react';
 
-const updateUniverse = vi.fn();
+const patchUniverseCanonEntry = vi.fn();
 vi.mock('../services/apiUniverseBuilder', () => ({
-  updateUniverse: (...args) => updateUniverse(...args),
+  patchUniverseCanonEntry: (...args) => patchUniverseCanonEntry(...args),
 }));
 const toastError = vi.fn();
 vi.mock('../components/ui/Toast', () => ({ default: { error: (...a) => toastError(...a) } }));
 
 import { useCanonPatch } from './useCanonPatch.js';
+import useMounted from './useMounted';
 
-const KIND = { key: 'characters' };
-const baseUniverse = {
+const KIND = { key: 'characters', singular: 'character' };
+const BASE = {
   id: 'u1',
   characters: [
-    { id: 'c1', name: 'Alice', intExt: 'INT' },
+    { id: 'c1', name: 'Alice', physicalDescription: 'Original' },
     { id: 'c2', name: 'Bob' },
   ],
 };
-
-function setup(overrides = {}) {
-  const apply = vi.fn();
-  const mountedRef = { current: true };
-  const props = {
-    universe: baseUniverse,
-    apply,
-    mountedRef,
-    ...overrides,
-  };
-  const { result } = renderHook(() => useCanonPatch(props));
-  return { result, apply, mountedRef };
-}
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
+const setup = () => renderHook(() => {
+  const [universe, apply] = useState(BASE);
+  const mountedRef = useMounted();
+  return { universe, apply, ...useCanonPatch({ universe, apply, mountedRef }) };
+});
 
 beforeEach(() => {
-  updateUniverse.mockReset();
+  patchUniverseCanonEntry.mockReset();
   toastError.mockReset();
 });
 
-describe('useCanonPatch', () => {
-  it('optimistically applies the patched kind list, then re-applies the server copy', async () => {
-    const serverCopy = { id: 'u1', characters: [{ id: 'c1', name: 'Alice', intExt: 'EXT' }] };
-    updateUniverse.mockResolvedValue(serverCopy);
-    const { result, apply } = setup();
+describe('useCanonPatch write ownership', () => {
+  it('keeps newer optimistic edits and references through field-only acknowledgements', async () => {
+    const first = deferred();
+    const second = deferred();
+    patchUniverseCanonEntry.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { result } = setup();
+    let a;
+    let b;
+    // Same-frame calls must compose without waiting for React to render.
+    act(() => {
+      a = result.current.patchEntry(KIND, 'c1', { physicalDescription: ' First ' });
+      b = result.current.patchEntry(KIND, 'c2', { name: 'Robert' });
+    });
+    await act(async () => {});
+    expect(result.current.universe.characters[1].name).toBe('Robert');
+    expect(result.current.universe.characters[0].physicalDescription).toBe(' First ');
+    expect(patchUniverseCanonEntry).toHaveBeenNthCalledWith(1, 'u1', 'character', 'c1', { physicalDescription: ' First ' }, { silent: true });
 
+    // Another writer adds a reference while the inline save is pending.
+    act(() => result.current.apply(previous => ({ ...previous, updatedAt: '2026-01-01T00:00:02.000Z', characters: previous.characters.map(entry => entry.id === 'c1' ? { ...entry, imageRefs: ['new.png'] } : entry) })));
     await act(async () => {
-      await result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' });
+      first.resolve({ universe: { updatedAt: '2026-01-01T00:00:01.000Z' }, entry: { id: 'c1', name: 'Alice', physicalDescription: 'First', imageRefs: [] } });
+      await a;
     });
-
-    // Optimistic apply mutates only the targeted entry.
-    expect(apply).toHaveBeenNthCalledWith(1, {
-      ...baseUniverse,
-      characters: [
-        { id: 'c1', name: 'Alice', intExt: 'EXT' },
-        { id: 'c2', name: 'Bob' },
-      ],
-    });
-    // PATCH sends the full kind list, silently (the hook owns the error toast).
-    expect(updateUniverse).toHaveBeenCalledWith('u1', {
-      characters: [
-        { id: 'c1', name: 'Alice', intExt: 'EXT' },
-        { id: 'c2', name: 'Bob' },
-      ],
-    }, { silent: true });
-    // Server response re-applied.
-    expect(apply).toHaveBeenNthCalledWith(2, serverCopy);
+    expect(result.current.universe.characters[0]).toMatchObject({ physicalDescription: 'First', imageRefs: ['new.png'] });
+    expect(result.current.universe.characters[1].name).toBe('Robert');
+    expect(result.current.universe.updatedAt).toBe('2026-01-01T00:00:02.000Z');
+    expect(patchUniverseCanonEntry).toHaveBeenLastCalledWith('u1', 'character', 'c2', { name: 'Robert' }, { silent: true });
+    await act(async () => { second.resolve({ universe: { updatedAt: '2026-01-01T00:00:03.000Z' }, entry: { id: 'c2', name: 'Robert' } }); await b; });
+    expect(result.current.universe.updatedAt).toBe('2026-01-01T00:00:03.000Z');
   });
 
-  it('no-ops when the universe is missing', async () => {
-    const { result, apply } = setup({ universe: null });
-    await act(async () => {
-      await result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' });
-    });
-    expect(apply).not.toHaveBeenCalled();
-    expect(updateUniverse).not.toHaveBeenCalled();
+  it('does not restore a previous value when the same field is edited again before its save completes', async () => {
+    const first = deferred();
+    patchUniverseCanonEntry.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ entry: { id: 'c1', physicalDescription: 'Newest' } });
+    const { result } = setup();
+    let a;
+    let b;
+    act(() => { a = result.current.patchEntry(KIND, 'c1', { physicalDescription: 'Earlier' }); });
+    act(() => { b = result.current.patchEntry(KIND, 'c1', { physicalDescription: 'Newest' }); });
+    await act(async () => { first.resolve({ entry: { id: 'c1', physicalDescription: 'Earlier' } }); await a; });
+    expect(result.current.universe.characters[0].physicalDescription).toBe('Newest');
+    await act(async () => { await b; });
+    expect(result.current.universe.characters[0].physicalDescription).toBe('Newest');
   });
 
-  it('no-ops when the patch is missing or not an object', async () => {
-    const { result, apply } = setup();
-    await act(async () => {
-      await result.current.patchEntry(KIND, 'c1', null);
-      await result.current.patchEntry(KIND, 'c1', 'nope');
-    });
-    expect(apply).not.toHaveBeenCalled();
-    expect(updateUniverse).not.toHaveBeenCalled();
-  });
-
-  it('toasts and skips the re-apply when the PATCH fails', async () => {
-    updateUniverse.mockRejectedValue(new Error('boom'));
-    const { result, apply } = setup();
-    await act(async () => {
-      await result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' });
-    });
-    expect(apply).toHaveBeenCalledTimes(1); // optimistic only
-    expect(toastError).toHaveBeenCalledWith('Save failed: boom');
-  });
-
-  it('does not re-apply the server copy after unmount', async () => {
-    let resolveUpdate;
-    updateUniverse.mockReturnValue(new Promise((res) => { resolveUpdate = res; }));
-    const { result, apply, mountedRef } = setup();
+  it('ignores an old visit acknowledgement after navigating away and back to the same universe', async () => {
+    const first = deferred();
+    patchUniverseCanonEntry.mockReturnValue(first.promise);
+    const { result } = setup();
     let pending;
-    act(() => { pending = result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' }); });
-    expect(apply).toHaveBeenCalledTimes(1); // optimistic apply fired
-    mountedRef.current = false;
-    await act(async () => { resolveUpdate({ id: 'u1', characters: [] }); await pending; });
-    expect(apply).toHaveBeenCalledTimes(1); // server copy NOT re-applied
+    act(() => { pending = result.current.patchEntry(KIND, 'c1', { name: 'Old visit' }); });
+    act(() => { result.current.apply({ id: 'u2', characters: [] }); });
+    act(() => { result.current.apply({ ...BASE, characters: [{ id: 'c1', name: 'Current visit' }] }); });
+    await act(async () => { first.resolve({ entry: { id: 'c1', name: 'Old visit' } }); await pending; });
+    expect(result.current.universe.characters[0].name).toBe('Current visit');
   });
 
-  it('PATCHes the loaded record id and drops a re-apply after the loaded universe swaps', async () => {
-    let resolveUpdate;
-    updateUniverse.mockReturnValue(new Promise((res) => { resolveUpdate = res; }));
+  it('finishes accepted writes after unmount without publishing their results', async () => {
+    const first = deferred();
     const apply = vi.fn();
-    const mountedRef = { current: true };
-    const props = { universe: baseUniverse, apply, mountedRef };
-    const { result, rerender } = renderHook((p) => useCanonPatch(p), { initialProps: props });
+    patchUniverseCanonEntry.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ entry: { id: 'c2', name: 'Robert' } });
+    const { result, unmount } = renderHook(() => useCanonPatch({ universe: BASE, apply, mountedRef: useMounted() }));
+    let a;
+    let b;
+    act(() => { a = result.current.patchEntry(KIND, 'c1', { name: 'Alicia' }); b = result.current.patchEntry(KIND, 'c2', { name: 'Robert' }); });
+    unmount();
+    await act(async () => { first.resolve({ entry: { id: 'c1', name: 'Alicia' } }); await a; await b; });
+    expect(patchUniverseCanonEntry).toHaveBeenCalledTimes(2);
+    expect(apply).toHaveBeenCalledTimes(2); // optimistic updates only
+  });
 
-    let pending;
-    act(() => { pending = result.current.patchEntry(KIND, 'c1', { intExt: 'EXT' }); });
-    // PATCH targets the loaded record's id, not a separately-passed prop.
-    expect(updateUniverse).toHaveBeenCalledWith('u1', expect.any(Object), { silent: true });
-    // The loaded universe swaps to a different world before the PATCH settles
-    // (e.g. useUniverse refetched for a new series.universeId).
-    rerender({ ...props, universe: { id: 'u2', characters: [] } });
-    await waitFor(() => {}); // flush the id-sync effect
-    await act(async () => { resolveUpdate({ id: 'u1', characters: [] }); await pending; });
-    expect(apply).toHaveBeenCalledTimes(1); // stale server copy dropped
+  it('reports a failed write and still saves the next edit', async () => {
+    patchUniverseCanonEntry.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ entry: { id: 'c2', name: 'Robert' } });
+    const { result } = setup();
+    await act(async () => {
+      const a = result.current.patchEntry(KIND, 'c1', { name: 'Alicia' });
+      const b = result.current.patchEntry(KIND, 'c2', { name: 'Robert' });
+      await a;
+      await b;
+    });
+    expect(toastError).toHaveBeenCalledWith('Save failed: offline');
+    expect(patchUniverseCanonEntry).toHaveBeenLastCalledWith('u1', 'character', 'c2', { name: 'Robert' }, { silent: true });
+    expect(result.current.universe.characters[1].name).toBe('Robert');
   });
 });
