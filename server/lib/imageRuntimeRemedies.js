@@ -32,11 +32,13 @@ export const IMAGE_RUNTIME = Object.freeze({
   TORCH_VENV: 'torch-venv',
   MFLUX_PYTHON: 'mflux-python',
   MOSS_SWIFT: 'moss-swift',
+  FLUX3: 'flux3',
 });
 
 export const IMAGE_RUNTIME_LABELS = Object.freeze({
   [IMAGE_RUNTIME.TORCH_VENV]: 'Shared torch runtime (FLUX.2 · Z-Image · ERNIE · HiDream · Qwen)',
   [IMAGE_RUNTIME.MFLUX_PYTHON]: 'mflux Python interpreter',
+  [IMAGE_RUNTIME.FLUX3]: 'FLUX.3 Klein / MLX (isolated mflux 0.23.0)',
   [IMAGE_RUNTIME.MOSS_SWIFT]: 'MOSS Swift / MLX (SFT bf16, text-to-image)',
 });
 
@@ -46,8 +48,11 @@ export const IMAGE_RUNTIME_LABELS = Object.freeze({
 // the enum exists to end. `services/imageGen/regen.js` re-exports this as
 // `modelUsesFluxVenv` for its existing callers.
 export const imageRuntimeFor = (model) =>
-  model?.runner === IMAGE_RUNTIME.MOSS_SWIFT ? IMAGE_RUNTIME.MOSS_SWIFT
+  model?.runner === IMAGE_RUNTIME.FLUX3 ? IMAGE_RUNTIME.FLUX3
+    : model?.runner === IMAGE_RUNTIME.MOSS_SWIFT ? IMAGE_RUNTIME.MOSS_SWIFT
     : (isFlux2(model) || usesDiffusersRunner(model)) ? IMAGE_RUNTIME.TORCH_VENV : IMAGE_RUNTIME.MFLUX_PYTHON;
+
+export const usesFlux3 = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.FLUX3;
 
 export const usesMossSwift = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.MOSS_SWIFT;
 
@@ -57,6 +62,7 @@ export const usesTorchVenv = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME
 // onto one button apiece — see client/src/components/imageGen/LocalRuntimeStatus.jsx.
 export const IMAGE_RUNTIME_REMEDY = Object.freeze({
   INSTALL_TORCH_VENV: 'install-torch-venv',
+  INSTALL_FLUX3: 'install-flux3',
   INSTALL_MOSS_SWIFT: 'install-moss-swift',
   DOWNLOAD_MOSS_WEIGHTS: 'download-moss-weights',
   INSTALL_PACKAGES: 'install-packages',

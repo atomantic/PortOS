@@ -25,6 +25,9 @@ const MEDIA_HARDWARE_REQUIREMENTS = Object.freeze({
   // These are the explicit floors in the shipped model descriptions. Keep
   // them here as derived metadata so older media-models.json files get the
   // same protection without an on-disk migration.
+  'flux3-klein-q4': Object.freeze({ minMemoryGb: 32 }),
+  'flux3-klein-q6': Object.freeze({ minMemoryGb: 32 }),
+  'flux3-klein-q8': Object.freeze({ minMemoryGb: 32 }),
   'flux2-klein-4b': Object.freeze({ minMemoryGb: 16 }),
   'flux2-klein-9b': Object.freeze({ minMemoryGb: 32 }),
   'flux2-klein-4b-int8': Object.freeze({ minMemoryGb: 32 }),
@@ -357,7 +360,7 @@ export function hardwareRequirementsForMediaModel(model, { kind = 'image', bucke
       runtimeRequirements.platforms = ['linux', 'win32'];
       runtimeRequirements.requiresNvidiaGpu = true;
     }
-  } else if (model?.runner === 'mflux' || (!model?.runner && ['dev', 'schnell'].includes(model?.id))) {
+  } else if (['mflux', 'flux3'].includes(model?.runner) || (!model?.runner && ['dev', 'schnell'].includes(model?.id))) {
     runtimeRequirements.platforms = ['darwin'];
     runtimeRequirements.requiresAppleSilicon = true;
   }

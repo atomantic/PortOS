@@ -23,7 +23,7 @@ import {
 } from '../lib/fileUtils.js';
 import { findCachedRepoFiles, inspectModelCache } from '../lib/hfCache.js';
 import { getImageModels, getVideoModels, isEditOnly, isFlux2, repoForModel, requiredModelCacheGroups } from '../lib/mediaModels.js';
-import { usesMossSwift, IMAGE_RUNTIME_REMEDY } from '../lib/imageRuntimeRemedies.js';
+import { usesMossSwift, usesFlux3, IMAGE_RUNTIME_REMEDY } from '../lib/imageRuntimeRemedies.js';
 import { isMiniMaxH3Runtime, usesDiffusersRunner } from '../lib/runners.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_BYTES,
@@ -86,7 +86,7 @@ const sanitizeModelList = (models) => (Array.isArray(models)
   : []);
 
 const requiresConfiguredPython = (kind, model) => {
-  if (kind === 'image') return !usesMossSwift(model) && !isFlux2(model) && !usesDiffusersRunner(model);
+  if (kind === 'image') return !usesMossSwift(model) && !usesFlux3(model) && !isFlux2(model) && !usesDiffusersRunner(model);
   if (kind === 'video') return !BYOV_VIDEO_RUNTIMES.has(model?.runtime);
   return false;
 };
@@ -108,6 +108,7 @@ const requiresConfiguredPython = (kind, model) => {
 function federatedInputProfile(kind, model) {
   if (!model) return null;
   if (kind === 'image') {
+    if (usesFlux3(model)) return { roles: ['referenceImages'], required: false };
     if (model.supportsImg2Img === false || usesMossSwift(model)) return null;
     return {
       roles: isFlux2(model) ? ['initImage', 'referenceImages'] : ['initImage'],
@@ -463,12 +464,12 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
     const needsPython = requiresConfiguredPython(kind, model);
     // The native adapter needs its pinned snapshot and a working Metal probe,
     // not an arbitrary cached revision of the same repository.
-    const nativeStatus = kind === 'image' && usesMossSwift(model)
+    const nativeStatus = kind === 'image' && (usesMossSwift(model) || usesFlux3(model))
       ? await import('./imageGen/localRuntime.js')
         .then(({ diagnoseLocalRuntime }) => diagnoseLocalRuntime({ modelId: model.id }))
         .catch(() => ({ readiness: 'unknown' }))
       : null;
-    const modelReady = nativeStatus ? nativeStatus.readiness === 'ready'
+    const modelReady = nativeStatus && usesMossSwift(model) ? nativeStatus.readiness === 'ready'
       : !model ? false : await inspectFederatedModelCache(model, repo);
     const runtimeReady = !isLocal ? false
       : nativeStatus ? nativeStatus.readiness === 'ready' || nativeStatus.remedy?.kind === IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS

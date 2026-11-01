@@ -624,6 +624,21 @@ describe('federated media provider — image/video kinds', () => {
     });
   });
 
+
+  it('advertises FLUX.3 reference-only edits only with both its isolated runtime and cached weights', async () => {
+    state.settings = { federation: { mediaProvider: imageConfig() } };
+    state.imageModels = [{ id: 'flux-dev', runner: 'flux3', repo: 'example/flux3', supportsImg2Img: false }];
+    state.mossStatus = { readiness: 'unavailable', remedy: { kind: 'install-flux3' } };
+    let status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: false, runtimeReady: false, inputAssets: { roles: ['referenceImages'], maxCount: 8, required: false } });
+    state.mossStatus = { readiness: 'ready' };
+    status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: false, runtimeReady: true, unavailableReason: 'model-unavailable' });
+    state.cachedRepos = new Set(['example/flux3']);
+    status = await getFederatedMediaProviderStatus(imageConfig(), { kinds: ['image'] });
+    expect(status.capabilities[0]).toMatchObject({ ready: true, runtimeReady: true });
+  });
+
   it('advertises native MOSS only after its pinned runtime and weights are ready, without image inputs', async () => {
     state.settings = { federation: { mediaProvider: imageConfig() } };
     state.imageModels = [{ id: 'flux-dev', runner: 'moss-swift', repo: 'example/moss', supportsImg2Img: false }];

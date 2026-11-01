@@ -30,7 +30,7 @@ vi.mock('../localMemory.js', () => ({
     return { blockers: [], unloaded: [] };
   },
 }));
-vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
+vi.mock('../hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
 // Lets a test force the post-render degenerate-frame check to throw, without
@@ -1581,5 +1581,61 @@ describe('local render launch unwind (#11862)', () => {
       expect(watcher.close).toHaveBeenCalled();
       expect(watcher.listenerCount('error')).toBeGreaterThan(0);
     } finally { claimSpy.mockRestore(); }
+  });
+});
+
+
+describe('FLUX.3 dispatch', () => {
+  const base = { model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
+    prompt: 'An illustrated puffin on a rocky cliff in soft morning light', width: 1024, height: 1024,
+    steps: 16, seed: 42, outputPath: '/tmp/example.png', quantize: '8', guidance: 3.5, pythonPath: '/legacy/python3' };
+
+  it('renders without legacy Python and records the actual checkpoint quantization while preserving the stored token', async () => {
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    const { hfChildEnv } = await import('../hfToken.js');
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const spy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true, cpuCount: 8, totalMemoryGb: 64,
+    });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    mockSpawn.mockReset().mockReturnValue(child);
+    hfChildEnv.mockResolvedValueOnce({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: '/legacy-packages' });
+    const previousToken = process.env.HF_TOKEN;
+    process.env.HF_TOKEN = 'fixture-stale-environment-token';
+    try {
+      const job = await generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42, quantize: '8' });
+      writeFileSync(join(PATHS.images, job.filename), 'synthetic FLUX.3 output');
+      const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+      child.emit('close', 0);
+      await completed;
+      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+      expect(sidecar).toMatchObject({ modelId: 'flux3-klein-q4', quantization: 'q4', quantize: '4', guidance: 0,
+        sentPrompt: base.prompt, modelRepo: base.model.repo,
+        provenance: { sources: [expect.objectContaining({ license: 'flux-kommunity-license' })] } });
+    } finally {
+      spy.mockRestore();
+      if (previousToken === undefined) delete process.env.HF_TOKEN; else process.env.HF_TOKEN = previousToken;
+    }
+  });
+  it('uses the isolated FLUX.3 CLI and checkpoint quantization for text and all ten reference images', () => {
+    const text = buildArgs(base);
+    expect(text.bin).toMatch(/venv-flux3\/bin\/python3$/);
+    expect(text.bin).not.toBe(base.pythonPath);
+    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', base.model.repo,
+      '--base-model', 'flux3-image-klein', '--prompt', base.prompt, '--width', '1024', '--height', '1024',
+      '--steps', '16', '--seed', '42', '--output', base.outputPath, '--metadata', '--low-ram']);
+    const refs = Array.from({ length: 10 }, (_, i) => `/tmp/ref-${i}.png`);
+    const edit = buildArgs({ ...base, referenceImagePaths: refs });
+    expect(edit.args[2]).toBe('mflux.models.flux3.cli.flux3_edit_generate');
+    expect(edit.args.slice(-11)).toEqual(['--image-paths', ...refs]);
+    expect(edit.providerInputs).toEqual({ initImagePath: null, referenceImagePaths: refs });
+  });
+  it.each([
+    { negativePrompt: 'blur' }, { initImagePath: '/tmp/init.png' }, { referenceImagePaths: Array(11).fill('/tmp/ref.png') },
+    { loraPaths: ['/tmp/adapter.safetensors'] }, { referenceImageStrengths: [0.5] }, { width: 1536 },
+  ])('rejects unsupported inputs before they can be silently dropped: %j', input => {
+    expect(() => buildArgs({ ...base, ...input })).toThrow();
   });
 });

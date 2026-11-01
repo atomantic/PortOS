@@ -84,13 +84,14 @@ export default function ImageGenControls({
   // A peer chooses its own model; the retained local selection cannot constrain it.
   const currentModel = remoteTargetActive ? null : models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
+  const isFlux3 = isLocal && currentModel?.runner === 'flux3';
   const isMoss = isLocal && currentModel?.runner === 'moss-swift';
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
   // falls through to the custom inputs (rendered by ResolutionField) so the
   // value stays visible and editable until the user picks a supported preset.
   const availableResolutions = filterResolutions(mode, currentModel?.runner)
-    .filter(size => !isMoss || [size.w, size.h].every(edge => edge >= 256 && edge <= 1024 && edge % 16 === 0));
+    .filter(size => !(isMoss || isFlux3) || [size.w, size.h].every(edge => edge >= 256 && edge <= 1024 && edge % 16 === 0));
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -114,6 +115,11 @@ export default function ImageGenControls({
           >
             {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
           </select>
+          {isFlux3 && (
+            <p className="mt-2 text-xs text-gray-400">
+              {currentModel.disclosure} <a href={currentModel.licenseUrl} target="_blank" rel="noopener noreferrer" className="text-port-accent underline">Read the FLUX Kommunity License</a>
+            </p>
+          )}
           {onModelDownload && modelStatus && (
             <ModelDownloadBadge
               status={modelStatus}
@@ -232,7 +238,7 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {!isCloudCli && isLocal && showQuantize && !isFlux2 && currentModel?.runner !== 'moss-swift' && (
+      {!isCloudCli && isLocal && showQuantize && !isFlux2 && !isFlux3 && currentModel?.runner !== 'moss-swift' && (
         <FormField label="Quantize (bits)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={quantize ?? '8'}

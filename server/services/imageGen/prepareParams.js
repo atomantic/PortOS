@@ -48,6 +48,7 @@ import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
+import { usesFlux3, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
@@ -224,10 +225,10 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, nam
 // Reference images one request may carry. A peer-routed render is bounded by the
 // request limit alone; a FableLoom cloud render takes its provider's own limit
 // within that bound; everything else not named here takes 4.
-function referenceImageCap({ peerRouted, mode, isQwen21, fableLoom, cloudModel }) {
+function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, fableLoom, cloudModel }) {
   if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
   if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
-  if (isQwen21) return 10;
+  if (isQwen21 || isFlux3) return 10;
   if (fableLoom && CLOUD_IMAGE_GEN_MODES.includes(mode)) {
     return Math.min(maxInputImages(mode, cloudModel) ?? IMAGE_REFERENCE_REQUEST_LIMIT, IMAGE_REFERENCE_REQUEST_LIMIT);
   }
@@ -359,6 +360,14 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = initInputCount + referenceImageCount;
+  if (localModel?.runner === 'flux3') {
+    const { assertFlux3Inputs } = await import('./flux3Runtime.js');
+    try {
+      assertFlux3Inputs({ negativePrompt: data.negativePrompt, width: Number(data.width ?? 1024), height: Number(data.height ?? 1024),
+        hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount, referenceImageStrengths: data.referenceStrengths || [],
+        loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0) });
+    } catch (error) { cleanupReqFilesTemp(); throw error; }
+  }
   if (localModel) {
     // Preserve the existing temporary-upload cleanup on every pre-stage refusal.
     await Promise.resolve().then(() => assertFlux2InputsCompatible(localModel, {
@@ -375,7 +384,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : null;
   const isQwen21 = localModel?.pipelineClass === QWEN_IMAGE_21_PIPELINE;
-  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
+  const isFlux3 = localModel?.runner === 'flux3';
+  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, isFlux3, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -431,10 +441,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
   if (!data.mediaProviderPeerId && referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    if (!isFlux2(localModel) && !isQwen21) {
+    if (!isFlux2(localModel) && !isQwen21 && !isFlux3) {
       cleanupReqFilesTemp();
       throw new ServerError(
-        'Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend',
+        'Reference images require a FLUX.2, FLUX.3 or Qwen Image 2.1 model on the local backend',
         { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
       );
     }
@@ -606,7 +616,7 @@ export function resolveLocalImageModel(settings, params) {
       { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
     );
   }
-  if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !pythonPath) {
+  if (selectedModel && !usesFlux3(selectedModel) && !usesMossSwift(selectedModel) && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !pythonPath) {
     throw new ServerError(
       'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
       { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },

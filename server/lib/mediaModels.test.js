@@ -29,6 +29,24 @@ afterEach(() => {
 // first server boot via seedIfMissing(). This suite verifies that the runtime
 // registry matches the expected guarantees without depending on a committed file.
 describe('media model registry freshly loaded', () => {
+  it('adds all FLUX.3 conversions on upgrade, preserves customization, and reports the real license and hardware', async () => {
+    const { loadMediaModels, reloadMediaModels, requiredReposForModel, getImageModels } = await import('./mediaModels.js');
+    const initial = loadMediaModels();
+    initial.image = initial.image.filter(model => !model.id.startsWith('flux3-'));
+    initial._shippedDefaults.image.list = initial._shippedDefaults.image.list.filter(id => !id.startsWith('flux3-'));
+    initial.image[0].name = 'Customized image model';
+    writeFileSync(registryFile, JSON.stringify(initial));
+    const upgraded = reloadMediaModels().image.filter(model => model.id.startsWith('flux3-'));
+    expect(upgraded.map(model => model.id)).toEqual(['flux3-klein-q4', 'flux3-klein-q6', 'flux3-klein-q8']);
+    expect(loadMediaModels().image[0].name).toBe('Customized image model');
+    for (const model of upgraded) {
+      expect(requiredReposForModel(model)).toEqual([model.repo]);
+      expect(model).toMatchObject({ runner: 'flux3', license: 'flux-kommunity-license', cfgDisabled: true, supportsNegativePrompt: false });
+      expect(model.requiresHfToken).not.toBe(true);
+      expect(getImageModels().find(row => row.id === model.id).hardwareRequirements).toMatchObject({ platforms: ['darwin'], requiresAppleSilicon: true, minMemoryGb: 32 });
+    }
+  });
+
   it('adds the pinned MOSS preview without overwriting customization or restoring a removed entry', async () => {
     const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
     const initial = loadMediaModels();

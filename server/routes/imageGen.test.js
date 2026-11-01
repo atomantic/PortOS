@@ -68,6 +68,10 @@ vi.mock('../services/fableLoom/visualConditioning.js', () => ({
     .then(actual => actual.fableLoomAdapterDigest(...args)),
 }));
 
+vi.mock('../services/imageGen/flux3Runtime.js', async original => ({ ...await original(),
+  installFlux3Runtime: vi.fn(emit => { emit({ type: 'complete', message: 'Fixture runtime ready' }); return { promise: Promise.resolve(), kill: vi.fn() }; }),
+}));
+
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
@@ -2195,6 +2199,48 @@ describe('Image Gen Routes', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+
+  describe('FLUX.3 HTTP generation', () => {
+    it('requires operator authority for runtime installation and accepts an authorized local install', async () => {
+      const { installFlux3Runtime } = await import('../services/imageGen/flux3Runtime.js');
+      const denied = express();
+      denied.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+      denied.use('/api/image-gen', imageGenRoutes);
+      denied.use(errorMiddleware);
+      const rejected = await request(denied).post('/api/image-gen/setup/flux3-install?runtime=flux3');
+      expect([rejected.status, rejected.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(installFlux3Runtime).not.toHaveBeenCalled();
+      const accepted = await request(app).post('/api/image-gen/setup/flux3-install?runtime=flux3');
+      expect(accepted.status).toBe(200);
+      expect(accepted.text).toContain('Fixture runtime ready');
+      expect(installFlux3Runtime).toHaveBeenCalledOnce();
+    });
+
+    it('previews and queues ten reference edits without a legacy Python or HF token setting', async () => {
+      const refs = Array.from({ length: 10 }, (_, i) => `flux3-example-${i}.png`);
+      await Promise.all(refs.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = { mode: 'local', modelId: 'flux3-klein-q4', prompt: 'A detailed scene caption', referenceImageFiles: refs };
+      const settings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.error, submit.status, submit.body.error]).toEqual([200, undefined, 200, undefined]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual(refs);
+      expect(preview.body.sentPrompt).toBe(body.prompt);
+    });
+    it.each([
+      { negativePrompt: 'blur' }, { initImageFile: 'example.png' }, { loraFilenames: ['example.safetensors'] },
+      { referenceStrengths: [0.5] }, { referenceImageFiles: Array(11).fill('example.png') },
+    ])('refuses unsupported raw FLUX.3 inputs before staging/queueing: %j', async unsupported => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } });
+      const response = await request(app).post('/api/image-gen/generate').send({ mode: 'local', modelId: 'flux3-klein-q4', prompt: 'Example', ...unsupported });
+      expect([response.status, response.body.code]).toEqual([400, 'FLUX3_INPUT_UNSUPPORTED']);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 

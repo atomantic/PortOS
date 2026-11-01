@@ -1072,6 +1072,17 @@ const DEFAULT_REGISTRY = {
       hardwareRequirements: { platforms: ['darwin'], architectures: ['arm64'], requiresAppleSilicon: true, minMemoryGb: 48 },
       license: 'apache-2.0', licenseUrl: 'https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/fc5de0d56fc910cbca6f6625a70f5f582b26deb1/LICENSE',
     },
+    // The community conversions contain all components and are ungated. Their
+    // availability does not certify acceptance of BFL's upstream terms.
+    ...[4, 6, 8].map(bits => ({
+      id: `flux3-klein-q${bits}`, name: `FLUX.3 Klein Q${bits} (MLX, 32+ GB RAM)`,
+      runner: 'flux3', repo: `mflux-community/flux-3-image-klein-mflux-q${bits}`,
+      steps: 16, guidance: 0, cfgDisabled: true, quantization: `q${bits}`,
+      supportsImg2Img: false, supportsLoras: false, supportsNegativePrompt: false,
+      license: 'flux-kommunity-license',
+      licenseUrl: 'https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md',
+      disclosure: 'FLUX Kommunity License v1.0: non-commercial use, with a commercial-output exception for qualifying users below US$5M annualized revenue, subject to the full terms, output review/filtering and required AI disclosures. Community weights are ungated; access does not verify upstream acceptance. Write a full scene caption (or use Refine). Edits accept up to 10 reference images; init-image strength, negative prompts and LoRAs are unavailable.',
+    })),
     // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
     { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5, requiresHfToken: true, licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.1-dev' },
     { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0,   cfgDisabled: true },
