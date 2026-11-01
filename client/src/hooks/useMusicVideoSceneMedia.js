@@ -1,8 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoStoryboardClipInputs, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
-import { storyboardClipBlockedReason } from '../../../server/lib/storyboardGuidance.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -228,7 +227,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `refine` (with `referenceImageId`) edits that frame by a short instruction
    * instead: the prompt is the instruction, and the frame leads the shot's references.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
@@ -254,6 +253,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       musicVideo: {
         projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
         ...(replaceSelection ? { replaceSelection: true } : {}),
+        // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
+        ...(thenClip ? { thenClip } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
@@ -279,6 +280,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
               referenceImageId: updated.referenceImageId, takes: updated.takes,
             }))
             .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
+          // Only queued renders chain into a clip (musicVideoSceneImageHook); this lane answered inline.
+          if (thenClip) toast.info('Still ready. Lock it and render its clip from the shot card.');
         }
         frameLane.clearScene(scene.sceneId);
         return { ok: true };
@@ -384,14 +387,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * Returns a promise that always resolves to `{ ok }` — see generateFrame's
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
-  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null, fromStoryboard = false } = {}) => {
-    // From the storyboard: the panel is layout guidance and the shot's references set the
-    // look; the lane builds its own photographic first frame (lib/storyboardGuidance.js).
-    const guided = fromStoryboard
-      ? musicVideoStoryboardClipInputs(project, scene, castMedia, { greybox: !!musicVideoGreyboxReference(project, scene, greyboxPlaces)?.reference })
-      : null;
-    if (fromStoryboard && !guided) { toast.error('This shot has no storyboard panel art'); return Promise.resolve({ ok: false }); }
-    if (!guided && !scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
+  const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null } = {}) => {
+    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
     const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
     // `card` is the shot card's Render: the director's text and its input toggles
@@ -413,16 +410,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
-    const guidedBlocked = guided && storyboardClipBlockedReason({ backend: settings.backend, performance, audioReactive: audioReactiveSelected });
-    if (guidedBlocked) { toast.error(guidedBlocked); return Promise.resolve({ ok: false }); }
     const spanSec = sceneSpanSec(scene);
-    const songAudio = !guided && (typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio');
-    const mode = guided ? 'text' : audioReactiveSelected || songAudio ? 'a2v' : 'image';
-    const cutawayFal = settings.backend === 'fal'
+    const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
+    const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
-    // A guided fal clip renders on the server's reference model, at the length the cutaway take covers.
-    const falFields = cutawayFal && guided ? { ...cutawayFal, falModelId: undefined } : cutawayFal;
     // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
     const runwayFields = settings.backend === 'runway'
       ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings }))
@@ -454,11 +447,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             // shared pin saved, but omit it until this peer chooses Local.
             : { grokDuration: settings.grokDuration, disableAudio }),
       mode,
-      ...(guided || {}),
-      ...(guided ? {} : { sourceImageFile: scene.referenceImageId }),
+      sourceImageFile: scene.referenceImageId,
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
-      ...(guided || (card && (card.endFrame === false || songAudio)) ? {} : sceneEndFrameRequestFields(scene, {
+      ...(card && (card.endFrame === false || songAudio) ? {} : sceneEndFrameRequestFields(scene, {
         backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, mode, // A card's local pick names its own model; else the active one.
         localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
       })),
@@ -471,8 +463,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
         compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
-        // A storyboard clip hears no song: a project set to supplied audio would route it to local a2v.
-        ...(guided ? { songAudio: false } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })

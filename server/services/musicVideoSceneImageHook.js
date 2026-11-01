@@ -69,7 +69,7 @@ const hook = createMediaJobImageHook({
       ...(tag.replaceSelection === true ? { replaceSelection: true } : {}),
     }]);
   },
-  onAttached: ({ projectId, sceneId, filename }, { scene, appended }) => {
+  onAttached: ({ projectId, sceneId, filename, job }, { scene, appended }) => {
     musicVideoEvents.emit('scene-image', {
       projectId,
       sceneId,
@@ -81,6 +81,9 @@ const hook = createMediaJobImageHook({
       takeId: appended[0]?.takeId ?? null,
     });
     console.log(`🎞️ music-video scene image take ${projectId.slice(0, 8)}/${sceneId} ← ${filename}`);
+    const thenClip = job?.params?.musicVideo?.thenClip;
+    // Detached: the clip submission writes the project, which this hook's per-project queue must not wait on.
+    if (thenClip && scene.referenceImageId === filename) void animateStoryboardStill({ projectId, sceneId, ...thenClip });
   },
   // A render that FAILED (a cancel is not a failure) is recorded on the scene
   // so the board can say which scene failed and why, including after a reload.
@@ -88,6 +91,28 @@ const hook = createMediaJobImageHook({
   // retries the start frame, which is not what failed.
   onTerminal: (ctx, status, job) => (job?.params?.musicVideo?.slot === 'end' ? undefined : recordSceneLastFailure(ctx, status, job, 'image')),
 });
+
+/**
+ * Clip from storyboard: the still this render made is now the shot's selection,
+ * so animate it. A refusal (no prompt, a lane that is off) is recorded on the
+ * shot's video lane, where its Retry is.
+ */
+async function animateStoryboardStill({ projectId, sceneId, backend = null, model = null }) {
+  try {
+    const { requireProject } = await import('./musicVideo/requireProject.js');
+    const { dispatchStoryboardStillClip } = await import('./musicVideo/productionDispatch.js');
+    const project = await requireProject(projectId);
+    const scene = project.scenes?.find((s) => s.sceneId === sceneId);
+    if (!scene?.referenceImageId) return;
+    const { jobId } = await dispatchStoryboardStillClip({ project, scene, backend, model });
+    console.log(`🎬 music-video storyboard clip queued ${projectId.slice(0, 8)}/${sceneId} → ${jobId}`);
+  } catch (err) {
+    console.log(`🚫 music-video storyboard clip refused ${projectId.slice(0, 8)}/${sceneId}: ${err.message}`);
+    await recordSceneLastFailure({ projectId, sceneId }, 'failed', { error: err.message }, 'video').catch((e) => {
+      console.error(`❌ music-video storyboard clip failure not recorded ${projectId.slice(0, 8)}/${sceneId}: ${e.message}`);
+    });
+  }
+}
 
 export function initMusicVideoSceneImageHook() {
   hook.init();

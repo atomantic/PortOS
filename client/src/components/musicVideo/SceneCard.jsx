@@ -228,16 +228,16 @@ export default function SceneCard({
     if (lockThenRender && !(await shotLock.toggle(true, 'still'))) return;
     sendRender();
   };
-  // A shot fitted from a storyboard panel, with no locked still, leads with a clip from the panel.
-  const storyboardDefault = storyboardClipOffered({ scene, layer, performance, stillLocked: shotLock?.still === 'locked' });
+  // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
+  // its still renders first, then the server animates it on this card's lane.
+  const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
   // Only a locked video holds it back: there is no still to lock first.
   const storyboardRefusal = storyboardDefault ? greyboxRefusal || (shotLock?.clip === 'locked' ? lockBlocked : null)
     || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
-  // The regular Render stays beside it once the shot has a still to animate.
-  const showRender = !storyboardDefault || !!scene.referenceImageId;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
-    onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card: { prompt: cardRequest.authored }, fromStoryboard: true });
+    const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
+    onGenerateFrame?.(scene, { thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}) } });
   };
   const renderCost = performance ? performanceCost : timing.falCost;
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
@@ -575,12 +575,12 @@ export default function SceneCard({
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
           <div className="flex flex-wrap items-center gap-2">
             {storyboardDefault && (
-              <SceneStoryboardClip backend={renderLane} refusal={storyboardRefusal} generatingVideo={!!generatingVideo} generatingFrame={!!generatingFrame}
-                hasStill={!!scene.referenceImageId} onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
+              <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
+                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
             )}
-            {showRender && <button onClick={generateVideo}
+            {!storyboardDefault && <button onClick={generateVideo}
               disabled={renderBlocked}
-              className={storyboardDefault ? SECONDARY_BUTTON : PRIMARY_BUTTON}
+              className={PRIMARY_BUTTON}
               title={lockThenRender ? 'Lock this still, then render its clip from it'
                 : videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                   : "Render this shot's clip from its still")}>
@@ -611,7 +611,7 @@ export default function SceneCard({
             )}
           </div>
           {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && showRender && (
+          {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
               <span>{videoRefusal}</span>
               {stillLockPending && <ShotLockButton scene={scene} />}

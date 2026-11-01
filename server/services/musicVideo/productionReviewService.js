@@ -33,9 +33,12 @@ export async function assertMusicVideoSceneReview(tag, kind = null, { storyboard
   const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
   // A locked video is final: no new still or clip for that shot, from the director or a run.
   assertClipUnlocked(project, tag.sceneId);
-  // A clip from the storyboard panel makes its own first frame, so like a still it
-  // needs only the art direction: there is no still to lock before it.
-  if (boardShot && (kind === 'image' || storyboardGuided)) assertProductionApproval(project, 'art');
+  // A clip from the storyboard panel makes its own first frame, and Clip from
+  // storyboard animates the still its own render just made (`storyboardStill`, set
+  // only server-side): like a still, each needs only the art direction.
+  const storyboardStill = typeof tag.storyboardStill === 'string'
+    && project.scenes?.find(scene => scene.sceneId === tag.sceneId)?.referenceImageId === tag.storyboardStill;
+  if (boardShot && (kind === 'image' || storyboardGuided || storyboardStill)) assertProductionApproval(project, 'art');
   else if (boardShot) assertShotApproval(project, tag.sceneId);
   else assertProductionApproval(project, 'storyboard');
   if (tag.productionRunId) {

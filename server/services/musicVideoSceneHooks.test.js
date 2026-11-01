@@ -16,6 +16,8 @@ const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-scene-hooks-test-'));
 
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: () => TEST_DATA_ROOT }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+const dispatchStoryboardStillClip = vi.fn(async () => ({ jobId: 'clip-job' }));
+vi.mock('./musicVideo/productionDispatch.js', () => ({ dispatchStoryboardStillClip: (...a) => dispatchStoryboardStillClip(...a) }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const { musicVideoEvents } = await import('./musicVideo/events.js');
@@ -157,6 +159,32 @@ describe('music-video scene completion hooks → takes', () => {
     expect(stored.referenceImageId).toBe('recast.png');
     expect(stored.takes.find((take) => take.assetId === 'recast.png').castInputs).toEqual(castInputs);
     expect(stored.takes.find((take) => take.assetId === 'first.png')).not.toHaveProperty('castInputs');
+  });
+
+  // Uniquely catches Clip from storyboard stopping at the still, animating a still it did not make, or losing a refusal.
+  it('animates a Clip from storyboard still once it is the selection, and records a refused clip on the video lane', async () => {
+    dispatchStoryboardStillClip.mockClear();
+    const job = imageJob(project.id, scene.sceneId, 'first.png');
+    job.params.musicVideo.thenClip = { backend: 'grok' };
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => dispatchStoryboardStillClip.mock.calls.length === 1);
+    const [{ scene: animated, backend }] = dispatchStoryboardStillClip.mock.calls[0];
+    expect({ still: animated.referenceImageId, backend }).toEqual({ still: 'first.png', backend: 'grok' });
+
+    // A still that lands beside a selection is only a take: nothing animates it.
+    const second = imageJob(project.id, scene.sceneId, 'second.png');
+    second.params.musicVideo.thenClip = {};
+    mediaJobEvents.emit('completed', second);
+    await waitFor(() => emitted.filter((e) => e.event === 'scene-image').length === 2);
+
+    dispatchStoryboardStillClip.mockRejectedValueOnce(new Error('Add a shot prompt first'));
+    const third = imageJob(project.id, scene.sceneId, 'third.png');
+    third.params.musicVideo.thenClip = {};
+    third.params.musicVideo.replaceSelection = true;
+    mediaJobEvents.emit('completed', third);
+    await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));
+    expect(dispatchStoryboardStillClip).toHaveBeenCalledTimes(2);
+    expect((await sceneOf(project.id, scene.sceneId)).lastFailure).toMatchObject({ lane: 'video', error: 'Add a shot prompt first' });
   });
 
   it('a completion racing a director selection loses neither (one write tail on the file store)', async () => {

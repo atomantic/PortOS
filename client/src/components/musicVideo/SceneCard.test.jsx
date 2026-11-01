@@ -419,27 +419,24 @@ describe('Render follows the shot locks', () => {
 });
 
 describe('clip from the storyboard panel', () => {
-  // Uniquely catches a panel-fitted shot without a locked still not leading with a clip from its panel, or losing the one-tap still.
-  it('leads with Clip from storyboard and keeps Render full still first one tap away', async () => {
+  // Uniquely catches the tap animating the sketch instead of rendering the shot's real still first.
+  it('renders the still first with the card lane to animate it, and keeps Still only one tap away', async () => {
     const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', prompt: 'She laces her skates', panelId: 'p1', panelArt: 'panel.png', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onGenerateFrame = vi.fn();
-    const card = (backend) => (
+    render(
       <ShotLockContext.Provider value={{ locks: { s1: 'open' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={scene} index={0} expanded project={{ id: 'mv-example', scenes: [scene] }} onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
-          lipSyncBackend={backend} falVideoSettings={{ backend }} />
-      </ShotLockContext.Provider>
+          lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} />
+      </ShotLockContext.Provider>,
     );
-    const { rerender } = render(card('grok'));
     expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: { prompt: scene.prompt }, fromStoryboard: true });
-    fireEvent.click(screen.getByRole('button', { name: 'Render full still first' }));
-    expect(onGenerateFrame).toHaveBeenCalledWith(scene);
-    rerender(card('local'));
-    expect(screen.getByRole('button', { name: 'Clip from storyboard' }).disabled).toBe(true);
-    expect(screen.getByTestId('storyboard-clip-refusal').textContent).toMatch(/Grok or fal\.ai/);
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Still only' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene);
+    expect(onGenerateVideo).not.toHaveBeenCalled();
   });
 });
 

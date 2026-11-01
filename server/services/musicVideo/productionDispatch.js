@@ -165,6 +165,20 @@ async function dispatchClip({ project, scene, route, tag }) {
 }
 
 /**
+ * Clip from storyboard's second half: animate the still the shot's storyboard
+ * render just made on `backend` (the project's lane when absent). The tag names
+ * that still so the review guard can admit the clip on the art approval; a
+ * client cannot send that key (the video route's tag schema strips it).
+ */
+export function dispatchStoryboardStillClip({ project, scene, backend = null, model = null }) {
+  return dispatchClip({
+    project, scene,
+    route: { kind: 'video', mode: backend || project.videoSettings?.backend || undefined, model },
+    tag: { projectId: project.id, sceneId: scene.sceneId, storyboardStill: scene.referenceImageId },
+  });
+}
+
+/**
  * Dispatch one production step. `tag` is the full `musicVideo` job tag
  * (`projectId`, `sceneId`, `productionRunId`, `productionStepKey`, optional
  * `revisionId`; a standalone auto-review section carries only `projectId`,

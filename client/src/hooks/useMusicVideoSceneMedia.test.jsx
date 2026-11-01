@@ -166,21 +166,12 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
 describe('useMusicVideoSceneMedia clip from the storyboard panel', () => {
   afterEach(cleanup);
 
-  // Uniquely catches the panel going out as the clip's start frame, or the shot's look references not riding along.
-  it('sends the panel as guidance with the shot references and no start frame, hearing no song', async () => {
-    const { generateVideo } = await import('../services/apiImageVideo.js');
-    generateVideo.mockResolvedValueOnce({ jobId: 'guided-job', status: 'queued' });
-    const guidedProject = {
-      id: 'p5',
-      visualSpec: { references: [{ id: 'ref-set', imageId: 'set.png', role: 'set', condition: true }] },
-      scenes: [{ sceneId: 's1', order: 0, prompt: 'she laces her skates', panelId: 'pn-1', panelArt: 'panel.png', referenceImageId: null, takes: [], startSec: 0, endSec: 4 }],
-    };
-    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: guidedProject, videoSettings: { settings: { backend: 'grok', generationMode: 'suppliedAudio' } }, applyScenePatch: vi.fn() }));
-    await act(async () => { await result.current.generateSceneVideo(guidedProject.scenes[0], { fromStoryboard: true }); });
-    const sent = generateVideo.mock.calls.at(-1)[0];
-    expect(sent).toMatchObject({ backend: 'grok', mode: 'text', guidanceImageFile: 'panel.png', referenceImageFiles: ['set.png'] });
-    expect(sent.sourceImageFile).toBeUndefined();
-    expect(JSON.parse(sent.musicVideo)).toMatchObject({ projectId: 'p5', sceneId: 's1', songAudio: false });
+  // Uniquely catches the still render losing the lane the server animates it on.
+  it('tags the still render with the lane its clip renders on', async () => {
+    const boardProject = { id: 'p5', scenes: [{ sceneId: 's1', order: 0, prompt: 'she laces her skates', panelId: 'pn-1', panelArt: 'panel.png', takes: [], startSec: 0, endSec: 4 }] };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: boardProject, videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
+    await act(async () => { await result.current.generateFrame(boardProject.scenes[0], { thenClip: { backend: 'grok' } }); });
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ projectId: 'p5', sceneId: 's1', thenClip: { backend: 'grok' } });
   });
 });
 
