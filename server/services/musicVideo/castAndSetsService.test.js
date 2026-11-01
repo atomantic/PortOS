@@ -1630,8 +1630,8 @@ it('waits for held image embedding and the persisted sheet before assembly settl
   expect(readFileSync(join(ROOT(), artifact.file), 'utf8')).toContain(`data:image/png;base64,${PNG.toString('base64')}`);
 });
 
-// A picker must not spend a provider call, and the old sheet must not approve the newly selected conditioning.
-it('saves a greybox plate choice without rendering and holds approval until regeneration', async () => {
+// A picker must not spend a provider call, and only a changed camera makes the sheet stale.
+it('holds approval for a changed greybox camera and releases it when the change is undone', async () => {
   const project = await seed();
   await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
     status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
@@ -1642,11 +1642,83 @@ it('saves a greybox plate choice without rendering and holds approval until rege
   expect(result.stage.greyboxPending).toBe(true);
   expect(jobs.length).toBe(beforeJobs);
   await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
-  await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
-  await service.regenerateCastAndSets(project.id);
-  await runTo(project.id, 'review');
-  expect((await current(project.id)).castAndSets.greyboxPending).toBe(false);
+  const other = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other' } }] });
+  expect(other.stage.greyboxPending).toBe(true);
+  const undone = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
+  expect(undone.stage.greyboxPending).toBe(false);
   await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
+});
+
+it('allows an environment without a camera and repairs an older false pending flag at approval', async () => {
+  const project = await seed();
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
+  } } }));
+  const partial = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: { subjectId: 'place-example' } }] });
+  expect(partial.stage.greyboxPending).toBe(false);
+  await projects.mutateProjectRecord(project.id, (p) => {
+    const { greyboxPendingSetIds: _ids, ...legacy } = p.castAndSets;
+    return { project: { ...p, castAndSets: { ...legacy, greyboxPending: true } } };
+  });
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved', greyboxPending: false } });
+});
+
+it('reconciles legacy pending flags in mixed environments against the capture used by the plate', async () => {
+  const project = await seed({ concept: { subjects: [{ id: 'place-example', kind: 'place', name: 'Example place', ingredientId: 'cat-place' }] } });
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  onDisk('previous-capture.png', 'new-capture.png');
+  let capture = 'new-capture.png';
+  const catalog = {
+    getIngredient: async () => ({ type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }),
+    listMediaForIngredient: async () => capture ? [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: capture }] : [],
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog }));
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1, greyboxPending: true,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set.id === 'harbor' ? { ...set, setReference: { subjectId: 'place-other' } } : set) },
+    plan: { 'set:lab': { key: 'set:lab', setReference, refImages: ['previous-capture.png'] } }, images: {},
+  } } }));
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
+  capture = null;
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING', message: expect.stringContaining('could not be checked') });
+  const edited = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other-again' } }] });
+  expect(edited.stage.greyboxPendingSetIds).toEqual([]);
+  expect(edited.stage.greyboxLegacyPendingSetIds).toEqual(['lab']);
+  capture = 'previous-capture.png';
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved', greyboxPending: false } });
+});
+
+it('does not mark another set with an unchanged rendered camera pending', async () => {
+  const project = await seed();
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set) },
+    plan: { 'set:lab': { key: 'set:lab', setReference, refImages: ['capture.png'] } }, images: {},
+  } } }));
+  const partial = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other' } }] });
+  expect(partial.stage.greyboxPending).toBe(false);
+  const selected = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other', greyboxShotId: 'wide' } }] });
+  expect(selected.stage.greyboxPendingSetIds).toEqual(['harbor']);
+  const cleared = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: null }] });
+  expect(cleared.stage.greyboxPending).toBe(false);
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
+});
+
+it('requires regeneration when removing or reselecting a rendered camera whose capture may have changed', async () => {
+  const project = await seed();
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set) },
+    plan: { 'set:lab': { key: 'set:lab', setReference, refImages: ['previous-capture.png'] } }, images: {},
+  } } }));
+  const removed = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
+  expect(removed.stage.greyboxPending).toBe(true);
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
+  const restored = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference }] });
+  expect(restored.stage.greyboxPending).toBe(true);
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
 });
 
 it('names the Casting changes since the sheet was built, and an image update clears them', async () => {

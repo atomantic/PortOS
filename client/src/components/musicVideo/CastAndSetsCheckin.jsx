@@ -1,4 +1,5 @@
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
+import { castAndSetsGreyboxPending, musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { useState } from 'react';
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Trash2, Users } from 'lucide-react';
@@ -98,12 +99,19 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
  */
 export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onRegenerate, onRegenerateImages, onEditDirection, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [greyboxesOpen, setGreyboxesOpen] = useState(() => (project.castAndSets?.direction?.sets || []).some((set) => set.setReference?.greyboxShotId));
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const stage = project.castAndSets;
   // Mirrors the server's formSubjects: catalog-linked characters outside Cast & Sets' own `cs-` subjects.
   const formSubjects = (project.concept?.subjects || []).filter((s) => s?.kind === 'character' && s.ingredientId && !String(s.id || '').startsWith('cs-'));
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
+  const sets = stage.direction?.sets || [];
+  const needsLegacyCaptures = stage.greyboxPending && (!Array.isArray(stage.greyboxPendingSetIds) || stage.greyboxLegacyPendingSetIds?.length);
+  const liveCaptures = needsLegacyCaptures
+    ? Object.fromEntries(sets.filter((set) => set.setReference?.greyboxShotId).map((set) => [set.id, musicVideoGreyboxReference(project, { setReference: set.setReference }, greyboxPlaces)?.reference?.imageId || null])) : {};
+  const greyboxPending = castAndSetsGreyboxPending(stage, liveCaptures);
+  const hasGreyboxChoices = (project.concept?.subjects || []).some((s) => s.kind === 'place' && s.ingredientId) || sets.some((s) => s.setReference);
   const sheet = stage.artifactId ? (project.devArtifacts || []).find((a) => a.id === stage.artifactId && !a.deleted) : null;
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
   const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
@@ -147,14 +155,22 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           </button>
         </div>
       )}
-      {['review', 'approved'].includes(stage.status) && onEditDirection && (stage.direction?.sets || []).map((set) => (
-        <div key={set.id} className="space-y-1">
-          <p className="text-xs font-medium">Set plate · {set.name}</p>
-          <SceneGreyboxReference project={project} scene={{ sceneId: `plate-${set.id}`, setReference: set.setReference }} places={greyboxPlaces} disabled={busy}
-            onChange={(setReference) => onEditDirection({ sets: [{ id: set.id, setReference }] })} />
-        </div>
-      ))}
-      {stage.greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
+      {['review', 'approved'].includes(stage.status) && onEditDirection && sets.length > 0 && hasGreyboxChoices && (
+        <details open={greyboxesOpen} onToggle={(e) => setGreyboxesOpen(e.currentTarget.open)} className="rounded border border-port-border p-2">
+          <summary className="min-h-[44px] cursor-pointer text-xs font-medium">Greybox references (optional)</summary>
+          <p className="mb-2 text-xs text-port-text-muted">Choose a saved camera only if you want it to guide a set plate.</p>
+          <div className="space-y-2">
+            {sets.map((set) => (
+              <div key={set.id} className="space-y-1">
+                <p className="text-xs font-medium">Set plate · {set.name}</p>
+                <SceneGreyboxReference project={project} scene={{ sceneId: `plate-${set.id}`, setReference: set.setReference }} places={greyboxPlaces} disabled={busy}
+                  onChange={async (setReference) => Boolean(await onEditDirection({ sets: [{ id: set.id, setReference }] }))} />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
       <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview}
         subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
@@ -174,7 +190,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
             {onEditDirection && stage.direction?.medium === 'procedural' && (
               <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
             )}
-            <button type="button" disabled={busy || stage.greyboxPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
+            <button type="button" disabled={busy || greyboxPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>
               <CheckCircle2 size={14} aria-hidden="true" /> Approve &amp; continue
             </button>
           </>

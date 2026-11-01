@@ -136,7 +136,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
   const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
-  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved — regenerate to apply it' : 'Direction saved — re-rendering what changed');
+  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
