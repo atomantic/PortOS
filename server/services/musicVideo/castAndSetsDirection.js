@@ -738,7 +738,7 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
 
 // Recurring objects: described, unique slug ids, capped; the director's catalog
 // objects (`fixed`) are added by name when the answer left one out.
-export function normalizeProps(props, { fixed = [] } = {}) {
+function normalizeProps(props, { fixed = [] } = {}) {
   const seen = new Set();
   const kept = (Array.isArray(props) ? props : []).filter((p) => p && p.name && p.description);
   const named = new Set(kept.map((p) => String(p.name).trim().toLowerCase()));
