@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {Target, TreePine, List} from 'lucide-react';
 import * as api from '../services/api';
@@ -7,6 +7,7 @@ import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import LoadFailedState from '../components/ui/LoadFailedState';
 import { useValidTab } from '../hooks/useValidTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
@@ -32,12 +33,30 @@ export default function Goals() {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  // Children call onRefresh after every mutation, so reads can overlap; only
+  // the newest one may write.
+  const loadGeneration = useRef(0);
 
+  // A failed read is not an empty goal list. The request helper toasts the
+  // failure; a refresh that fails keeps the goals already shown, and a first
+  // read that fails renders a retry instead of "No goals yet".
   const loadData = useCallback(async () => {
-    const tree = await api.getGoalsTree().catch(() => null);
-    setData(tree);
+    const generation = ++loadGeneration.current;
+    const result = await api.getGoalsTree().then((tree) => ({ tree }), (error) => ({ error }));
+    if (generation !== loadGeneration.current) return;
+    if (result.error) {
+      setLoadError(result.error);
+    } else {
+      setData(result.tree);
+      setLoadError(null);
+    }
     setLoading(false);
   }, []);
+  const retryLoad = () => {
+    setLoading(true);
+    loadData();
+  };
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -83,6 +102,8 @@ export default function Goals() {
       <div className="flex-1 overflow-hidden">
         {loading ? (
           <PageSkeleton header="none" label="Loading goals" fullHeight cards={4} sidebar={false} />
+        ) : !data && loadError ? (
+          <LoadFailedState title="Could not load goals" hint={loadError.message} onRetry={retryLoad} />
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} selectedGoalId={goalId} />
         ) : (
