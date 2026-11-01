@@ -2029,6 +2029,37 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 });
 
 describe('MusicVideo YouTube audio import (#1945)', () => {
+  // Uniquely catches an older library response hiding a completed import.
+  it.each([false, true])('reconciles an import during loading, with reconciliation failure=%s', async (fails) => {
+    let resolveOld;
+    let resolveFresh;
+    const track = { id: 'track-new', title: 'New imported song' };
+    listTracks.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    if (fails) listTracks.mockRejectedValueOnce(new Error('Library reconciliation offline'));
+    else listTracks.mockImplementationOnce(() => new Promise((resolve) => { resolveFresh = resolve; }));
+    renderMV();
+    await openCreateForm();
+    const input = await screen.findByPlaceholderText(/Paste a YouTube or Suno link/i);
+    fireEvent.change(input, { target: { value: 'https://youtu.be/example' } });
+    fireEvent.click(within(input.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+    await settle();
+    getYtSseState(trackImportEventsUrl('yt-job-1')).latest = { type: 'complete', trackId: track.id, track };
+    fireEvent.change(input, { target: { value: 'https://youtu.be/completed' } });
+    if (fails) {
+      expect(await screen.findByRole('alert')).toHaveTextContent('Library reconciliation offline');
+      expect(screen.queryByText(/No tracks in the music library yet/)).not.toBeInTheDocument();
+      listTracks.mockResolvedValueOnce([track]);
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    } else {
+      await waitFor(() => expect(resolveFresh).toBeTypeOf('function'));
+      await act(async () => resolveFresh([track]));
+    }
+    expect(await screen.findByRole('option', { name: /New imported song/ })).toBeInTheDocument();
+    await act(async () => resolveOld([]));
+    expect(screen.getByRole('option', { name: /New imported song/ })).toBeInTheDocument();
+  });
+
   it('starts an import from the detail view and attaches the finished track to the project', async () => {
     await openProject(PROJECT_NO_CLIP, 'setup');
     const urlInput = screen.getByPlaceholderText(/Paste a YouTube or Suno link/i);

@@ -197,6 +197,11 @@ export default function MusicVideo() {
   // Retry, never as an empty library; an import appends to it locally.
   const trackLibrary = useListResource(loadTracks);
   const { items: tracks, setItems: setTracks } = trackLibrary;
+  // Imports can complete before the library read; replace that pre-import read.
+  const onTrackImported = (track) => {
+    if (trackLibrary.state !== 'ready') trackLibrary.retry();
+    else setTracks((prev) => [...prev.filter((item) => item.id !== track.id), track]);
+  };
   const universeResource = useListResource(loadUniverses);
   const universes = universeResource.items;
   // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
@@ -340,7 +345,7 @@ export default function MusicVideo() {
   const youtube = useMusicVideoYoutubeImport({
     routeProjectId,
     navigate,
-    onTrackImported: (track) => setTracks((prev) => [...prev, track]),
+    onTrackImported,
     onCreateComplete: (track) => setForm((f) => ({
       ...f,
       trackId: track.id,
@@ -739,7 +744,7 @@ export default function MusicVideo() {
             prepareSong={prepareSong}
             onAnalyze={handleAnalyze}
             onClone={handleClone}
-            onTrackImported={(track) => setTracks((prev) => [...prev, track])}
+            onTrackImported={onTrackImported}
             onRename={handleRename}
             renameForm={renameForm}
             deletion={deletion}

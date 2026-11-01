@@ -92,7 +92,7 @@ describe('Privacy TABS ↔ nav manifest', () => {
   });
 });
 import {
-  revealVaultRecord, getVaultRecords, getPrivacyStatus, getPrivacySubjects,
+  revealVaultRecord, getVaultRecords, getPrivacyStatus, getPrivacySubjects, createPrivacySubject,
 } from '../services/api';
 
 const SELF_ID = '00000000-0000-4000-8000-000000000001';
@@ -169,6 +169,24 @@ describe('Privacy Center', () => {
 
   // ── Household subjects (#3658) ────────────────────────────────────────────
   describe('household subjects', () => {
+    // Uniquely catches creating a household member before the initial list settles.
+    it('reconciles a new member without letting the older household read erase it', async () => {
+      let resolveOld;
+      const member = { id: 'sub-new', displayName: 'New member', relationship: 'partner' };
+      getPrivacySubjects.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+      getPrivacySubjects.mockResolvedValueOnce([...SUBJECTS, member]);
+      createPrivacySubject.mockResolvedValueOnce(member);
+      renderAt('/privacy/vault');
+      fireEvent.click(screen.getByRole('button', { name: /Household/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Add household member' }));
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: member.displayName } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
+      expect(await screen.findByRole('option', { name: /New member/ })).toBeInTheDocument();
+      await act(async () => resolveOld(SUBJECTS));
+      expect(screen.getByRole('option', { name: /New member/ })).toBeInTheDocument();
+      expect(screen.getByLabelText('Subject')).toHaveValue(member.id);
+    });
+
     it('defaults the scope to self and lists the household in the switcher', async () => {
       renderAt('/privacy/vault');
       await waitFor(() => expect(screen.getByText('Home address')).toBeInTheDocument());

@@ -12,8 +12,12 @@ vi.mock('../services/apiImageVideo.js', () => ({ cancelVideoPendingDelete: vi.fn
 vi.mock('../services/api', () => ({
   getInstances: vi.fn().mockResolvedValue({ peers: [{ id: 'rec-peer', name: 'Example Peer' }] }),
 }));
+const download = vi.hoisted(() => ({ onComplete: null }));
 vi.mock('../hooks/useVideoDownload.js', () => ({
-  default: () => ({ active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() }),
+  default: ({ onComplete }) => {
+    download.onComplete = onComplete;
+    return { active: false, percent: 0, stage: '', start: vi.fn(), cancel: vi.fn() };
+  },
 }));
 const confirmState = vi.hoisted(() => ({ confirming: false }));
 vi.mock('../hooks/useConfirmDelete.js', () => ({
@@ -30,6 +34,40 @@ import toast from '../components/ui/Toast';
 import { cancelVideoPendingDelete } from '../services/apiImageVideo.js';
 
 describe('VideoDownloaderPage', () => {
+  // Uniquely catches a pre-download list overwriting the completed clip.
+  it.each([false, true])('reconciles a download during loading, with reconciliation failure=%s', async (fails) => {
+    let resolveOld;
+    let resolveFresh;
+    const clip = { id: 'new', filename: 'new.mp4', title: 'New clip' };
+    listVideoDownloads.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    if (fails) listVideoDownloads.mockRejectedValueOnce(new Error('Reconciliation offline'));
+    else listVideoDownloads.mockImplementationOnce(() => new Promise((resolve) => { resolveFresh = resolve; }));
+    render(<VideoDownloaderPage />);
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+    act(() => download.onComplete(clip));
+    if (fails) {
+      expect(await screen.findByRole('alert')).toHaveTextContent('Reconciliation offline');
+      expect(screen.queryByText('No videos downloaded yet.')).not.toBeInTheDocument();
+      listVideoDownloads.mockResolvedValueOnce([clip]);
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    } else {
+      await waitFor(() => expect(resolveFresh).toBeTypeOf('function'));
+      await act(async () => resolveFresh([clip]));
+    }
+    expect(await screen.findByText('New clip')).toBeInTheDocument();
+    await act(async () => resolveOld([]));
+    expect(screen.getByText('New clip')).toBeInTheDocument();
+  });
+
+  it('prepends a completed download immediately when the list is ready', async () => {
+    const reads = listVideoDownloads.mock.calls.length;
+    render(<VideoDownloaderPage />);
+    await screen.findByText('Clip A');
+    act(() => download.onComplete({ id: 'new', filename: 'new.mp4', title: 'New clip' }));
+    expect(screen.getAllByRole('listitem')[0]).toHaveTextContent('New clip');
+    expect(listVideoDownloads).toHaveBeenCalledTimes(reads + 1);
+  });
+
   it('swaps only the failed thumbnail for the placeholder', async () => {
     listVideoDownloads.mockResolvedValueOnce([
       { id: 'a', filename: 'a.mp4', thumbnail: 'a.jpg', title: 'Clip A', createdAt: new Date().toISOString() },
