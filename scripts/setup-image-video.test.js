@@ -306,7 +306,9 @@ exit 1
   it.skipIf(process.platform === 'win32')('deletes a universal venv before reinstall and keeps an arm64-only one', () => {
     const reset = source.match(/^reset_universal_venv\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
     const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const atLeast = source.match(/^python_at_least_310\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
     expect(reset).toBeTruthy();
+    expect(atLeast).toBeTruthy();
     const dir = mkdtempSync(join(tmpdir(), 'portos-reset-venv-'));
     tempVenvs.push(dir);
     const uname = join(dir, 'uname');
@@ -336,25 +338,32 @@ printf '%s\\n' '0'
     chmodSync(lipo, 0o755);
     chmodSync(sysctl, 0o755);
     const recreate = join(dir, 'recreate');
-    writeFileSync(recreate, '#!/bin/bash\nexit 1\n');
+    writeFileSync(recreate, `#!/bin/bash
+case "$*" in
+  *version_info*) [[ "\${TOO_OLD:-}" == 1 ]] && exit 1; exit 0 ;;
+  *) exit 1 ;;
+esac
+`);
     chmodSync(recreate, 0o755);
-    const run = (machine, arches, recreateArches = 'arm64') => {
+    const run = (machine, arches, recreateArches = 'arm64', tooOld = '') => {
       const venv = join(dir, 'venv');
       rmSync(venv, { recursive: true, force: true });
       mkdirSync(join(venv, 'bin'), { recursive: true });
       writeFileSync(join(venv, 'bin', 'python3'), 'PY');
-      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, recreate], {
+      execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, recreate], {
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
           ARCHES: arches,
           RECREATE_ARCHES: recreateArches,
           MACHINE: machine,
+          TOO_OLD: tooOld,
         },
       });
       return existsSync(venv);
     };
     expect(run('arm64', 'x86_64 arm64')).toBe(false);
+    expect(run('arm64', 'x86_64 arm64', 'arm64', '1')).toBe(true);
     expect(run('arm64', 'x86_64 arm64', 'x86_64')).toBe(true);
     expect(run('arm64', 'arm64')).toBe(true);
     expect(run('x86_64', 'x86_64 arm64')).toBe(true);
@@ -363,7 +372,7 @@ printf '%s\\n' '0'
       rmSync(venv, { recursive: true, force: true });
       mkdirSync(join(venv, 'bin'), { recursive: true });
       writeFileSync(join(venv, 'bin', 'python3'), 'PY');
-      execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, name], {
+      execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', venv, name], {
         env: {
           ...process.env,
           PATH: `${dir}:${process.env.PATH}`,
@@ -385,7 +394,7 @@ printf '%s\\n' '0'
     const insidePy = join(inside, 'bin', 'python3');
     writeFileSync(insidePy, '#!/bin/bash\nexit 0\n');
     chmodSync(insidePy, 0o755);
-    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', inside, insidePy], {
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', inside, insidePy], {
       env: {
         ...process.env,
         PATH: `${dir}:${process.env.PATH}`,
@@ -407,7 +416,7 @@ printf '%s\\n' '0'
       chmodSync(join(later, 'python3'), 0o755);
     };
     prepareNamed();
-    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
       env: {
         ...process.env,
         PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:${process.env.PATH}`,
@@ -418,7 +427,7 @@ printf '%s\\n' '0'
     });
     expect(existsSync(namedRoot)).toBe(false);
     prepareNamed();
-    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" python3`, 'bash', namedRoot], {
       env: {
         ...process.env,
         PATH: `${join(namedRoot, 'bin')}:${dir}:/bin`,
@@ -435,7 +444,7 @@ printf '%s\\n' '0'
     chmodSync(join(versioned, 'bin', 'python3.11'), 0o755);
     writeFileSync(join(later, 'python3.13'), '#!/bin/bash\nexit 0\n');
     chmodSync(join(later, 'python3.13'), 0o755);
-    execFileSync('bash', ['-c', `${apple}\n${reset}\nreset_universal_venv "$1" python3.11`, 'bash', versioned], {
+    execFileSync('bash', ['-c', `${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" python3.11`, 'bash', versioned], {
       env: {
         ...process.env,
         PATH: `${join(versioned, 'bin')}:${later}:${dir}:/bin`,
@@ -451,7 +460,7 @@ printf '%s\\n' '0'
     mkdirSync(join(relativeVenv, 'bin'), { recursive: true });
     writeFileSync(join(relativeVenv, 'bin', 'python3'), '#!/bin/bash\nexit 0\n');
     chmodSync(join(relativeVenv, 'bin', 'python3'), 0o755);
-    execFileSync('bash', ['-c', `cd "$3"\n${apple}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', relativeVenv, 'venv/bin/python3', relativeHome], {
+    execFileSync('bash', ['-c', `cd "$3"\n${apple}\n${atLeast}\n${reset}\nreset_universal_venv "$1" "$2"`, 'bash', relativeVenv, 'venv/bin/python3', relativeHome], {
       env: {
         ...process.env,
         PATH: `${dir}:${process.env.PATH}`,
@@ -466,7 +475,7 @@ printf '%s\\n' '0'
     chmodSync(join(namedRoot, 'bin', 'python3'), 0o755);
     writeFileSync(join(later, 'python3'), '#!/bin/bash\necho OUTSIDE\n');
     chmodSync(join(later, 'python3'), 0o755);
-    const hashed = execFileSync('bash', ['-c', `set -e\n${apple}\n${reset}\npython3 >/dev/null\nreset_universal_venv "$1" python3\npython3`, 'bash', namedRoot], {
+    const hashed = execFileSync('bash', ['-c', `set -e\n${apple}\n${atLeast}\n${reset}\npython3 >/dev/null\nreset_universal_venv "$1" python3\npython3`, 'bash', namedRoot], {
       env: {
         ...process.env,
         PATH: `${join(namedRoot, 'bin')}:${later}:${dir}:/bin`,

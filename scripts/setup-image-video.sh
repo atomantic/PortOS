@@ -181,8 +181,10 @@ pin_venv_arm64() {
 # resolve a bare name on PATH or the reset never runs and pin later leaves
 # x86_64 wheels under an arm64 launcher. An Intel-only binary still runs
 # under this arm64 shell and cannot install arm64-only wheels, so a working
-# venv is left in place. An arm64-only interpreter is not universal and is
-# also left alone. No-op until uname -m is arm64.
+# venv is left in place. Apple's /usr/bin/python3 is 3.9 and still universal;
+# ACE-Step 1.5 and MiniMax Music 3 need 3.10+, so a replacement below that
+# floor is also left alone. An arm64-only interpreter is not universal.
+# No-op until uname -m is arm64.
 reset_universal_venv() {
   is_apple_silicon || return 0
   case "$(uname -m)" in
@@ -249,6 +251,9 @@ reset_universal_venv() {
       "$base" -c 'import platform,sys; sys.exit(0 if platform.machine() in ("arm64","aarch64") else 1)' >/dev/null 2>&1 || return 0
       ;;
   esac
+  # The arch check above accepts /usr/bin/python3. Recreating a 3.10+ venv
+  # with that 3.9 interpreter makes the next pip install fail.
+  python_at_least_310 "$base" || return 0
   echo "♻️  Recreating ${1} so native wheels replace the universal interpreter's x86_64 packages."
   rm -rf "$1"
   # An earlier `python3 -m venv` in this script hashed the deleted interpreter.
