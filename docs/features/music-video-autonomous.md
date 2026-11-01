@@ -133,6 +133,16 @@ a duration, or successful decoding cannot prove that generation ended. The
 adapter uses Suno's Download UI and waits for the browser to finish saving the
 M4A export before validating and importing it. It never downloads a CDN preview.
 
+Suno lists the new workspace rows as soon as it accepts Create, while the audio
+is still generating. The driver stores those ids, then polls the chosen row —
+or the song page, when that row is not on the current page — until the render
+shows a completed status or a positive duration and is not still marked in
+progress. Only then does it open Download. That wait has its own deadline: a
+render that never finishes fails with `SUNO_GENERATION_TIMEOUT`, which is not
+the M4A export's `SUNO_AUDIO_TIMEOUT`. The ids are already stored, so a retry
+exports the same songs instead of pressing Create again. A render Suno marks
+failed stops at `SUNO_GENERATION_FAILED` without spending the export deadline.
+
 Validation checks the container signature and uses ffmpeg to decode every audio
 frame with file-only access, the MOV/M4A demuxer, a bounded process deadline, and
 positive decoded-frame evidence. Original AAC or Opus audio and optional

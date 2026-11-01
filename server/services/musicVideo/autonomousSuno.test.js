@@ -11,7 +11,7 @@ vi.mock('../../lib/childProcess.js', () => ({ execFile: Object.assign(() => {}, 
 vi.mock('../../lib/ffmpeg.js', () => ({ findFfmpeg: vi.fn(async () => 'ffmpeg') }));
 import { __testing, generateSunoSong, submitSunoSongOnly } from './autonomousSuno.js';
 
-const { submitSunoSong } = __testing;
+const { submitSunoSong, sunoRenderPhase, collectSunoRenderSnapshot, SUNO_RENDER_PROBE } = __testing;
 
 const OLD = '11111111-1111-1111-1111-111111111111';
 const NEW_A = '22222222-2222-2222-2222-222222222222';
@@ -23,7 +23,7 @@ const noSleep = async () => {};
  * `options` models the Advanced form's optional controls (version menu, More Options, vocal gender);
  * null is an older UI that has none of them.
  */
-function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false }, options = null } = {}) {
+function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = true, newTitleMatches = true, afterCreate = [NEW_A, NEW_B], onCreate, refusalSignals = { inspected: true, captcha: false, credits: false, signIn: false, contentPolicy: false }, options = null, render = null } = {}) {
   const fills = {};
   const actions = [];
   const events = new EventEmitter();
@@ -104,10 +104,15 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
     url: () => url,
     locator,
     getByRole: button,
-    evaluate: async (_fn, title) => title === undefined ? refusalSignals : [
-      ...(title === null ? [`/song/${OLD}`] : []),
-      ...(created && (title === null || newTitleMatches) ? afterCreate.map((id) => `/song/${id}`) : []),
-    ],
+    evaluate: async (_fn, arg) => {
+      if (arg && typeof arg === 'object' && arg.probe === SUNO_RENDER_PROBE) {
+        return typeof render === 'function' ? render() : (render || { onSongPage: false, hasSongLink: true, clocks: ['3:21'], busyLabels: [], status: '' });
+      }
+      return arg === undefined ? refusalSignals : [
+        ...(arg === null ? [`/song/${OLD}`] : []),
+        ...(created && (arg === null || newTitleMatches) ? afterCreate.map((id) => `/song/${id}`) : []),
+      ];
+    },
     close: async () => {},
   };
 }
@@ -253,8 +258,8 @@ describe('submitSunoSong', () => {
 
 // Synthetic container signature; ffmpeg is mocked at its process boundary.
 const m4a = Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]);
-function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null } = {}) {
-  const page = fakePage();
+function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null, render = null } = {}) {
+  const page = fakePage({ render });
   const baseRole = page.getByRole;
   const selected = new Set(['MP3', 'WAV', 'MP4 video asset']);
   const actions = [];
@@ -305,9 +310,184 @@ function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = fals
   return { page, selected, actions, download, savedPath: () => savedPath, browser, connect, importAudio, listDownloads, downloadPollMs: 5 };
 }
 
+function h(tag, attrs = {}, content = '') {
+  const { hidden, ...rest } = attrs;
+  const children = Array.isArray(content) ? content : [];
+  return { tag, attrs: rest, children, ownText: Array.isArray(content) ? '' : String(content || ''), hidden: Boolean(hidden) };
+}
+
+// Just enough of a document for collectSunoRenderSnapshot. Selectors are the ones that reader uses.
+function installDom(body, pathname) {
+  const all = [];
+  const match = (el, sel) => {
+    if (sel === 'a[href*="/song/"]') return el.tag === 'a' && String(el.attrs.href || '').includes('/song/');
+    if (sel === 'span,div,time,p') return ['span', 'div', 'time', 'p'].includes(el.tag);
+    if (sel === '[role="progressbar"],[aria-busy="true"]') return el.attrs.role === 'progressbar' || el.attrs['aria-busy'] === 'true';
+    if (sel === '[data-status]') return el.attrs['data-status'] != null;
+    return false;
+  };
+  const wire = (el, parent) => {
+    all.push(el);
+    el.parentElement = parent;
+    el.children.forEach((child) => wire(child, el));
+    el.childElementCount = el.children.length;
+    el.textContent = el.children.length ? el.children.map((child) => child.textContent).join('') : el.ownText;
+    el.getAttribute = (name) => (Object.hasOwn(el.attrs, name) ? el.attrs[name] : null);
+    el.getClientRects = () => (el.hidden ? [] : [{}]);
+    el.closest = (sel) => {
+      let node = el;
+      while (node) {
+        if (match(node, sel)) return node;
+        node = node.parentElement;
+      }
+      return null;
+    };
+    el.contains = (other) => {
+      let node = other;
+      while (node) {
+        if (node === el) return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
+    el.querySelectorAll = (sel) => all.filter((node) => node !== el && el.contains(node) && match(node, sel));
+  };
+  wire(body, null);
+  const previous = { document: globalThis.document, location: globalThis.location, getComputedStyle: globalThis.getComputedStyle };
+  globalThis.document = { body, querySelectorAll: (sel) => all.filter((node) => match(node, sel)) };
+  globalThis.location = { pathname };
+  globalThis.getComputedStyle = (el) => ({ visibility: el.hidden ? 'hidden' : 'visible' });
+  return () => {
+    globalThis.document = previous.document;
+    globalThis.location = previous.location;
+    globalThis.getComputedStyle = previous.getComputedStyle;
+  };
+}
+
+describe('sunoRenderPhase', () => {
+  it('treats a completed status or a positive duration as finished, and an in-progress render as not', () => {
+    expect(sunoRenderPhase({ clocks: ['3:21'], busyLabels: [], status: '' })).toBe('ready');
+    expect(sunoRenderPhase({ clocks: [], busyLabels: [], status: 'complete' })).toBe('ready');
+    expect(sunoRenderPhase({ clocks: ['0:00'], busyLabels: [], status: '' })).toBe('pending');
+    expect(sunoRenderPhase({ clocks: ['1:02'], busyLabels: ['42%'], status: 'streaming' })).toBe('pending');
+    expect(sunoRenderPhase({ clocks: [], busyLabels: ['Generating'], status: '' })).toBe('pending');
+    expect(sunoRenderPhase({ clocks: ['3:21'], busyLabels: [], status: 'error' })).toBe('failed');
+  });
+
+  it('reads only the chosen row, so a neighbour duration or a hidden generating label cannot decide it', () => {
+    const body = h('div', {}, [
+      h('div', { 'data-status': 'streaming' }, [
+        h('a', { href: `/song/${NEW_A}` }, [h('span', {}, 'First take')]),
+        h('span', {}, '42%'),
+        h('span', {}, '1:02'),
+      ]),
+      h('div', { 'data-status': 'complete' }, [
+        h('a', { href: `/song/${NEW_B}` }, [h('span', {}, 'Second take')]),
+        h('span', {}, '3:21'),
+        h('span', { hidden: true }, 'Generating'),
+      ]),
+    ]);
+    const restore = installDom(body, '/create');
+    try {
+      const pending = collectSunoRenderSnapshot({ songId: NEW_A });
+      expect(pending.clocks).toEqual(['1:02']);
+      expect(pending.busyLabels).toEqual(['42%']);
+      expect(pending.status).toBe('streaming');
+      expect(sunoRenderPhase(pending)).toBe('pending');
+      const ready = collectSunoRenderSnapshot({ songId: NEW_B });
+      expect(ready.clocks).toEqual(['3:21']);
+      expect(ready.busyLabels).toEqual([]);
+      expect(ready.status).toBe('complete');
+      expect(sunoRenderPhase(ready)).toBe('ready');
+    } finally {
+      restore();
+    }
+  });
+
+  it('reads the song-page player clock and ignores a related song duration', () => {
+    const body = h('div', {}, [
+      h('div', {}, [h('span', {}, '0:00'), h('span', {}, ' / '), h('span', {}, '3:21')]),
+      h('a', { href: `/song/${NEW_A}` }, [h('span', {}, '2:00')]),
+    ]);
+    const restore = installDom(body, `/song/${NEW_B}`);
+    try {
+      const snap = collectSunoRenderSnapshot({ songId: NEW_B });
+      expect(snap.onSongPage).toBe(true);
+      expect(snap.hasSongLink).toBe(false);
+      expect(snap.clocks).toContain('3:21');
+      expect(snap.clocks).not.toContain('2:00');
+      expect(sunoRenderPhase(snap)).toBe('ready');
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe('generateSunoSong M4A export', () => {
   const fields = { title: 'Example Song', style: 'synthwave', lyrics: 'example', instrumental: false };
   afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+  it('waits while the song is still generating, then exports once', async () => {
+    let polls = 0;
+    const phases = [];
+    const w = workflow({ render: () => {
+      polls += 1;
+      if (polls < 3) {
+        phases.push('generating');
+        expect(w.actions).not.toContain('export');
+        return { onSongPage: false, hasSongLink: true, clocks: ['1:02'], busyLabels: ['42%'], status: 'streaming' };
+      }
+      phases.push('ready');
+      return { onSongPage: false, hasSongLink: true, clocks: ['3:21'], busyLabels: [], status: '' };
+    } });
+    let time = 0;
+    const steps = [];
+    const out = await generateSunoSong(fields, {
+      ...w, sleep: noSleep, now: () => (time += 1000), onProgress: (step) => steps.push(step),
+    });
+    expect(out.filename).toBe('music-example.m4a');
+    expect(phases).toEqual(['generating', 'generating', 'ready']);
+    expect(w.actions.filter((action) => action === 'export')).toHaveLength(1);
+    expect(steps).toEqual(['opening', 'generating', 'exporting', 'validating', 'importing']);
+  });
+
+  it('opens the song page when the workspace has no row yet, then exports the finished render', async () => {
+    let polls = 0;
+    const w = workflow({ render: () => {
+      polls += 1;
+      if (polls === 1) return { onSongPage: false, hasSongLink: false, clocks: [], busyLabels: [], status: '' };
+      return { onSongPage: true, hasSongLink: true, clocks: ['3:21'], busyLabels: [], status: 'complete' };
+    } });
+    const out = await generateSunoSong(fields, { ...w, songIds: [NEW_B], sleep: noSleep });
+    expect(out.songId).toBe(NEW_B);
+    const songUrl = `https://suno.com/song/${NEW_B}`;
+    expect(w.page.goto.mock.calls.map((call) => call[0]).filter((url) => url === songUrl)).toHaveLength(2);
+    expect(w.actions.filter((action) => action === 'export')).toHaveLength(1);
+  });
+
+  it('fails a render that never finishes with a generation timeout and does not start the export', async () => {
+    const w = workflow({ render: () => ({ onSongPage: false, hasSongLink: true, clocks: ['0:00'], busyLabels: ['Generating'], status: 'streaming' }) });
+    let time = 0;
+    const steps = [];
+    const error = await generateSunoSong(fields, {
+      ...w, songIds: [NEW_A], sleep: noSleep, now: () => (time += 60_000), generationTimeoutMs: 120_000,
+      onProgress: (step) => steps.push(step),
+    }).catch((err) => err);
+    expect(error).toMatchObject({ code: 'SUNO_GENERATION_TIMEOUT', context: { stage: 'generating', reason: 'deadline-exceeded' } });
+    expect(error.message).toBe('Suno: song generation deadline-exceeded');
+    expect(steps).toEqual(['opening', 'generating']);
+    expect(w.actions).not.toContain('export');
+    expect(w.importAudio).not.toHaveBeenCalled();
+    expect(w.page.close).toHaveBeenCalled();
+  });
+
+  it('fails a render Suno marks failed without opening Download', async () => {
+    const w = workflow({ render: () => ({ onSongPage: false, hasSongLink: true, clocks: [], busyLabels: [], status: 'error' }) });
+    await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A], sleep: noSleep }))
+      .rejects.toMatchObject({ code: 'SUNO_GENERATION_FAILED', context: { stage: 'generating', reason: 'failed' } });
+    expect(w.actions).not.toContain('export');
+    expect(w.importAudio).not.toHaveBeenCalled();
+  });
 
   it('submits once, selects only M4A, saves the completed download, and imports the original file', async () => {
     const w = workflow();
