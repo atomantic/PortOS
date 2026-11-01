@@ -420,6 +420,8 @@ const h = vi.hoisted(() => ({
   // CI on Linux, on a Windows dev box, and on the Apple Silicon they target.
   osPlatform: 'darwin',
   osArch: 'arm64',
+  // x64 Node on Apple Silicon. Intel cases leave this false.
+  rosettaAppleSilicon: false,
 }));
 // Set after the top-level imports resolve; the fileUtils mock reads it through
 // a getter so the (eagerly-built) PATHS object always reflects the final value.
@@ -434,6 +436,22 @@ vi.mock('os', async () => ({
   platform: () => h.osPlatform,
   arch: () => h.osArch,
 }));
+
+// Real isAppleSilicon() probes sysctl. On this Mac that bit is 1, so a
+// darwin+x64 case would be Apple Silicon unless the probe is injected.
+vi.mock('../../lib/platform.js', async () => {
+  const actual = await vi.importActual('../../lib/platform.js');
+  return {
+    ...actual,
+    isAppleSilicon: (opts = {}) => {
+      const plat = opts.platform ?? h.osPlatform;
+      const ar = opts.arch ?? h.osArch;
+      if (plat !== 'darwin') return false;
+      if (ar === 'arm64') return true;
+      return h.rosettaAppleSilicon === true;
+    },
+  };
+});
 
 vi.mock('../../lib/childProcess.js', async () => {
   const actual = await vi.importActual('../../lib/childProcess.js');
@@ -523,6 +541,7 @@ beforeEach(() => {
   h.probeOk = true;
   h.osPlatform = 'darwin';
   h.osArch = 'arm64';
+  h.rosettaAppleSilicon = false;
   cuda.status = 'available';
   cuda.maxVramGb = 40;
   invalidateEngineHealth();
@@ -804,6 +823,11 @@ describe('isEnginePlatformSupported', () => {
     h.osPlatform = 'darwin';
     h.osArch = 'x64';
     expect(isEnginePlatformSupported('musicgen')).toBe(false);
+
+    // Rosetta: Node reports x64, the Mac is Apple Silicon.
+    h.rosettaAppleSilicon = true;
+    expect(isEnginePlatformSupported('musicgen')).toBe(true);
+    expect(isEnginePlatformSupported('minimax-music3-mlx')).toBe(true);
   });
 
   it('exposes a human-readable requirement for the UI', () => {

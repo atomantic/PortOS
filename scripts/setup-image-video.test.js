@@ -177,6 +177,45 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(body).not.toMatch(/\$\{?\w+_VENV\}?\/bin\/python3/);
   });
 
+  it.skipIf(process.platform === 'win32')('treats Rosetta (uname x86_64, hw.optional.arm64=1) as Apple Silicon', () => {
+    const helper = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    expect(helper).toBeTruthy();
+    expect(source).not.toMatch(/uname -m"\) != "arm64"/);
+    expect(source).not.toMatch(/uname -m"\) == "arm64"/);
+
+    const probe = ({ system, machine, arm64Bit }) => {
+      const dir = mkdtempSync(join(tmpdir(), 'portos-hwprobe-'));
+      tempVenvs.push(dir);
+      const uname = join(dir, 'uname');
+      const sysctl = join(dir, 'sysctl');
+      writeFileSync(uname, `#!/bin/bash
+case "$1" in
+  -s) printf '%s\\n' '${system}' ;;
+  -m) printf '%s\\n' '${machine}' ;;
+  *) exit 1 ;;
+esac
+`);
+      writeFileSync(sysctl, `#!/bin/bash
+if [[ "$1" == "-n" && "$2" == "hw.optional.arm64" ]]; then
+  printf '%s\\n' '${arm64Bit}'
+  exit 0
+fi
+exit 1
+`);
+      chmodSync(uname, 0o755);
+      chmodSync(sysctl, 0o755);
+      return execFileSync('bash', ['-c', `${helper}\nis_apple_silicon && echo yes || echo no`], {
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      }).trim();
+    };
+
+    expect(probe({ system: 'Darwin', machine: 'arm64', arm64Bit: '0' })).toBe('yes');
+    expect(probe({ system: 'Darwin', machine: 'x86_64', arm64Bit: '1' })).toBe('yes');
+    expect(probe({ system: 'Darwin', machine: 'x86_64', arm64Bit: '0' })).toBe('no');
+    expect(probe({ system: 'Linux', machine: 'x86_64', arm64Bit: '1' })).toBe('no');
+  });
+
   it('captures diagnostics for every aborting install probe', () => {
     const abortProbeBlocks = shellIfBlocks(source)
       .filter((block) => block.includes('2>/dev/null') && /\bexit 1\b/.test(block));

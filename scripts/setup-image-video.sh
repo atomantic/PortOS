@@ -59,6 +59,16 @@ probe_or_fail() {
 }
 
 is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+# Apple Silicon, including a shell translated by Rosetta. `uname -m` is
+# x86_64 under Rosetta; hw.optional.arm64 is the hardware bit (same probe as
+# isAppleSilicon() in server/lib/platform.js).
+is_apple_silicon() {
+  [[ "$(uname -s)" == "Darwin" ]] || return 1
+  case "$(uname -m)" in
+    arm64|aarch64) return 0 ;;
+  esac
+  [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]
+}
 # Git-bash / MSYS / Cygwin all report a prefixed uname; PortOS runs the
 # in-app installer through git-bash on Windows, so match all three.
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0;; *) return 1;; esac; }
@@ -402,7 +412,7 @@ INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"
 if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # FastVideo provides native Apple Silicon inference for Wan and FastMetal models
   # via MLX/Metal. Reached only when the user chooses Install/Repair in Video Gen.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ FastVideo MLX requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -525,7 +535,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   # or transformers drift on a ~100 GB model is expensive to diagnose after a
   # long render. This block is reached only from the explicit runtime Install /
   # Repair action (or the matching terminal opt-in), never from PortOS boot.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ MiniMax H3 MLX requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -584,7 +594,7 @@ fi
 
 INSTALL_MERERUN="${INSTALL_MERERUN:-0}"
 if [[ "$INSTALL_MERERUN" == "1" ]]; then
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "❌ MiniMax H3 Ref2VA through mere.run requires an Apple-Silicon Mac." >&2
     exit 1
   fi
@@ -755,7 +765,7 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
   # a pip package — so we clone the repo and build a sibling venv. The sidecar
   # `scripts/generate_musicgen.py` imports `MusicGen` from the clone;
   # server/lib/pythonSetup.js (resolveMusicgenPython) looks for python3 here.
-  if ! is_macos; then
+  if ! is_apple_silicon; then
     echo "⚠️ INSTALL_MUSICGEN=1 is macOS / Apple-Silicon only (MLX). Skipping." >&2
   else
     if ! have git; then
@@ -988,7 +998,7 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
   # the MLX model loader is Apple-Silicon-only. Model weights stay a separate,
   # explicit Music-studio download so installing a runtime never spends tens of
   # gigabytes without the user's consent.
-  if ! is_macos || [[ "$(uname -m)" != "arm64" ]]; then
+  if ! is_apple_silicon; then
     echo "⚠️ INSTALL_MINIMAX_MUSIC3_MLX=1 is macOS / Apple-Silicon only. Skipping." >&2
   else
     MINIMAX_MUSIC3_MLX_VENV="${HOME}/.portos/venv-minimax-music3-mlx"
@@ -1178,10 +1188,10 @@ if [[ "$INSTALL_MERERUN" == "1" ]]; then
   echo "   MiniMax H3 Ref2VA: ${HOME}/.portos/mere-run/mere.run (mere.run v${MERE_RUN_VERSION})"
   echo "                       Weights remain uninstalled until accepted and downloaded in Video Gen."
 fi
-if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_macos; then
+if [[ "$INSTALL_MUSICGEN" == "1" ]] && is_apple_silicon; then
   echo "   MusicGen:  ${HOME}/.portos/venv-musicgen/bin/python3 (separate venv, MLX runtime @ ${HOME}/.portos/mlx-examples/musicgen)"
 fi
-if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]] && is_macos && [[ "$(uname -m)" == "arm64" ]]; then
+if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]] && is_apple_silicon; then
   echo "   MiniMax Music 3 MLX: ${MINIMAX_MUSIC3_MLX_PY} (separate venv, mlx-audio; weights install separately in Music)"
 fi
 if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then

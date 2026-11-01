@@ -10,7 +10,7 @@
 
 import { stat } from 'fs/promises';
 import {
-  REQUIRED_PACKAGES, detectArm64Python, HOST_ARCH, probePythonHealth, pipNameFor,
+  REQUIRED_PACKAGES, detectArm64Python, HOST_ARCH, hostIsAppleSilicon, probePythonHealth, pipNameFor,
 } from '../../lib/pythonSetup.js';
 
 // /setup/check is called on every keystroke in the python-path input (debounced
@@ -26,18 +26,18 @@ const setupCheckCache = new Map();
 
 async function buildSetupCheck(pythonPath) {
   const health = await probePythonHealth(pythonPath);
-  // The arch warning is specifically about mlx wheels (arm64-only) on Apple
-  // Silicon. A generic interpreterArch !== HOST_ARCH compare would false-
-  // positive on Windows (Python reports `AMD64`, Node reports `x86_64`) and
-  // on hypothetical arm64 Linux — where mlx isn't even in REQUIRED_PACKAGES.
-  const archMismatch = process.platform === 'darwin'
-    && HOST_ARCH === 'arm64'
-    && health.interpreterArch === 'x86_64';
+  // mlx wheels are arm64-only. Warn when the interpreter is x86_64 on Apple
+  // Silicon hardware, including Node under Rosetta (HOST_ARCH is then x86_64
+  // and would hide the mismatch). Comparing interpreterArch to HOST_ARCH
+  // false-positives on Windows (Python reports AMD64) and on arm64 Linux,
+  // where mlx is not in REQUIRED_PACKAGES.
+  const appleSilicon = process.platform === 'darwin' && hostIsAppleSilicon();
+  const archMismatch = appleSilicon && health.interpreterArch === 'x86_64';
   const suggestedArm64Python = archMismatch ? await detectArm64Python() : null;
   return {
     pythonPath,
     required: REQUIRED_PACKAGES,
-    hostArch: HOST_ARCH,
+    hostArch: appleSilicon ? 'arm64' : HOST_ARCH,
     archMismatch,
     suggestedArm64Python,
     ...health,

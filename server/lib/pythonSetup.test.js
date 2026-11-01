@@ -33,6 +33,9 @@ const mockState = {
   spawnCalls: [],
   // Every [bin, '-m', 'venv', …] createVenv ran, in order.
   venvCalls: [],
+  // x64 Node on Apple Silicon hardware (Rosetta). Intel tests leave this false
+  // so they do not call the real sysctl probe.
+  appleSiliconHardware: false,
 };
 
 // pythonSetup composes paths with path.join, which is backslashed on a Windows
@@ -136,6 +139,20 @@ vi.mock('./processEnv.js', async (importOriginal) => ({
 
 vi.mock('./fileUtils.js', () => ({ PATHS: { data: '/data' } }));
 
+// The real probe reads hw.optional.arm64. On this Apple Silicon Mac that bit
+// is 1, so an arch:'x64' Intel case would be classified as Apple Silicon.
+vi.mock('./platform.js', async () => {
+  const actual = await vi.importActual('./platform.js');
+  return {
+    ...actual,
+    isAppleSilicon: ({ platform: plat = mockState.platform, arch: a = mockState.arch } = {}) => {
+      if (plat !== 'darwin') return false;
+      if (a === 'arm64') return true;
+      return mockState.appleSiliconHardware === true;
+    },
+  };
+});
+
 const loadModule = async () => {
   vi.resetModules();
   return await import('./pythonSetup.js');
@@ -158,6 +175,7 @@ const resetState = () => {
   mockState.spawnExitByArgs = new Map();
   mockState.spawnCalls = [];
   mockState.venvCalls = [];
+  mockState.appleSiliconHardware = false;
 };
 
 describe('REQUIRED_PACKAGES', () => {
@@ -304,6 +322,30 @@ describe('detectPython on darwin/arm64', () => {
     const { detectPython } = await loadModule();
     await expect(detectPython()).resolves.toBe('/opt/anaconda3/bin/python3');
   });
+
+  it('still prefers Homebrew arm64 when Node reports x64 on Apple Silicon', async () => {
+    mockState.arch = 'x64';
+    mockState.appleSiliconHardware = true;
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.archByPath.set('/opt/anaconda3/bin/python3', 'x86_64');
+    mockState.archByPath.set('/opt/homebrew/bin/python3', 'arm64');
+    const { detectPython, hostIsAppleSilicon, HOST_ARCH } = await loadModule();
+    expect(HOST_ARCH).toBe('x86_64');
+    expect(hostIsAppleSilicon()).toBe(true);
+    await expect(detectPython()).resolves.toBe('/opt/homebrew/bin/python3');
+  });
+
+  it('keeps first-present order on an Intel Mac', async () => {
+    mockState.arch = 'x64';
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.archByPath.set('/opt/anaconda3/bin/python3', 'x86_64');
+    mockState.archByPath.set('/opt/homebrew/bin/python3', 'arm64');
+    const { detectPython, hostIsAppleSilicon } = await loadModule();
+    expect(hostIsAppleSilicon()).toBe(false);
+    await expect(detectPython()).resolves.toBe('/opt/anaconda3/bin/python3');
+  });
 });
 
 describe('detectPythonSync', () => {
@@ -347,12 +389,23 @@ describe('detectArm64Python', () => {
     await expect(detectArm64Python()).resolves.toBeNull();
   });
 
-  it('returns null on Intel macs (HOST_ARCH !== arm64)', async () => {
+  it('returns null on Intel macs', async () => {
     mockState.arch = 'x64';
     mockState.presentPaths.add('/usr/local/bin/python3');
     mockState.archByPath.set('/usr/local/bin/python3', 'x86_64');
     const { detectArm64Python } = await loadModule();
     await expect(detectArm64Python()).resolves.toBeNull();
+  });
+
+  it('finds Homebrew arm64 when Node reports x64 on Apple Silicon', async () => {
+    mockState.arch = 'x64';
+    mockState.appleSiliconHardware = true;
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.archByPath.set('/opt/anaconda3/bin/python3', 'x86_64');
+    mockState.archByPath.set('/opt/homebrew/bin/python3', 'arm64');
+    const { detectArm64Python } = await loadModule();
+    await expect(detectArm64Python()).resolves.toBe('/opt/homebrew/bin/python3');
   });
 
   it('returns null when no present candidate reports arm64', async () => {
