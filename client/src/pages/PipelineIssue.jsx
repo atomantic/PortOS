@@ -422,7 +422,7 @@ export default function PipelineIssue() {
               <button
                 type="button"
                 onClick={() => setSettingsOpen(true)}
-                className="inline-flex items-center justify-center p-2 rounded-lg bg-port-card border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-2 rounded-lg bg-port-card border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50"
                 title={`${VISUAL_STAGE_LABELS[stageId]} generation settings`}
                 aria-label={`${VISUAL_STAGE_LABELS[stageId]} generation settings`}
               >

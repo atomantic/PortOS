@@ -66,7 +66,7 @@ export default function CatalogFormsEditor({ type, payload, onChange }) {
                   </div>
                   <button type="button" onClick={() => setForms(forms.filter((f) => f.id !== form.id))}
                     aria-label={`Remove ${form.label || 'this age or look'}`} title="Remove"
-                    className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded border border-port-border text-gray-400 hover:text-port-error">
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded border border-port-border text-gray-400 hover:text-port-error">
                     <Trash2 size={14} aria-hidden="true" />
                   </button>
                 </div>

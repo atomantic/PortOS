@@ -217,7 +217,7 @@ export default function VideoDownloaderPage() {
                     <button
                       type="button"
                       onClick={() => requestDelete(d.id)}
-                      className="p-2 text-gray-400 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-port-error transition-colors"
                       aria-label={`Delete ${d.title || 'video'}`}
                     >
                       <Trash2 size={16} />

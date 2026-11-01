@@ -298,14 +298,14 @@ export default function PersonasTab({ onRefresh }) {
                         <button
                           onClick={() => startEdit(persona)}
                           aria-label="Edit persona"
-                          className="p-2 min-h-[36px] text-gray-400 hover:text-white rounded-lg"
+                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[36px] text-gray-400 hover:text-white rounded-lg"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => setConfirmDeleteId(persona.id)}
                           aria-label="Delete persona"
-                          className="p-2 min-h-[36px] text-gray-400 hover:text-port-error rounded-lg"
+                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[36px] text-gray-400 hover:text-port-error rounded-lg"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>

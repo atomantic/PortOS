@@ -187,7 +187,7 @@ export default function CreativeCommissions() {
                   disabled={runningIds.has(c.id)}
                   title="Run now (ignores schedule)"
                   aria-label={`Run commission ${c.name} now`}
-                  className="p-2 text-gray-400 hover:text-port-accent disabled:opacity-50"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-port-accent disabled:opacity-50"
                 >
                   <Zap className={`w-4 h-4 ${runningIds.has(c.id) ? 'animate-pulse text-port-accent' : ''}`} />
                 </button>
@@ -195,7 +195,7 @@ export default function CreativeCommissions() {
                   onClick={() => toggleEnabled(c)}
                   title={c.enabled ? COMMISSION_STOP_COPY.pauseTitle : COMMISSION_STOP_COPY.resumeTitle}
                   aria-label={c.enabled ? 'Pause' : 'Resume'}
-                  className="p-2 text-gray-400 hover:text-gray-100"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-gray-100"
                 >
                   {c.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 </button>
@@ -212,7 +212,7 @@ export default function CreativeCommissions() {
                     onClick={() => requestDelete(c.id)}
                     title={COMMISSION_STOP_COPY.deleteTitle}
                     aria-label={`Delete commission ${c.name}`}
-                    className="p-2 text-gray-400 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-port-error"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>

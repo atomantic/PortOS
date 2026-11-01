@@ -126,7 +126,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
             aria-pressed={expanded}
             aria-label={expanded ? 'Return preview to sidebar' : 'Expand preview into main area'}
             title={expanded ? 'Return preview to sidebar' : 'Expand preview into main area'}
-            className="ml-auto hidden min-h-[28px] min-w-[28px] shrink-0 items-center justify-center rounded border border-port-border text-port-text hover:border-port-accent xl:flex"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-auto hidden min-h-[28px] min-w-[28px] shrink-0 items-center justify-center rounded border border-port-border text-port-text hover:border-port-accent xl:flex"
           >
             <SizeIcon size={14} aria-hidden="true" />
           </button>

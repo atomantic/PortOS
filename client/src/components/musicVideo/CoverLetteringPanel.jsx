@@ -162,7 +162,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
                     Apply artist style
                   </button>
                   <button type="button" onClick={() => lettering.removeStyle(chosenStyle.name)} disabled={!chosenStyle} aria-label={chosenStyle ? `Delete the style for ${chosenStyle.name}` : 'Delete the saved style'}
-                    className="flex items-center text-port-text-muted hover:text-port-error disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center text-port-text-muted hover:text-port-error disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
                     <Trash2 size={13} />
                   </button>
                 </>

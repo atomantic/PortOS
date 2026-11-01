@@ -463,7 +463,7 @@ function CastTab({ panel, onPatch }) {
                     [field]: panel[field].filter((x) => x !== id),
                     ...(field === 'environmentIds' && panel.setShot?.environmentId === id ? { setShot: null } : {}),
                   })}
-                    className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-full text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-full text-gray-500 hover:text-port-error"
                     aria-label={`Remove ${names[id] || 'record'}`}>
                     <X size={14} />
                   </button>

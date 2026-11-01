@@ -33,7 +33,7 @@ export default function CatalogFamilyPicker({ items, onAdd, onRemove, excludeIds
               <span className="text-white truncate max-w-[12rem]">{item.name || item.id}</span>
               <button type="button" disabled={disabled} onClick={() => onRemove(item)}
                 aria-label={`Remove ${getRelationKind(item.kind)?.label || item.kind} ${item.name || item.id}`}
-                className="inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-full text-gray-500 hover:text-port-error disabled:opacity-50">
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center min-w-[32px] min-h-[32px] rounded-full text-gray-500 hover:text-port-error disabled:opacity-50">
                 <X size={14} aria-hidden="true" />
               </button>
             </li>

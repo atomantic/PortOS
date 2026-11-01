@@ -761,7 +761,7 @@ export default function VoiceWidget() {
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
-            className={`p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
           >
             <EyeOff size={14} />
           </button>
@@ -828,7 +828,7 @@ export default function VoiceWidget() {
             disabled={!draft.trim()}
             title="Send text (Enter)"
             aria-label="Send text"
-            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
           >
             <Send size={14} />
           </button>
@@ -912,14 +912,14 @@ export default function VoiceWidget() {
               onClick={interrupt}
               title="Interrupt"
               aria-label="Interrupt"
-              className="p-2 rounded-full text-port-error hover:bg-port-error/10"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-port-error hover:bg-port-error/10"
             >
               <Square size={14} />
             </button>
           )}
           <button
             onClick={toggleCapture}
-            className={`p-3 rounded-full transition-colors ${
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 rounded-full transition-colors ${
               capturing
                 ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
                 : 'bg-port-accent-2/20 hover:bg-port-accent-2/40 text-port-accent-2'
@@ -944,7 +944,7 @@ export default function VoiceWidget() {
             onClick={() => setExpanded(false)}
             title="Minimize voice controls"
             aria-label="Minimize voice controls"
-            className="md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <X size={14} />
           </button>
@@ -952,7 +952,7 @@ export default function VoiceWidget() {
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
-            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <EyeOff size={14} />
           </button>

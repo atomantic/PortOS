@@ -124,7 +124,7 @@ export default function SceneTakeStrip({
                   )}
                   <button type="button" disabled={busy} onClick={() => openNote(take)}
                     aria-label="Edit take note"
-                    className="inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
                     title="Note what to change on the next attempt">
                     <MessageSquare size={11} />
                   </button>

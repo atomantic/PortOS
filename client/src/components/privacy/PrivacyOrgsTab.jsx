@@ -195,10 +195,10 @@ export default function PrivacyOrgsTab({ subjectId }) {
                         <ExternalLink size={16} />
                       </a>
                     )}
-                    <button onClick={() => openEdit(org)} title="Edit organization" aria-label="Edit organization" className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
+                    <button onClick={() => openEdit(org)} title="Edit organization" aria-label="Edit organization" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
                       <Pencil size={16} />
                     </button>
-                    <button onClick={() => setConfirmDelete(org.id)} title="Delete organization" aria-label="Delete organization" className="p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50">
+                    <button onClick={() => setConfirmDelete(org.id)} title="Delete organization" aria-label="Delete organization" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50">
                       <Trash2 size={16} />
                     </button>
                   </div>

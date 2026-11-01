@@ -187,7 +187,7 @@ export default function ImageGenControls({
               type="button"
               onClick={() => onSeedChange?.(randomSeed())}
               disabled={disabled}
-              className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
               title="Randomize seed" aria-label="Randomize seed"
             >
               <Dice5 className="w-4 h-4" />

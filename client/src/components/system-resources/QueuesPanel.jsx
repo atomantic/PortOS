@@ -97,7 +97,7 @@ export default function QueuesPanel() {
             <Link to="/cos/tasks" className="inline-flex min-h-[36px] items-center gap-1 rounded-lg px-2 text-xs text-port-accent hover:bg-port-accent/10">
               Full queue <ExternalLink size={12} />
             </Link>
-            <button type="button" onClick={refetch} className="grid h-9 w-9 place-items-center rounded-lg text-gray-400 hover:bg-port-border/40 hover:text-white" aria-label="Refresh agent queue">
+            <button type="button" onClick={refetch} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 grid h-9 w-9 place-items-center rounded-lg text-gray-400 hover:bg-port-border/40 hover:text-white" aria-label="Refresh agent queue">
               <RefreshCw size={14} />
             </button>
           </div>

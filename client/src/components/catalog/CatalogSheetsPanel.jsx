@@ -55,7 +55,7 @@ function PointerSheetFigure({ variant, filename, bad = false, remove = null }) {
               busy={remove.busy} busyText="Removing…" onConfirm={remove.onConfirm} onCancel={remove.onCancel} largeTouchTargets />
           ) : (
             <button type="button" onClick={remove.onArm} disabled={remove.disabled} title="Remove this sheet" aria-label={`Remove ${variant} sheet`}
-              className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-error">
               <Trash2 size={12} aria-hidden="true" />
             </button>
           )}

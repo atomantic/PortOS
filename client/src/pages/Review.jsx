@@ -901,7 +901,7 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
           type="button"
           onClick={() => onTriage(item, 'dismiss')}
           disabled={disabled}
-          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
           title="Dismiss this recommendation"
           aria-label="Dismiss this recommendation"
         >
