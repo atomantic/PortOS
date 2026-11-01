@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const db = vi.hoisted(() => ({ state: null, failMedia: false, access: null }));
+const db = vi.hoisted(() => ({ state: null, failMedia: false, failCanonLink: false, failUsage: false, access: null }));
 vi.mock('../lib/db.js', () => {
   const query = async (sql, params = []) => {
     const state = db.state;
@@ -21,8 +21,10 @@ vi.mock('../lib/db.js', () => {
       .map((ref) => ({ ...ref, resolved: !!state.universes[ref.refId] })) };
     if (sql.includes('SELECT id FROM universes')) return { rows: state.universes[params[0]] ? [{ id: params[0] }] : [] };
     if (sql.includes('SELECT id, name AS name FROM universes')) return { rows: params[0].filter((id) => state.universes[id]).map((id) => ({ id, name: state.universes[id] })) };
+    if (sql.includes('SELECT id, name AS name FROM pipeline_series')) return { rows: [] };
     if (sql.includes('SELECT type FROM catalog_ingredients')) return { rows: state.ingredients[params[0]] ? [{ type: state.ingredients[params[0]].type }] : [] };
     if (sql.includes('SELECT id FROM catalog_ingredients')) return { rows: state.ingredients[params[0]] ? [{ id: params[0] }] : [] };
+    if (sql.includes('SELECT unnest(catalog_identity_member_ids')) return { rows: [{ id: params[0] }] };
     if (sql.includes('UPDATE catalog_ingredient_refs')) {
       state.refs = state.refs.map((ref) => ref.ingredientId === params[0] && ref.role === params[1] && ref.refId !== params[2] ? { ...ref, deleted: true } : ref);
       return { rows: [] };
@@ -63,13 +65,18 @@ vi.mock('../services/catalogDB/ingredients.js', async () => {
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: async (id) => id, getCatalogIdentityAccess: async () => db.access }));
 vi.mock('../services/catalogDB/refs.js', () => ({
   linkIngredientToRef: async (ingredientId, refKind, refId, role) => {
+    if (db.failCanonLink && role.startsWith('canon-')) throw new Error('Injected canon link failure');
     const existing = db.state.refs.find((ref) => ref.ingredientId === ingredientId && ref.refKind === refKind && ref.refId === refId && ref.role === role);
     if (existing) existing.deleted = false;
     else db.state.refs.push({ ingredientId, refKind, refId, role });
   },
   unlinkIngredientFromRef: async () => {},
 }));
-vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => [] }));
+vi.mock('../services/catalogPrimitiveUsage.js', () => ({ listPrimitiveUsages: async () => {
+  if (db.failUsage) throw new Error('Usage unavailable');
+  return [];
+} }));
+vi.mock('../services/universeBuilder/store.js', () => ({ isValidUniverseId: (id) => /^[A-Za-z0-9_-]{1,128}$/.test(id) }));
 vi.mock('../services/universeBuilder.js', () => ({
   updateUniverse: async (id, mutator, { afterWrite }) => {
     const { withTransaction } = await import('../lib/db.js');
@@ -97,8 +104,12 @@ const operationKey = 'd48e7a1a-3f88-42a7-93ab-a2650562a290';
 
 beforeEach(() => {
   db.failMedia = false;
+  db.failCanonLink = false;
+  db.failUsage = false;
   db.access = null;
-  db.state = { universes: { first: 'First universe', second: 'Second universe' }, canon: { first: { characters: [] }, second: { characters: [] } },
+  db.state = { universes: { first: 'First universe', second: 'Second universe' }, canon: {
+    first: { characters: [], places: [], objects: [] }, second: { characters: [], places: [], objects: [] },
+  },
     receipts: {}, relations: [], revisions: [],
     refs: [{ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'first', role: 'owner' }],
     ingredients: { 'cat-chr-source': { id: 'cat-chr-source', type: 'character', name: 'Example courier', tags: [], syncSequence: '72',
@@ -125,7 +136,86 @@ describe('creative primitive ownership and forks', () => {
     expect(result.status).toBe(200);
     expect(result.body.owner).toMatchObject({ refId: 'second', refName: 'Second universe' });
     expect(db.state.ingredients).toEqual(before);
-    expect(db.state.refs.filter((ref) => ref.role !== 'owner')).toHaveLength(2);
+    expect(db.state.refs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'first', role: 'canon-character' }),
+      expect.objectContaining({ refId: 'second', role: 'reference' }),
+      expect.objectContaining({ refId: 'second', role: 'canon-character' }),
+    ]));
+    expect(db.state.canon.second.characters).toMatchObject([{ ingredientId: 'cat-chr-source', locked: true }]);
+  });
+
+  it.each([['character', 'characters'], ['place', 'places'], ['object', 'objects']])
+  ('assigns a %s to canon once, preserves removal on retry, and refuses owner moves or clears', async (type, field) => {
+    db.state.refs = [{ ingredientId: 'cat-chr-source', refKind: 'series', refId: 'story', role: 'cast' }];
+    db.state.ingredients['cat-chr-source'].type = type;
+    const assign = () => request(app).put(`${path}/owner`).send({ universeId: 'first' });
+    const result = await assign();
+    expect(result.status).toBe(200);
+    expect(result.body.refs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'first', role: 'owner' }),
+      expect.objectContaining({ refId: 'first', role: `canon-${type}` }),
+      expect.objectContaining({ refId: 'story', role: 'cast' }),
+    ]));
+    const entry = db.state.canon.first[field][0];
+    expect(entry).toMatchObject({ ingredientId: 'cat-chr-source', locked: true });
+    expect((await assign()).status).toBe(200);
+    expect(db.state.canon.first[field]).toEqual([entry]);
+    const before = structuredClone(db.state);
+    expect((await request(app).put(`${path}/owner`).send({ universeId: 'second' })).status).toBe(409);
+    expect((await request(app).put(`${path}/owner`).send({ universeId: null })).status).toBe(400);
+    expect((await request(app).put(`${path}/owner`).send({ universeId: 'invalid/id' })).status).toBe(404);
+    expect(db.state).toEqual(before);
+    db.state.canon.first[field] = [];
+    db.state.refs.find((ref) => ref.role === `canon-${type}`).deleted = true;
+    expect((await assign()).status).toBe(200);
+    expect(db.state.canon.first[field]).toEqual([]);
+    expect(db.state.refs.find((ref) => ref.role === `canon-${type}`).deleted).toBe(true);
+  });
+
+  it.each(['idea', 'constructor'])('adds a generic reference for non-canon type %s on initial assignment', async (type) => {
+    db.state.refs = [];
+    db.state.ingredients['cat-chr-source'].type = type;
+    const response = await request(app).put(`${path}/owner`).send({ universeId: 'first' });
+    expect(response.status).toBe(200);
+    expect(response.body.refs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ refId: 'first', role: 'owner' }),
+      expect.objectContaining({ refId: 'first', role: 'reference' }),
+    ]));
+  });
+
+  it('returns the committed owner and membership if detailed usage cannot be loaded', async () => {
+    db.state.refs = [];
+    db.failUsage = true;
+    const response = await request(app).put(`${path}/owner`).send({ universeId: 'first' });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ usageComplete: false, owner: { refId: 'first' },
+      refs: expect.arrayContaining([expect.objectContaining({ refId: 'first', role: 'canon-character' })]) });
+    expect(db.state.canon.first.characters).toMatchObject([{ ingredientId: 'cat-chr-source' }]);
+  });
+
+  it('reuses an existing canon entry when resolving its ownership', async () => {
+    db.state.refs = [{ ingredientId: 'cat-chr-source', refKind: 'universe', refId: 'first', role: 'canon-character' }];
+    const entry = { id: 'existing-canon', ingredientId: 'cat-chr-source', name: 'Earlier version', locked: true };
+    db.state.canon.first.characters = [entry];
+    const response = await request(app).put(`${path}/owner`).send({ universeId: 'first' });
+    expect(response.status).toBe(200);
+    expect(db.state.canon.first.characters).toEqual([entry]);
+    expect(db.state.refs.filter((ref) => ref.role === 'canon-character')).toHaveLength(1);
+  });
+
+  it('rolls back ownership when the canon bucket is full or the membership write fails', async () => {
+    db.state.refs = [];
+    db.state.canon.first.characters = Array.from({ length: BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX }, (_, i) => ({ id: `full-${i}`, name: `Existing ${i}` }));
+    let before = structuredClone(db.state);
+    const full = await request(app).put(`${path}/owner`).send({ universeId: 'first' });
+    expect(full.status).toBe(409);
+    expect(full.body.code).toBe('UNIVERSE_CANON_FULL');
+    expect(db.state).toEqual(before);
+    db.state.canon.first.characters = [];
+    before = structuredClone(db.state);
+    db.failCanonLink = true;
+    expect((await request(app).put(`${path}/owner`).send({ universeId: 'first' })).status).toBe(500);
+    expect(db.state).toEqual(before);
   });
 
   it('refuses an implicit ownership move and a new cross-universe mutable link', async () => {
@@ -260,9 +350,27 @@ describe('creative primitive ownership and forks', () => {
     expect(db.state).toEqual(before);
   });
 
-  it('uses the same explicit ownership contract for a non-bible creative type', async () => {
-    const idea = await createOwnedPrimitive({ type: 'idea', name: 'Example premise', payload: { summary: 'A small idea.' }, tags: [] }, 'second', operationKey);
+  it.each(['idea', 'constructor'])('creates non-canon type %s with a universe reference and preserves a later removal on replay', async (type) => {
+    const input = { type, name: 'Example premise', payload: { summary: 'A small idea.' }, tags: [] };
+    const idea = await createOwnedPrimitive(input, 'second', operationKey);
     expect(idea.payload.summary).toBe('A small idea.');
     expect(db.state.refs).toContainEqual({ ingredientId: idea.id, refKind: 'universe', refId: 'second', role: 'owner' });
+    const reference = db.state.refs.find((ref) => ref.ingredientId === idea.id && ref.role === 'reference');
+    expect(reference).toMatchObject({ refKind: 'universe', refId: 'second' });
+    reference.deleted = true;
+    expect((await createOwnedPrimitive(input, 'second', operationKey)).id).toBe(idea.id);
+    expect(reference.deleted).toBe(true);
+  });
+
+  it.each(['idea', 'constructor'])('adds a non-canon %s fork without restoring a later removal on replay', async (type) => {
+    db.state.ingredients['cat-chr-source'].type = type;
+    const input = { universeId: 'second', operationKey };
+    const response = await request(app).post(`${path}/fork`).send(input);
+    expect(response.status).toBe(201);
+    const reference = db.state.refs.find((ref) => ref.ingredientId === response.body.id && ref.role === 'reference');
+    expect(reference).toMatchObject({ refKind: 'universe', refId: 'second' });
+    reference.deleted = true;
+    expect((await request(app).post(`${path}/fork`).send(input)).status).toBe(201);
+    expect(reference.deleted).toBe(true);
   });
 });

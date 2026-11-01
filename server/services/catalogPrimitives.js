@@ -41,10 +41,16 @@ async function requireUniverse(client, id) {
   if (!rows.length) fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
 }
 
-// The row lock serializes overlapping explicit ownership decisions. Conflicts
-// arriving later through federation remain visible rather than picking a winner.
+// Resolve ownership and the initial membership together. Retrying an existing
+// owner does not undo a later, deliberate removal from its universe's canon.
 export async function setPrimitiveOwner(id, universeId) {
-  await withTransaction(async (client) => {
+  const [{ updateUniverse }, { isValidUniverseId }] = await Promise.all([
+    import('./universeBuilder.js'), import('./universeBuilder/store.js'),
+  ]);
+  if (!isValidUniverseId(universeId)) fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
+  const identityIds = [];
+  let membershipRole = null;
+  await updateUniverse(universeId, async (current, { client }) => {
     await assertCatalogIdentityWritable(id, { client });
     const { rows } = await client.query('SELECT id FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE', [id]);
     if (!rows.length) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
@@ -55,17 +61,40 @@ export async function setPrimitiveOwner(id, universeId) {
     if (context.owner && context.owner.refId !== universeId) {
       fail('This primitive already has an owning universe. Fork it to use a different universe.');
     }
+    if (context.owner?.refId === universeId) return null;
     await client.query(`UPDATE catalog_ingredient_refs SET deleted = true, deleted_at = NOW()
       WHERE ingredient_id = $1 AND ref_kind = 'universe' AND role = $2 AND ref_id <> $3 AND deleted = false`,
     [id, CATALOG_OWNER_ROLE, universeId]);
     await linkIngredientToRef(id, 'universe', universeId, CATALOG_OWNER_ROLE, { client });
+    const ingredient = await getIngredient(id, { client });
+    if (!ingredient) fail('Ingredient not found', 'CATALOG_NOT_FOUND', 404);
+    const field = CANON_FIELD[ingredient.type];
+    membershipRole = field ? `canon-${ingredient.type}` : 'reference';
+    if (!field) return null;
+    const members = await client.query('SELECT unnest(catalog_identity_member_ids($1)) AS id', [id]);
+    identityIds.push(...members.rows.map((row) => row.id));
+    const list = current[field] || [];
+    if (list.some((entry) => identityIds.includes(entry.ingredientId))) return null;
+    if (list.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) fail('This universe’s canon bucket is full. Remove a membership before adding another.', 'UNIVERSE_CANON_FULL');
+    // This write only appends a catalog-sourced entry. Do not reverse-project
+    // unchanged canon entries into unrelated catalog records and revisions.
+    for (const canonField of Object.values(CANON_FIELD)) {
+      for (const entry of current[canonField] || []) if (entry.ingredientId) identityIds.push(entry.ingredientId);
+    }
+    return { [field]: [...list, canonEntryFor(ingredient)] };
+  }, { transactional: true, canonProjectionGuard: id, canonProjectionIdentityIds: identityIds,
+    afterWrite: (_universe, { client }) => membershipRole
+      ? linkIngredientToRef(id, 'universe', universeId, membershipRole, { client }) : Promise.resolve() }).catch((error) => {
+    if (error.code === 'NOT_FOUND') fail('Destination universe not found', 'UNIVERSE_NOT_FOUND', 404);
+    throw error;
   });
-  const context = await getPrimitiveContext(id);
   catalogEvents.emit('primitive-changed', { ingredientId: id });
-  return context;
+  // The assignment is committed; a failed derived-usage lookup must not make
+  // it look as if the assignment failed. The panel can retry detailed usage.
+  return getPrimitiveContext(id).catch(() => getPrimitiveContext(id, { includeDerived: false }));
 }
 
-const CANON_FIELD = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
+const CANON_FIELD = Object.freeze(Object.assign(Object.create(null), { character: 'characters', place: 'places', object: 'objects' }));
 
 /**
  * A record the user creates themselves starts unlocked. The bit is stamped
@@ -92,7 +121,11 @@ export async function createOwnedPrimitive(rawInput, universeId, operationKey) {
   const input = withUserCreatedLock(rawInput);
   const field = CANON_FIELD[input.type];
   if (!field) {
-    const result = await withTransaction((client) => createOwnedRecord(input, rawInput, universeId, operationKey, client));
+    const result = await withTransaction(async (client) => {
+      const created = await createOwnedRecord(input, rawInput, universeId, operationKey, client);
+      if (!created.replayed) await linkIngredientToRef(created.ingredient.id, 'universe', universeId, 'reference', { client });
+      return created;
+    });
     return result.ingredient;
   }
   const role = `canon-${input.type}`;
@@ -276,7 +309,11 @@ export async function forkPrimitive(sourceId, request) {
   const { rows: [sourceRow] } = await query('SELECT type FROM catalog_ingredients WHERE id = catalog_canonical_ingredient_id($1)', [sourceId]);
   const field = CANON_FIELD[sourceRow?.type];
   if (!field) {
-    const { fork } = await withTransaction((client) => forkRecord(client, sourceId, request));
+    const { fork } = await withTransaction(async (client) => {
+      const result = await forkRecord(client, sourceId, request);
+      if (!result.replayed) await linkIngredientToRef(result.fork.id, 'universe', request.universeId, 'reference', { client });
+      return result;
+    });
     catalogEvents.emit('primitive-changed', { ingredientId: fork.id });
     return fork;
   }

@@ -388,8 +388,10 @@ function canonEntryContentEqual(a, b) {
 // the bible sanitizer otherwise preserves the prior timestamp and the
 // canon→catalog projection would skip a genuine change. Untouched entries keep
 // their old timestamp so this never manufactures projection churn.
-function stampChangedCanonEntries(prev, next, canonProjectionGuard) {
+function stampChangedCanonEntries(prev, next, canonProjectionGuard, canonProjectionIdentityIds) {
   const nowMs = Date.now();
+  const guardedIds = new Set(canonProjectionIdentityIds);
+  if (canonProjectionGuard) guardedIds.add(canonProjectionGuard);
   for (const key of BIBLE_KEYS) {
     const nextList = Array.isArray(next[key]) ? next[key] : null;
     if (!nextList) continue;
@@ -398,7 +400,7 @@ function stampChangedCanonEntries(prev, next, canonProjectionGuard) {
     );
     next[key] = nextList.map((entry) => {
       // A mirrored catalog revision keeps its source clock; it is not a new edit.
-      if (!entry?.id || (canonProjectionGuard && entry.ingredientId === canonProjectionGuard)) return entry;
+      if (!entry?.id || guardedIds.has(entry.ingredientId)) return entry;
       const before = prevById.get(entry.id);
       if (before && canonEntryContentEqual(before, entry)) return entry;
       // Monotonic bump: a content change MUST advance the LWW clock past the
@@ -664,7 +666,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // on genuine content changes makes the embedded entry's timestamp truthful
     // so projectToCatalog correctly carries the edit across. Unchanged entries
     // keep their old timestamp (no spurious revisions / no projection churn).
-    stampChangedCanonEntries(cur, mergedRecord, canonProjectionGuard);
+    stampChangedCanonEntries(cur, mergedRecord, canonProjectionGuard, canonProjectionIdentityIds);
     // Persist the stale-reference-sheet null at write time so the on-disk
     // record catches up with what the GET-route pruner shows. Otherwise a
     // PATCH that omits `characters` (e.g. rename) merges from `cur` and

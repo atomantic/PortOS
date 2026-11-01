@@ -15,7 +15,8 @@ vi.mock('../../services/apiCatalog', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import CatalogUniversePanel from './CatalogUniversePanel';
 import socket from '../../services/socket';
-import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient } from '../../services/apiCatalog';
+import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient } from '../../services/apiCatalog';
+import toast from '../ui/Toast';
 
 const initial = { status: 'needs-review', owner: null, refs: [
   { refKind: 'universe', refId: 'first', role: 'canon-character', refName: 'First world', resolved: true },
@@ -28,6 +29,25 @@ function Harness(props) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('primitive ownership and fork controls', () => {
+  it('shows the new membership immediately and permits a retry after an assignment failure', async () => {
+    const owner = { refKind: 'universe', refId: 'second', role: 'owner', refName: 'Second world', resolved: true };
+    const member = { ...owner, role: 'canon-character' };
+    setCatalogUniverseOwner.mockRejectedValueOnce(new Error('Universe is full'))
+      .mockResolvedValueOnce({ ...initial, status: 'owned', owner, refs: [...initial.refs, owner, member] });
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve ownership / fork…' }));
+    await screen.findByRole('option', { name: 'Second world' });
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Universe is full'));
+    expect(screen.getByText('Ownership needs review')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Set owning universe' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await screen.findByText('Second world · Character canon');
+    expect(screen.queryByRole('button', { name: 'Add to owning universe' })).toBeNull();
+    expect(linkCatalogIngredient).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('allows an independent fork from a read-only source unless its identity is fenced (%s)', async (fenced) => {
     forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
     render(<MemoryRouter><Harness readOnly forkBlocked={fenced} /></MemoryRouter>);
