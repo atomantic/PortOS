@@ -970,6 +970,24 @@ describe('code-first production execution (#9301)', () => {
     await expect(start({ pool: POOL, authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
   });
 
+  it('names every conflicting shot before refusing a performance planned as a still', async () => {
+    const scenes = [
+      { sceneId: 'mvs-first', label: 'Example close-up', startSec: 0, endSec: 2 },
+      { sceneId: 'mvs-second', label: 'Example close-up', startSec: 2, endSec: 4 },
+      { sceneId: 'mvs-unlabeled', startSec: 4, endSec: 8 },
+    ];
+    seedCodeFirst({ scenes, directions: scenes.map((scene) => ({
+      sceneId: scene.sceneId, mode: 'performance', medium: 'still', mediumRationale: 'Selected still',
+    })) });
+    const { author } = documentDoubles();
+    await expect(start({ pool: [POOL[0]], authoring: AUTHORING })).rejects.toMatchObject({
+      code: 'PRODUCTION_MEDIUM_CONFLICT',
+      message: expect.stringMatching(/Example close-up \(mvs-first\): Visible performance.*Example close-up \(mvs-second\): Visible performance.*mvs-unlabeled: Visible performance/),
+    });
+    expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
+    expect(current().productionRuns).toBeUndefined();
+  });
+
   it('requires the current plan to be applied before starting any provider work', async () => {
     seedCodeFirst(); const { author } = documentDoubles();
     store.get('mv-example').treatment.revision = 2;

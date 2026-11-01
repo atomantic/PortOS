@@ -48,11 +48,11 @@ describe('footage tools on a code-first project (#10450)', () => {
 });
 
 describe('codeFirstProductionAssets conflicts', () => {
-  it('names a plan-level conflict once however many shots raise it', () => {
+  it('retains each shot id when several shots raise the same medium conflict', () => {
     const scenes = [0, 1, 2].map((i) => ({ sceneId: `s${i}`, startSec: i * 5, endSec: i * 5 + 5, shotMode: 'cutaway' }));
     const shotDirections = scenes.map((s) => ({ sceneId: s.sceneId, mode: 'performance', medium: 'procedural', mediumRationale: 'x' }));
     const p = { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 }, audioAnalysis: { durationSec: 15 }, scenes,
       treatment: { revision: 1, appliedRevision: 1, shotDirections } };
-    expect(codeFirstProductionAssets(p).conflicts).toEqual([expect.stringMatching(/^Visible performance is unresolved/)]);
+    expect(codeFirstProductionAssets(p).conflicts).toEqual(scenes.map((scene) => expect.stringMatching(new RegExp(`^${scene.sceneId}: Visible performance is unresolved`))));
   });
 });
