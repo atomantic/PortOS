@@ -90,4 +90,18 @@ describe('NextActionBanner question load', () => {
     expect(await screen.findByText('A generated follow-up?')).toBeInTheDocument();
     expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, undefined, { silent: true, structuredOnly: false });
   });
+
+  it('keeps the skipped questions out of the generated follow-up request', async () => {
+    api.getActiveProvider.mockResolvedValue({ id: 'example', name: 'Example Provider' });
+    api.getDigitalTwinEnrichQuestion
+      .mockResolvedValueOnce({ questionId: 'q1', question: 'First question?', questionIndex: 0 })
+      .mockResolvedValueOnce({ category: 'core_memories', exhausted: true })
+      .mockResolvedValueOnce({ questionId: 'g1', question: 'A generated follow-up?', isGenerated: true });
+    renderBanner();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate a follow-up question with Example Provider' }));
+    expect(await screen.findByText('A generated follow-up?')).toBeInTheDocument();
+    expect(api.getDigitalTwinEnrichQuestion).toHaveBeenLastCalledWith('core_memories', undefined, undefined, [0], { silent: true, structuredOnly: false });
+  });
 });
