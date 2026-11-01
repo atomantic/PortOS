@@ -58,7 +58,7 @@
     "smoke": "node scripts/smoke-boot.js"
   },
   "dependencies": {
-    "pm2": "7.1.0"
+    "pm2": "7.1.1"
   },
   "overrides": {
     "lodash": "4.18.1",
