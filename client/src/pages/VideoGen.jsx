@@ -923,9 +923,9 @@ export default function VideoGen() {
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
     },
     {
-      key: 'speed-profile', id: speedProfileAssetId, label: 'LightX2V adapter',
+      key: 'speed-profile', id: speedProfileAssetId, label: 'speed profile adapter',
       applies: !!speedProfileAssetId, status: speedProfileStatus, keyPrefix: speedProfileAssetId,
-      name: 'The LightX2V v1.3 adapter', repairLabel: 'Download adapter again',
+      name: selectedH3SpeedProfile?.name || 'The selected speed adapter', repairLabel: 'Download adapter again',
     },
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
@@ -1933,7 +1933,9 @@ export default function VideoGen() {
               {...localResolutionBounds}
               snapOnBlur
               note={isMiniMaxH3Runtime(currentModel?.runtime)
-                ? 'H3 quality presets follow its trained 768px short-edge, area-capped canvas. Smaller custom sizes are off-distribution but useful for faster wiring tests; each edge snaps to 32px.'
+                ? selectedH3SpeedProfile
+                  ? `The selected Speed profile supports ${selectedH3SpeedProfile.canvases.map(([w, h]) => `${w}×${h}`).join(', ')}. Set an exact size below; each edge snaps to 32px.`
+                  : 'H3 quality presets follow its trained 768px short-edge, area-capped canvas. Smaller custom sizes are off-distribution but useful for faster wiring tests; each edge snaps to 32px.'
                 : `Each edge 64–2048px; the server rounds each down to the nearest multiple of ${localResolutionBounds.step}px.`}
             />
 

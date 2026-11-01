@@ -546,10 +546,10 @@ export async function resolveByovRuntimeLoraCapable(runtimeId) {
 
 // A profile request verifies the sampler seams independently of the optional
 // user-LoRA capability. No model weights or network access enter this probe.
-export async function resolveMiniMaxH3MlxSpeedCapable() {
+export async function resolveMiniMaxH3MlxSpeedCapable(profileId) {
   if (!existsSync(MINIMAX_H3_VENV_PYTHON) || !await isByovRuntimeCurrent('minimax_h3')) return false;
   return runVenvProbe(MINIMAX_H3_VENV_PYTHON, [
-    join(PATHS.root, 'scripts', '_minimax_h3_mlx_lightx2v.py'), '--probe',
+    join(PATHS.root, 'scripts', profileId === 'pika-h3-flex-mlx-6step' ? '_minimax_h3_mlx_flex.py' : '_minimax_h3_mlx_lightx2v.py'), '--probe',
     MINIMAX_H3_REPO_DIR, MINIMAX_H3_EXPECTED_REVISION,
   ], 'MiniMax H3 MLX LightX2V');
 }

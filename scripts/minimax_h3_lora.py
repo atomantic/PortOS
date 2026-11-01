@@ -433,7 +433,7 @@ def _load_adapter(adapter_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _plan_lora(
-    transformer: nn.Module, path: str | Path, scale: float
+    transformer: nn.Module, path: str | Path, scale: float, *, alpha=None, dtype=None
 ) -> list[tuple[nn.Module, str, _LoRAProjection]]:
     """Load and fully validate one adapter without touching the transformer."""
     adapter_path = Path(path)
@@ -444,6 +444,10 @@ def _plan_lora(
         raise ValueError(f"MiniMax H3 LoRA scale must be finite: {scale!r}")
 
     tensors, metadata = _load_adapter(adapter_path)
+    if alpha is not None:
+        metadata = {**metadata, "alpha": str(alpha)}
+    if dtype is not None:
+        tensors = {key: value.astype(dtype) for key, value in tensors.items()}
     # Resolved per adapter file, so each adapter in a stack keeps its own row
     # order rather than sharing one global permutation.
     declared_qkv_layout = _declared_qkv_layout(metadata, adapter_path.name)
@@ -518,5 +522,5 @@ def apply_loras(transformer: nn.Module, loras: list[dict[str, Any]]) -> None:
     for spec in loras:
         if not isinstance(spec, dict) or not spec.get("path"):
             raise ValueError("Each MiniMax H3 LoRA must provide a path.")
-        planned.extend(_plan_lora(transformer, spec["path"], spec.get("scale", 1.0)))
+        planned.extend(_plan_lora(transformer, spec["path"], spec.get("scale", 1.0), alpha=spec.get("alpha"), dtype=spec.get("dtype")))
     _attach(planned)

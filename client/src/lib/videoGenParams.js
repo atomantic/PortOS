@@ -155,7 +155,7 @@ export const textEncoderIdFromRecord = (value) => (
 // identically.
 export const DEFAULT_SPEED_PROFILE_ID = 'quality';
 export const isMiniMaxH3SpeedProfile = (profile) => (
-  profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v'
+  profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v' || profile?.type === 'minimax-h3-mlx-flex'
 );
 
 // Absence, the empty string and the default id are one request — mirrors
