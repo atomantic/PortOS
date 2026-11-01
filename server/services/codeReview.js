@@ -299,10 +299,11 @@ export function getLocalCodeReviewTimeoutMs(diff) {
 export const REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS = 600_000
 export const REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS = 1_800_000
 
-// The toolkit stamps its generic run default onto every provider record it
-// creates (`timeout: providerData.timeout || 300000`), so that exact value means
-// "never tuned", not a chosen review cap. Honoring it cut grok-cli claim reviews
-// of ordinary ~23 KiB diffs off at 300 s (#14499).
+// 300000 is the generic run default that the toolkit's create path, the
+// provider form's pre-fill and the shipped samples all write, so on a stored
+// record it means "never tuned", not a chosen review cap — and no record can
+// tell the two apart after the fact. Honoring it cut grok-cli claim reviews
+// of ordinary ~23 KiB diffs off at 300 s (#14499); every other value still wins.
 export const getRemoteCodeReviewTimeoutMs = (provider) => (
   Number.isFinite(provider?.timeout) && provider.timeout > 0 && provider.timeout !== PROVIDER_DEFAULT_TIMEOUT_MS
     ? Math.min(REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, provider.timeout)
