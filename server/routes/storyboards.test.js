@@ -102,6 +102,17 @@ describe('storyboards routes', () => {
     expect(mixed.status).toBe(400);
   });
 
+  it('keeps a panel set camera, clears it, and refuses an id no greybox shot can have', async () => {
+    const { body: board } = await api('post', '/', {});
+    const beat = (await api('post', `/${board.id}/beats`, {})).body.beatId;
+    const panel = (await api('post', `/${board.id}/beats/${beat}/panels`, { environmentIds: ['cat-rink'] })).body.panelId;
+    const setShot = { environmentId: 'cat-rink', shotId: 'wall-east' };
+    expect((await api('patch', `/${board.id}/panels/${panel}`, { setShot })).body.beats[0].panels[0].setShot).toEqual(setShot);
+    // Longer than a shot id fits in its capture's media role, so the music video shot would refuse it.
+    expect((await api('patch', `/${board.id}/panels/${panel}`, { setShot: { ...setShot, shotId: `w${'x'.repeat(51)}` } })).status).toBe(400);
+    expect((await api('patch', `/${board.id}/panels/${panel}`, { setShot: null })).body.beats[0].panels[0].setShot).toBeNull();
+  });
+
   it('attaches a temp track from uploads and takes it off again', async () => {
     const { body: board } = await api('post', '/', { name: 'Demo' });
     const set = await api('patch', `/${board.id}`, { tempTrack: { filename: '0a1b2c3d-demo_v2.mp3', name: 'demo v2.mp3' } });

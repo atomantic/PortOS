@@ -30,6 +30,7 @@ import {
 } from './storyboardVocabulary.js';
 import { RECIPE_LIMITS, sanitizePanelMake, sanitizeRecipe } from './storyboardRecipe.js';
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 const SKETCH_KEY_PATTERN = /^sketch:[A-Za-z0-9-]{1,80}$/;
 const ENTITY_ID_PATTERN = /^[a-z]+-[A-Za-z0-9-]{1,80}$/;
@@ -56,10 +57,10 @@ const pick = (value, set, fallback = null) => (set.has(value) ? value : fallback
 const isoOr = (value, fallback) => (isNonBlankStr(value) && Number.isFinite(Date.parse(value)) ? value : fallback);
 const entityId = (value, prefix) => (typeof value === 'string' && ENTITY_ID_PATTERN.test(value) ? value : newStoryboardEntityId(prefix));
 const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
-const SET_SHOT_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const sanitizeSetShot = (value) => {
   const environmentId = refOrNull(value?.environmentId);
-  return environmentId && SET_SHOT_ID.test(value?.shotId || '') ? { environmentId, shotId: value.shotId } : null;
+  const shotId = typeof value?.shotId === 'string' ? value.shotId : '';
+  return environmentId && shotId.length <= GREYBOX_SHOT_ID_MAX && GREYBOX_SHOT_ID_PATTERN.test(shotId) ? { environmentId, shotId } : null;
 };
 
 /**

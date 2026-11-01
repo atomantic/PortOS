@@ -14,6 +14,7 @@ import { RECIPE_LIMITS as R, RECIPE_NODE_TYPES, RECIPE_PORT_LABELS } from './sto
 import { BEAT_EXTRACT_LIMITS } from './storyboardBeatExtract.js';
 import { isStoryboardTempTrackFilename } from './storyboardRecord.js';
 import { creativeDirectorProjectCreateSchema } from './creativeDirectorValidation.js';
+import { GREYBOX_SHOT_ID_MAX, GREYBOX_SHOT_ID_PATTERN } from './greyboxVocabulary.js';
 
 const text = (max) => z.string().max(max);
 const ref = z.string().trim().min(1).max(L.refId);
@@ -74,7 +75,7 @@ const panelFields = {
   environmentIds: refs.optional(),
   objectIds: refs.optional(),
   // Which saved greybox camera of one of its environments the panel is seen from.
-  setShot: z.object({ environmentId: ref, shotId: z.string().trim().min(1).max(64).regex(/^[A-Za-z][A-Za-z0-9_-]*$/) }).strict().nullable().optional(),
+  setShot: z.object({ environmentId: ref, shotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN) }).strict().nullable().optional(),
   notes: text(L.notes).optional(),
 };
 

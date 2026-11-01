@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { GREYBOX_ASPECTS, GREYBOX_SHOT_ROLE_PREFIX } from './greyboxVocabulary.js';
+import { GREYBOX_ASPECTS, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
 
 export const GREYBOX_SCHEMA_VERSION = 1;
 
@@ -96,7 +96,7 @@ const shotFigureSchema = z.object({
 
 // A shot's capture carries `greybox-shot:<id>` as its media role (VARCHAR(64)),
 // so the id has to leave room for the prefix.
-const shotIdSchema = idSchema.max(64 - GREYBOX_SHOT_ROLE_PREFIX.length);
+const shotIdSchema = idSchema.max(GREYBOX_SHOT_ID_MAX);
 
 const shotSchema = z.object({
   id: shotIdSchema,
