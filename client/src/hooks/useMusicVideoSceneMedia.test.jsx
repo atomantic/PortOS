@@ -183,3 +183,20 @@ describe('useMusicVideoSceneMedia clip from the storyboard panel', () => {
     expect(JSON.parse(sent.musicVideo)).toMatchObject({ projectId: 'p5', sceneId: 's1', songAudio: false });
   });
 });
+
+describe('useMusicVideoSceneMedia cold-open clip sound', () => {
+  afterEach(cleanup);
+
+  // Uniquely catches a cold-open shot with Clip sound on rendering a silent local clip (or a song shot gaining sound).
+  it('asks a local render for sound only on a cold-open shot playing its clip sound', async () => {
+    const { generateVideo } = await import('../services/apiImageVideo.js');
+    const scene = (sceneId, extra) => ({ sceneId, order: 0, prompt: 'the rink at dawn', referenceImageId: `${sceneId}.png`, takes: [], ...extra });
+    const project = { id: 'p6', scenes: [scene('s1', { preMusic: { durationSec: 4, clipVolume: 1 } }), scene('s2', { startSec: 0, endSec: 4 })] };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: { backend: 'local' } }, applyScenePatch: vi.fn() }));
+    for (const [index, disableAudio] of [[0, false], [1, true]]) {
+      generateVideo.mockResolvedValueOnce({ jobId: `job-${index}`, status: 'queued' });
+      await act(async () => { await result.current.generateSceneVideo(project.scenes[index]); });
+      expect(generateVideo.mock.calls.at(-1)[0]).toMatchObject({ backend: 'local', disableAudio });
+    }
+  });
+});

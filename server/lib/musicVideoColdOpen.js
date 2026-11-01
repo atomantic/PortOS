@@ -69,6 +69,13 @@ export function normalizePreMusic(value) {
 
 export const isPreMusicShot = (scene) => !!scene?.preMusic && typeof scene.preMusic === 'object';
 
+/**
+ * Whether a shot plays its clip's own sound: a cold-open shot with Clip sound
+ * on. Only such a shot asks its video model for sound; every song shot renders
+ * silent, since the song is its only soundtrack.
+ */
+export const preMusicClipSound = (scene) => isPreMusicShot(scene) && normalizePreMusic(scene.preMusic).clipVolume > 0;
+
 const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
 
 /** The cold-open shots in play order. */
