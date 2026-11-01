@@ -14,7 +14,7 @@ import {
   pyRound, pyRoundTo, median, sampleBorderKey, validateMeasuredKey,
   isUsableMeasuredKey, longestUsableSpan,
   recoverAlphaFrame, despillKeyFrame, imageDistance, estimateMotionPeriod, isPeriodAgreement,
-  selectCycleIndices, selectAmbientLoopIndices, selectArclengthIndices,
+  selectCycleIndices, selectAmbientLoopIndices, _selectArclengthIndices as selectArclengthIndices,
   alphaBbox, rootX, robustBottomRow, alignFrames, packStrip, validateFrames, buildContrastSheet,
   rootBandForManifest, ROOT_BAND_TORSO, ROOT_BAND_HIP, ALIGN_OP_TORSO_X,
   decodeTransparentSpriteSource, prepareWalkAnchorChromaInput,

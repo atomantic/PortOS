@@ -585,7 +585,7 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
 }
 
 /** Sample an action across equal cumulative RGB motion, including both endpoints. */
-export function selectArclengthIndices(signatures, frameCount) {
+function selectArclengthIndices(signatures, frameCount) {
   const n = signatures.length;
   if (!Number.isInteger(frameCount) || frameCount < 2) {
     throw new Error('Action sampling needs an integer frame count of at least 2');
@@ -626,6 +626,8 @@ export function selectArclengthIndices(signatures, frameCount) {
     },
   };
 }
+
+export { selectArclengthIndices as _selectArclengthIndices };
 
 /**
  * Pick a non-directional ambient-loop window and resample it evenly.
