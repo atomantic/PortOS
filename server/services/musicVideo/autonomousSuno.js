@@ -433,8 +433,8 @@ const chosenRender = (ids, picked) => picked || pickRender(ids);
 
 /**
  * Submit a song to Suno and stop: no export, so no download credit is spent.
- * The song checkpoint parks on these ids until the director picks a render,
- * (or revise it in Suno), then `generateSunoSong` exports only the approved song
+ * The song checkpoint parks on these ids until the director picks a render
+ * (or revises it in Suno), then `generateSunoSong` exports only the approved song
  * (`songIds` + `exportSongId`).
  */
 export async function submitSunoSongOnly(fields, deps = {}) {

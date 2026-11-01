@@ -112,10 +112,10 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   // Parked on fresh Suno renders before their download (a download spends one of the account's
   // monthly downloads): the director listens on Suno and approves the one to download.
   const songRenders = awaiting === 'song' && run.stage === 'song' && !run.output?.trackId && sunoCount ? run.output.sunoSongIds : [];
-  const linkText = songLink?.runId === run.id ? songLink.value : '';
+  const linkText = songLink && songLink.runId === run.id ? songLink.value : '';
   const linkedSong = SUNO_SONG_ID.exec(linkText)?.[0]?.toLowerCase() || null;
   const pickedRender = !songRenders.length ? null
-    : linkedSong || (songPick?.runId === run.id && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
+    : linkedSong || (songPick && songPick.runId === run.id && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
   // A failed run that only has the final render left retries just that.
   const retryLabel = run.status === 'failed' && run.stage === 'produce' && (run.output?.renderJobId || run.output?.productionDone) ? 'Retry render' : run.status === 'failed' ? 'Retry' : 'Resume';
   // A stale or hand-edited `?run-stage=` that names no finished, viewable stage opens nothing.
