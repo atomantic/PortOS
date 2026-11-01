@@ -158,7 +158,7 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
  * history records. Returns the plan with the record of the text fal receives
  * (#11317); the Video Gen form's preview calls it with the same inputs.
  */
-export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, promptAdditions = [], ...spec }) {
+export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
   const { negativePrompt } = spec;
   // A storyboard-guided render (`guidanceReferences`: how many reference images
@@ -172,7 +172,9 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
   try {
     planned = buildFalVideoRequest({
       ...spec, modelId, prompt,
-      ...(guidance ? { referenceImageUrls: guidance.placeholders } : {}),
+      // A sequence take (#14241) sends one frame per shot, named in its prompt as Image n.
+      ...(guidance ? { referenceImageUrls: guidance.placeholders }
+        : referenceCount > 0 ? { referenceImageUrls: Array.from({ length: referenceCount }, (_, i) => `pending:reference-${i + 1}`) } : {}),
       imageUrl: hasImage ? 'pending:image' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
       audioUrl: hasAudio && !audioAsReference ? 'pending:audio' : null,
@@ -269,11 +271,13 @@ async function generateVideoPrepared({
     // A shot card shows the text that is sent, so the provider may not rewrite it.
     ...(musicVideo ? { promptExpansion: 'disabled' } : {}),
   };
-  const guidanceImages = guidanceImagePath ? [guidanceImagePath, ...referenceImagePaths] : [];
+  // Without a storyboard panel the references go in as given: a music-video sequence take (#14241).
+  const guidanceImages = guidanceImagePath ? [guidanceImagePath, ...referenceImagePaths] : referenceImagePaths;
   const { planned, record: sentRecord, prompt: guidedPrompt } = falVideoSentPrompt({
     ...requestSpec, promptAdditions,
     hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
     guidanceReferences: guidanceImagePath ? referenceImagePaths.length : null,
+    referenceCount: guidanceImagePath ? 0 : referenceImagePaths.length,
   });
   // The guided render sends the prompt with its role lines, exactly as the record shows.
   if (guidanceImagePath) requestSpec.prompt = guidedPrompt;

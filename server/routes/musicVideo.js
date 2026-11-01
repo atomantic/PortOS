@@ -48,6 +48,7 @@ import {
   musicVideoTreatmentUpdateSchema,
   musicVideoTreatmentCompileSchema,
   musicVideoTreatmentApplySchema,
+  musicVideoSequenceRenderSchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
   musicVideoSocialCutsQuerySchema,
@@ -534,6 +535,13 @@ router.get('/:id/treatment/apply-preview', asyncHandler(async (req, res) => {
 router.get('/:id/sequence-coverage', asyncHandler(async (req, res) => {
   const { previewSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
   res.json(previewSequenceCoverage(await requireProject(req.params.id)));
+}));
+
+// Queue one planned run as a single fal request; the clip is cut onto its scenes on completion.
+router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
+  const { sceneIds } = validateRequest(musicVideoSequenceRenderSchema, req.body ?? {});
+  const { submitSequenceCoverage } = await import('../services/musicVideo/sequenceCoverage.js');
+  res.status(202).json(await submitSequenceCoverage(req.params.id, { sceneIds }));
 }));
 
 router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {

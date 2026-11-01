@@ -160,6 +160,7 @@ import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
 import { initFableLoomSceneVideoHook } from './fableLoomSceneVideoHook.js';
 import { initMusicVideoSceneImageHook } from './musicVideoSceneImageHook.js';
 import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
+import { initMusicVideoSequenceVideoHook } from './musicVideoSequenceVideoHook.js';
 import { initMusicVideoCollectionHook } from './musicVideoCollectionHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
 import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
@@ -731,6 +732,8 @@ const initMediaJobDependentHooks = () => {
   // Music Video scene-video hook — durably files a queued i2v scene clip onto
   // its project scene's `videoHistoryId` on completion (#1760 Phase 1).
   initMusicVideoSceneVideoHook();
+  // Music Video sequence hook (#14241) — cuts one sequence clip onto its scenes' in/out points.
+  initMusicVideoSequenceVideoHook();
   // Music Video collection hook — files every render that names a music video
   // (a shot's, Cast & Sets, or a tagged Image/Video Gen request) into its collection.
   initMusicVideoCollectionHook();

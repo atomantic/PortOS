@@ -14,13 +14,18 @@
  *   - `sequenceClipSpans` maps each scene back to its in/out point inside the
  *     returned clip — the existing scene cut times, never new ones.
  *
- * Only reference-to-video models are eligible. Kling's `multi_prompt` is not
- * represented: its schema has not been verified, so Kling stays per-shot rather
- * than sending a body the endpoint may not accept.
+ * Only reference-to-video models are eligible. Kling v3 Pro image-to-video does
+ * take `multi_prompt` (fal schema read 2026-10-31), but each element's `duration`
+ * is a whole-second enum ("1"-"15") beside one start image, so its shot changes
+ * cannot land on a scene's own in/out point; rounding them would invent cut
+ * times. Kling stays per-shot.
  */
 
 import { falReferenceImageName } from './storyboardGuidance.js';
-import { getFalVideoModel } from './falVideoModels.js';
+import {
+  FAL_DEFAULT_IMAGE_VIDEO_MODEL, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel,
+} from './falVideoModels.js';
+import { authoredShotPrompt } from './musicVideoShotPrompt.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 
 const EPS = 1e-6;
@@ -34,7 +39,9 @@ function sequenceCoverageBlockedReason(modelId) {
   const model = getFalVideoModel(modelId);
   if (!model) return 'The selected model is not in the curated fal catalog';
   if (model.kind !== 'ref2v') {
-    return `${model.label} has no verified multi-shot request body (Kling's multi_prompt is not represented), so it stays per-shot`;
+    return model.family === 'kling-v3'
+      ? `${model.label} times multi-shot prompts in whole seconds, which cannot hold this section's cut points, so it stays per-shot`
+      : `${model.label} renders one shot per request, so it stays per-shot`;
   }
   return null;
 }
@@ -144,4 +151,33 @@ export function sequenceClipSpans(group, scenes, { clipDurationSec = null } = {}
     return { ok: false, reason: `the generated clip is ${round3(clipDurationSec)}s but the sequence needs ${group.durationSec}s` };
   }
   return { ok: true, spans };
+}
+
+/** The fal model a project's sequence runs render on, or null off the fal backend. */
+export const sequenceModelId = (project) => {
+  const settings = project?.videoSettings || {};
+  return settings.backend === 'fal' ? settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL : null;
+};
+
+/**
+ * What one planned run sends: shot n is "Image n" and its frame the nth
+ * reference, the timed prompt, the labeled prompt-expansion value, and each
+ * scene's cut inside the clip. The server submit and the shot card both read
+ * this, so the card shows the request that is sent.
+ */
+export function sequenceGroupInput(project, group) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const modelId = sequenceModelId(project);
+  const byId = new Map(scenes.map((s) => [sceneKey(s), s]));
+  const members = group.sceneIds.map((id) => byId.get(id));
+  const prompt = composeSequencePrompt({
+    modelId,
+    shots: members.map((s, i) => ({ prompt: authoredShotPrompt(s), startSec: s.startSec, endSec: s.endSec, imageIndex: i + 1 })),
+  });
+  const expansion = falPromptExpansionMode(getFalVideoModel(modelId), SEQUENCE_PROMPT_EXPANSION);
+  return {
+    modelId, members, prompt, resolution: project?.videoSettings?.falResolution,
+    promptAdditions: [falPromptExpansionAddition(expansion)].filter(Boolean),
+    spans: sequenceClipSpans(group, scenes).spans,
+  };
 }

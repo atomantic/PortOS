@@ -20,7 +20,12 @@ export function listInFlightSceneJobs(projectId) {
     if (job.status !== 'queued' && job.status !== 'running') continue;
     const lane = LANE_BY_KIND[job.kind];
     const tag = job.params?.musicVideo;
-    if (!lane || tag?.projectId !== projectId || !tag.sceneId) continue;
+    if (!lane || tag?.projectId !== projectId) continue;
+    // One sequence clip (#14241) is in flight on every scene it covers.
+    if (!tag.sceneId) {
+      for (const span of tag.sequence?.spans || []) out.push({ jobId: job.id, lane, sceneId: span.sceneId, status: job.status });
+      continue;
+    }
     // An end-frame render (#11173) restores into the board's end-frame lane.
     out.push({ jobId: job.id, lane: lane === 'image' && tag.slot === 'end' ? 'endImage' : lane, sceneId: tag.sceneId, status: job.status });
   }
