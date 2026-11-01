@@ -123,7 +123,8 @@ export async function findMergeRequestForBranch(branch, cwd, { includeDraft = fa
   }
   const mr = rows[0];
   if (!mr) return { status: 'none', number: null, url: null, detail: null };
-  return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null, headRefOid: typeof mr.sha === 'string' ? mr.sha : null, ...(includeDraft ? { isDraft: mr.draft === true || mr.work_in_progress === true } : {}) };
+  const mergedAt = typeof mr.merged_at === 'string' && Number.isFinite(Date.parse(mr.merged_at)) ? mr.merged_at : null;
+  return { status: 'found', number: mr.iid ?? null, url: mr.web_url || null, body: typeof mr.description === 'string' ? mr.description : null, detail: mr.state || null, headRefOid: typeof mr.sha === 'string' ? mr.sha : null, ...(mergedAt ? { mergedAt } : {}), ...(includeDraft ? { isDraft: mr.draft === true || mr.work_in_progress === true } : {}) };
 }
 
 /**

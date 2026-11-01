@@ -84,6 +84,7 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
     readable: !!found.detail,
     ...(published && found.autoMergeEnabled === true ? { autoMergeEnabled: true } : {}),
     ...(mergeHandoffQueued ? { mergeHandoffQueued: true } : {}),
+    ...(typeof found.mergedAt === 'string' && Number.isFinite(Date.parse(found.mergedAt)) ? { mergedAt: found.mergedAt } : {}),
   };
 }
 
@@ -107,15 +108,30 @@ export async function readMergedPrTip(sourceWorkspace, branchName) {
  * files never hold it. Bound to the SHA, not the branch name — a later local
  * commit, an unreadable forge, or no PR all answer false.
  */
-export async function isMergedPrHead(sourceWorkspace, branchName, head) {
+async function probeMergedHead(sourceWorkspace, branchName, head) {
   const observed = String(head || '').toLowerCase();
-  if (!observed || !branchName) return false;
+  if (!observed || !branchName) return null;
   // Awaited without `resolveForge`'s abandon-on-timeout race: removal follows this
   // answer, so no forge lookup may still be running git in the checkout afterwards.
   const forge = await git.resolveForgeForRepo(sourceWorkspace).catch(() => null);
-  if (!forge?.cli) return false;
+  if (!forge?.cli) return null;
   const probe = await probePrForBranch(sourceWorkspace, branchName, forge).catch(() => null);
-  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === observed;
+  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === observed ? probe : null;
+}
+
+export async function isMergedPrHead(sourceWorkspace, branchName, head) {
+  return (await probeMergedHead(sourceWorkspace, branchName, head)) != null;
+}
+
+/**
+ * The forge merge time for `branchName` at exactly `head`, or null. A merged
+ * pull request with no readable merge time is null: directory age cannot stand
+ * in for "this just merged." Callers that only need the boolean use
+ * `isMergedPrHead`, which still answers true without a timestamp.
+ */
+export async function readMergedPrDelivery(sourceWorkspace, branchName, head) {
+  const probe = await probeMergedHead(sourceWorkspace, branchName, head);
+  return probe && Number.isFinite(Date.parse(probe.mergedAt || '')) ? { mergedAt: probe.mergedAt } : null;
 }
 
 /**

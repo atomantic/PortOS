@@ -19,7 +19,7 @@ import { execGit } from '../lib/execGit.js';
 import { resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch, getPullRequestState } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
-import { readMergedPrTip, isMergedPrHead, probeChangeRequestState, probePrForBranch } from './prProbe.js';
+import { readMergedPrTip, isMergedPrHead, readMergedPrDelivery, probeChangeRequestState, probePrForBranch } from './prProbe.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -145,6 +145,14 @@ describe('isMergedPrHead', () => {
   ])('answers %s', async (_name, found, head, expected) => {
     findPullRequestForBranch.mockResolvedValue(found);
     expect(await isMergedPrHead('/repo', 'my-branch', head)).toBe(expected);
+  });
+
+  it('returns the merge time only when that exact head merged, and never invents one', async () => {
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', headRefOid: 'ABC', mergedAt: '2026-10-01T00:00:00.000Z' });
+    expect(await readMergedPrDelivery('/repo', 'my-branch', 'abc')).toEqual({ mergedAt: '2026-10-01T00:00:00.000Z' });
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', detail: 'MERGED', headRefOid: 'abc' });
+    expect(await isMergedPrHead('/repo', 'my-branch', 'abc')).toBe(true);
+    expect(await readMergedPrDelivery('/repo', 'my-branch', 'abc')).toBe(null);
   });
 });
 
