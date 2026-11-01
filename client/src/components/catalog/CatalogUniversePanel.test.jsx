@@ -92,6 +92,41 @@ describe('primitive ownership and fork controls', () => {
     expect(forkCatalogIngredient.mock.calls[1][1].operationKey).toBe(first.operationKey);
   });
 
+  it('discards a redesign proposal after assigning an owner', async () => {
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    setCatalogUniverseOwner.mockResolvedValue({ ...initial, status: 'owned', owner });
+    function HarnessWithProposal() {
+      const [context, setContext] = useState(initial);
+      const [fields, setFields] = useState({ physicalDescription: 'A red coat.' });
+      return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context}
+        onContextChange={setContext} redesign={fields ? { fields, clear: () => setFields(null) } : null} />;
+    }
+    render(<MemoryRouter><HarnessWithProposal /></MemoryRouter>);
+    await screen.findByLabelText('Destination universe');
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'first' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await screen.findByRole('button', { name: /Fork \/ experiment/ });
+    fireEvent.click(screen.getByRole('button', { name: /Fork \/ experiment/ }));
+    await screen.findByLabelText('Destination universe');
+    expect(screen.queryByText(/The fork gets the redesigned physical description/)).not.toBeInTheDocument();
+  });
+
+  it('discards a redesign proposal when the fork dialog is cancelled', async () => {
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    function Harness() {
+      const [context, setContext] = useState({ status: 'owned', owner, refs: [owner] });
+      const [fields, setFields] = useState({ physicalDescription: 'A red coat.' });
+      return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context}
+        onContextChange={setContext} redesign={fields ? { fields, clear: () => setFields(null) } : null} />;
+    }
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    await screen.findByText(/The fork gets the redesigned physical description/);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: /Fork \/ experiment/ }));
+    await screen.findByLabelText('Destination universe');
+    expect(screen.queryByText(/The fork gets the redesigned physical description/)).not.toBeInTheDocument();
+  });
+
   it('seeds the fork with only the tapped images, grouped by age, and saves a redesign onto the fork', async () => {
     forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
     const clear = vi.fn();

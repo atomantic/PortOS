@@ -8,7 +8,8 @@
  */
 
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
 import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -160,11 +161,19 @@ function IngredientEditor() {
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
   const [record, setRecord] = useState(null);
+  const [universeMount] = useState(() => document.createElement('div'));
+  const universeProfileSlot = useRef(null);
+  const universeFallbackSlot = useRef(null);
   const [mergeVersion, setMergeVersion] = useState(0);
   const [mergeBusy, setMergeBusy] = useState(false);
   const identityReadOnly = record?.sharedIdentity?.writable === false;
   const identityReason = identityReadOnly ? 'This shared identity is read-only here. Inspect its ownership notice and agreement.' : null;
   const [loading, setLoading] = useState(true);
+  useLayoutEffect(() => {
+    const slot = record?.type === 'character' && profileActive ? universeProfileSlot.current : universeFallbackSlot.current;
+    slot?.appendChild(universeMount);
+    return () => universeMount.remove();
+  }, [record?.type, profileActive, profileVisited, loading, universeMount]);
   const [name, setName] = useState('');
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
@@ -944,12 +953,13 @@ function IngredientEditor() {
           <button type="button" onClick={() => { applyDetails(externalDetails); setExternalDetails(null); }}
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
-        <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
+        <div ref={universeFallbackSlot} />
+        {createPortal(<CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
           onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
-          seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />
+          seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />, universeMount)}
 
-        <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
-          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
+        {record.type !== 'character' && <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />}
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
@@ -1015,7 +1025,7 @@ function IngredientEditor() {
               contextLoading={!!ownerUniverseId && !ownerUniverse && !ownerContextError}
               disabled={identityReadOnly || characterActionBusy} actionsDisabled={payload.locked === true || isDirty || saving || unlocking || lookSaving}
               onPatch={(patch) => setPayload((previous) => ({ ...previous, ...patch }))}
-              saveHint="Use Save to save your character edits"
+              saveHint={null}
               portrait={coverUrl ? <CatalogImagePreview key={coverUrl} src={coverUrl} fallbackSrc={coverUrl.replace('/data/images/', '/data/image-refs/')}
                 alt={`${record.name || 'Character'} cover`} className="w-full max-h-64 object-contain rounded" loading="eager" /> : null}
               identityControls={<div className="space-y-3">
@@ -1045,6 +1055,13 @@ function IngredientEditor() {
                     }).catch(error => toast.error(error.message || 'Could not refresh the character.'));
                   }} />}
               </div>}
+              primaryActions={<div className="space-y-3"><div className="flex flex-wrap items-start gap-2">
+                <GenerateImageControl key={record.id} ingredientId={record.id} name={name} description={genDescription}
+                  universeId={universeRef?.refId || null} onComplete={handleGeneratedImage}
+                  disabled={identityReadOnly || payload.locked === true || characterActionBusy || saving || unlocking || lookSaving || !!externalDetails} />
+                <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
+                  onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
+              </div><div ref={universeProfileSlot} /></div>}
               storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
             >
               <div className="bg-port-card border border-port-border rounded-lg p-4">
@@ -1200,6 +1217,8 @@ function IngredientEditor() {
             onDetach={identityReadOnly ? undefined : handleDetachMedia}
             onUploadFile={handleUploadFile}
             onRecordVoice={handleRecordVoiceMemo}
+            hideGenerate={record.type === 'character'}
+            generateProfilePath={record.type === 'character' && tabs ? `${detailTabPath(library, record.id, 'profile')}${search}` : null}
             genIngredientId={record.id}
             genName={name}
             genDescription={genDescription}
@@ -1600,7 +1619,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove, readOnly
 // memo" (MediaRecorder → WAV → Whisper transcript) persist through the catalog
 // media-upload/voice routes into the federating library dirs, then attach via
 // the same media-refs seam gallery picks use.
-function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated, pendingRenders = [], onPendingRenderComplete, onPendingRenderFailed }) {
+function MediaPanel({ generateProfilePath = null, hideGenerate = false, canonRemoval = null, readOnly = false, referenceLibrary = null, media, canonImageRefs = [], primaryImageRef, missingMedia, onAttach, onSetPortrait, onDetach, onUploadFile, onRecordVoice, genIngredientId, genName, genDescription, genUniverseId, onGenerated, pendingRenders = [], onPendingRenderComplete, onPendingRenderFailed }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
@@ -1673,7 +1692,8 @@ function MediaPanel({ canonRemoval = null, readOnly = false, referenceLibrary = 
           <ImageIcon size={14} aria-hidden="true" /> Media
         </h2>
         {!readOnly && <div className="flex items-center gap-2 flex-wrap">
-          <GenerateImageControl key={genIngredientId} ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />
+          {generateProfilePath && <Link to={generateProfilePath} className="text-xs text-port-accent hover:underline">Generate image in Profile</Link>}
+          {!hideGenerate && <GenerateImageControl key={genIngredientId} ingredientId={genIngredientId} name={genName} description={genDescription} universeId={genUniverseId} onComplete={onGenerated} />}
           <button type="button" onClick={() => setPickerOpen(true)}
             className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
             <Plus size={12} aria-hidden="true" /> Pick from gallery

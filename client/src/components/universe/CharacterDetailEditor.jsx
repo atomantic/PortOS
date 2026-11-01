@@ -1413,7 +1413,7 @@ export default function CharacterDetailEditor({ draftMode = 'blur', ...props }) 
 }
 
 function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, actionsDisabled = false,
-  characters = [], portrait = null, identityControls = null, storyExtra = null, navigationId = null, onPageChange = null,
+  characters = [], portrait = null, identityControls = null, primaryActions = null, storyExtra = null, navigationId = null, onPageChange = null,
   contextLoading = false, saveHint = 'Edits save when you leave a field', children }) {
   const [activePage, setActivePage] = useDrawerTab(`castSheet-${navigationId || entry?.id}`, 'attributes', SHEET_PAGE_IDS);
   // Keep visited pages mounted so pending list rows and local voice drafts survive
@@ -1434,7 +1434,7 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
     const section = SECTIONS.find((item) => item.key === key);
     const filled = section.fields.filter((field) => typeof entry[field.name] === 'string' && entry[field.name].trim()).length;
     return <BoxedSection icon={section.icon} label={section.label} summary={`${filled}/${section.fields.length} filled`}>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{renderFields(section.fields)}</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{renderFields(key === 'visualIdentity' ? section.fields.slice(1) : section.fields)}</div>
     </BoxedSection>;
   };
   const listSection = (key) => <ListSectionEditor section={LIST_SECTIONS.find((item) => item.key === key)}
@@ -1443,7 +1443,7 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
   return (
     <div className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-port-border pt-3">
-        <h3 className="text-sm font-semibold text-port-accent">Character sheet</h3>
+        <span />
         {universeId && (<Link
         to={`/voices?${new URLSearchParams({ universeId, characterId: entry.id })}`}
         className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
@@ -1459,15 +1459,17 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
           </button>
         ) : null}
       </div>
+      <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-3">
+        {renderFields([SECTIONS.find(section => section.key === 'visualIdentity').fields[0]])}
+        {primaryActions}
+      </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[240px_minmax(0,1fr)] items-start">
         <aside className="min-w-0 space-y-3" aria-label={`${entry.name} identity`}>
           <div className={`rounded-lg border border-port-accent/30 bg-port-accent/5 p-3 xl:p-4 grid gap-3 ${portrait ? 'grid-cols-[80px_minmax(0,1fr)] xl:grid-cols-1' : 'grid-cols-1'}`}>
             {portrait ? <div className="flex justify-center">{portrait}</div> : null}
             <div className="space-y-3">
               <div className="xl:text-center">
-                <p className="text-[10px] uppercase tracking-widest text-port-accent">Character primitive</p>
-                <p className="text-lg font-semibold text-white">Identity</p>
-                <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>
+                {(disabled || saveHint) && <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>}
               </div>
               {identityControls}
               {renderFields([...SECTIONS[0].fields.slice(0, 3), SECTIONS[0].fields.find(field => field.name === 'role')])}
