@@ -24,7 +24,7 @@
  * the failure surfaces in an unrelated test file.
  */
 
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -521,6 +521,13 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
 const REPO_ROOT = dirname(SERVER_DIR);
 
 describe('server suite import growth (#7993)', () => {
+  // One head walk feeds both the growth comparison and the instances.js
+  // reach count. evaluateWorkingTreeImportGrowth used to walk again.
+  let headMeasurement;
+  beforeAll(() => {
+    headMeasurement = measureWorkingTree(REPO_ROOT);
+  }, 60_000);
+
   it('memoized closure walk agrees with staticImportClosure', () => {
     const read = (rel) => {
       try {
@@ -541,8 +548,9 @@ describe('server suite import growth (#7993)', () => {
   // per-edge rows cannot be. It fails closed when the base commit cannot be
   // read — a timeout or a throw here is a guard failure, not a pass.
   it('does not fan a heavy subtree into existing suites relative to the merge base', () => {
-    const report = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT });
+    const report = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, headMeasurement });
     expect(report.ok, formatImportGrowthReport(report)).toBe(true);
+    if (!report.skipped) expect(report.timings.headCollectMs).toBeNull();
   }, 60_000);
 
   // #6836: before the identity leaf split, 181 of these files' closures reached
@@ -550,9 +558,8 @@ describe('server suite import growth (#7993)', () => {
   // row above pins the direct callers; this counts the whole suite so a new
   // widely reached edge back onto instances.js is visible.
   it('keeps fewer than 60 server test files statically reaching services/instances.js', () => {
-    const measured = measureWorkingTree(REPO_ROOT);
     const target = 'server/services/instances.js';
-    const reachingCount = [...measured.tests.values()].filter((closure) => closure.has(target)).length;
+    const reachingCount = [...headMeasurement.tests.values()].filter((closure) => closure.has(target)).length;
     expect(
       reachingCount,
       `${reachingCount} server test files still statically reach services/instances.js (was 181 before #6836's instanceIdentity.js leaf split). If this crept back up, check for a caller that only needs identity (getInstanceId/ensureInstanceId/getSelf/ensureSelf/updateSelf/UNKNOWN_INSTANCE_ID) re-widening its import back onto instances.js instead of instanceIdentity.js.`,
