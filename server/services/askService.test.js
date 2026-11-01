@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
+import { GROK_NO_TOOL_ARGS } from '../lib/grok.js';
 
 // All upstream services are mocked so the unit under test is the
 // orchestration logic itself: parallel retrieval, ranking, prompt assembly,
@@ -552,11 +553,11 @@ describe('runAsk', () => {
       ? expect.stringMatching(/grok-prompt-.*\.txt$/)
       : '/dev/stdin';
     // #9008: Ask runs tool-free — never grok's agent-path bypassPermissions.
+    // #14476: every built-in tool removed; an empty `--tools ''` removed none.
     expect(args).toEqual([
       '--output-format', 'plain',
       '--prompt-file', expectedPromptFile,
-      '--permission-mode', 'plan',
-      '--tools', '',
+      ...GROK_NO_TOOL_ARGS,
     ]);
     expect(args).not.toContain('--model');
     // POSIX delivery: the prompt is piped in via stdin.
