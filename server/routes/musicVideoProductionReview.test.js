@@ -226,6 +226,14 @@ describe('human-reviewed Music Video workflow', () => {
     await expect(assertMusicVideoSceneReview(tag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     // A clip from the storyboard panel makes its own first frame: it has no still to lock.
     await expect(assertMusicVideoSceneReview(tag, 'video', { storyboardGuided: true })).resolves.toBeUndefined();
+    // Clip from storyboard animates the still its own render made, named by the server, and no other.
+    const { mkdirSync, writeFileSync } = await import('node:fs');
+    mkdirSync(`${ROOT()}/images`, { recursive: true });
+    writeFileSync(`${ROOT()}/images/board-still.png`, 'synthetic image');
+    await store.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: current.scenes.map(s => (s.sceneId === tag.sceneId ? { ...s, referenceImageId: 'board-still.png' } : s)) } }));
+    await expect(assertMusicVideoSceneReview({ ...tag, storyboardStill: 'board-still.png' }, 'video')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview({ ...tag, storyboardStill: 'older-still.png' }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('storyboard')).status).toBe(200);

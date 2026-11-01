@@ -277,6 +277,12 @@ const generateSchema = z.object({
     // hook copies them onto the take; it does not look them up again.
     castInputs: musicVideoCastInputsSchema.optional(),
     replaceSelection: z.boolean().optional(),
+    // Clip from storyboard: once this still lands as the shot's selection, the
+    // completion hook animates it on this lane (a model the card picked wins).
+    thenClip: z.object({
+      backend: z.string().min(1).max(40).optional(),
+      model: z.string().min(1).max(300).optional(),
+    }).optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot
   // keeps it (sheets, tests, alternates): musicVideoCollectionHook for the

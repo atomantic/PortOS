@@ -4,7 +4,7 @@
  * reference images set the cinematic look. Shared by every lane that renders
  * such a clip (Grok image-first, fal reference-to-video) so each names the two
  * roles the same way, and listed as a visible prompt addition (#11317).
- * Browser-safe: the shot card reads it too.
+ * Browser-safe (no zod), like the other lib modules the client may import.
  */
 
 export const STORYBOARD_GUIDANCE_ADDITION_ID = 'storyboard-guidance';
@@ -34,13 +34,6 @@ export function storyboardGuidanceText({ guidance, references = [] }) {
 /** The gallery basename of the first frame a storyboard clip was animated from (videoGen/grok.js), or null. */
 export const storyboardFirstFrameFile = (result) => (typeof result?.firstFrameFile === 'string' && /^[^/\\]+\.png$/i.test(result.firstFrameFile)
   ? result.firstFrameFile : null);
-
-/** Why a shot cannot render a clip from its storyboard panel on `backend`, or null. Browser-safe. */
-export function storyboardClipBlockedReason({ backend, performance = false, audioReactive = false }) {
-  if (performance) return 'A lip-sync or music-driven shot renders from its still, not from the storyboard panel.';
-  if (audioReactive || (backend !== 'grok' && backend !== 'fal')) return 'A clip from the storyboard renders on Grok or fal.ai. Pick one of those, or render the full still first.';
-  return null;
-}
 
 /** The labeled addition a storyboard-guided render records and the compose screen shows. */
 // The modelInput.promptAddition shape, built here so the module stays browser-safe (it imports no zod).
