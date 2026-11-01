@@ -38,6 +38,21 @@ async function writeBootstrapFixture(dir) {
   return { command, bootstrap };
 }
 
+// Run a grok code review against a stand-in CLI that emits `events` as its
+// streaming-json transcript.
+async function runGrokTranscript(prefix, events) {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  const command = join(dir, 'grok');
+  await writeFile(command, `#!/usr/bin/env node\nconst format = process.argv[process.argv.indexOf('--output-format') + 1];\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(format === 'streaming-json' ? ${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))} : 'plain'));`, { mode: 0o755 });
+  return runCliProviderPrompt({
+    provider: { ...cli('grok-cli'), command },
+    model: 'grok-4.7', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
+  }).finally(() => rm(dir, { recursive: true, force: true }));
+}
+
 describe('pickCliProvider', () => {
   const providers = {
     'claude-code': cli('claude-code', { defaultModel: 'claude-opus-4-7', models: ['claude-opus-4-7', 'claude-haiku-4-5'] }),
@@ -149,33 +164,34 @@ describe('runCliProviderPrompt', () => {
     expect(argv).toContain('pinned-model');
   });
 
-  // #14391: grok narrates before its tool calls; the reviewer must receive only
-  // the final message so the strict verdict parser sees bare JSON.
+  // #14391: the reviewer must receive only grok's final message so the strict
+  // verdict parser sees bare JSON, not the transcript's other events.
   it.skipIf(process.platform === 'win32')('hands the code reviewer only the final message of a grok transcript', async () => {
-    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const dir = await mkdtemp(join(tmpdir(), 'review-grok-test-'));
-    const command = join(dir, 'grok');
-    const events = [
-      { type: 'text', data: "I'll check the callers first." },
-      { type: 'tool_call', toolName: 'grep' },
+    const result = await runGrokTranscript('review-grok-test-', [
+      { type: 'thought', data: 'Reading the diff.' },
       { type: 'text', data: '{"verdict":"clean",' },
       { type: 'text', data: '"findings":[]}' },
       { type: 'end', stopReason: 'end_turn' },
-    ];
-    await writeFile(command, `#!/usr/bin/env node\nconst format = process.argv[process.argv.indexOf('--output-format') + 1];\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(format === 'streaming-json' ? ${JSON.stringify(events.map((event) => JSON.stringify(event)).join('\n'))} : 'plain'));`, { mode: 0o755 });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = await runCliProviderPrompt({
-      provider: { ...cli('grok-cli'), command },
-      model: 'grok-4.7', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate', codeReview: true,
-    }).finally(() => rm(dir, { recursive: true, force: true }));
+    ]);
     expect(result.error).toBeUndefined();
     expect(result.text).toBe('{"verdict":"clean","findings":[]}');
     expect(result.finishReason).toBe('stop');
     expect(result.streamFormat).toBeUndefined();
-    // A tool call in a no-tool run is drift the probe must name (#14476).
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('grep'));
+  });
+
+  // A tool that escaped the no-tool denylist and was called may have read host
+  // content into the verdict, so that run's answer must not be accepted.
+  it.skipIf(process.platform === 'win32')('refuses a grok review whose no-tool run called a tool', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = await runGrokTranscript('review-grok-call-test-', [
+      { type: 'text', data: "I'll check the callers first." },
+      { type: 'tool_call', toolName: 'example_new_tool' },
+      { type: 'text', data: '{"verdict":"clean","findings":[]}' },
+      { type: 'end', stopReason: 'end_turn' },
+    ]);
+    expect(result.error).toContain('example_new_tool');
+    expect(result.text).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('example_new_tool'));
     warn.mockRestore();
   });
 
