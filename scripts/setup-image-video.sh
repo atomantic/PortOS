@@ -100,7 +100,7 @@ pin_venv_arm64() {
     arm64|aarch64) ;;
     *) return 0 ;;
   esac
-  local root="$1/bin" py base arches tmp target link origin origin_dir dep rel abs failed extensions_checked=0 ext ext_arches
+  local root="$1/bin" py base arches tmp link origin origin_dir dep rel abs failed extensions_checked=0 ext ext_arches
   [[ -d "$root" ]] || return 0
   for py in "$root"/python "$root"/python3 "$root"/python3.[0-9] "$root"/python3.[0-9][0-9]; do
     [[ -e "$py" && ! -d "$py" ]] || continue
