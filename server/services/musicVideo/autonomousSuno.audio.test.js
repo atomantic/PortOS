@@ -20,6 +20,7 @@ function completedExport(bytes) {
   page.goto = async () => {};
   page.url = () => `https://suno.com/song/${SONG}`;
   page.close = async () => {};
+  page.evaluate = async () => ({ onSongPage: true, hasSongLink: true, clocks: [], busyLabels: [], status: 'complete' });
   const download = {
     saveAs: async (target) => { path = target; await writeFile(target, bytes); },
     failure: async () => null, cancel: async () => {}, delete: async () => {},
