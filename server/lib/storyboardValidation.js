@@ -73,6 +73,8 @@ const panelFields = {
   castIds: refs.optional(),
   environmentIds: refs.optional(),
   objectIds: refs.optional(),
+  // Which saved greybox camera of one of its environments the panel is seen from.
+  setShot: z.object({ environmentId: ref, shotId: z.string().trim().min(1).max(64).regex(/^[A-Za-z][A-Za-z0-9_-]*$/) }).strict().nullable().optional(),
   notes: text(L.notes).optional(),
 };
 

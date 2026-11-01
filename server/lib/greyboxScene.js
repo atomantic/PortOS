@@ -108,6 +108,9 @@ const shotSchema = z.object({
   aspect: z.enum(GREYBOX_ASPECTS).default('16:9'),
   figures: z.array(shotFigureSchema).max(GREYBOX_LIMITS.SHOT_FIGURES).default([]),
   note: z.string().trim().max(300).optional(),
+  // A finished photo of the place from this camera (one of its reference
+  // images); shots that pick this camera send it instead of the flat capture.
+  plate: z.string().trim().max(200).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i).optional(),
 });
 
 const duplicateIds = (items) => {

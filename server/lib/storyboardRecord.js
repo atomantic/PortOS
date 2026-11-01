@@ -56,6 +56,11 @@ const pick = (value, set, fallback = null) => (set.has(value) ? value : fallback
 const isoOr = (value, fallback) => (isNonBlankStr(value) && Number.isFinite(Date.parse(value)) ? value : fallback);
 const entityId = (value, prefix) => (typeof value === 'string' && ENTITY_ID_PATTERN.test(value) ? value : newStoryboardEntityId(prefix));
 const refOrNull = (value) => trimTo(value, STORYBOARD_LIMITS.refId) || null;
+const SET_SHOT_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const sanitizeSetShot = (value) => {
+  const environmentId = refOrNull(value?.environmentId);
+  return environmentId && SET_SHOT_ID.test(value?.shotId || '') ? { environmentId, shotId: value.shotId } : null;
+};
 
 /**
  * The production a board was made from, when one keeps scenes of its own that
@@ -146,6 +151,7 @@ function sanitizePanel(raw) {
     castIds: refList(raw.castIds),
     environmentIds: refList(raw.environmentIds),
     objectIds: refList(raw.objectIds),
+    setShot: sanitizeSetShot(raw.setShot),
     notes: trimTo(raw.notes, STORYBOARD_LIMITS.notes),
     takes,
     selectedTakeId,
