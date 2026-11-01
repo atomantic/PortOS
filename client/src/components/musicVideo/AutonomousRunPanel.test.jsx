@@ -168,6 +168,9 @@ describe('AutonomousRunPanel', () => {
     const field = screen.getByLabelText(/version you made or revised in suno/i);
     fireEvent.change(field, { target: { value: 'https://example.com/not-a-song' } });
     expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+    // A song id inside a link to another site is not a Suno song link.
+    fireEvent.change(field, { target: { value: 'https://example.com/song/44444444-4444-4444-8444-444444444444' } });
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
     const revised = '33333333-3333-4333-8333-333333333333';
     fireEvent.change(field, { target: { value: `https://suno.com/song/${revised}?sh=x` } });
     fireEvent.click(screen.getByRole('button', { name: /approve & download this render/i }));

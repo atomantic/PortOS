@@ -12,6 +12,7 @@ import { formatCount, formatUsd } from '../../utils/formatters.js';
 import AutoApproveFields from './AutoApproveFields.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import OrchestratorReviewLog from './OrchestratorReviewLog.jsx';
+import { isSunoSongUrl, sunoSongIdFromUrl } from '../../../../server/lib/sunoSong.js';
 
 // The stages that report a sub-step while they run (the server's `stages[id].step`).
 const STEP_LABELS = { lyrics: AUTONOMOUS_LYRICS_STEP_LABELS, produce: AUTONOMOUS_PRODUCE_STEP_LABELS, song: AUTONOMOUS_SONG_STEP_LABELS };
@@ -26,8 +27,13 @@ const STAGE_MARKS = {
   failed: { Icon: XCircle, cls: 'text-port-error', label: 'failed' },
   pending: { Icon: Circle, cls: 'text-port-text-muted', label: 'not started' },
 };
-// A Suno song id, bare or inside a suno.com/song/<id> link.
-const SUNO_SONG_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const BARE_SUNO_SONG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A bare Suno song id or a Suno song page link; an id inside any other URL or text is not one.
+const pastedSunoSongId = (text) => {
+  const value = text.trim();
+  if (BARE_SUNO_SONG_ID.test(value)) return value.toLowerCase();
+  return isSunoSongUrl(value) ? sunoSongIdFromUrl(value) : null;
+};
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const buttonClass = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -113,7 +119,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
   // monthly downloads): the director listens on Suno and approves the one to download.
   const songRenders = awaiting === 'song' && run.stage === 'song' && !run.output?.trackId && sunoCount ? run.output.sunoSongIds : [];
   const linkText = songLink && songLink.runId === run.id ? songLink.value : '';
-  const linkedSong = SUNO_SONG_ID.exec(linkText)?.[0]?.toLowerCase() || null;
+  const linkedSong = pastedSunoSongId(linkText);
   const pickedRender = !songRenders.length ? null
     : linkedSong || (songPick && songPick.runId === run.id && songRenders.includes(songPick.value) ? songPick.value : songRenders[songRenders.length > 1 ? 1 : 0]);
   // A failed run that only has the final render left retries just that.
