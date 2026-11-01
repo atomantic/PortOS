@@ -148,6 +148,19 @@ describe('persisted audit disposition workflow', () => {
     expect(await settle()).toMatchObject({ status: 'complete', unresolved: 0 });
   });
 
+  it('persists a replayed receipt through the archive once the run left live state', async () => {
+    await deliver('agent-one', [finding()]);
+    expect(await settle()).toMatchObject({ status: 'complete' });
+    const archived = await readRecord('agent-one');
+    deps.updateAgent = vi.fn(async () => null);
+    await expect(settle()).rejects.toThrow('Audit run record unavailable');
+    await writeFile(recordPath('agent-one'), JSON.stringify({ ...archived, startedAt: '2026-01-01T00:00:00Z' }));
+    deps.recordAuditFindingsReceipt = vi.fn(async () => true);
+    expect(await settle()).toMatchObject({ status: 'complete' });
+    expect(deps.recordAuditFindingsReceipt).toHaveBeenLastCalledWith('agent-one', '2026-01-01T00:00:00Z',
+      expect.objectContaining({ status: 'complete' }));
+  });
+
   it('keeps candidate confidence separate and refuses a persistence failure', async () => {
     await deliver('agent-one', [finding({ classification: 'candidate', confidence: 'low',
       disposition: { kind: 'unresolved', reason: 'Trace the deferred consumer before claiming impact.' } })]);

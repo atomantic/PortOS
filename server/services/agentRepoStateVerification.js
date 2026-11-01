@@ -1576,7 +1576,7 @@ async function containedInDefaultBranch(sourceWorkspace, head) {
   const branch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
   if (!branch) return false;
   const result = await execGit(['merge-base', '--is-ancestor', head, `refs/remotes/origin/${branch}`], sourceWorkspace,
-    { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null);
+    { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null);
   return result?.exitCode === 0;
 }
 
@@ -1619,10 +1619,11 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   // A run that never published (a no-change audit) has no PR to prove. When the
-  // forge affirmatively reports none and the captured final head is already in
-  // the fetched default branch, the removed checkout held nothing undelivered.
+  // forge affirmatively reports none, no remote branch holds other work, and the
+  // captured final head is already in the fetched default branch, the removed
+  // checkout held nothing undelivered.
   const unpublishedContained = !integrated && capturedHead && !proofUrl && delivery?.readable === true && !delivery.prState
-    && await containedInDefaultBranch(sourceWorkspace, capturedHead);
+    && observed.remoteBranchPresent === false && await containedInDefaultBranch(sourceWorkspace, capturedHead);
   if (!staysOpen && (integrated || unpublishedContained)) {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {
