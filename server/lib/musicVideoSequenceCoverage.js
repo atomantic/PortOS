@@ -14,9 +14,11 @@
  *   - `sequenceClipSpans` maps each scene back to its in/out point inside the
  *     returned clip — the existing scene cut times, never new ones.
  *
- * Only reference-to-video models are eligible. Kling's `multi_prompt` is not
- * represented: its schema has not been verified, so Kling stays per-shot rather
- * than sending a body the endpoint may not accept.
+ * Only reference-to-video models are eligible. Kling v3 Pro image-to-video does
+ * take `multi_prompt` (fal schema read 2026-10-31), but each element's `duration`
+ * is a whole-second enum ("1"-"15") beside one start image, so its shot changes
+ * cannot land on a scene's own in/out point; rounding them would invent cut
+ * times. Kling stays per-shot.
  */
 
 import { falReferenceImageName } from './storyboardGuidance.js';
@@ -37,7 +39,9 @@ function sequenceCoverageBlockedReason(modelId) {
   const model = getFalVideoModel(modelId);
   if (!model) return 'The selected model is not in the curated fal catalog';
   if (model.kind !== 'ref2v') {
-    return `${model.label} has no verified multi-shot request body (Kling's multi_prompt is not represented), so it stays per-shot`;
+    return model.family === 'kling-v3'
+      ? `${model.label} times multi-shot prompts in whole seconds, which cannot hold this section's cut points, so it stays per-shot`
+      : `${model.label} renders one shot per request, so it stays per-shot`;
   }
   return null;
 }

@@ -56,7 +56,7 @@ describe('planSequenceCoverage', () => {
     const { groups, perShot } = planSequenceCoverage([shot('a', 0, 3), shot('b', 3, 6)], { modelId: kling });
     expect(groups).toEqual([]);
     expect(perShot).toHaveLength(2);
-    expect(perShot[0].reason).toMatch(/multi_prompt/);
+    expect(perShot[0].reason).toMatch(/whole seconds/);
   });
 });
 
