@@ -27,7 +27,7 @@ function featuredCast(direction, scene) {
 }
 
 // A close framing: the face fills the frame, so the set barely shows and the face sheets matter most.
-const CLOSE_FRAMING = /\b(extreme close|close-?up|close on|tight on|selfie|arm'?s[- ]length|face fills)/i;
+const CLOSE_FRAMING = /\b(extreme close|close[- ]?up|close on|tight on|selfie|arm['’]?s[- ]length|face fills)/i;
 
 /** Whether a scene's frame or shot prompt frames a face close. */
 function isCloseFraming(scene) {
