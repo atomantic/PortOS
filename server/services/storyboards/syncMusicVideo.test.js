@@ -95,6 +95,32 @@ describe('sync a music video\'s shots to its storyboard', () => {
     expect(c).toMatchObject({ startSec: 10, endSec: 20, visualIntent: 'Crowd lifts her up' });
   });
 
+  it('preserves a legacy shot and its selected frame when its panel is deleted until removal is explicitly confirmed', async () => {
+    const { project, board } = await linkedProject();
+    const initial = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const first = initial.body.project.scenes[0];
+    const { PATHS } = await import('../../lib/paths.js');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await mkdir(PATHS.images, { recursive: true });
+    await writeFile(`${PATHS.images}/preserved.png`, 'synthetic image');
+    await projects.appendSceneTakes(project.id, first.sceneId, [{ kind: 'image', assetId: 'preserved.png', source: 'generated' }]);
+    const { setShotLocks } = await import('../musicVideo/productionReview.js');
+    await projects.mutateProjectRecord(project.id, current => ({ project: setShotLocks(current, { sceneIds: [first.sceneId], locked: true }) }));
+
+    await request(app).delete(`/api/storyboards/${board.id}/panels/${board.beats[0].panels[0].id}`);
+    const retained = await projects.getProject(project.id);
+    expect(retained.scenes.find(scene => scene.sceneId === first.sceneId)).toMatchObject({ referenceImageId: 'preserved.png' });
+    const updatedBoard = (await request(app).get(`/api/storyboards/${board.id}`)).body;
+    const removed = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`)
+      .send({ boardUpdatedAt: updatedBoard.updatedAt, projectUpdatedAt: retained.updatedAt, removeWithMedia: true });
+    expect(removed.status).toBe(200);
+    expect(removed.body.project.scenes.some(scene => scene.sceneId === first.sceneId)).toBe(false);
+    const { getCollection, musicVideoCollectionId } = await import('../mediaCollections.js');
+    expect((await getCollection(musicVideoCollectionId(project.id))).items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'image', ref: 'preserved.png' }),
+    ]));
+  });
+
   // An older edit's sync can finish after a newer edit's; it must not apply its stale board.
   it('syncs from the board as it is now, not from a late edit\'s older snapshot', async () => {
     const { project, board } = await linkedProject();

@@ -9,13 +9,12 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 
 /**
- * Shots: the scene board, where each shot's still and clip are made and locked
- * (a video shot locks its still, then its clip), the shot timing tools (folded),
+ * Shots: the scene board, where each shot's still and clip are made, the shot timing tools (folded),
  * the footage tools for making
  * many at once, then the composition over them. A render style that draws its
  * own picture (code, document, Eidoverse) keeps the footage tools folded, since
- * footage is optional there. The approvals sit at the bottom of the page (Lock
- * all stills, and the animated proof only while a production run's pilot or
+ * footage is optional there. The approvals sit at the bottom of the page (the
+ * storyboard, and the animated proof only while a production run's pilot or
  * open feedback needs it); the autopilot and production runs live in Project
  * settings › Autopilot.
  */

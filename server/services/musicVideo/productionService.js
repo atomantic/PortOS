@@ -59,6 +59,7 @@ import {
   markProductionPlanned,
   normalizeProductionPool,
   nextProductionStep,
+  pendingStillRepair,
   projectProductionRuns,
   reconcileProductionSteps,
   remainingProductionGenerations,
@@ -347,6 +348,10 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   let run = findProductionRun(project, runId);
   let scene = (project.scenes || []).find((s) => s.sceneId === sceneId);
   if (!scene) return { ok: false };
+  const repair = stepKind === 'frame' && !revisionId ? pendingStillRepair(scene) : null;
+  const stillRepair = repair ? { at: repair.at, replaces: repair.replaces } : null;
+  // A director can choose a different frame after the scheduler inspected the board.
+  if (stepKind === 'frame' && scene.referenceImageId && !stillRepair && !plateRepairBasis && !revisionId) return { ok: false };
   if (stepKind === 'clip' && scene.direction?.actionContract) {
     // A plate that fails against its neighbor gets the same single repair as one that fails alone.
     for (let pass = 0; ; pass++) {
@@ -381,18 +386,19 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   await mutateProjectRecord(projectId, (current) => quoteProductionSpend(current, runId, { kind: stepKind, sceneId, costUsd }));
 
   const reserved = await mutateProjectRecord(projectId, (current) => reserveProductionStep(current, runId, {
-    kind: stepKind, sceneId, revisionId, plateRepairBasis, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
+    kind: stepKind, sceneId, revisionId, plateRepairBasis, stillRepair, route: choice.route, rationale: choice.rationale, processId: PROCESS_ID,
     costUsd: stepPriceUsd({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
     costModelId: stepCostModelId({ route: choice.route, project: current, scene: (current.scenes || []).find((s) => s.sceneId === sceneId), stepKind }),
   })).catch((err) => ({ error: err }));
   if (reserved.error) {
     const code = reserved.error.code;
     if (LIMIT_CODES.has(code)) return { halt: { status: 'limit-reached', reason: reserved.error.message } };
-    if (code === 'PRODUCTION_STEP_IN_FLIGHT' || code === 'PRODUCTION_NOT_RUNNING' || code === 'PRODUCTION_INTERRUPTED') return { ok: false };
+    if (code === 'PRODUCTION_STEP_IN_FLIGHT' || code === 'PRODUCTION_NOT_RUNNING' || code === 'PRODUCTION_INTERRUPTED' || code === 'PRODUCTION_PLATE_CHANGED') return { ok: false };
     throw reserved.error;
   }
   const { step } = reserved;
-  const tag = { projectId, sceneId, productionRunId: runId, productionStepKey: step.key, ...(revisionId ? { revisionId } : {}) };
+  const tag = { projectId, sceneId, productionRunId: runId, productionStepKey: step.key, ...(revisionId ? { revisionId } : {}),
+    ...(step.stillRepair ? { replaceSelection: true, expectedSelection: step.stillRepair.replaces, stillRepairAt: step.stillRepair.at } : {}) };
   const sent = await deps.dispatch({ stepKind, project: reserved.project, scene: reserved.project.scenes.find((s) => s.sceneId === sceneId), route: choice.route, tag, settings: env.settings })
     .catch((err) => ({ error: err }));
   if (sent.error) {

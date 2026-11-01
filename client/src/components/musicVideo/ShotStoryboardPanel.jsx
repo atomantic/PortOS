@@ -10,7 +10,7 @@ const imageName = (ref) => (typeof ref === 'string' ? ref.split(/[?#]/)[0].split
 /**
  * A fitted shot's storyboard panel: which panel it came from, a notice when the
  * panel was edited since (Update copies its action to the shot's intent and its
- * art to the shot's frame reference; a locked shot changes only then) or deleted (Unlink), and Use as panel art, which sends
+ * art to the shot's frame reference) or deleted (Unlink), and Use as panel art, which sends
  * the shot's still back to the panel as its selected take.
  */
 export default function ShotStoryboardPanel({ projectId, storyboardId, scene, linked, onSceneUpdated, onUnlink, onBoard }) {

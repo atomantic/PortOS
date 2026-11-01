@@ -39,6 +39,7 @@ import { musicVideoCreativeContext, musicVideoDirectionContext, musicVideoSongSt
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
@@ -361,6 +362,7 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
  */
 export async function planProject(id, { seedPrompts = true, providerId, model, effort, directive, mode = 'append' } = {}) {
   const project = await requireProject(id);
+  const scenesBasis = canonicalSnapshotChecksum(project.scenes || []);
   const existingCount = (project.scenes || []).length;
   if (mode === 'require' && existingCount > 0) {
     throw new ServerError(
@@ -432,7 +434,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
   const hasCards = sceneInputs.some((s) => s.visualLayer === 'card');
   // Persist card scenes and the mode that renders them in the same transaction.
   // Read the current composition under the lock so concurrent edits survive.
-  const { project: persisted, scenes, rejected } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace' });
+  const { project: persisted, scenes, rejected } = await persistPlan(id, sceneInputs, { hasCards, replace: mode === 'replace', scenesBasis });
   // Only a project with an automation brief keeps the route it planned on.
   const updated = (persisted.automation && await recordLlmRoute(id, 'plan', llmRoute)) || persisted;
   console.log(`🪄 Music Video plan: seeded ${scenes.length} scene${scenes.length === 1 ? '' : 's'} for ${id} (prompts ${promptsSeeded ? 'seeded' : `skipped: ${promptsSkippedReason || 'n/a'}`})`);
@@ -514,12 +516,15 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
   return updates;
 }
 
-async function persistPlan(id, sceneInputs, { hasCards, replace }) {
+async function persistPlan(id, sceneInputs, { hasCards, replace, scenesBasis }) {
   if (!hasCards && !replace) return addProjectScenes(id, sceneInputs, { source: 'shot-planner' });
 
   const { addScenes, replaceScenes } = await import('./projectsLogic.js');
   const { normalizeComposition } = await import('./composition.js');
   return mutateProjectRecord(id, (current) => {
+    if (replace && canonicalSnapshotChecksum(current.scenes || []) !== scenesBasis) {
+      throw new ServerError('The shots changed while the plan was being prepared. Review them and plan again.', { status: 409, code: 'SHOT_PLAN_STALE' });
+    }
     const outcome = (replace ? replaceScenes : addScenes)(current, sceneInputs);
     // An authored whole-song code/document renderer remains the operator's choice.
     if (hasCards && (!current.composition?.mode || current.composition.mode === 'concat')) {

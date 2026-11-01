@@ -13,7 +13,7 @@ import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardCli
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle, Lock } from 'lucide-react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import OverflowMenu from '../ui/OverflowMenu.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -39,7 +39,6 @@ import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
-import { ShotLockButton, useShotLock } from './ShotLock.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
@@ -103,13 +102,12 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  *
  * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
  * timing, lyric line and status — and it opens on tap to the full editor:
- * the lock and a "…" menu (move, delete), the linked storyboard panel, then
+ * a "…" menu (move, delete), the linked storyboard panel, then
  * one picture at a time behind a Still / Clip switch (the still stands in for a
  * clip not made yet), each with its takes, its make / "Swap from unused" /
  * import buttons and its prompt. Swap from unused
  * (`onPlacePoolItem(scene, { kind, assetId, withAssetId? })`) opens
- * SceneTakePicker over the project's unused stills or clips. A Render waiting
- * only on the still's lock reads "Lock still & render" and does both. The
+ * SceneTakePicker over the project's unused stills or clips. The
  * settings sit in ShotEditorGroup groups (Timing, Sound, Transitions & effects,
  * Lyrics, Shot type, Direction), each header naming what is set: beside the
  * picture in a wide drawer and open there, stacked and closed on a phone.
@@ -185,13 +183,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const shotLock = useShotLock(scene.sceneId);
-  const locked = shotLock?.state === 'locked';
-  // A clip needs its still locked, and a locked video stays as it is until unlocked.
-  const lockBlocked = !shotLock ? null
-    : shotLock.clip === 'locked' ? 'Video locked. Unlock the video to render it again.'
-      : shotLock.still !== 'locked' ? 'Lock the still first' : null;
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, locked, unlocked: shotLock?.unlocked ?? null });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
   const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
   // #10154: the server-persisted failure of the last render, shown until a
@@ -209,10 +201,7 @@ export default function SceneCard({
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
   };
   const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
-  const videoRefusal = greyboxRefusal || lockBlocked || otherRefusal;
-  // A still waiting only on its lock renders in one tap: Render locks it first.
-  const stillLockPending = Boolean(shotLock && shotLock.clip !== 'locked' && shotLock.still !== 'locked');
-  const lockThenRender = stillLockPending && !greyboxRefusal && !otherRefusal;
+  const videoRefusal = greyboxRefusal || otherRefusal;
   const sendRender = () => {
     const { songAudio, endFrame, wholeLine } = cardRequest;
     const card = {
@@ -223,19 +212,15 @@ export default function SceneCard({
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
-  // Every video entry point (Render and the failure Retry) locks a waiting still first.
-  const renderBlocked = lockThenRender ? shotLock.busy : !!videoRefusal;
-  const generateVideo = async () => {
+  const renderBlocked = !!videoRefusal;
+  const generateVideo = () => {
     if (renderBlocked) return;
-    if (lockThenRender && !(await shotLock.toggle(true, 'still'))) return;
     sendRender();
   };
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
-  // Only a locked video holds it back: there is no still to lock first.
-  const storyboardRefusal = storyboardDefault ? greyboxRefusal || (shotLock?.clip === 'locked' ? lockBlocked : null)
-    || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
+  const storyboardRefusal = storyboardDefault ? greyboxRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
     const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
@@ -320,8 +305,7 @@ export default function SceneCard({
         <PreMusicTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
         {/* Move the cut before this shot a frame at a time; the shot before ends where this one starts. */}
         {!preMusic && onMoveStart && sceneHasAuthoredSpan(scene) && (
-          <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart}
-            disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
+          <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart} />
         )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {!preMusic && SCENE_TIME_FIELDS.map(([labelText, key]) => {
@@ -506,7 +490,6 @@ export default function SceneCard({
             </button>
           </span>
         )}
-        <ShotLockButton scene={scene} compact />
         <OverflowMenu label="Shot actions" items={[
           { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || documentComposition },
           { id: 'later', label: 'Move later', icon: ArrowDown, onSelect: () => onMove(index, 1), disabled: isLast || documentComposition },
@@ -552,15 +535,14 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          clipLocked={shotLock?.clip === 'locked'} stillLocked={shotLock?.still === 'locked'} assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
+          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
         </div>
         {/* Clip: the picture and its takes, Render, the motion prompt and where it renders, then other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
           {layered && (layer === 'footage' || layer === 'still') && (
-            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps}
-              disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : null} />
+            <SceneImageEffect fieldId={fieldId} scene={scene} onChange={applyPatch} beats={project?.audioAnalysis?.beats} fps={photoFps} />
           )}
           {stillPicture ? <ScenePicturePreview scene={scene} beats={project?.audioAnalysis?.beats} fps={photoFps} /> : (
           <>
@@ -574,11 +556,10 @@ export default function SceneCard({
           )}
           <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
             onOpenPreview={onOpenPreview} onTrimClip={onTrimClip}
-            takeBusy={takeBusy} generatingVideo={generatingVideo} clipLocked={shotLock?.clip === 'locked'} />
+            takeBusy={takeBusy} generatingVideo={generatingVideo} />
           {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
           {scene.videoHistoryId && layer === 'footage' && (
-            <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch}
-              disabled={shotLock?.clip === 'locked'} disabledReason={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to retime it.' : null} />
+            <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
           )}
           {/* A clip of another shape (a 3:2 local render) zooms to fill, or keeps its ratio with covered edges. */}
           {scene.videoHistoryId && (
@@ -610,18 +591,16 @@ export default function SceneCard({
             {!storyboardDefault && <button onClick={generateVideo}
               disabled={renderBlocked}
               className={PRIMARY_BUTTON}
-              title={lockThenRender ? 'Lock this still, then render its clip from it'
-                : videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
+              title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                   : "Render this shot's clip from its still")}>
-              {generatingVideo ? <Activity size={14} className="animate-spin" /> : lockThenRender ? <Lock size={14} /> : <Video size={14} />}
-              {generatingVideo ? 'Rendering…' : `${lockThenRender ? 'Lock still & render' : 'Render'}${scene.videoHistoryId ? ' again' : ''}`}
+              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+              {generatingVideo ? 'Rendering…' : `Render${scene.videoHistoryId ? ' again' : ''}`}
             </button>}
           </div>
           {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && !lockThenRender && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
+          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
               <span>{videoRefusal}</span>
-              {stillLockPending && <ShotLockButton scene={scene} />}
             </div>
           )}
           {layer === 'footage' && promptField}
@@ -651,8 +630,8 @@ export default function SceneCard({
           {(onPlacePoolItem || onImportClipTake || (scene.videoHistoryId && canContinueShot)) && (
           <div className="flex flex-wrap items-center gap-2" data-testid="clip-other-sources">
             {onPlacePoolItem && (
-              <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy || shotLock?.clip === 'locked'} className={SECONDARY_BUTTON}
-                title={shotLock?.clip === 'locked' ? 'Video locked. Unlock the video to change it.' : "Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor"}>
+              <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy} className={SECONDARY_BUTTON}
+                title="Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor">
                 <Shuffle size={14} /> Swap from unused
               </button>
             )}
@@ -722,7 +701,7 @@ export default function SceneCard({
         <button type="button"
           onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
           disabled={failure.lane === 'video' && renderBlocked}
-          title={failure.lane === 'video' && !lockThenRender ? videoRefusal || undefined : undefined}
+          title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
           className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 sm:min-h-0">
           Retry
         </button>

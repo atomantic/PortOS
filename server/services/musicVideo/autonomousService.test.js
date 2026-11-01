@@ -36,21 +36,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const store = new Map();
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
-vi.mock('./projects.js', async () => {
-  const { preserveAutomatedShotLocks } = await vi.importActual('./productionReview.js');
+vi.mock('./projects.js', () => {
   return {
     getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
-    // Like the real store, an automation write passes the shot-lock guard.
-    mutateProjectRecord: (id, transform, { source = null, runId = null } = {}) => {
+    mutateProjectRecord: (id, transform) => {
       const run = writeTail.then(() => {
         if (!store.has(id)) throw Object.assign(new Error('Project not found'), { status: 404 });
         const current = clone(store.get(id));
         const out = transform(current);
-        if (source) {
-          const guarded = preserveAutomatedShotLocks(current, out.project, source, { runId });
-          out.project = guarded.project;
-          if (guarded.rejected) out.rejected = true;
-        }
         store.set(id, clone(out.project));
         return { ...out, project: clone(out.project) };
       });
@@ -1643,7 +1636,7 @@ describe('autopilot clears the gates it was granted on its own', () => {
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], ...GRANT[0] }, GRANT[1]);
     await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
     const project = store.get('mv-auto');
-    project.scenes[0].prompt = 'the dancer turns toward the light';
+    project.scenes[0].lyricText = 'a changed lyric';
     project.productionRuns = [{ id: 'mvpr-1', status: 'blocked', createdAt: new Date().toISOString() }];
     expect(actual.productionReadiness(project).storyboard.approved).toBe(false);
     doubles.approveProductionReview.mockClear();
@@ -1797,7 +1790,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     answers.stills = [{ verdict: 'revise', score: 5, notes: 'One extra hand.', issues: [{ sceneId: 'mvs-b', text: 'The chair has three hands on it.' }, { sceneId: 'mvs-x', text: 'not a shot' }] }];
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
     expect(doubles.orchestrate).toHaveBeenLastCalledWith(expect.objectContaining({ images: ['/gallery/a1.png', '/gallery/b1.png'] }));
-    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: null, stillFixes: { text: 'The chair has three hands on it.' } });
+    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: 'b1.png', stillFixes: { text: 'The chair has three hands on it.', pending: true, replaces: 'b1.png' } });
     expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
     expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, stopBefore: 'clips' });
     expect(runOf().status).toBe('running');
@@ -1822,9 +1815,8 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(doubles.resumeProduction.mock.calls[0][2].stopBefore).toBeUndefined();
   });
 
-  // Uniquely catches the run's still repairs being discarded by the locks its own storyboard approval set (#12065),
-  // and a repair a director's lock refused being logged as a regeneration.
-  it('lands still repairs on shots its own storyboard approval locked, but parks on a director\'s lock', async () => {
+  // Old saved shot approvals do not prevent an authorized still repair.
+  it('lands still repairs on shots with legacy approvals and retains their old images as takes', async () => {
     const actual = await vi.importActual('./productionReview.js');
     await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
     await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
@@ -1847,25 +1839,24 @@ describe('orchestrated mode (brief.orchestrator)', () => {
 
     answers.stills = [{ verdict: 'revise', score: 5, notes: 'One extra hand.', issues: [{ sceneId: 'mvs-b', text: 'The chair has three hands on it.' }] }];
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
-    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: null, stillFixes: { text: 'The chair has three hands on it.' } });
+    expect(store.get('mv-auto').scenes[1]).toMatchObject({ referenceImageId: 'b1.png', stillFixes: { text: 'The chair has three hands on it.', pending: true, replaces: 'b1.png' } });
     expect(actual.shotLocks(store.get('mv-auto'))).toEqual({ 'mvs-a': 'locked', 'mvs-b': 'locked' });
     expect(store.get('mv-auto').productionReview.feedback || []).toEqual([]);
     expect(runOf().orchestration.reviews.at(-1).notes).toContain('Regenerating 1 still');
     expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, stopBefore: 'clips' });
 
-    // The director locks the shots themselves: the run's next repair is refused, and it says so instead of regenerating.
+    // Legacy director-created locks are no longer a precondition for repairing a still.
     store.get('mv-auto').scenes[1].referenceImageId = 'b2.png';
     store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a', 'mvs-b'], locked: true, approvedBy: 'director' })));
     doubles.resumeProduction.mockClear();
     answers.stills = [{ verdict: 'revise', score: 5, notes: 'Wrong sky.', issues: [{ sceneId: 'mvs-a', text: 'The sky is noon, not dusk.' }] }];
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
-    expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
-    expect(store.get('mv-auto').scenes[0].stillFixes).toBeUndefined();
+    expect(store.get('mv-auto').scenes[0]).toMatchObject({ referenceImageId: 'a1.png', stillFixes: { text: 'The sky is noon, not dusk.', pending: true, replaces: 'a1.png' },
+      takes: expect.arrayContaining([expect.objectContaining({ kind: 'image', assetId: 'a1.png' })]) });
     const last = runOf().orchestration.reviews.at(-1);
-    expect(last).toMatchObject({ checkpoint: 'stills', verdict: 'revise', notes: expect.stringContaining('Shot 1 locked by an approval this run did not give') });
-    expect(last.notes).not.toContain('Regenerating');
-    expect(doubles.resumeProduction).not.toHaveBeenCalled();
-    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'stills' });
+    expect(last).toMatchObject({ checkpoint: 'stills', verdict: 'revise', notes: expect.stringContaining('Regenerating 1 still') });
+    expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true, stopBefore: 'clips' });
+    expect(runOf().status).toBe('running');
   });
 
   // Uniquely catches a 69-shot run parking at the default 40 generations before every shot has a still.
@@ -1936,8 +1927,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       expect(runOf().status).toBe('running');
     });
 
-    // Uniquely catches a pilot repair discarded by the run's own shot lock, or one a director's lock refused logged as made again (#12065).
-    it('lands a pilot repair on a shot the run locked, and parks without regenerating on a director\'s lock', async () => {
+    it('applies pilot repairs regardless of legacy run or director shot locks', async () => {
       const actual = await vi.importActual('./productionReview.js');
       await pilotFixture();
       const lock = (fields) => store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a'], locked: true, ...fields })));
@@ -1953,12 +1943,11 @@ describe('orchestrated mode (brief.orchestrator)', () => {
       reviewPilot('rev-2', { verdict: 'revise', reason: 'The landing is soft.' });
       doubles.resumeProduction.mockClear();
       await blocked();
-      expect(store.get('mv-auto').scenes[0].clipFixes).toMatchObject({ text: 'The skater floats above the ramp.' });
+      expect(store.get('mv-auto').scenes[0].clipFixes).toMatchObject({ text: 'The skater floats above the ramp. The landing is soft.' });
       const last = runOf().orchestration.reviews.at(-1);
-      expect(last).toMatchObject({ checkpoint: 'pilot', verdict: 'revise', notes: expect.stringContaining('repair not applied') });
-      expect(last.notes).not.toContain('generated again');
-      expect(doubles.resumeProduction).not.toHaveBeenCalled();
-      expect(runOf()).toMatchObject({ status: 'needs-human', errorCode: 'PRODUCTION_PARKED' });
+      expect(last).toMatchObject({ checkpoint: 'pilot', verdict: 'revise', notes: expect.stringContaining('generated again') });
+      expect(doubles.resumeProduction).toHaveBeenCalledWith('mv-auto', 'mvpr-1', { acceptBasis: true });
+      expect(runOf().status).toBe('running');
     });
 
     // Uniquely catches an orchestrated run parking on the proof gate after its pilot passed.
@@ -2037,6 +2026,27 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     expect(runOf().status).toBe('canceled');
     expect(doubles.resumeProduction).not.toHaveBeenCalled();
     expect(store.get('mv-auto').scenes[0].referenceImageId).toBe('a1.png');
+  });
+
+  it('keeps a frame selected while a stills review is in flight', async () => {
+    await service.startAutonomousVideo({ prompt: 'p', tools: ['image:local'], orchestrator: ORCHESTRATOR }, { autoApproveAuthorized: true });
+    await vi.waitFor(() => expect(doubles.startProduction).toHaveBeenCalledOnce());
+    store.get('mv-auto').scenes = [{ sceneId: 'mvs-a', label: 'Intro', framePrompt: 'a skater', referenceImageId: 'a1.png' }];
+    let release;
+    doubles.orchestrate.mockImplementation(() => new Promise((resolve) => { release = () => resolve({
+      text: JSON.stringify({ verdict: 'revise', score: 4, notes: 'Bad.', issues: [{ sceneId: 'mvs-a', text: 'wrong' }] }),
+      route: { providerId: 'orch', model: 'judge' }, visual: true }); }));
+    doubles.resumeProduction.mockClear();
+    doubles.orchestrate.mockClear();
+    const settling = service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
+    await vi.waitFor(() => expect(doubles.orchestrate).toHaveBeenCalled());
+    store.get('mv-auto').scenes[0].referenceImageId = 'director-choice.png';
+    release();
+    await settling;
+    expect(store.get('mv-auto').scenes[0]).toMatchObject({ referenceImageId: 'director-choice.png' });
+    expect(store.get('mv-auto').scenes[0].stillFixes).toBeUndefined();
+    expect(runOf().orchestration.reviews.at(-1).notes).toContain('changed while the stills were being reviewed');
+    expect(doubles.resumeProduction).not.toHaveBeenCalled();
   });
 
   // Uniquely catches the orchestrator approving art or a storyboard it still wants changed once its revisions run out.

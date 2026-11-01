@@ -669,7 +669,7 @@ describe('the final render lip-sync gate', () => {
     const project = { id: 'mv-1', scenes: [shot('late', 6), shot('early', 0), { ...shot('cut', 3), shotMode: 'cutaway' }] };
     await expect(assertCurrentPerformanceTakes(project, 'unread.wav')).rejects.toMatchObject({
       status: 422, code: 'STALE_PERFORMANCE_TAKES',
-      message: 'Shots 1 (no lip-sync record), 3 (no lip-sync record): the selected take may not sing in sync with the song. Regenerate them, lock their clips to keep them as they play or switch them to Cutaway',
+      message: 'Shots 1 (no lip-sync record), 3 (no lip-sync record): the selected take may not sing in sync with the song. Regenerate them or switch them to Cutaway',
       context: { stale: [{ sceneId: 'late', reason: 'not-lip-synced', cutaway: true }, { sceneId: 'early', reason: 'not-lip-synced', cutaway: true }] },
     });
     const stillLocked = setShotLocks(project, { sceneIds: ['late'], locked: true });

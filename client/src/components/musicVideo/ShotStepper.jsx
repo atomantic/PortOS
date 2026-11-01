@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
-import { ShotLockButton } from './ShotLock.jsx';
 import { isPreMusicShot } from '../../../../server/lib/musicVideoColdOpen.js';
 
 // Back within this far into a shot goes to the shot before it; further in, to its own start.
@@ -97,7 +96,6 @@ export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, r
           <Pencil size={14} aria-hidden="true" /> Edit shot
         </button>
       )}
-      {onScreen && <ShotLockButton scene={onScreen} />}
     </div>
   );
 }

@@ -364,10 +364,9 @@ export const musicVideoTakeInputSchema = z.object({
   inputAssets: z.array(z.object({ role: z.enum(['crop', 'mask']), assetId: galleryImageName, revision: z.number().int().min(1).max(1000000) }).strict()).max(4).optional(),
   use: z.enum(MUSIC_VIDEO_TAKE_USES).optional(),
   castInputs: musicVideoCastInputsSchema.optional(),
-  // One-tap re-render of a filled still. The new image becomes the selection
-  // unless the take is already stale. A locked still is reverted by the
-  // generation-completion lock, which keeps the new take as a candidate.
+  // A re-render may replace only the frame that was selected at submission.
   replaceSelection: z.boolean().optional(),
+  expectedSelection: galleryImageName.nullable().optional(),
 }).strict().superRefine((take, ctx) => {
   const check = take.kind === 'video' ? videoHistoryIdSchema : galleryImageName;
   const parsed = check.safeParse(take.assetId);

@@ -110,40 +110,34 @@ describe('BoardStage effects', () => {
   });
 });
 
-// Uniquely catches the Needs attention filter leaving out a shot the checklist counts as not locked yet.
-describe('BoardStage Needs attention and locks', () => {
-  it('lists shots whose video or still the checklist counts as not locked yet', () => {
+describe('BoardStage legacy locks', () => {
+  it('does not list legacy unlocked shots as needing attention', () => {
     const scenes = [scene(1), scene(2), scene(3)];
     render(<MemoryRouter initialEntries={['/?scenes=attention']}><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'locked', s3: 'open' },
       clips: { s1: 'locked', s2: 'changed', s3: 'open' }, unlocked: { stills: ['s3'], videos: ['s2'] }, toggle: vi.fn() }}>
       <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
-    expect(screen.getByRole('button', { name: 'Needs attention (2)' })).toBeTruthy();
-    expect(screen.queryByText('Shot 1 · Part 1')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Open Shot 2 · Part 2' }).textContent).toContain('Video not locked');
-    expect(screen.getByRole('button', { name: 'Open Shot 3 · Part 3' }).textContent).toContain('Still not locked');
+    expect(screen.getByRole('button', { name: 'Needs attention (0)' })).toBeTruthy();
+    expect(screen.queryByText('Shot 2 · Part 2')).toBeNull();
   });
 });
 
-describe('BoardStage thumbnail lock marks', () => {
-  it('marks locked, still-only and changed shots, and leaves open ones bare', () => {
+describe('BoardStage thumbnail marks', () => {
+  it('shows media marks without exposing legacy lock states', () => {
     const scenes = [scene(1), scene(2), scene(3), scene(4)];
     render(<MemoryRouter><ShotLockContext.Provider value={{ locks: { s1: 'locked', s2: 'changed', s3: 'open', s4: 'locked' },
       clips: { s1: 'locked', s2: 'open', s3: 'open', s4: 'open' }, toggle: vi.fn() }}>
       <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
     const described = (name) => screen.getByRole('button', { name }).getAttribute('aria-describedby').split(' ')
       .map(id => document.getElementById(id).textContent);
-    expect(described('Open Shot 1 · Part 1')).toEqual(['Locked', 'Clip']);
-    expect(described('Open Shot 2 · Part 2')).toEqual(['Changed since locked', 'Clip']);
+    expect(described('Open Shot 1 · Part 1')).toEqual(['Clip']);
+    expect(described('Open Shot 2 · Part 2')).toEqual(['Clip']);
     expect(described('Open Shot 3 · Part 3')).toEqual(['Clip']);
-    // A video shot whose still is locked but whose clip is not reads "Still".
-    expect(document.getElementById('scene-lock-s4')).toMatchObject({ title: 'Still locked, video not locked yet' });
+    expect(document.getElementById('scene-lock-s4')).toBeNull();
   });
 });
 
 describe('BoardStage scene cards', () => {
-  // Uniquely catches the board card naming only its section (no shot number), a locked shot still
-  // flagged "Takes to review", and a code-rendered clip labelled Clip with no picture.
-  it('numbers shots in song order, settles a locked shot, and marks a code-rendered clip', () => {
+  it('numbers shots in song order, keeps candidate review visible, and marks a code-rendered clip', () => {
     const pending = { takes: [{ takeId: 't1', kind: 'video', assetId: 'v', status: 'selected' }, { takeId: 't2', kind: 'video', assetId: 'v2', status: 'candidate' }] };
     const scenes = [scene(1, { startSec: 3, endSec: 6, sectionLabel: 'Verse', ...pending }), scene(2, { startSec: 0, endSec: 3, sectionLabel: 'Intro' }),
       scene(3, { startSec: 6, endSec: 9, sectionLabel: 'Code', referenceImageId: null, videoHistoryId: 'upload-1', codeClip: true })];
@@ -159,7 +153,7 @@ describe('BoardStage scene cards', () => {
     expect(code.textContent).not.toContain('No frame');
     unmount();
     view({ s1: 'locked', s2: 'open', s3: 'open' });
-    expect(screen.getByRole('button', { name: 'Open Shot 2 · Verse' }).textContent).not.toContain('Takes to review');
+    expect(screen.getByRole('button', { name: 'Open Shot 2 · Verse' }).textContent).toContain('Takes to review');
   });
 });
 
@@ -233,7 +227,7 @@ describe('BoardStage ending', () => {
   });
 });
 
-describe('BoardStage Lock all', () => {
+describe('BoardStage with legacy locks', () => {
   const scenes = [
     scene(1),
     scene(2, { videoHistoryId: null }),
@@ -245,16 +239,11 @@ describe('BoardStage Lock all', () => {
   const renderLockAll = (value) => render(<MemoryRouter><ShotLockContext.Provider value={{ locks, clips, toggle: vi.fn(), ...value }}>
     <BoardStage board={board(scenes)} /></ShotLockContext.Provider></MemoryRouter>);
 
-  it('says what it locks and that unused takes get rejected, then locks stills before videos', async () => {
+  it('does not offer a lock action that could reject unused takes', () => {
     const lockAll = vi.fn(async () => ({ project: {} }));
     renderLockAll({ lockAll });
-    fireEvent.click(screen.getByRole('button', { name: 'Lock all' }));
-    // Shot 3 has nothing picked and shot 4 is already locked; shot 2 has a still but no clip.
-    expect(screen.getByText('Lock 2 stills and 1 video?')).toBeTruthy();
-    expect(screen.getByText(/rejects that shot's unused takes/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Lock all' })).toBeNull();
     expect(lockAll).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Lock them' }));
-    await waitFor(() => expect(lockAll).toHaveBeenCalledWith(['s1', 's2'], ['s1']));
   });
 
   it('hides when every picked still and clip is locked', () => {

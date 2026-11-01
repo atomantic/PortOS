@@ -103,7 +103,7 @@ export default function StoryboardFitPanel({ project, board, disabled, onFitted,
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       {confirming ? (
         <InlineConfirmRow autoFocus aria-label="Replace the shots" tone="warning" confirmText="Write shots"
-          question={`Replace the ${plural(existing, 'shot')} with ${plural(fit.shots.length, 'shot')} from the board? A shot whose span stays the same keeps its frames and clips.`}
+          question={`Replace the ${plural(existing, 'shot')} with ${plural(fit.shots.length, 'shot')} from the board? A shot matched by panel or span keeps its frames and clips; removed shots' takes stay in the collection.`}
           onConfirm={write} onCancel={() => setConfirming(false)} />
       ) : (
         <div className="flex flex-wrap gap-2">

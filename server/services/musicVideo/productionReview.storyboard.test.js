@@ -64,6 +64,7 @@ describe('approving a Board storyboard of derived shots', () => {
     expect(before.storyboard.problems).toEqual([]);
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: before.basis.storyboard });
     expect(approved.productionReview.draft.storyboard).toEqual(before.storyboard.shots);
+    expect(approved.productionReview.shotApprovals).toBeUndefined();
     expect(productionReadiness(approved).storyboard.approved).toBe(true);
 
     // Uniquely catches a machine-only composition migration staling art and storyboard approvals.
@@ -91,16 +92,15 @@ describe('the director trimming an approved storyboard', () => {
     return approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
   }
 
-  // Uniquely catches cutting a shot, or moving a cut, unlocking an approved still.
-  it('keeps every still locked through a cut and the shot stretched over the gap, and unlocks only a changed picture', () => {
+  it('keeps an approved storyboard current through a cut, retiming, and frame prompt change', () => {
     const cut = removeScene(approvedBoard(), 's2');
     expect(cut.productionReview.draft.storyboard.map((shot) => shot.sceneId)).toEqual(['s1', 's3']);
     expect(productionReadiness(cut).storyboard.shotLocks).toEqual({ s1: 'locked', s3: 'locked' });
-    // Moving a cut keeps the still approved: its timing is the clip's, which a video lock guards.
+    // Shot wording and timing may be refined without locking the reference frame.
     const { project: stretched } = applySceneUpdate(cut, 's1', { endSec: 6 });
     expect(productionReadiness(stretched).storyboard).toMatchObject({ approved: true, unlocked: [], shotLocks: { s1: 'locked', s3: 'locked' } });
     const { project: redrawn } = applySceneUpdate(stretched, 's1', { framePrompt: 'Close-up, desk lamp' });
-    expect(productionReadiness(redrawn).storyboard).toMatchObject({ approved: false, unlocked: ['s1'], shotLocks: { s1: 'changed', s3: 'locked' } });
+    expect(productionReadiness(redrawn).storyboard).toMatchObject({ approved: true, unlocked: [] });
   });
 
   it('keeps the merged shot still locked when two shots are joined', () => {
@@ -151,8 +151,7 @@ describe('locking shots one at a time', () => {
     expect(productionReadiness(all).storyboard).toMatchObject({ approved: true, unlocked: [] });
   });
 
-  // Uniquely catches one shot's edit un-approving every other shot on an approved board.
-  it('unlocks only the shot an edit touches, and the board until it is locked again', () => {
+  it('keeps the board approved while shot prompts and clip selections change', () => {
     const art = artApproved();
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
     expect(productionReadiness(approved).storyboard.shotLocks).toEqual({ s1: 'locked', s2: 'locked', s3: 'locked' });
@@ -164,15 +163,11 @@ describe('locking shots one at a time', () => {
     expect(applySceneUpdate(coded, 's3', { prompt: 'Same clip, new words' }).updated.codeClip).toBe(true);
     const { project: edited } = applySceneUpdate(approved, 's2', { prompt: 'ASCII-art music video on the CRT' });
     const board = productionReadiness(edited).storyboard;
-    expect(board.shotLocks).toEqual({ s1: 'locked', s2: 'changed', s3: 'locked' });
-    expect(board).toMatchObject({ approved: false, unlocked: ['s2'] });
-    expect(() => assertShotApproval(edited, 's1')).not.toThrow();
-    expect(() => assertShotApproval(edited, 's2')).toThrow(/changed since you locked it/);
-    // Picking another clip take is the shot's output, not an input: it stays locked.
+    expect(board).toMatchObject({ approved: true, unlocked: [] });
+    expect(edited.productionReview.shotApprovals).toBeUndefined();
+    // Picking another clip take is the shot's output, not a board revision.
     const { project: retaken } = applySceneUpdate(edited, 's1', { videoHistoryId: 'clip-2' });
-    expect(productionReadiness(retaken).storyboard.shotLocks.s1).toBe('locked');
-    const relocked = setShotLocks(retaken, { sceneIds: ['s2'], locked: true });
-    expect(productionReadiness(relocked).storyboard.approved).toBe(true);
+    expect(productionReadiness(retaken).storyboard.approved).toBe(true);
   });
 
   // Uniquely catches a board approved before per-shot locks shipped dropping to "N shots not locked"

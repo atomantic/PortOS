@@ -116,13 +116,26 @@ describe('cast inputs on a new still (#14154)', () => {
     const project = sceneWithFrame();
     const kept = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'other.png', source: 'generated', castInputs }]);
     expect(kept.scene.referenceImageId).toBe('start.png');
-    const replaced = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'other.png', source: 'generated', castInputs, replaceSelection: true }]);
+    const replaced = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'other.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: 'start.png' }]);
     expect(replaced.scene.referenceImageId).toBe('other.png');
     expect(replaced.scene.takes.find((take) => take.assetId === 'other.png')).not.toHaveProperty('replaceSelection');
     const end = appendSceneTakes({ id: 'mv-1', scenes: [{ sceneId: 's1', endImageId: 'end-old.png' }] }, 's1', [
-      { kind: 'endImage', assetId: 'end-new.png', source: 'generated', castInputs, replaceSelection: true },
+      { kind: 'endImage', assetId: 'end-new.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: 'end-old.png' },
     ]);
     expect(end.scene.endImageId).toBe('end-new.png');
+    const changed = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'late.png', source: 'generated', replaceSelection: true, expectedSelection: 'previous.png' }]);
+    expect(changed.scene.referenceImageId).toBe('start.png');
+    expect(changed.scene.takes.some((take) => take.assetId === 'late.png')).toBe(true);
+  });
+
+  it('keeps a newer repair pending when an older repair finishes', () => {
+    const project = sceneWithFrame();
+    project.scenes[0].stillFixes = { text: 'newer instructions', at: 'repair-2', pending: true, replaces: 'start.png' };
+    const { scene } = appendSceneTakes(project, 's1', [{ kind: 'image', assetId: 'late.png', source: 'generated',
+      replaceSelection: true, expectedSelection: 'start.png', stillRepairAt: 'repair-1' }]);
+    expect(scene.referenceImageId).toBe('start.png');
+    expect(scene.stillFixes).toMatchObject({ at: 'repair-2', pending: true });
+    expect(scene.takes.map(take => take.assetId)).toEqual(['start.png', 'late.png']);
   });
 });
 

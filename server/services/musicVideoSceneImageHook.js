@@ -67,6 +67,8 @@ const hook = createMediaJobImageHook({
       // Copied from the submit, not recomputed: a long render can finish after Casting changes.
       ...(tag.castInputs ? { castInputs: tag.castInputs } : {}),
       ...(tag.replaceSelection === true ? { replaceSelection: true } : {}),
+      ...(tag.expectedSelection !== undefined ? { expectedSelection: tag.expectedSelection } : {}),
+      ...(typeof tag.stillRepairAt === 'string' ? { stillRepairAt: tag.stillRepairAt } : {}),
     }]);
   },
   onAttached: ({ projectId, sceneId, filename, job }, { scene, appended }) => {

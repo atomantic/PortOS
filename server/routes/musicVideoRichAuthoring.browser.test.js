@@ -164,13 +164,13 @@ describe.skipIf(!canRun)('rich document authoring in a real browser (Chrome, ffm
     await page.getByLabel('Requested change').fill('Move the operator behind the threshold at the exit.');
     await page.getByRole('button', { name: 'Save revision feedback' }).click();
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
-    expect(await page.getByRole('button', { name: 'Lock all stills' }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Approve storyboard' }).isDisabled()).toBe(true);
     await page.getByLabel('How it was resolved (optional)').fill('Reviewed the updated staging in the storyboard.');
     await page.getByRole('button', { name: 'Mark resolved' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
-    await approve('Lock all stills');
+    await approve('Approve storyboard');
     await page.getByRole('button', { name: 'Make step', exact: true }).click();
     // Generation response, then the candidate the panel fetches in response to the updated project.
     // Observing both names the failing hop, and they also assert the candidate pointer is the one just staged.

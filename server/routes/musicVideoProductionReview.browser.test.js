@@ -116,14 +116,14 @@ describe.skipIf(!canRun)('production review in a real browser (Chrome, ffmpeg an
     await page.getByLabel('Requested change').fill('Move the operator behind the threshold at the exit.');
     await page.getByRole('button', { name: 'Save revision feedback' }).click();
     await page.getByText('Move the operator behind the threshold at the exit.', { exact: true }).waitFor();
-    expect(await page.getByRole('button', { name: 'Lock all stills' }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Approve storyboard' }).isDisabled()).toBe(true);
     await page.getByLabel('How it was resolved (optional)').fill('Reviewed the updated staging in the storyboard.');
     await page.getByRole('button', { name: 'Mark resolved' }).click();
     await page.getByText('Resolution: Reviewed the updated staging in the storyboard.', { exact: true }).waitFor();
     const beforeBoard = await page.evaluate(async id => (await fetch('/api/music-video/' + id + '/production-review')).json(), p.id);
     expect(beforeBoard.readiness.storyboard.problems).toEqual([]);
-    await page.getByRole('button', { name: 'Lock all stills' }).click();
-    await page.getByRole('heading', { name: 'All stills locked', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Approve storyboard' }).click();
+    await page.getByRole('heading', { name: 'Storyboard approved', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Make step', exact: true }).click();
     await page.getByRole('button', { name: 'Render animated proof' }).click();
     await page.locator('video').waitFor({ timeout: 120000 });

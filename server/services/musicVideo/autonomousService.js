@@ -67,6 +67,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
@@ -93,9 +94,9 @@ import {
 } from '../../lib/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord as mutateRecord } from './projects.js';
+import { ensureSceneTakes } from './takes.js';
 import { requireProject } from './requireProject.js';
-// `runId` lets the run's repairs land on shots its own approval locked (preserveAutomatedShotLocks).
-const mutateProjectRecord = (id, transform, { runId = null } = {}) => mutateRecord(id, transform, { source: 'orchestrator', runId });
+const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 import { musicVideoEvents } from './events.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
@@ -1278,10 +1279,10 @@ function stopsBeforeClips(project, run, pool) {
 }
 
 /**
- * One review round over every still. Clears the flagged stills (their fixes
- * ride the next prompt) and returns those shots, which production makes again:
+ * One review round over every still. Marks flagged stills for regeneration
+ * (their fixes ride the next prompt) and returns those shots:
  * none once the rounds are spent, when the reviewer could not see the images,
- * or when a lock the run did not give refuses the repair. Null when a stop or
+ * or when a shot changed during the review. Null when a stop or
  * cancel released the run during the review, which then changes nothing.
  */
 async function reviewStills(projectId, run, productionRunId) {
@@ -1314,9 +1315,25 @@ async function reviewStills(projectId, run, productionRunId) {
   const fixes = new Map();
   for (const issue of flagged) fixes.set(issue.sceneId, [fixes.get(issue.sceneId), issue.text].filter(Boolean).join(' '));
   const at = new Date().toISOString();
-  // Clearing the still is what makes production generate it again; the fixes ride its next prompt.
-  const refused = fixes.size > 0 && (await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((scene) => (fixes.has(scene.sceneId)
-    ? { ...scene, referenceImageId: null, stillFixes: { text: trimTo(fixes.get(scene.sceneId), STILL_FIXES_MAX), at } } : scene)) } }), { runId: run.id })).rejected === true;
+  // Only repair the shots actually reviewed: a director may have changed a
+  // selection while the reviewer was running. Keep it selected until its
+  // replacement lands, and retain legacy selections in the take history.
+  const reviewed = new Map(shots.map((scene) => [scene.sceneId, canonicalSnapshotChecksum(scene)]));
+  const repair = fixes.size > 0 ? await mutateProjectRecord(projectId, (current) => {
+    const latest = projectAutonomousRun(current);
+    if (latest?.status !== 'running' || latest.processId !== PROCESS_ID || latest.output?.productionRunId !== productionRunId) {
+      return { project: current, stopped: true };
+    }
+    const changed = [...fixes.keys()].some((id) => {
+      const scene = (current.scenes || []).find((item) => item.sceneId === id);
+      return !scene || canonicalSnapshotChecksum(scene) !== reviewed.get(id);
+    });
+    if (changed) return { project: current, rejected: true };
+    return { project: { ...current, scenes: (current.scenes || []).map((scene) => (fixes.has(scene.sceneId)
+      ? { ...scene, takes: ensureSceneTakes(scene), stillFixes: { text: trimTo(fixes.get(scene.sceneId), STILL_FIXES_MAX), at, pending: true, replaces: scene.referenceImageId } } : scene)) } };
+  }) : null;
+  if (repair?.stopped) return null;
+  const refused = repair?.rejected === true;
   const regenerate = refused ? [] : flagged;
   const scored = reviews.map((r) => r.score).filter((n) => n != null);
   // Approval needs every still seen and nothing flagged; an inconclusive or unresolved round is not one.
@@ -1324,7 +1341,7 @@ async function reviewStills(projectId, run, productionRunId) {
   const unresolved = issues.length > 0 && !regenerate.length;
   const why = !reviews.length ? 'No still could be shown to the reviewer. '
     : reviews.some((r) => !r.visual) ? 'The reviewer could not see every still. '
-      : refused ? `${nameShots(project, [...fixes.keys()])} locked by an approval this run did not give; unlock to regenerate. `
+      : refused ? `${nameShots(project, [...fixes.keys()])} changed while the stills were being reviewed; review again before regenerating. `
         : unresolved ? 'Revision limit reached with changes still open. ' : '';
   await recordReview(projectId, { checkpoint: 'stills', verdict: regenerate.length || unresolved || !conclusive ? 'revise' : 'approve',
     score: scored.length ? Math.min(...scored) : null, route: reviews.at(-1)?.route || null, visual: reviews.length > 0 && reviews.every((r) => r.visual),
@@ -2001,16 +2018,28 @@ async function repairPilot(projectId, run, productionRunId, { pilot, result }) {
   if (spent < reviewLimit(run)) {
     const at = new Date().toISOString();
     const slot = repair.category === 'plate' ? 'stillFixes' : 'clipFixes';
-    const { rejected } = await mutateProjectRecord(projectId, (current) => ({ project: { ...current, scenes: (current.scenes || []).map((s) => {
-      if (s.sceneId !== pilot.sceneId) return s;
-      // Earlier fixes stay in the prompt so a repair never undoes the last one; the newest win the length cap.
-      const text = [s[slot]?.text, problems].filter(Boolean).join(' ');
-      return { ...s, ...(slot === 'stillFixes' ? { referenceImageId: null } : {}), [slot]: { text: text.slice(-(slot === 'stillFixes' ? STILL_FIXES_MAX : CLIP_FIXES_MAX)), at } };
-    }) } }), { runId: run.id });
+    const sceneBasis = canonicalSnapshotChecksum(scene);
+    const { rejected } = await mutateProjectRecord(projectId, (current) => {
+      const latest = projectAutonomousRun(current);
+      const live = (current.scenes || []).find((s) => s.sceneId === pilot.sceneId);
+      if (!live || canonicalSnapshotChecksum(live) !== sceneBasis || latest?.status !== 'running'
+        || latest.processId !== PROCESS_ID || latest.output?.productionRunId !== productionRunId
+        || pilot.inputBasis !== pilotInputBasis(current, pilot.sceneId)
+        || musicVideoDependencyChanges(current, result.dependencies).length) return { project: current, rejected: true };
+      return { project: { ...current, scenes: (current.scenes || []).map((s) => {
+        if (s.sceneId !== pilot.sceneId) return s;
+        // Earlier fixes stay in the prompt so a repair never undoes the last one; the newest win the length cap.
+        const text = [s[slot]?.text, problems].filter(Boolean).join(' ');
+        return { ...s, ...(slot === 'stillFixes' ? { takes: ensureSceneTakes(s) } : {}), [slot]: {
+          text: text.slice(-(slot === 'stillFixes' ? STILL_FIXES_MAX : CLIP_FIXES_MAX)), at,
+          ...(slot === 'stillFixes' && s.referenceImageId ? { pending: true, replaces: s.referenceImageId } : {}),
+        } };
+      }) } };
+    });
     if (rejected) {
       // Nothing landed, so production would make the same take again: leave it to the director.
       await recordReview(projectId, { checkpoint: 'pilot', sceneId: pilot.sceneId, verdict: 'revise',
-        notes: trimTo(`Pilot ${scene.label || pilot.sceneId}: ${repair.category} repair not applied; ${nameShots(project, [pilot.sceneId])} is locked by an approval this run did not give. Unlock it to repair. ${problems}`, 1500),
+        notes: trimTo(`Pilot ${scene.label || pilot.sceneId}: ${repair.category} repair not applied; ${nameShots(project, [pilot.sceneId])} changed during review. Review it again before regenerating. ${problems}`, 1500),
         changes: [trimTo(`${pilot.sceneId}: ${problems}`, 300)] });
       return false;
     }
