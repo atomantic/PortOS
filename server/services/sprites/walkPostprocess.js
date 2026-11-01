@@ -728,6 +728,10 @@ export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
  */
 export const ROOT_BAND_TORSO = [0.30, 0.58];
 export const ROOT_BAND_HIP = [0.42, 0.76];
+// Atlas track-to-track registration uses the stance, measured across the
+// whole track. Keep the per-frame walk packer's torso landmark unchanged:
+// following individual swinging feet there would introduce gait drift.
+export const ROOT_BAND_STANCE = [0.78, 1];
 
 /** The `alignment.operation` stamp written by the torso-pivot packer (#3049). */
 export const ALIGN_OP_TORSO_X = 'one-fixed-scale-per-frame-torso-x-and-baseline-y';
