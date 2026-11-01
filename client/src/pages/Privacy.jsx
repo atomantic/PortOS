@@ -66,7 +66,8 @@ export default function Privacy() {
   const handleCreated = (subject) => {
     // Creation writes exactly one local-only `pii_vault` grant — broker
     // purposes start ungranted (#8332).
-    setSubjects((prev) => [...prev, { ...subject, consentCount: 1, recordCount: 0, activeScopes: ['pii_vault'] }]);
+    if (subjectsState !== 'ready') retrySubjects();
+    else setSubjects((prev) => [...prev, { ...subject, consentCount: 1, recordCount: 0, activeScopes: ['pii_vault'] }]);
     selectSubject(subject.id);
   };
 

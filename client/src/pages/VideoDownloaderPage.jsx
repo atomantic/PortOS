@@ -32,10 +32,14 @@ export default function VideoDownloaderPage() {
   const { peerNames, rememberPeerName } = usePendingDeletePeerNames(downloads);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
-  // Prepend the finished clip to the list rather than refetching (reactive UI).
+  // An outstanding list predates the completed download: supersede that read.
+  // Once ready, keep the immediate local update without another request.
   const { active, percent, stage, start, cancel } = useVideoDownload({
     onComplete: (video) => {
-      if (video) setDownloads((prev) => [video, ...prev.filter((d) => d.id !== video.id)]);
+      if (video) {
+        if (state !== 'ready') retry();
+        else setDownloads((prev) => [video, ...prev.filter((d) => d.id !== video.id)]);
+      }
       setUrl('');
     },
   });
