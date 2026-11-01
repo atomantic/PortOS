@@ -33,7 +33,7 @@ import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
 import { isSelfDrawnLayer } from '../../lib/musicVideoLayers.js';
 import { beginNextAttempt } from './autoReview.js';
@@ -125,6 +125,15 @@ const defaults = {
     if (!provider || provider.id !== input?.providerId || provider.enabled === false || !selectedModel || selectedModel !== input?.model) throw new ServerError('The selected code-authoring provider/model is unavailable', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     if (!isAuthoringOneShotProvider(provider)) throw new ServerError('Choose an API, a tool-free headless CLI, or a read-only-sandboxed codex CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     return { providerId: provider.id, model: selectedModel, ...(input.effort ? { effort: input.effort } : {}), costUsd: isFreeProvider(provider) ? 0 : null };
+  },
+  // Same rule autoReviewService.callReviewer applies to a production review, checked at Start so an
+  // unset reviewer falls back to the active provider only when that provider is eligible (#14549).
+  assertReviewerEligible: async (input) => {
+    const { resolveProviderAndModel } = await import('../promptRunner.js');
+    const { provider, selectedModel } = await resolveProviderAndModel(input || {});
+    if (!provider || provider.enabled === false) throw new ServerError('No enabled AI provider is available for production review; select a tool-free reviewer provider', { status: 422, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
+    if (!isToolFreeOneShotProvider(provider)) throw new ServerError(`Provider "${provider.name || provider.id}" is not tool-free; select a tool-free reviewer provider and model`, { status: 422, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
+    if ((input?.providerId && provider.id !== input.providerId) || (input?.model && selectedModel !== input.model)) throw new ServerError('The selected production reviewer is unavailable', { status: 409, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
   },
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
 };
@@ -742,6 +751,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
   }
   const assets = codeFirstProductionAssets(project);
   const authoring = assets ? await deps.resolveAuthoring(requestedAuthoring) : null;
+  await deps.assertReviewerEligible(reviewer);
   const pool = bindSuppliedAudio(normalizeProductionPool(requested, { allowEmpty: !!assets }), project);
   await assertPoolEligible(pool, await deps.loadEnv());
   // The autopilot cuts on the song (#9290) unless the director chose how it
