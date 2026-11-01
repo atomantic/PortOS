@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  planSequenceCoverage, composeSequencePrompt, sequenceClipSpans, SEQUENCE_PROMPT_EXPANSION,
+  planSequenceCoverage, planProjectSequenceCoverage, composeSequencePrompt, sequenceClipSpans, SEQUENCE_PROMPT_EXPANSION,
 } from './musicVideoSequenceCoverage.js';
 import { buildFalVideoRequest } from './falVideoModels.js';
 
@@ -82,5 +82,40 @@ describe('sequence request', () => {
     const scenes = [shot('a', 0, 5), shot('b', 5, 10)];
     const [group] = planSequenceCoverage(scenes, { modelId: H3 }).groups;
     expect(sequenceClipSpans(group, scenes, { clipDurationSec: 7 }).ok).toBe(false);
+  });
+});
+
+describe('planProjectSequenceCoverage (stored scenes carry no set/protagonist)', () => {
+  const stored = (sceneId, startSec, endSec, extra = {}) => {
+    const { set, protagonist, ...rest } = shot(sceneId, startSec, endSec, extra);
+    return rest;
+  };
+  const plan = (scenes, project = {}) => planProjectSequenceCoverage({ ...project, scenes }, { modelId: H3 });
+
+  it('splits a run where the picked set changes and groups shots that share set and lead', () => {
+    const lead = { ingredientId: 'cast-1' };
+    const scenes = [
+      stored('a', 0, 3, { setReference: { subjectId: 'attic' }, characterVariant: lead }),
+      stored('b', 3, 6, { setReference: { subjectId: 'attic' }, characterVariant: lead }),
+      stored('c', 6, 9, { setReference: { subjectId: 'roof' }, characterVariant: lead }),
+    ];
+    const { groups, perShot } = plan(scenes);
+    expect(groups.map((g) => g.sceneIds)).toEqual([['a', 'b']]);
+    expect(perShot).toEqual([{ sceneId: 'c', reason: 'no adjoining shot in the same set with the same lead' }]);
+  });
+
+  it('splits on a lead change and falls back to the section set in the song map', () => {
+    const project = { castAndSets: { direction: { songMap: [{ section: 1, setId: 'attic' }] } } };
+    const split = plan([
+      stored('a', 0, 3, { characterVariant: { ingredientId: 'cast-1' } }),
+      stored('b', 3, 6, { characterVariant: { ingredientId: 'cast-2' } }),
+    ], project);
+    expect(split.groups).toEqual([]);
+    const same = plan([stored('a', 0, 3), stored('b', 3, 6, { setReference: { subjectId: 'attic' } })], project);
+    expect(same.groups.map((g) => g.sceneIds)).toEqual([['a', 'b']]);
+  });
+
+  it('keeps grouping when no shot names a set or lead', () => {
+    expect(plan([stored('a', 0, 3), stored('b', 3, 6)]).groups.map((g) => g.sceneIds)).toEqual([['a', 'b']]);
   });
 });
