@@ -335,6 +335,11 @@ revision-bound proof and durable retry times; conflicting owners remain blocked.
 
 Verification inspects the exact same-repository synchronization PR/head and its
 merged development ancestry (including the candidate head and published promotion).
+For inline releases it also reads the package version at the observed development
+head and requires it to be at least the published version. When the published tree
+contains `package-lock.json`, its development copy must agree with the package
+version. A newer development version is preserved; unreadable or older versions
+remain a synchronization hold.
 A provider-confirmed merge establishes delivery under the repository's merge
 policy. The legacy local-review, hosted-review, CI and admission obligation names
 record that provider authority; they do not claim that PortOS independently

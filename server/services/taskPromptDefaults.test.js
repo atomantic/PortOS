@@ -968,10 +968,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('Only trusted work is yours');
     expect(current).toContain('--base <DEV_BRANCH>');
     expect(current).toContain('Merge dependency updates');
-    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(24);
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(25);
     expect(current).toContain('Keep ownership of blockers');
     expect(current).toContain('Do not create a separate PortOS task or agent');
     expect(current).toContain('synchronizationMode: "inline"');
+    expect(current).toContain('preserve any newer version and unrelated changes');
     expect(current).not.toContain('Stop doing synchronization in this publishing run');
     expect(current).toContain('Filing an issue and leaving the release PR open is NOT a resolution');
     expect(current).not.toContain('Bound the loop');

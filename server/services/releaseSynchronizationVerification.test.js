@@ -8,7 +8,8 @@ import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/m
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
   present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
   missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true,
-  forgeCalls: 0, checkoutHead: null }));
+  forgeCalls: 0, checkoutHead: null, developmentVersion: null, lockVersion: null, lockRootVersion: null,
+  hasLock: true, versionUnavailable: false, versionReads: [] }));
 const inlineCleanup = vi.hoisted(() => vi.fn(async () => ({ attempted: true, retired: [], held: [] })));
 vi.mock('./releaseSynchronizationCleanup.js', () => ({ settleInlineReleaseCheckouts: inlineCleanup }));
 vi.mock('../lib/fileUtils.js', async original => {
@@ -72,6 +73,17 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   else if (path === 'pulls/42/reviews?per_page=100') result = [f.reviews];
   else if (path.startsWith('compare/')) result = { status: f.ancestor
     && !(f.missingSyncAncestry && path === `compare/${f.pr.head.sha}...${'e'.repeat(40)}`) ? 'ahead' : 'diverged', merge_base_commit: { sha: path.slice(8, 48) } };
+  else if (path.startsWith('git/trees/')) result = { truncated: false, tree: f.hasLock
+    ? [{ path: 'package-lock.json', type: 'blob', sha: '1'.repeat(40) }] : [] };
+  else if (path.startsWith('contents/package.json?ref=')) {
+    f.versionReads.push(path);
+    if (f.versionUnavailable) throw new Error('synthetic version transport failure');
+    result = { encoding: 'base64', sha: '2'.repeat(40), content: Buffer.from(JSON.stringify({ version: f.developmentVersion })).toString('base64') };
+  } else if (path.startsWith('contents/package-lock.json?ref=')) {
+    f.versionReads.push(path);
+    result = { encoding: 'base64', sha: '3'.repeat(40), content: Buffer.from(JSON.stringify({ version: f.lockVersion,
+      packages: { '': { version: f.lockRootVersion } } })).toString('base64') };
+  }
   else if (path.startsWith('contents/.quality.json?')) result = f.qualityFile;
   else throw new Error(`Unexpected synthetic forge endpoint: ${path}`);
   return JSON.stringify(result);
@@ -98,6 +110,10 @@ beforeEach(async () => {
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
   f.forgeCalls = 0;
   f.checkoutHead = null;
+  f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.109.0';
+  f.hasLock = true;
+  f.versionUnavailable = false;
+  f.versionReads = [];
   f.liveAgents = null;
   f.liveTrusted = true;
   // POSIX settlement is the default contract; the native Windows test overrides it.
@@ -155,7 +171,8 @@ async function finishExecution({ retain = true } = {}) {
 
 it('verifies an inline owner against its exact synchronization head and settles after the owner exits', async () => {
   const source = await addTask({ description: 'Inline release', app: 'example-app' });
-  const inlinePublication = { ...publication, identity: '8'.repeat(64), synchronizationHandoffVersion: 2 };
+  const inlinePublication = { ...publication, identity: '8'.repeat(64), synchronizationHandoffVersion: 2,
+    version: '2.109.0', tag: 'v2.109.0', tagTree: 'f'.repeat(40) };
   const publisher = structuredClone(f.agents[0]);
   publisher.id = 'inline-publisher';
   publisher.metadata.checkoutSeeds[0].agentId = publisher.id;
@@ -178,6 +195,28 @@ it('verifies an inline owner against its exact synchronization head and settles 
   f.pr.merged = true;
   expect((await verifyReleaseSynchronizationTask(inlineTask)).status).toBe('running');
   expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
+  expect(f.versionReads).toContain(`contents/package.json?ref=${'e'.repeat(40)}`);
+  expect(f.versionReads).toContain(`contents/package-lock.json?ref=${'e'.repeat(40)}`);
+  f.developmentVersion = '2.108.0';
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
+    reason: 'synchronizationPr:development-version-behind-publication' });
+  f.developmentVersion = '2.109.0-rc.1';
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
+    reason: 'synchronizationPr:development-version-behind-publication' });
+  f.developmentVersion = '2.109.0';
+  f.lockRootVersion = '2.108.0';
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
+    reason: 'synchronizationPr:development-lockfile-version-conflict' });
+  f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.110.0';
+  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
+  f.versionUnavailable = true;
+  expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false,
+    reason: 'synchronizationPr:development-version-unreadable' });
+  f.versionUnavailable = false;
+  f.hasLock = false;
+  expect(await verifyInlineReleaseDelivery(publisher)).toEqual({ verified: true });
+  f.hasLock = true;
+  f.developmentVersion = f.lockVersion = f.lockRootVersion = '2.109.0';
   f.checkoutHead = 'c'.repeat(40);
   f.pr.head.sha = '9'.repeat(40);
   expect(await verifyInlineReleaseDelivery(publisher)).toMatchObject({ verified: false, reason: 'synchronization-pr-identity-changed' });

@@ -9,6 +9,7 @@ import { claimCheckoutOwner } from '../lib/claimContinuation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
 import { matchingRetirementReceipts } from '../lib/reconcileRetirementEvidence.js';
+import { compareSemver } from '../lib/versionUtils.js';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, isInlineReleaseSynchronization, publisherCandidateTarget } from '../lib/releaseSynchronization.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 import { execGh } from './github.js';
@@ -30,6 +31,40 @@ const wait = reason => { throw Object.assign(new Error(reason), { code: reason, 
 const ownersOf = (entry, agents) => agents.filter(agent => agent.taskId === entry.task.id);
 const sameCheckout = (left, right) => left && right && ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity']
   .every(key => left[key] === right[key]);
+const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const validVersion = value => typeof value === 'string' && versionPattern.test(value)
+  && value.split(/[.+-]/, 3).every(part => Number.isSafeInteger(Number(part)));
+
+async function developmentVersionEvidence(ctx, publication) {
+  if (!validVersion(publication.version) || !sha(publication.tagTree)) hold('published-version-unverified');
+  const readJson = async (path, reason) => {
+    const file = await ctx.api(`contents/${path}?ref=${ctx.target.developmentHead}`).catch(() => hold(reason));
+    if (file?.encoding !== 'base64' || !sha(file.sha) || typeof file.content !== 'string') hold(reason);
+    try { return { value: JSON.parse(Buffer.from(file.content, 'base64').toString('utf8')), blob: file.sha }; }
+    catch { hold(reason); }
+  };
+  const manifest = await readJson('package.json', 'development-version-unreadable');
+  const current = manifest.value?.version;
+  if (!validVersion(current)) hold('development-version-unreadable');
+  if (compareSemver(current, publication.version) < 0) hold('development-version-behind-publication');
+  // The publication's immutable tree decides whether this project owns an
+  // npm lockfile. A missing or inconsistent delivered lock cannot be hidden
+  // by a correct package.json; a project without one keeps its old contract.
+  const tree = await ctx.api(`git/trees/${publication.tagTree}`).catch(() => hold('published-version-tree-unreadable'));
+  if (!Array.isArray(tree?.tree) || tree.truncated !== false) hold('published-version-tree-unreadable');
+  const locks = tree.tree.filter(row => row.path === 'package-lock.json');
+  if (locks.length > 1 || (locks.length === 1 && (locks[0].type !== 'blob' || !sha(locks[0].sha)))) hold('published-version-tree-unreadable');
+  let lockBlob = null;
+  if (locks.length) {
+    const lock = await readJson('package-lock.json', 'development-lockfile-unreadable');
+    if (!lock.value || typeof lock.value !== 'object' || Array.isArray(lock.value) || lock.value.version !== current
+      || (Object.hasOwn(lock.value, 'packages') && lock.value.packages?.['']?.version !== current)) {
+      hold('development-lockfile-version-conflict');
+    }
+    lockBlob = lock.blob;
+  }
+  return { publishedVersion: publication.version, developmentVersion: current, manifestBlob: manifest.blob, lockBlob };
+}
 
 async function readSynchronizationForge(origin, forgeExec, path, paginate = false) {
   const args = ['api', '--hostname', origin.host, ...(paginate ? ['--paginate', '--slurp'] : []),
@@ -177,7 +212,8 @@ export async function inspectReleaseSynchronization(entry, agents) {
     if (!time(pr.merged_at) || !sha(pr.merge_commit_sha)) hold('synchronization-merge-unreadable');
     if (!await ctx.ancestor(pr.merge_commit_sha, target.developmentHead)) hold('synchronization-merge-not-on-development');
     if (!await ctx.ancestor(target.headSha, target.developmentHead)) hold('synchronization-head-not-on-development');
-    return target;
+    const version = isInlineReleaseSynchronization(entry) ? await developmentVersionEvidence(ctx, entry.publication) : {};
+    return { ...target, ...version };
   });
   await check('candidateFixes', async () => {
     if (!await ctx.ancestor(entry.publication.candidateHead, target.headSha)) hold('candidate-fixes-not-preserved');
