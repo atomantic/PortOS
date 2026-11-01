@@ -75,3 +75,32 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     expect(ids(musicVideoConditioningReferences(project(authored), { panelId: 'panel-1', panelArt: 'sketch.gif' }))).toEqual(['lead.png', 'set.png']);
   });
 });
+
+describe('musicVideoConditioningReferences with an approved Cast & Sets check-in', () => {
+  const references = [
+    { id: 'mvr-cs-character', imageId: 'lead-sheet.png', condition: true },
+    { id: 'mvr-cs-set-street', imageId: 'street.png', condition: true },
+    { id: 'mvr-cs-set-mall', imageId: 'mall.png', condition: true },
+    { id: 'mvr-cs-set-lot', imageId: 'lot.png', condition: true },
+    { id: 'mvr-cs-set-hill', imageId: 'hill.png', condition: false },
+    { id: 'mvr-cs-cast-kevin', imageId: 'kevin-sheet.png', condition: false },
+  ];
+  const checkedIn = {
+    visualSpec: { references },
+    castAndSets: { status: 'approved', direction: { cast: [{ id: 'kevin', name: 'Kevin', role: 'boyfriend' }], songMap: [{ section: 0, setId: 'hill' }] } },
+  };
+  const scene = (extra) => ({ framePrompt: 'Kevin rides beside her, both laughing', ...extra });
+
+  it('sends the shot\'s own set and the cast it names', () => {
+    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+  });
+
+  // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
+  // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
+  it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
+    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }))))
+      .toEqual(['lead-sheet.png', 'kevin-sheet.png', 'street.png', 'mall.png']);
+    expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' })))
+      .toEqual(['lead-sheet.png', 'street.png', 'mall.png', 'lot.png']);
+  });
+});
