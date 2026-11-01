@@ -101,6 +101,11 @@ beforeEach(() => {
       await opts.onSubmitted(['song-a', 'song-b']);
       return { songId: 'song-a', songIds: ['song-a', 'song-b'], filename: 'music-song-a.mp3' };
     }),
+    // The song checkpoint's submit-only path: renders are made, nothing is downloaded.
+    submitSunoSong: stub('suno-submit', async (_fields, opts) => {
+      await opts.onSubmitted(['song-a', 'song-b']);
+      return ['song-a', 'song-b'];
+    }),
     generateLocalSong: stub('local', async ({ trackId, onSubmitted }) => {
       await onSubmitted('job-local');
       return { trackId, filename: 'song.wav', jobId: 'job-local' };
@@ -1058,20 +1063,19 @@ describe('checkpoints', () => {
 });
 
 describe('retaking the song at the song checkpoint', () => {
-  it('discards the song, re-runs the stage with the edited lyrics, style and Suno options, and parks there again', async () => {
+  it('parks on the fresh renders before any download, retakes them with edited lyrics, style and Suno options, then downloads only the picked render', async () => {
     await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'], suno: { excludeStyles: 'metal', vocalGender: 'female' } });
     await settled('awaiting-approval');
-    expect(runOf()).toMatchObject({ awaiting: 'song', stage: 'analyze', output: { trackId: 'track-1', sunoSongIds: ['song-a', 'song-b'] } });
-    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
-    expect(store.get('mv-auto').trackId).toBe('track-1');
+    // Suno made the renders, but nothing was exported: a download spends the director's monthly quota.
+    expect(runOf()).toMatchObject({ awaiting: 'song', stage: 'song', output: { sunoSongIds: ['song-a', 'song-b'] } });
+    expect(runOf().output.trackId).toBeFalsy();
+    expect(runOf().stages.song).toMatchObject({ status: 'pending', step: 'pick-take' });
+    expect(doubles.submitSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({ excludeStyles: 'metal', vocalGender: 'female', model: null }), expect.any(Object));
+    expect(doubles.generateSunoSong).not.toHaveBeenCalled();
 
-    doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
-    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
-      // A fresh request: the rejected take's ids and project link are no longer used.
-      expect(store.get('mv-auto').trackId).toBeNull();
-      expect(opts.songIds).toBeNull();
+    doubles.submitSunoSong.mockImplementationOnce(async (_fields, opts) => {
       await opts.onSubmitted(['song-c', 'song-d']);
-      return { songId: 'song-d', songIds: ['song-c', 'song-d'], filename: 'music-song-d.m4a' };
+      return ['song-c', 'song-d'];
     });
     const { run } = await service.resumeAutonomousVideo('mv-auto', {
       retakeSong: true, lyrics: '[verse]\nnew words', style: 'darker synthwave', suno: { vocalGender: 'male', model: 'v6' },
@@ -1079,22 +1083,33 @@ describe('retaking the song at the song checkpoint', () => {
     expect(run).toMatchObject({ status: 'running', stage: 'song', awaiting: null, output: { trackId: null, sunoSongIds: null } });
     await settled('awaiting-approval');
     expect(runOf()).toMatchObject({
-      awaiting: 'song', stage: 'analyze',
+      awaiting: 'song', stage: 'song',
       brief: { suno: { excludeStyles: 'metal', vocalGender: 'male', model: 'v6' } },
-      output: { trackId: 'track-2', sunoSongIds: ['song-c', 'song-d'], lyrics: '[verse]\nnew words', sunoStyle: 'darker synthwave' },
+      output: { sunoSongIds: ['song-c', 'song-d'], lyrics: '[verse]\nnew words', sunoStyle: 'darker synthwave' },
     });
-    expect(runOf().stages.song).toMatchObject({ status: 'done' });
-    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(2);
-    expect(doubles.generateSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(doubles.submitSunoSong).toHaveBeenLastCalledWith(expect.objectContaining({
       lyrics: '[verse]\nnew words', style: 'darker synthwave', excludeStyles: 'metal', vocalGender: 'male', model: 'v6',
     }), expect.any(Object));
-    // The project was linked to the new take; analysis has not run.
-    expect(store.get('mv-auto').trackId).toBe('track-2');
-    expect(calls).not.toContain('analyze');
+    expect(doubles.generateSunoSong).not.toHaveBeenCalled();
 
-    // Approving the new take continues the pipeline as before.
-    await service.resumeAutonomousVideo('mv-auto');
+    // A pick cannot ride a retake: the retake throws these renders away.
+    await expect(service.resumeAutonomousVideo('mv-auto', { retakeSong: true, sunoSongId: 'song-c' })).rejects.toMatchObject({ status: 409 });
+    expect(runOf()).toMatchObject({ status: 'awaiting-approval', awaiting: 'song', output: { sunoSongIds: ['song-c', 'song-d'] } });
+
+    // Approving downloads the picked song once (here a version the director revised in Suno),
+    // links it, and does not stop on the song again.
+    doubles.createTrack.mockResolvedValueOnce({ id: 'track-2' });
+    doubles.generateSunoSong.mockImplementationOnce(async (_fields, opts) => {
+      expect(opts).toMatchObject({ songIds: ['song-c', 'song-d'], exportSongId: 'song-revised' });
+      return { songId: 'song-revised', songIds: ['song-c', 'song-d'], filename: 'music-song-revised.m4a' };
+    });
+    await service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-revised' });
     await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(doubles.generateSunoSong).toHaveBeenCalledTimes(1);
+    expect(store.get('mv-auto').trackId).toBe('track-2');
+    expect(runOf().output).toMatchObject({ trackId: 'track-2', songTakeApproved: true, sunoSongPick: 'song-revised' });
+    // Once past the checkpoint, a pick is refused.
+    await expect(service.resumeAutonomousVideo('mv-auto', { sunoSongId: 'song-c' })).rejects.toMatchObject({ status: 409 });
   });
 
   it('refuses a retake anywhere but the song checkpoint, leaving the run untouched', async () => {
@@ -1115,7 +1130,8 @@ describe('retaking the song at the song checkpoint', () => {
       await new Promise((resolve) => { release = resolve; });
       throw Object.assign(new Error('cancelled'), { code: 'SUNO_AUDIO_CANCELLED' });
     });
-    await service.startAutonomousVideo({ prompt: 'p', checkpoints: ['song'] });
+    // No song checkpoint, so the song stage exports straight away.
+    await service.startAutonomousVideo({ prompt: 'p', checkpoints: [] });
     await vi.waitFor(() => expect(runOf().output.sunoSongIds).toEqual(['song-dead-a', 'song-dead-b']));
     await service.stopAutonomousVideo('mv-auto');
     release();
@@ -1129,8 +1145,8 @@ describe('retaking the song at the song checkpoint', () => {
     });
     const { run } = await service.resumeAutonomousVideo('mv-auto', { retakeSong: true, style: 'industrial electro' });
     expect(run).toMatchObject({ status: 'running', stage: 'song', output: { sunoSongIds: null, sunoStyle: 'industrial electro' } });
-    await settled('awaiting-approval');
-    expect(runOf()).toMatchObject({ awaiting: 'song', output: { sunoSongIds: ['song-e', 'song-f'] } });
+    await vi.waitFor(() => expect(calls).toContain('production'));
+    expect(runOf().output).toMatchObject({ sunoSongIds: ['song-e', 'song-f'] });
   });
 
   it('applies a Suno options patch on a plain approval too', async () => {

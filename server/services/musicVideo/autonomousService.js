@@ -118,6 +118,7 @@ const defaults = {
   reviewLyrics: async (args) => (await import('../musicDesigner.js')).reviewLyrics(args),
   createMoodBoard: async (spec, opts) => (await import('./autonomousBoard.js')).createAutonomousMoodBoard(spec, opts),
   generateSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).generateSunoSong(fields, opts),
+  submitSunoSong: async (fields, opts) => (await import('./autonomousSuno.js')).submitSunoSongOnly(fields, opts),
   generateLocalSong: async (args) => (await import('./autonomousLocalSong.js')).generateLocalSong(args),
   cancelLocalSong: async (jobId) => (await import('../mediaJobQueue/index.js')).cancelJob(jobId),
   getTrack: async (id) => (await import('../tracks/index.js')).getTrack(id).catch(() => null),
@@ -230,6 +231,8 @@ const stagePatch = (run, stage, patch) => ({ stages: { [stage]: { ...run.stages[
 
 const RENDER_STEP = 'rendering';
 const CAST_STEP = 'cast-and-sets';
+// The song stage's step while it waits for the director to pick a Suno render to download.
+export const SONG_PICK_STEP = 'pick-take';
 const autoApproves = (run, stage) => normalizeAutoApprove(run.brief.autoApprove).includes(stage);
 
 /**
@@ -1100,6 +1103,12 @@ const STAGES = {
       title: run.output.title, style: run.output.sunoStyle, lyrics: run.output.lyrics, instrumental: run.brief.instrumental, suno: run.brief.suno,
     });
     let submitted = run.output.sunoSongIds?.length > 0;
+    // With a song checkpoint, park on the fresh renders before any export: a
+    // Suno download spends one of the director's monthly downloads, so only the
+    // render they approve is ever downloaded. The orchestrator reviews the
+    // imported audio itself, so an orchestrated run exports as before.
+    const pickFirst = run.brief.checkpoints.includes('song') && !isOrchestratedRun(run) && !run.output.songTakeApproved;
+    if (pickFirst && submitted) return { output: {}, hold: SONG_PICK_STEP };
     let song;
     const controller = new AbortController();
     sunoControllers.set(run.id, controller);
@@ -1107,8 +1116,16 @@ const STAGES = {
       const latest = projectAutonomousRun(await getProject(project.id));
       if (latest?.id !== run.id || latest.status !== 'running') controller.abort();
       controller.signal.throwIfAborted();
+      if (pickFirst) {
+        await deps.submitSunoSong(fields, {
+          signal: controller.signal,
+          onSubmitted: (ids) => { submitted = true; return save({ output: { sunoSongIds: ids } }); },
+        });
+        return { output: {}, hold: SONG_PICK_STEP };
+      }
       song = await deps.generateSunoSong(fields, {
         songIds: run.output.sunoSongIds,
+        exportSongId: run.output.sunoSongPick || null,
         signal: controller.signal,
         // The long stage's sub-step rides the run record (and its socket event) so the page can show it.
         onProgress: (step) => { patchRun(project.id, (r) => stagePatch(r, 'song', { step })).catch(() => {}); },
@@ -1436,6 +1453,17 @@ async function advance(projectId) {
         console.log(`🎬 Autonomous music video ${short(run.id)} going back to ${result.goto}`);
         continue;
       }
+      if (result.hold) {
+        // Parked inside the stage (the song checkpoint before its download): approving
+        // re-runs this stage, which then finishes it.
+        await patchRun(projectId, (r) => {
+          owned = ownsRunningRun(r, run);
+          return { output: result.output, ...stagePatch(r, stage, { status: 'pending', step: result.hold }),
+            ...(owned ? { status: 'awaiting-approval', awaiting: stage } : {}) };
+        });
+        if (owned) console.log(`🎬 Autonomous music video ${short(run.id)} made its ${stage} — waiting for approval before the download`);
+        return;
+      }
       if (result.wait) {
         await patchRun(projectId, (r) => {
           owned = ownsRunningRun(r, run);
@@ -1460,7 +1488,8 @@ async function advance(projectId) {
         return;
       }
       const next = nextAutonomousStage(stage);
-      const checkpoint = run.brief.checkpoints.includes(stage);
+      // A song the director already approved before its download does not stop again once imported.
+      const checkpoint = run.brief.checkpoints.includes(stage) && !(stage === 'song' && run.output.songTakeApproved);
       await patchRun(projectId, (r) => {
         owned = ownsRunningRun(r, run);
         return {
@@ -1658,7 +1687,7 @@ const assertAtSongCheckpoint = (run) => {
 // Every key the song stage (and `localSong`) writes; a retake nulls them all so
 // the stage runs from scratch — a new Suno request (the director's explicit,
 // credit-spending choice) or a new local render on a new track.
-const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'songSource', 'songFallbackReason', 'localTrackId', 'localSongJobId'];
+const SONG_OUTPUT_KEYS = ['trackId', 'sunoSongIds', 'sunoSongPick', 'songTakeApproved', 'songSource', 'songFallbackReason', 'localTrackId', 'localSongJobId'];
 
 /**
  * How a run continues on its produce stage, read from the checkpoint ids in its
@@ -1706,6 +1735,12 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
   const retake = edits.retakeSong === true;
   if (retake && run.brief.songFrom) throw runError(409, 'SONG_REUSED', 'This run reuses an existing song, so it has no song to retake');
   if (retake) assertAtSongCheckpoint(run);
+  // Parked on fresh Suno renders before any download: approving downloads one of them, or a
+  // version the director made or revised in Suno meanwhile (`sunoSongId`).
+  const pickingSong = (r) => r.status === 'awaiting-approval' && r.awaiting === 'song' && r.stage === 'song';
+  if (edits.sunoSongId && (retake || !pickingSong(run))) {
+    throw runError(409, 'NOT_AT_SONG_CHECKPOINT', 'A Suno song can only be picked while the run waits for approval of its song, before the download');
+  }
   // A changed prompt or guidance reaches production's shot planner on this resume.
   const directionPatch = Object.fromEntries(['prompt', 'guidance'].filter((key) => typeof edits[key] === 'string' && edits[key] !== (run.brief[key] ?? '')).map((key) => [key, edits[key]]));
   const directionChanged = Object.keys(directionPatch).length > 0;
@@ -1749,6 +1784,7 @@ export async function resumeAutonomousVideo(projectId, edits = {}, { autoApprove
       } } : {}),
       output: {
         ...(retake ? Object.fromEntries(SONG_OUTPUT_KEYS.map((key) => [key, null])) : {}),
+        ...(!retake && pickingSong(r) ? { songTakeApproved: true, ...(edits.sunoSongId ? { sunoSongPick: edits.sunoSongId } : {}) } : {}),
         ...(typeof edits.lyrics === 'string' ? { lyrics: edits.lyrics } : {}),
         ...(typeof edits.style === 'string' && edits.style.trim() ? { sunoStyle: edits.style.trim() } : {}),
       },

@@ -149,6 +149,31 @@ describe('AutonomousRunPanel', () => {
     await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { retakeSong: true }, { silent: true }));
   });
 
+  it('parked on Suno renders before their download: links each one and approves only the picked render', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'song', output: { sunoSongIds: ids } })} />);
+    expect(screen.getAllByRole('link', { name: /listen/i }).map((a) => a.getAttribute('href'))).toEqual(ids.map((id) => `https://suno.com/song/${id}`));
+    // The second render is the default pick, as before.
+    expect(screen.getAllByRole('radio')[1]).toBeChecked();
+    fireEvent.click(screen.getAllByRole('radio')[0]);
+    fireEvent.click(screen.getByRole('button', { name: /approve & download this render/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: ids[0] }, { silent: true }));
+  });
+
+  it('approves a version the director revised in Suno from a pasted link, and blocks a link that is not a Suno song', async () => {
+    api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    render(<Harness initial={baseRun({ status: 'awaiting-approval', awaiting: 'song', stage: 'song', output: { sunoSongIds: ids } })} />);
+    const field = screen.getByLabelText(/version you made or revised in suno/i);
+    fireEvent.change(field, { target: { value: 'https://example.com/not-a-song' } });
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDisabled();
+    const revised = '33333333-3333-4333-8333-333333333333';
+    fireEvent.change(field, { target: { value: `https://suno.com/song/${revised}?sh=x` } });
+    fireEvent.click(screen.getByRole('button', { name: /approve & download this render/i }));
+    await waitFor(() => expect(api.resumeAutonomousMusicVideo).toHaveBeenCalledWith('mv-1', { sunoSongId: revised }, { silent: true }));
+  });
+
   it('offers Resume, not Cancel, for a run canceled while it waited on production', async () => {
     api.resumeAutonomousMusicVideo.mockResolvedValue({ project: { id: 'mv-1', autonomousRun: baseRun() }, run: baseRun() });
     render(<Harness initial={baseRun({ status: 'canceled', stage: 'produce', error: 'Production was canceled' })} />);
