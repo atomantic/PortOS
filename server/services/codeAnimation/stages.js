@@ -30,7 +30,7 @@ import { checkSoundConsent, produceSoundtrack, muxSoundtrack } from './sound.js'
 import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 import { resolveBlenderExecution } from './execution.js';
 import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
-import { trackedRenderMap } from '../renderActivity.js';
+import { admittedRenderMap } from '../renderActivity.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];
@@ -42,7 +42,7 @@ const CANCEL_CODE = 'CODE_ANIMATION_RUN_CANCELED';
 
 const lifecycle = channel('portos.code-animation-stage.lifecycle');
 
-const activeRuns = trackedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
+const activeRuns = admittedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
 export const activeStageRunIds = () => [...activeRuns.keys()];
 
 const exhausted = dimension => new ServerError(`Production budget exhausted: ${dimension}`, { status: 409, code: BUDGET_CODE, context: { dimension } });
@@ -492,10 +492,11 @@ async function finish(ctx, run) {
     }
   }
   Object.assign(ctx.state, outcome || { stopReason: null }, { resumable: status !== 'completed' });
-  activeRuns.delete(ctx.runId);
   await persist(ctx, status, { completed: true, revisionId: ctx.state.currentRevisionId }).catch(error => {
+    activeRuns.markUnsettled(ctx.runId);
     console.error(`❌ Code Animation production run ${ctx.runId.slice(0, 8)} final status could not be saved: ${error.message}`);
   });
+  activeRuns.delete(ctx.runId);
   console.log(`🎞️ Code Animation production run ${ctx.runId.slice(0, 8)} ${status}${ctx.state.stopReason ? ` (${ctx.state.stopReason})` : ''}`);
   return status;
 }
@@ -549,7 +550,8 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
   emitCodeAnimationChanged(projectId);
   console.log(`🎞️ Code Animation production run ${runId.slice(0, 8)} started on revision ${revision.id.slice(0, 8)}`);
   // Process boundary: nothing may reject unhandled out of the background run.
-  const done = finish(ctx, () => execute(ctx, revision)).catch(error => {
+  const done = activeRuns.run(runId, () => finish(ctx, () => execute(ctx, revision))).catch(error => {
+    activeRuns.markUnsettled(runId);
     console.error(`❌ Code Animation production run ${runId.slice(0, 8)} crashed: ${error.message}`);
     activeRuns.delete(runId);
     return 'failed';

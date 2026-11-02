@@ -511,3 +511,16 @@ describe('thumbnail frames', () => {
     expect(b).toBeGreaterThan(d);
   });
 });
+
+
+it('preserves candidate kit files when shared project references cannot be read', async () => {
+  await mkdir(PATHS.videos, { recursive: true });
+  const filename = 'shared-kit-example.mp4';
+  const path = join(PATHS.videos, filename);
+  await writeFile(path, 'synthetic shared output');
+  const list = vi.spyOn(projects, 'listProjects').mockRejectedValueOnce(new Error('Synthetic project store unavailable'));
+  try {
+    await expect(kit.releaseKitFiles([filename])).rejects.toThrow('project store unavailable');
+    expect(await readFile(path, 'utf8')).toBe('synthetic shared output');
+  } finally { list.mockRestore(); }
+});

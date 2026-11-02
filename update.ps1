@@ -3,6 +3,15 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RootDir
+if ($env:PORTOS_PEER_UPDATE_OPERATION_ID) {
+    & node scripts/deferred-update.mjs --peer-enter $env:PORTOS_PEER_UPDATE_OPERATION_ID
+} elseif (-not $env:PORTOS_DEFERRED_UPDATE_ID) {
+    & node scripts/deferred-update.mjs
+    exit $LASTEXITCODE
+} else {
+    & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
+}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 New-Item -ItemType Directory -Force -Path "$RootDir\data" | Out-Null
 
 # Log file for external command output — keeps noisy git/npm/node output
@@ -686,4 +695,8 @@ if ($setupGuide) {
 
 # Exit non-zero when the install did not come back. This script outlives the
 # server it restarts, so its status is the only signal a caller still has.
+if ($env:PORTOS_DEFERRED_UPDATE_ID) {
+    & node scripts/deferred-update.mjs --terminal $env:PORTOS_DEFERRED_UPDATE_ID $PID $verifyFailed
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 exit $verifyFailed

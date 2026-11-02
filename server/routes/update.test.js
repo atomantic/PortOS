@@ -195,50 +195,13 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     }));
   });
 
-  it('rejects a normal update with 409 AGENTS_ACTIVE while an agent is live (no restart)', async () => {
+  it('hands active agents and in-flight spawns to the deferred script without blocking their children', async () => {
     getActiveAgentIds.mockReturnValue(['agent-1']);
-    const res = await request(makeApp()).post('/api/update/execute').send({});
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(launchUpdate).not.toHaveBeenCalled();
-    // Guard runs before the in-progress lock is acquired.
-    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
-  });
-
-  it('rejects when a task is mid-spawn (in spawningTasks) even before it registers a process', async () => {
-    // No live process yet — the agent has launched but not yet populated the
-    // process maps; a restart would still sever it. spawningTasks closes that gap.
-    getActiveAgentIds.mockReturnValue([]);
     mockSpawningTasks.add('task-42');
     const res = await request(makeApp()).post('/api/update/execute').send({});
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(launchUpdate).not.toHaveBeenCalled();
-  });
-
-  it('re-checks after acquiring the lock and releases it if an agent started during the git/fork awaits', async () => {
-    // Pre-check sees no agents (call 1), but one goes live during getUpdateStatus/
-    // fork-gate (call 2 at the post-lock re-check) — the update must abort and
-    // release the in-progress lock instead of restarting out from under it.
-    getActiveAgentIds.mockReturnValueOnce([]).mockReturnValueOnce(['agent-late']);
-    const res = await request(makeApp()).post('/api/update/execute').send({});
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(launchUpdate).not.toHaveBeenCalled();
-    // Lock was acquired then released (true, then false), leaving no stuck lock.
-    expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
-    expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
-  });
-
-  it('rejects a reconcile with 409 AGENTS_ACTIVE while agents are live', async () => {
-    updateChecker.getUpdateStatus.mockResolvedValue(baseStatus({ installState: { outOfSync: true } }));
-    getActiveAgentIds.mockReturnValue(['agent-1', 'agent-2']);
-    const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AGENTS_ACTIVE');
-    // Pluralized message names both agents.
-    expect(res.body.error).toMatch(/2 CoS agents are running/);
-    expect(launchUpdate).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(launchUpdate).toHaveBeenCalled();
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
   });
 
   it('proceeds normally when no agents are running', async () => {
@@ -260,48 +223,6 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.body.code).toBe('PERSISTENT_MIND_IMAGES_IN_FLIGHT');
     expect(res.body.error).toMatch(/Drain the image-bearing work, or create a backup/);
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
-    expect(launchUpdate).not.toHaveBeenCalled();
-  });
-
-  it('re-checks image work after locking and releases the update lock on a race', async () => {
-    let reads = 0;
-    readPersistentMindStateForSafetyCheck.mockImplementation(async () => {
-      reads += 1;
-      return reads === 1
-        ? { trusted: true, persistentMind: { queuedMessages: [], activeTurn: null } }
-        : {
-            trusted: true,
-            persistentMind: {
-              queuedMessages: [],
-              activeTurn: {
-                wake: {
-                  kind: 'message',
-                  message: { id: 'message-example', images: [{ attachmentId: 'attachment-example' }] },
-                },
-              },
-            },
-          };
-    });
-
-    const res = await request(makeApp()).post('/api/update/execute').send({});
-
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PERSISTENT_MIND_IMAGES_IN_FLIGHT');
-    expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
-    expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
-    expect(launchUpdate).not.toHaveBeenCalled();
-  });
-
-  it('releases the update lock when the post-lock safety read fails', async () => {
-    readPersistentMindStateForSafetyCheck
-      .mockResolvedValueOnce({ trusted: true, persistentMind: { queuedMessages: [], activeTurn: null } })
-      .mockRejectedValueOnce(new Error('state read failed'));
-
-    const res = await request(makeApp()).post('/api/update/execute').send({});
-
-    expect(res.status).toBe(500);
-    expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
-    expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
     expect(launchUpdate).not.toHaveBeenCalled();
   });
 
@@ -360,17 +281,12 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     }));
   });
 
-  // The atomic check-and-set is the only thing standing between two callers and
-  // two concurrent `update.sh` runs; ignoring its `false` return would let the
-  // second one through.
-  it('409s UPDATE_IN_PROGRESS when the lock is already held', async () => {
-    updateChecker.setUpdateInProgress.mockResolvedValue(false);
+  it('reports the detached supervisor refusal without releasing another update', async () => {
+    launchUpdate.mockResolvedValue({ started: false, result: { errorMessage: 'Update already running' } });
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('UPDATE_IN_PROGRESS');
-    expect(launchUpdate).not.toHaveBeenCalled();
-    // A lost race must not release the lock the winner holds.
-    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalledWith(false);
+    expect(res.body.code).toBe('UPDATE_LAUNCH_FAILED');
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
   });
 
   // The tag is handed to update.sh; anything that isn't a plain semver release
@@ -390,7 +306,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
   // throwing before any child listener is attached) skips recordUpdateResult,
   // so the launcher is the only place left that can release the lock. Leaving
   // it set wedges every later update at 409 and blocks all CoS agent spawns.
-  it('releases the update lock and emits an error when launchUpdate rejects', async () => {
+  it('reports a rejected launch without changing the admission owner', async () => {
     launchUpdate.mockRejectedValue(new Error('spawn EACCES'));
     const res = await request(makeApp()).post('/api/update/execute').send({});
     // NOT 200: the rejection happens during the LAUNCH, before any script is
@@ -398,9 +314,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     // handed `started: true` for a restart that is not coming.
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.body.started).toBeUndefined();
-    await vi.waitFor(() => {
-      expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
-    });
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
     expect(mockIo.emit).toHaveBeenCalledWith('portos:update:error', {
       message: 'spawn EACCES',
       step: 'unknown',

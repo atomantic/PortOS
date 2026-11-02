@@ -48,13 +48,14 @@ const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
  *   Refusal returns its recorded result; spawn failures reject. A successful
  *   launch returns separately from completion, which may outlive this server.
  */
-export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecution } = {}) {
+export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false } = {}) {
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
-  const cmd = isWindows ? 'powershell' : 'bash';
-  const args = isWindows
-    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1]
-    : [UPDATE_SH];
+  const pinnedNode = resolvePinnedNodeInterpreter();
+  const cmd = peerExecution ? (isWindows ? 'powershell' : 'bash') : (pinnedNode || process.execPath);
+  const args = peerExecution
+    ? (isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH])
+    : [join(PATHS.root, 'scripts', 'deferred-update.mjs')];
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
@@ -70,18 +71,22 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   // its npm install and native rebuilds target whichever Node runs them.
   // Exporting the pin also tells pm2-daemon-refresh.js to move the daemon onto
   // it when the daemon still runs an older Node.
-  const pinnedNode = resolvePinnedNodeInterpreter();
   const childEnv = withNodeBinOnPath({ ...process.env }, pinnedNode);
   if (pinnedNode) childEnv[NODE_INTERPRETER_ENV_KEY] = pinnedNode;
   // Never inherit peer-only pinning from an operator's ambient environment.
+  if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
+  else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
+  delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
+  delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
   delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
   if (peerExecution) {
     const { capability, evidence } = peerExecution;
-    assertPeerExecutionCapability(capability, { action: 'portos.update' },
+    const operation = assertPeerExecutionCapability(capability, { action: 'portos.update' },
       createHash('sha256').update(canonicalStringify(evidence)).digest('hex'));
     if (!/^[a-f0-9]{40}$/.test(evidence.target.targetSha) || !/^[a-f0-9]{40}$/.test(evidence.target.headSha))
       throw new Error('Invalid peer update revision.');
+    childEnv.PORTOS_PEER_UPDATE_OPERATION_ID = operation.operationId;
     childEnv.PORTOS_PEER_UPDATE_TARGET_SHA = evidence.target.targetSha;
     childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA = evidence.target.headSha;
   }
@@ -110,7 +115,10 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   // triggers, and its supervisor's late `exit` write into a truncated control
   // dir would prematurely close the new handle with the OLD script's status).
   // A still-running script also means a second update is wrong regardless.
-  if (await isDetachedRunning(controlDir, { executable: cmd, args })) {
+  const legacyArgs = isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH];
+  const previousRunning = await isDetachedRunning(controlDir, { executable: cmd, args })
+    || (!peerExecution && await isDetachedRunning(controlDir, { executable: isWindows ? 'powershell' : 'bash', args: legacyArgs }));
+  if (previousRunning) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
       version: targetVersion,

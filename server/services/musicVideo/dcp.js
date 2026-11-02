@@ -11,7 +11,7 @@ import { PATHS } from '../../lib/paths.js';
 import { safeUnder, runFfmpegProcess, findFfprobe } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { trackedRenderMap } from '../renderActivity.js';
+import { admittedRenderMap } from '../renderActivity.js';
 import { requireProject } from './requireProject.js';
 import { mutateProjectRecord } from './projects.js';
 import { assertRenderCleanupIdle } from './renderCleanupActivity.js';
@@ -19,7 +19,7 @@ import { inspectDcpReadiness, dcpSourceProblems, locateDcpTool, probeDcpSource, 
 
 const exec = promisify(execFile);
 const jobs = new Map();
-const active = trackedRenderMap('music-video-dcp', { noun: 'cinema package export', link: id => `/music-video/${encodeURIComponent(id)}` });
+const active = admittedRenderMap('music-video-dcp', { noun: 'cinema package export', link: id => `/music-video/${encodeURIComponent(id)}` });
 const failure = (message, code = 'DCP_UNAVAILABLE', status = 409) => new ServerError(message, { status, code });
 export const isDcpActive = id => active.has(id);
 export const activeDcp = id => {
@@ -170,14 +170,14 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
         if (job.abort.signal.aborted) throw new Error('Export cancelled');
         job.committing = true;
         publicationAttempted = true;
-        await withBackupAssetPublication(() => mutateProjectRecord(projectId, current => ({ project: { ...current, dcpExports: [...(current.dcpExports || []), artifact] } }))).catch(() => { throw new Error(`Could not save the package record. The output was retained at ${root}; inspect it before removing it.`); });
+        await withBackupAssetPublication(() => mutateProjectRecord(projectId, current => ({ project: { ...current, dcpExports: [...(current.dcpExports || []), artifact] } }))).catch(() => { active.markUnsettled(projectId); throw new Error(`Could not save the package record. The output was retained at ${root}; inspect it before removing it.`); });
         committed = true;
         return artifact;
       } finally {
-        if (!committed && !publicationAttempted) await rm(root, { recursive: true, force: true });
+        if (!committed && !publicationAttempted) await rm(root, { recursive: true, force: true }).catch(err => { active.markUnsettled(projectId); throw err; });
       }
     };
-    Promise.resolve().then(run).then(artifact => {
+    Promise.resolve().then(() => active.run(projectId, run)).then(artifact => {
       job.status = 'complete'; active.delete(projectId);
       broadcastSse(job, { type: 'complete', result: artifact }); closeJobAfterDelay(jobs, jobId);
     }).catch(err => {

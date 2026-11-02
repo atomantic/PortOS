@@ -29,11 +29,11 @@ import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
-import { trackedRenderMap } from '../renderActivity.js';
+import { admittedRenderMap } from '../renderActivity.js';
 import { pickThumbnailFrames, scoreThumbnailFrame, thumbnailCandidates } from './thumbnailFrames.js';
 
 const jobs = new Map();
-const projectBuilds = trackedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
+const projectBuilds = admittedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
 // keeps the analog grain without the upload being re-crushed.
 // 9:16 canvas: the full frame fitted to width over a blurred, cover-scaled copy of itself, so edge text is never cropped.
@@ -71,7 +71,7 @@ async function finalRenderFile(project) {
 /** A file an older build left behind, deleted only once no project's kit still names it (a clone shares the record). */
 export async function releaseKitFiles(filenames, keep = []) {
   if (!filenames.length) return;
-  const others = await listProjects().catch(() => []);
+  const others = await listProjects();
   const referenced = new Set(keep);
   for (const p of others) {
     const kit = projectPublishKit(p);
@@ -102,7 +102,7 @@ export async function startPublishKitBuild(projectId) {
   // another request before there is a background job to put in the registry.
   projectBuilds.set(projectId, jobId);
   try {
-    return await beginPublishKitBuild(projectId, jobId);
+    return await projectBuilds.run(projectId, () => beginPublishKitBuild(projectId, jobId));
   } catch (error) {
     projectBuilds.delete(projectId);
     throw error;
@@ -222,8 +222,8 @@ async function beginPublishKitBuild(projectId, jobId) {
         captionsFilename,
         chapters: buildChapters(current),
       } } };
-    }));
-    await releaseKitFiles(staleFiles, written);
+    })).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
+    await releaseKitFiles(staleFiles, written).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
     return written;
   };
 

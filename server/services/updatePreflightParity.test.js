@@ -109,37 +109,34 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     }));
   });
 
-  it('refuses identically when a CoS agent is live', async () => {
+  it('defers the API update while Git-tab checkout mutation still refuses live agents', async () => {
     getActiveAgentIds.mockReturnValue(['agent-1']);
 
     const routeRes = await request(makeRouteApp()).post('/api/update/execute').send({});
-    expect(routeRes.status).toBe(409);
-    expect(routeRes.body.code).toBe('AGENTS_ACTIVE');
+    expect(routeRes.status).toBe(200);
+    expect(launchUpdate).toHaveBeenCalled();
 
     const { fireUpdate, emitted } = makeSocketHarness();
     await fireUpdate({ appId: PORTOS_APP_ID });
     const errorEvent = emitted.find((e) => e.event === 'app:update:error');
     expect(errorEvent).toBeTruthy();
     expect(errorEvent.payload.code).toBe('AGENTS_ACTIVE');
-    expect(errorEvent.payload.message).toBe(routeRes.body.error);
     expect(appUpdaterUpdateApp).not.toHaveBeenCalled();
   });
 
-  it('refuses identically while a render is running', async () => {
+  it('defers API renders while Git-tab checkout mutation still refuses them', async () => {
     const { trackedRenderMap } = await import('./renderActivity.js');
     const renders = trackedRenderMap('parity-test', { noun: 'music video render' });
     renders.set('project-example', 'job-example');
     try {
       const routeRes = await request(makeRouteApp()).post('/api/update/execute').send({});
-      expect(routeRes.status).toBe(409);
-      expect(routeRes.body.code).toBe('RENDERS_ACTIVE');
-      expect(routeRes.body.error).toMatch(/^1 music video render running\. Let it finish/);
+      expect(routeRes.status).toBe(200);
+      expect(launchUpdate).toHaveBeenCalled();
 
       const { fireUpdate, emitted } = makeSocketHarness();
       await fireUpdate({ appId: PORTOS_APP_ID });
       const errorEvent = emitted.find((e) => e.event === 'app:update:error');
       expect(errorEvent.payload.code).toBe('RENDERS_ACTIVE');
-      expect(errorEvent.payload.message).toBe(routeRes.body.error);
       expect(appUpdaterUpdateApp).not.toHaveBeenCalled();
     } finally {
       renders.delete('project-example');

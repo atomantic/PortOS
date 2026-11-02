@@ -19,6 +19,22 @@ const gate = () => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('durable graceful maintenance', () => {
+  it('keeps a waiting update readable by strict legacy journals so release children can start', async () => {
+    const { root, admission } = gate();
+    const release = admission.admit('agent', 'release-example');
+    const update = admission.deferredUpdate.request();
+    const journal = JSON.parse(fs.readFileSync(join(root, 'workflow-maintenance/state.json'), 'utf8'));
+    expect(Object.keys(journal).sort()).toEqual(['hold', 'operations', 'revision', 'version']);
+    expect(journal.hold).toBeNull();
+    for (const operation of journal.operations) expect(legacyOperation.safeParse(operation).success).toBe(true);
+    const child = createMaintenanceAdmission(root).admit('agent', 'release-child-example');
+    await release.finish();
+    expect(admission.deferredUpdate.acquire(update.id)).toBe(false);
+    await child.finish();
+    expect(admission.deferredUpdate.acquire(update.id)).toBe(true);
+    admission.deferredUpdate.finish(update.id, false);
+  });
+
   it('names an interrupted transaction and its lock time without modifying evidence', () => {
     const { root, admission } = gate();
     const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;

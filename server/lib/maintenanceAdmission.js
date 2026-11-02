@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { createDeferredUpdateAdmission } from './maintenanceDeferredUpdate.js';
 import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
 
 const operationSchema = z.object({
@@ -89,6 +90,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
       ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
         startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
+    deferredUpdate: deferredUpdate.inspect(state),
     scope: 'PortOS agents, mind turns, provider runs, media renders and scheduled shell/script work, through cleanup and saving. Unrelated host applications are outside this scope.',
   });
   const status = () => {
@@ -160,6 +162,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   };
   const exclusive = createMaintenanceExclusive({ transaction, read, lockExists: () => exists(lock), makeId, error, now,
     verifyReceipt: verifyExclusiveReceipt });
+  const deferredUpdate = createDeferredUpdateAdmission({ transaction, read: readForStatus, makeId, error, now, directory, io, syncDirectory: syncMaintenanceDirectory });
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore() ?? null;
@@ -309,6 +312,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     transaction(state => {
       if (state.hold?.id !== expected.id || state.hold?.revision !== expected.revision)
         throw error('MAINTENANCE_STALE', 'This maintenance hold changed. Refresh before resuming.');
+      if (deferredUpdate.inspect(state)?.holdId === expected.id)
+        throw error('MAINTENANCE_STALE', 'The update owns this hold until its processes settle.');
       if (state.exclusive)
         throw error('MAINTENANCE_STALE', 'An exclusive maintenance operation owns this hold until verified reconciliation.');
       state.hold = null;
@@ -357,7 +362,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { deferredUpdate, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

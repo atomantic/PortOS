@@ -169,13 +169,14 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
       .resolves.toEqual({ started: true, tag: 'v1.26.0' });
     fail(new Error('completion failed'));
-    await vi.waitFor(() => expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.any(Object)));
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
     expect(io.emit).toHaveBeenCalledWith('portos:update:error', {
       message: 'completion failed', step: 'unknown',
     });
   });
 
-  it('releases the update lock when the launch itself rejects', async () => {
+  it('reports launch failure without claiming or releasing admission', async () => {
     // The executor clears the flag through recordUpdateResult on refusal and
     // completion; a rejection reports none, and the stuck flag then
     // wedges every later update and every CoS agent spawn (#6036).
@@ -183,7 +184,8 @@ describe('startPortosSelfUpdate — refresh mode', () => {
 
     await startPortosSelfUpdate({ io, mode: 'refresh' }).catch(() => {});
 
-    await vi.waitFor(() => expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.any(Object)));
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
     expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({
       message: 'spawn EACCES',
     }));

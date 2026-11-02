@@ -81,7 +81,7 @@ describe('executeUpdate', () => {
   // replaced meant DETACHED_PROCESS, which denies powershell a console:
   // update.ps1 exited 0 within ~100ms without running a line, and pm2's
   // `taskkill /T` would have killed an attached one mid-update anyway (#6169).
-  it('launches powershell through spawnDetached on win32', async () => {
+  it('launches the shared Node supervisor through spawnDetached on win32', async () => {
     // Re-pin over the file-level linux default; the file-level afterEach still
     // restores the pristine descriptor, so a failure here can't leak win32.
     pinPlatform('win32');
@@ -95,14 +95,14 @@ describe('executeUpdate', () => {
 
     expect(result.success).toBe(true);
     expect(spawnDetached).toHaveBeenCalledWith(
-      'powershell',
-      expect.arrayContaining(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']),
+      expect.stringMatching(/node(?:\.exe)?$/),
+      [expect.stringContaining('deferred-update.mjs')],
       expect.objectContaining({ controlDir: expect.stringContaining('update-detached') })
     );
     // The still-running guard covers Windows too now that the script survives there.
     expect(isDetachedRunning).toHaveBeenCalledWith(
       expect.stringContaining('update-detached'),
-      { executable: 'powershell', args: expect.any(Array) }
+      { executable: expect.stringMatching(/node(?:\.exe)?$/), args: [expect.stringContaining('deferred-update.mjs')] }
     );
   });
 
@@ -125,13 +125,13 @@ describe('executeUpdate', () => {
     expect(isDetachedRunning).toHaveBeenCalledWith(
       expect.stringContaining('update-detached'),
       {
-        executable: 'bash',
-        args: [expect.stringContaining('update.sh')]
+        executable: expect.stringMatching(/node(?:\.exe)?$/),
+        args: [expect.stringContaining('deferred-update.mjs')]
       }
     );
     expect(spawnDetached).toHaveBeenCalledWith(
-      'bash',
-      [expect.stringContaining('update.sh')],
+      expect.stringMatching(/node(?:\.exe)?$/),
+      [expect.stringContaining('deferred-update.mjs')],
       expect.objectContaining({
         cwd: '/mock',
         controlDir: expect.stringContaining('update-detached')

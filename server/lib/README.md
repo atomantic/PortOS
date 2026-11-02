@@ -37,6 +37,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `retiredLoraTraining.js` | Retirement refusal and short-lived admission for retained training data access/removal. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
+| `maintenanceDeferredUpdate.js` | Idle-only local update ownership and process-settlement recovery in the shared journal. |
+| `updateImageGuard.js` | Disk-only Persistent Mind image-state safety check for online and offline updates. |
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
 | `maintenanceExclusive.js` | Coordinator-owned exclusive claims, opaque idle observations, durable ownership, one-use fixed-adapter capabilities and verified settlement. Peer credentials alone never grant authority. |
 | `peerExecutionAuthority.js` | Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or pending/conflicting recovery. Invalidates grants on identity changes and refuses stale epochs. |
