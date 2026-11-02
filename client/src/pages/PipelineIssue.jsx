@@ -128,16 +128,34 @@ export default function PipelineIssue() {
 
   useEffect(() => {
     let canceled = false;
+    setIssue(null);
+    setSeries(null);
+    setLoading(true);
     getPipelineConfig({ silent: true })
       .then((config) => { if (!canceled) setArcRoles(config.arcRoles || []); })
       .catch(() => null);
     getPipelineIssue(issueId, { silent: true })
       .then((iss) => {
         if (canceled) return iss;
-        setIssue(iss);
-        return getPipelineSeries(iss.seriesId, { silent: true });
+        if (!iss) throw new Error('Pipeline issue not found');
+        if (!iss?.seriesId) {
+          setSeries(null);
+          setIssue(iss);
+          return null;
+        }
+        return getPipelineSeries(iss.seriesId, { silent: true })
+          .catch((err) => {
+            if (!canceled) toast.error(err.message || 'Failed to load series');
+            return null;
+          })
+          .then((s) => {
+          if (!canceled) {
+            setSeries(s || null);
+            setIssue(iss);
+          }
+          return s;
+          });
       })
-      .then((s) => { if (!canceled && s) setSeries(s); })
       .catch((err) => {
         if (canceled) return;
         toast.error(err.message || 'Failed to load issue');
@@ -330,7 +348,9 @@ export default function PipelineIssue() {
     else if (status?.next?.id === 'goto') navigate(`/pipeline/issues/${issueId}/${status.next.stage}`);
   };
 
-  if (loading) {
+  // Effects run after the route's first render. Gate on identity as well as
+  // loading so the prior issue can never appear beneath the newly selected URL.
+  if (loading || (issue && issue.id !== issueId)) {
     return (
       <PageSkeleton
         header="bar"
