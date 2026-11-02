@@ -4,6 +4,7 @@ import { rmSync } from 'node:fs';
 import { createTempDataRoot } from '../lib/mockPathsDataRoot.js';
 const mocks = vi.hoisted(() => ({ root: '', listConversations: vi.fn(), deleteEvents: vi.fn(), deleteAutoTouchpoints: vi.fn() }));
 vi.mock('../lib/fileUtils.js', async (original) => ({ ...await original(), dataPath: (...parts) => join(mocks.root, ...parts) }));
+vi.mock('../lib/db.js', () => ({ ensureSchema: vi.fn(), withTransaction: async (work) => work({ query: 'transaction-client' }) }));
 vi.mock('./humanActivity.js', () => ({ listConversations: mocks.listConversations, deleteEvents: mocks.deleteEvents }));
 vi.mock('./tribe.js', () => ({ deleteAutoTouchpoints: mocks.deleteAutoTouchpoints }));
 import { listConversations, setBlocklist, blockConversation, purgeConversation, readBlocklist } from './signalManage.js';
@@ -27,7 +28,7 @@ it('blocks and purges both stores for the exact opaque identifier, including rep
   const conversationId = 'group:%_nested:chat';
   await blockConversation(conversationId, { purgeExisting: true });
   expect((await readBlocklist()).conversationIds).toEqual([conversationId]);
-  expect(mocks.deleteEvents).toHaveBeenCalledWith({ source: 'signal', conversationId });
-  expect(mocks.deleteAutoTouchpoints).toHaveBeenCalledWith({ signalConversationId: conversationId });
+  expect(mocks.deleteEvents).toHaveBeenCalledWith({ source: 'signal', conversationId, client: { query: 'transaction-client' } });
+  expect(mocks.deleteAutoTouchpoints).toHaveBeenCalledWith({ signalConversationId: conversationId, client: { query: 'transaction-client' } });
   await expect(purgeConversation(conversationId)).resolves.toMatchObject({ deleted: 2, touchpoints: 1 });
 });

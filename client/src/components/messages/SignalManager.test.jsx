@@ -12,7 +12,7 @@ beforeEach(() => {
   api.listSignalConversations.mockResolvedValue({ conversations: [{ conversationId: 'opaque:%_:id', title: 'Example group', eventCount: 2 }] });
   api.getSignalBlocklist.mockResolvedValue({ handles: [], conversationIds: [] });
   api.blockSignalConversation.mockResolvedValue({});
-  api.setSignalBlocklist.mockResolvedValue({});
+  api.setSignalBlocklist.mockImplementation(async (body) => body);
 });
 it('loads on demand, confirms block and purge, and saves handle/conversation exclusions', async () => {
   render(<SignalManager />);
@@ -34,4 +34,16 @@ it('renders a failed management load without enabling mutation controls', async 
   fireEvent.click(screen.getByRole('button', { name: 'Manage imported data' }));
   expect((await screen.findByRole('alert')).textContent).toContain('Exclusions unavailable');
   expect(screen.queryByRole('button', { name: 'Save exclusions' })).toBeNull();
+});
+
+it('keeps unsaved exclusions through searches and conversation refreshes', async () => {
+  render(<SignalManager />);
+  fireEvent.click(screen.getByRole('button', { name: 'Manage imported data' }));
+  const handles = await screen.findByLabelText('Blocked handles (one per line)');
+  fireEvent.change(handles, { target: { value: '+15551234567' } });
+  fireEvent.change(screen.getByLabelText('Search Signal conversations'), { target: { value: 'example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+  await waitFor(() => expect(api.listSignalConversations).toHaveBeenCalledWith('example'));
+  expect(handles.value).toBe('+15551234567');
+  expect(api.getSignalBlocklist).toHaveBeenCalledTimes(1);
 });

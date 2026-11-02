@@ -457,7 +457,7 @@ const escapeLike = (value) => String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`
  *     never become wildcard or prefix expressions.
  * Returns counts only. An empty selector deletes nothing.
  */
-export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalConversationId } = {}) {
+export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalConversationId, client } = {}) {
   const clauses = [];
   const params = [];
   if (accountId != null && String(accountId).length > 0) {
@@ -474,8 +474,8 @@ export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalCon
     clauses.push(`(source = 'signal' AND metadata->>'conversationId' = $${params.length})`);
   }
   if (clauses.length === 0) return { touchpoints: 0, auditRows: 0 };
-  await ensureReady();
-  const result = await withTransaction(async (client) => {
+  if (!client) await ensureReady();
+  const remove = async (client) => {
     const removed = await client.query(
       `DELETE FROM tribe_touchpoints WHERE ${clauses.join(' OR ')} RETURNING id`,
       params,
@@ -491,7 +491,8 @@ export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalCon
       auditRows = snapshots.rowCount;
     }
     return { touchpoints: ids.length, auditRows };
-  });
+  };
+  const result = client ? await remove(client) : await withTransaction(remove);
   if (result.touchpoints > 0) {
     console.log(`🧹 Erased ${result.touchpoints} touchpoint(s) and ${result.auditRows} audit snapshot(s)`);
   }

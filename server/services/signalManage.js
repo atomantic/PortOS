@@ -1,4 +1,5 @@
 /** PortOS-side Signal management. Never mutates Signal's own database. */
+import { ensureSchema, withTransaction } from '../lib/db.js';
 import * as humanActivity from './humanActivity.js';
 import { readBlocklist, writeBlocklist, handleKey, withSignalPrivacyLock } from './signalPrivacy.js';
 export { readBlocklist } from './signalPrivacy.js';
@@ -14,10 +15,13 @@ export async function listConversations(options = {}) {
   }));
 }
 async function purge(conversationId) {
-  const events = await humanActivity.deleteEvents({ source: 'signal', conversationId });
   const { deleteAutoTouchpoints } = await import('./tribe.js');
-  const touchpoints = await deleteAutoTouchpoints({ signalConversationId: conversationId });
-  return { ...events, ...touchpoints, conversationId };
+  await ensureSchema();
+  return withTransaction(async (client) => {
+    const events = await humanActivity.deleteEvents({ source: 'signal', conversationId, client });
+    const touchpoints = await deleteAutoTouchpoints({ signalConversationId: conversationId, client });
+    return { ...events, ...touchpoints, conversationId };
+  });
 }
 export function purgeConversation(conversationId) {
   return withSignalPrivacyLock(() => purge(conversationId));

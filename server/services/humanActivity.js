@@ -492,8 +492,8 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, conversationId, handle, accountId } = {}) {
-  await ensureReady();
+export async function deleteEvents({ ids, source, chatGuid, conversationId, handle, accountId, client } = {}) {
+  if (!client) await ensureReady();
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
   const hasConversation = conversationId != null && String(conversationId).length > 0;
@@ -528,7 +528,8 @@ export async function deleteEvents({ ids, source, chatGuid, conversationId, hand
     clauses.push(`metadata->>'handle' = $${params.length}`);
   }
 
-  const result = await query(
+  const execute = client ? client.query.bind(client) : query;
+  const result = await execute(
     `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
     params,
   );
