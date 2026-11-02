@@ -204,6 +204,8 @@ describe('ProviderHarnessesTab', () => {
     renderTab();
     const claude = await screen.findByRole('article', { name: /Claude Code/ });
     fireEvent.click(await within(claude).findByRole('button', { name: /Update/ }));
+    expect(within(claude).getByText(/temporarily holds new PortOS work/)).toBeInTheDocument();
+    fireEvent.click(within(claude).getByRole('button', { name: 'Start update' }));
     expect(await screen.findByTestId('install-modal')).toHaveTextContent('claude · update');
   });
 

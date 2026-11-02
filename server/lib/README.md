@@ -39,6 +39,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
 | `maintenanceJournal.js` | Dependency-free shared journal transactions for server admission and offline update bootstrap. |
 | `maintenanceDeferredUpdate.js` | Idle-only local update ownership and process-settlement recovery in the shared journal. |
+| `maintenanceHarnessAction.js` | Journal ownership, process settlement and deferred-work recovery for harness actions. |
 | `updateImageGuard.js` | Disk-only Persistent Mind image-state safety check for online and offline updates. |
 | `maintenanceAdmission.js` | Durable machine-local workflow drain, cross-process admission permits, continuation ownership and stale-resume fencing. |
 | `maintenanceExclusive.js` | Coordinator-owned exclusive claims, opaque idle observations, durable ownership, one-use fixed-adapter capabilities and verified settlement. Peer credentials alone never grant authority. |

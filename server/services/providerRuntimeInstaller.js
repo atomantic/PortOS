@@ -541,11 +541,13 @@ export function describeRuntimeInstall(id, action = 'install') {
  * `action` selects install / update / uninstall from the table; an unsupported
  * pairing returns `null` rather than falling back to a different action.
  */
-export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install' } = {}) {
+export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install', verifiedCommand = null, detached = !IS_WIN } = {}) {
   const invocation = buildRuntimeActionCommand(id, action);
   if (!invocation) return null;
+  const runtime = getProviderRuntime(id);
+  if (verifiedCommand && (action !== 'update' || !runtime?.selfUpdate || invocation.command !== runtime.command)) throw new Error('Verified command is not valid for this updater');
   const env = safeChildProcessEnv();
-  const { command, args } = prepareCliSpawn(invocation.command, invocation.args, env);
+  const { command, args } = prepareCliSpawn(verifiedCommand || invocation.command, invocation.args, env);
   return spawnImpl(command, args, safeChildProcessOptions({
     env,
     shell: false,
@@ -553,7 +555,7 @@ export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install
     // npm and vendor install scripts both run lifecycle children. Give the
     // POSIX install its own group so closing the modal stops that entire
     // install, not just the parent.
-    detached: !IS_WIN,
+    detached,
   }));
 }
 

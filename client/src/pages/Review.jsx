@@ -38,6 +38,8 @@ import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
 import AgentCard from '../components/cos/tabs/AgentCard';
+import HarnessUpdateControl from '../components/review/HarnessUpdateControl';
+import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GitHubNotificationCard from '../components/github/GitHubNotificationCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
@@ -46,6 +48,7 @@ import useEscapeKey from '../hooks/useEscapeKey';
 import useFocusTrap from '../hooks/useFocusTrap';
 import { timeAgo, formatDateTime, formatCount, formatDateShort, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -72,6 +75,8 @@ const QUEUE_SEVERITY_STYLE = {
 };
 
 const INLINE_RESOLUTION_OPERATIONS = new Set(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']);
+const HARNESS_WARNING_KEY = 'portos-harness-release-warning-days';
+const WARNING_DAYS = [0, 1, 3, 7];
 const isInlineResolution = (operation) => operation?.available !== false && INLINE_RESOLUTION_OPERATIONS.has(operation?.id);
 
 const safeExternalHttpUrl = (value) => {
@@ -180,6 +185,16 @@ export default function Review() {
   // Rows with an inline accept/promote in flight — disables the button so a
   // double-tap can't double-resolve while the request is pending.
   const [resolvingQueueIds, setResolvingQueueIds] = useState(() => new Set());
+  const [pendingHarnessUpdate, setPendingHarnessUpdate] = useState(null);
+  const [harnessWarningDays, setHarnessWarningDays] = useState(() => {
+    const stored = Number(safeReadStorage(HARNESS_WARNING_KEY));
+    return WARNING_DAYS.includes(stored) ? stored : 0;
+  });
+  const saveHarnessWarningDays = (days) => {
+    if (!WARNING_DAYS.includes(days)) return;
+    setHarnessWarningDays(days);
+    safeWriteStorage(HARNESS_WARNING_KEY, String(days));
+  };
 
   const fetchItems = useCallback(() => {
     const requestId = ++itemsRequestId.current;
@@ -547,6 +562,10 @@ export default function Review() {
                     onTriage={handleQueueTriage}
                     onFeedbackSaved={fetchQueue}
                     onGitHubUpdated={handleGitHubUpdated}
+                    onHarnessUpdate={setPendingHarnessUpdate}
+                    harnessUpdatePending={Boolean(pendingHarnessUpdate)}
+                    harnessWarningDays={harnessWarningDays}
+                    onHarnessWarningDays={saveHarnessWarningDays}
                     actionLink={`/review/${encodeURIComponent(item.id)}?view=${actionView}`}
                     detailOpen={item.id === actionId}
                     resolving={resolvingQueueIds.has(item.id)}
@@ -740,6 +759,12 @@ export default function Review() {
         onGitHubUpdated={handleGitHubUpdated}
         onDrill={handleQueueDrill}
       />
+      <RuntimeInstallModal open={Boolean(pendingHarnessUpdate)} runtime={pendingHarnessUpdate?.id} label={pendingHarnessUpdate?.label}
+        title={`Updating ${pendingHarnessUpdate?.label || 'harness'}`} description="Running the harness updater."
+        doneText="The updater finished." installUrlBase="/api/harnesses/review-update"
+        params={pendingHarnessUpdate ? { expectedVersion: pendingHarnessUpdate.installedVersion,
+          candidateVersion: pendingHarnessUpdate.candidateVersion, ticket: pendingHarnessUpdate.ticket } : undefined}
+        streamMethod="POST" onClose={() => setPendingHarnessUpdate(null)} onComplete={() => { void fetchQueue(); }} />
     </div>
   );
 }
@@ -923,7 +948,8 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
   );
 }
 
-function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated, actionLink, detailOpen = false, resolving = false }) {
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated,
+  onHarnessUpdate, harnessUpdatePending, harnessWarningDays, onHarnessWarningDays, actionLink, detailOpen = false, resolving = false }) {
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
   if (item.source === 'github' && item.githubNotification) {
     return (
@@ -1015,6 +1041,8 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
         </div>
       )}
       <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
+        {item.source === 'updates' && item.harnessUpdate?.updatable && !item.unverified && onHarnessUpdate && <HarnessUpdateControl
+          harness={item.harnessUpdate} warningDays={harnessWarningDays} onWarningDays={onHarnessWarningDays} onUpdate={onHarnessUpdate} disabled={resolving || harnessUpdatePending} />}
         <QueueInvestigation item={item} />
         {onResolve && rateOperation && !feedbackRun && (
           <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">

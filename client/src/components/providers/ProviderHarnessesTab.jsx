@@ -92,6 +92,7 @@ function HarnessCard({
 
   const alwaysOn = harness.source === 'always';
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const [confirmUpdate, setConfirmUpdate] = useState(false);
 
   const isInstalled = detail ? Boolean(detail.installed) : harness.detected === true;
   const isNotProbed = !detail && harness.detected === null;
@@ -188,7 +189,7 @@ function HarnessCard({
             {isInstalled && (updateAvailable || updatable) && (
               <button
                 type="button"
-                onClick={() => onAction(detail || harness, 'update')}
+                onClick={() => setConfirmUpdate(true)}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded transition-colors ${
                   updateAvailable
                     ? 'bg-port-accent text-white hover:bg-port-accent/80'
@@ -242,6 +243,18 @@ function HarnessCard({
               </Link>
             )}
           </div>
+
+          {confirmUpdate && (
+            <InlineConfirmRow
+              className="mt-2"
+              autoFocus
+              aria-label={`Update ${effectiveLabel}`}
+              question="On macOS and Linux, PortOS checks known work and temporarily holds new PortOS work during the update. Windows does not have this protection. Other terminal sessions and processes that leave the updater group are not detected. Make sure those sessions are idle."
+              confirmText="Start update"
+              onConfirm={() => { setConfirmUpdate(false); onAction(detail || harness, 'update'); }}
+              onCancel={() => setConfirmUpdate(false)}
+            />
+          )}
 
           {isConfirming(harness.id) && (
             <InlineConfirmRow

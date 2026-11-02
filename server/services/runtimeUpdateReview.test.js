@@ -153,6 +153,17 @@ describe('runtime update review monitor', () => {
     expect(monitor.items().every((item) => item.required && item.operations.length === 0)).toBe(true);
   });
 
+  it('projects inline harness review details only for an observed update', async () => {
+    const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ updatable: true })] });
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ harnessUpdate: {
+      id: 'codex', label: 'Codex CLI', package: '@openai/codex', installedVersion: '1.0.0', candidateVersion: '1.1.0', updatable: true,
+    } });
+    deps.readHarnesses.mockResolvedValue([harness({ updatable: true, probeState: 'unavailable' })]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ unverified: true });
+  });
+
   it('keeps last known alerts through partial failures and clears only after verified observations', async () => {
     const { monitor, deps } = fixture();
     await monitor.refresh();

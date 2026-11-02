@@ -18,12 +18,18 @@
  */
 
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, harnessActionSchema, harnessRefreshSchema } from '../lib/validation.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
 
 const router = Router();
+const reviewUpdateSchema = harnessRefreshSchema.extend({
+  expectedVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
+  candidateVersion: z.string().max(100).regex(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/),
+  ticket: z.string().uuid(),
+});
 
 /**
  * The whole page in one round trip. `?fresh=1` bypasses both the runtime status
@@ -33,6 +39,28 @@ const router = Router();
  */
 router.get('/', asyncHandler(async (req, res) => {
   res.json({ harnesses: await listHarnesses({ fresh: req.query.fresh === '1' }) });
+}));
+
+// Reference data is scoped to a currently actionable, fixed-registry harness.
+router.get('/update-reference', asyncHandler(async (req, res) => {
+  const { runtime } = validateRequest(harnessRefreshSchema, req.query);
+  const { getHarnessUpdateReference } = await import('../services/harnessUpdateReference.js');
+  res.set('Cache-Control', 'no-store');
+  res.json(await getHarnessUpdateReference(runtime));
+}));
+
+// Inline update uses the same guarded stream, with an additional active-work check.
+router.post('/review-update', asyncHandler(async (req, res) => {
+  const { runtime, expectedVersion, candidateVersion, ticket } = validateRequest(reviewUpdateSchema, req.query);
+  const { getRuntimeUpdateReviewSnapshot } = await import('../services/runtimeUpdateReview.js');
+  const row = getRuntimeUpdateReviewSnapshot().items.find(item => item.id === `harness:${runtime}` && !item.unverified);
+  if (!row?.harnessUpdate?.updatable || row.harnessUpdate.installedVersion !== expectedVersion || row.harnessUpdate.candidateVersion !== candidateVersion) {
+    throw new ServerError('The harness update card changed. Refresh it before retrying.', { status: 409, code: 'HARNESS_UPDATE_CHANGED' });
+  }
+  const { takeHarnessUpdateTicket } = await import('../services/harnessUpdateReference.js');
+  const reviewed = takeHarnessUpdateTicket(runtime, ticket, expectedVersion, candidateVersion);
+  if (!reviewed) throw new ServerError('The update review expired or changed. Refresh it before retrying.', { status: 409, code: 'HARNESS_UPDATE_CHANGED' });
+  await streamHarnessAction(req, res, { runtime, action: 'update', requireIdle: true, expectedVersion, reviewed });
 }));
 
 /**

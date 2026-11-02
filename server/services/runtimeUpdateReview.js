@@ -220,7 +220,11 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
       const entry = unknown(rows.get(id), row(id, `${harness.label} update status unverified`, `Installed ${harness.version || 'version unknown'}. ${reason}`, link, 'unverified'));
       rows.set(id, { ...entry, retrySoon: Boolean(harness.package) });
     } else if (compared === -1) {
-      rows.set(id, row(id, `${harness.label} update available`, `Installed ${harness.version}; latest ${harness.latestVersion}. Review the harness updater before updating.`, link, `${harness.version}:${harness.latestVersion}`));
+      rows.set(id, {
+        ...row(id, `${harness.label} update available`, `Installed ${harness.version}; latest ${harness.latestVersion}. Review the harness updater before updating.`, link, `${harness.version}:${harness.latestVersion}`),
+        harnessUpdate: { id: harness.id, label: harness.label, installedVersion: harness.version,
+          candidateVersion: harness.latestVersion, package: harness.package, updatable: harness.updatable === true },
+      });
     } else rows.delete(id);
   }
   for (const id of priorIds) rows.set(id, { ...unknown(rows.get(id)), retrySoon: true });
