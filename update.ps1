@@ -171,14 +171,23 @@ function Stop-UpdateScript {
     Restore-Pm2Apps
     # Recovery must never turn a failed update into a reported success.
     if ($Code -eq 0) { $Code = 1 }
+    # All synchronous update and recovery commands have settled at this boundary.
+    # Publish a failed terminal result so an ordinary refusal does not leave the
+    # Windows hold indistinguishable from an abruptly killed process tree.
+    if ($env:PORTOS_DEFERRED_UPDATE_ID) {
+        try {
+            & node scripts/deferred-update.mjs --terminal $env:PORTOS_DEFERRED_UPDATE_ID $PID $Code
+        } catch {
+            Write-SafeHost "❌ Could not publish the failed update outcome; admission remains held: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
     exit $Code
 }
 
-# Backstop for a terminating error nobody converted into a Stop-UpdateScript
-# call; `break` rethrows so the script still exits non-zero.
+# Backstop for a synchronous terminating error: recover, publish failure and
+# preserve a nonzero status through the same terminal boundary.
 trap {
-    Restore-Pm2Apps
-    break
+    Stop-UpdateScript 1
 }
 
 Write-SafeHost "===================================" -ForegroundColor Cyan

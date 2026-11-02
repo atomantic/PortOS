@@ -1,6 +1,6 @@
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn, execFileSync } from 'child_process';
+import { spawn, spawnSync, execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -399,6 +399,19 @@ describe('update.ps1 headless-install guard', () => {
     // ...and both sanctioned exits must still be there, so the guard can't be
     // "satisfied" by deleting the exit inside Stop-UpdateScript.
     expect([...new Set(recoveryExits.map(e => e.line))].sort()).toEqual([...SANCTIONED_EXITS].sort());
+  });
+
+  it.runIf(process.platform === 'win32')('publishes a failed terminal outcome after recovery on a controlled Windows exit', () => {
+    const stop = ps1.slice(lineOf('function Stop-UpdateScript'), lineOf('# Backstop for a synchronous')).join('\n');
+    const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `
+      function Restore-Pm2Apps { Write-Output 'recovery-settled' }
+      function node { Write-Output ($args -join ' '); $global:LASTEXITCODE = 0 }
+      $env:PORTOS_DEFERRED_UPDATE_ID = 'controlled-failure'
+      ${stop}
+      Stop-UpdateScript 23
+    `], { encoding: 'utf8' });
+    expect(result.status).toBe(23);
+    expect(result.stdout).toMatch(/recovery-settled[\s\S]*--terminal controlled-failure \d+ 23/);
   });
 
   it('keeps every Resolve-Pm2Command branch a plain array collected by @()', () => {

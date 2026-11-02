@@ -51,6 +51,7 @@ const defaultState = () => ({
   updateInProgress: false,
   updateStartedAt: null,
   lastUpdateResult: null,
+  lastDeferredUpdateId: null,
   lastForkSync: null,
   autoUpdate: null
 });
@@ -498,7 +499,18 @@ export async function clearStaleUpdateInProgress() {
   if (deferred.operation) return false;
   return withLock(async () => {
     const state = await loadState();
-    if (deferred.result && state.lastUpdateResult?.deferredUpdateId !== deferred.result.id) {
+    if (deferred.result && state.lastDeferredUpdateId !== deferred.result.id) {
+      state.lastDeferredUpdateId = deferred.result.id;
+      const completedAt = Date.parse(deferred.result.completedAt);
+      const startedAt = Date.parse(state.updateStartedAt);
+      // The durable outcome can outlive later launch refusals or runtime updates.
+      // Consume it independently of the displayed result, without clearing a
+      // newer (or undated) active owner or replacing a more recent outcome.
+      if ((state.updateInProgress && (!Number.isFinite(startedAt) || startedAt >= completedAt))
+        || Date.parse(state.lastUpdateResult?.completedAt) >= completedAt) {
+        await saveState(state);
+        return false;
+      }
       state.updateInProgress = false;
       state.updateStartedAt = null;
       state.lastUpdateResult = {

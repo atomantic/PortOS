@@ -1362,7 +1362,9 @@ holds a `deferred-update` operation using the existing extensible operation shap
 Its bounded resource JSON carries phase, child and hold identity, so older running
 servers can still admit release children while updated source waits. The latest
 terminal outcome lives beside it in `update-result.json`, published under the
-same journal transaction before retiring the operation and hold.
+same journal transaction before retiring the operation and hold. The existing
+`data/update.json` keeps the last consumed outcome ID separately from the displayed
+result, so a retained outcome cannot replace newer update activity.
 Waiting does not close workflow admission. The same journal transaction acquires
 an update hold only with no admitted operations, retaining it through restart
 and final command settlement. The record binds a supervisor PID, child process
