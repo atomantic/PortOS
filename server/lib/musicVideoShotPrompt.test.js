@@ -25,6 +25,15 @@ describe('musicVideoFrameModelInput', () => {
     for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
   });
 
+  // Uniquely catches an amateur snapshot look rendering people studio-lit and pasted in (Hold Still mall frames).
+  it('lets people be badly lit when the look is amateur snapshots or home video, and only then', () => {
+    const snapshots = { ...project, concept: { ...project.concept, style: 'Found 1986 snapshots and VHS-C home video' } };
+    const input = musicVideoFrameModelInput(snapshots, scene);
+    expect(ids(input)).toContain('people-light');
+    expect(input.prompt).toContain('Authentic amateur snapshot lighting');
+    expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('people-light');
+  });
+
   // Uniquely catches a panel-linked still losing the storyboard's action, picks or sketch role (Here to Dance, cold-open shot 1).
   it('leads a panel-linked still with the panel\'s action, shot picks and sketch, and names only its cast', () => {
     const cast = { ...project, concept: { ...project.concept, subjects: [
