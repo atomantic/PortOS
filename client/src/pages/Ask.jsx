@@ -353,11 +353,11 @@ export default function Ask() {
 
   useEffect(() => {
     let cancelled = false;
+    setActiveConv(null);
+    setLoadingConv(!!conversationId);
     if (!conversationId) {
-      setActiveConv(null);
       return undefined;
     }
-    setLoadingConv(true);
     api.getAskConversation(conversationId).then((data) => {
       if (cancelled) return;
       if (data?.conversation) {
@@ -460,14 +460,15 @@ export default function Ask() {
   const handleSend = useCallback(async (e) => {
     e?.preventDefault?.();
     const trimmed = question.trim();
-    if (!trimmed || streaming) return;
+    const routeConv = activeConv?.id === conversationId ? activeConv : null;
+    if (!trimmed || streaming || (conversationId && !routeConv) || (!!conversationId && loadingConv)) return;
     setQuestion('');
     setStreamingTurn({ content: '', sources: [] });
     const controller = new AbortController();
     abortRef.current = controller;
     // Seed streamingConvIdRef with whatever conversation we're sending into;
     // for brand-new conversations this is null until the `open` event lands.
-    streamingConvIdRef.current = activeConv?.id && activeConv.id !== 'pending' ? activeConv.id : null;
+    streamingConvIdRef.current = routeConv?.id && routeConv.id !== 'pending' ? routeConv.id : null;
 
     // Optimistic user turn so the UI doesn't sit blank between submit and
     // the first SSE 'open' event (gather-sources + provider connect = 100s
@@ -483,7 +484,7 @@ export default function Ask() {
     // optimistic 'pending' placeholder (set when sending in a fresh
     // conversation) would fail server-side regex validation as a 400; in that
     // case we omit the field so the server creates a new conversation.
-    const persistedConvId = activeConv?.id && CONV_ID_RE.test(activeConv.id) ? activeConv.id : undefined;
+    const persistedConvId = routeConv?.id && CONV_ID_RE.test(routeConv.id) ? routeConv.id : undefined;
     let serverConvId = persistedConvId;
     let collectedSources = [];
     // Accumulate deltas into an array; concat-on-state would be O(n²) since
@@ -524,7 +525,7 @@ export default function Ask() {
             // (which fires on first send) doesn't get treated as a
             // switch-away by the conversationId-change effect.
             streamingConvIdRef.current = data.conversationId;
-            if (!activeConv?.id || activeConv.id === 'pending') {
+            if (!routeConv?.id || routeConv.id === 'pending') {
               navigate(`/ask/${data.conversationId}`, { replace: true });
             }
           } else if (event === 'sources') {
@@ -624,9 +625,14 @@ export default function Ask() {
       });
     }
     refreshList();
-  }, [activeConv, mode, navigate, question, refreshList, streaming]);
+  }, [activeConv, conversationId, loadingConv, mode, navigate, question, refreshList, streaming]);
 
-  const turns = activeConv?.turns || [];
+  // Effects run after render, so a route switch can otherwise render the old
+  // conversation once under the new URL before the fetch effect clears it.
+  const visibleConv = activeConv?.id === 'pending'
+    ? (!conversationId || conversationId === activeConv.id ? activeConv : null)
+    : activeConv?.id === conversationId ? activeConv : null;
+  const turns = visibleConv?.turns || [];
   const showEmptyState = !conversationId && !streaming;
 
   return (
@@ -660,12 +666,12 @@ export default function Ask() {
                 {m.label}
               </button>
             ))}
-            {activeConv && activeConv.id !== 'pending' && (
+            {visibleConv && visibleConv.id !== 'pending' && (
               <button
                 onClick={handlePromote}
-                aria-label={activeConv.promoted ? 'Unpin conversation' : 'Pin conversation'}
-                title={activeConv.promoted ? 'Unpin (allow auto-expiry after 30d)' : 'Pin (exempt from auto-expiry)'}
-                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors ${activeConv.promoted ? 'text-amber-400 hover:text-amber-300' : 'text-gray-500 hover:text-white'}`}
+                aria-label={visibleConv.promoted ? 'Unpin conversation' : 'Pin conversation'}
+                title={visibleConv.promoted ? 'Unpin (allow auto-expiry after 30d)' : 'Pin (exempt from auto-expiry)'}
+                className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors ${visibleConv.promoted ? 'text-amber-400 hover:text-amber-300' : 'text-gray-500 hover:text-white'}`}
               >
                 <Pin size={14} />
               </button>
@@ -695,9 +701,9 @@ export default function Ask() {
             <Turn
               key={t.id}
               turn={t}
-              conversationId={activeConv?.id}
+              conversationId={visibleConv?.id}
               goals={goals}
-              canPromote={!streaming && activeConv?.id && activeConv.id !== 'pending'}
+              canPromote={!streaming && visibleConv?.id && visibleConv.id !== 'pending'}
               onPromoted={handlePromoted}
             />
           ))}
@@ -721,7 +727,7 @@ export default function Ask() {
             />
             <button
               type="submit"
-              disabled={streaming || !question.trim()}
+              disabled={streaming || !question.trim() || (!!conversationId && (!visibleConv || loadingConv))}
               className="min-h-[44px] min-w-[44px] px-3 py-2 rounded-md bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-sm font-medium"
             >
               {streaming ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
