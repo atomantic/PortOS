@@ -116,19 +116,35 @@ async function reviewSnapshot(checkout, pr, origin) {
   return { files: evidence, legacyPublished: Boolean(pr && !files.includes('portos-local-review-lifecycle')) };
 }
 
-async function publicationSnapshot(checkout, candidate) {
+/** Read-only GitHub access for the repository's origin; anything else is unavailable. */
+export async function openCandidateForge(repoPath) {
   const [{ getOriginInfo }, { resolveForgeExecOptions }, { execGh }] = await Promise.all([
     import('../lib/gitRemote.js'), import('./forgeExecOptions.js'), import('./github.js'),
   ]);
-  const origin = await getOriginInfo(checkout.repoPath);
+  const origin = await getOriginInfo(repoPath);
   if (!origin.isGithub || origin.host !== 'github.com' || !origin.fullName) refuse('candidate-forge-unavailable');
-  const options = await resolveForgeExecOptions(checkout.repoPath);
+  const options = await resolveForgeExecOptions(repoPath);
   const api = async path => JSON.parse(await execGh(['api', '--hostname', origin.host, `repos/${origin.fullName}/${path}`], undefined, options));
-  const rows = await api(`pulls?state=all&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${checkout.branch}`)}&per_page=100`);
+  return { origin, api };
+}
+
+/** Every PR, in any state, whose head is this branch of the origin repository. */
+export const candidateBranchPulls = ({ origin, api }, branch) =>
+  api(`pulls?state=all&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${branch}`)}&per_page=100`);
+
+/** The `release` branch tip, or null when the ref is not a plain commit ref. */
+export async function readReleaseBaseTip({ api }) {
+  const base = await api('git/ref/heads/release');
+  return base.ref === 'refs/heads/release' && base.object?.type === 'commit' ? base.object.sha : null;
+}
+
+async function publicationSnapshot(checkout, candidate) {
+  const forge = await openCandidateForge(checkout.repoPath);
+  const { origin, api } = forge;
+  const rows = await candidateBranchPulls(forge, checkout.branch);
   if (!Array.isArray(rows) || rows.length > 1) refuse('candidate-publication-ambiguous');
   if (!rows.length) {
-    const base = await api('git/ref/heads/release');
-    if (base.ref !== 'refs/heads/release' || base.object?.type !== 'commit' || base.object.sha !== candidate.releaseBase) refuse('candidate-release-base-changed');
+    if (await readReleaseBaseTip(forge) !== candidate.releaseBase) refuse('candidate-release-base-changed');
     return null;
   }
   const pr = rows[0];
