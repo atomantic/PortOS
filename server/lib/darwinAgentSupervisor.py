@@ -269,7 +269,7 @@ def supervise(request, directory):
     token = str(uuid.uuid4())
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     service = connection = coalition = master = saved = None
-    status, terminated, root, created = None, False, None, None
+    status, terminated, escalated, root, created = None, False, False, None, None
     try:
         server = os.path.join(private, 's')
         listener.bind(server)
@@ -359,6 +359,7 @@ def supervise(request, directory):
                 stage = 'cancel'
                 if time.monotonic() - cancel_at >= GRACE_SECONDS:
                     signal_coalition(coalition, signal.SIGKILL)
+                    escalated = True
                 elif not terminated:
                     signal_coalition(coalition, signal.SIGTERM)
                     terminated = True
@@ -375,8 +376,9 @@ def supervise(request, directory):
                 flush(1, output)
         stage = 'exit-code'
         if status is None:
-            # Only an escalated stop kills the stub before it reports.
-            require(cancel_at is not None)
+            # Only this supervisor's SIGKILL escalation can stop the stub before
+            # it reports, and it killed the root with the same signal.
+            require(escalated)
             status = 128 + signal.SIGKILL
         stage = 'job'
         require(launchctl('bootout', service) in (0, 3, 113))
@@ -434,6 +436,12 @@ def inner(server, token):
             resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
         except (OSError, ValueError):
             pass
+        # A stop is the supervisor's to deliver; the stub must outlive SIGTERM
+        # long enough to report how the agent root ended, so the handlers exist
+        # before any stop can target this coalition's child. The child restores
+        # the default dispositions before exec.
+        for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
+            signal.signal(signum, lambda *_: None)
         gate_read, gate_write = os.pipe()
         # os.pipe() descriptors are close-on-exec, so a successful exec closes
         # error_write and the stub reads EOF.
@@ -481,10 +489,6 @@ def inner(server, token):
             send_message(connection, {'error': int(failed)})
             return 1
         send_message(connection, {'pid': child, 'created': created or '0'})
-        # A stop is the supervisor's to deliver; the stub must outlive SIGTERM
-        # long enough to report how the agent root ended.
-        for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
-            signal.signal(signum, lambda *_: None)
         while True:
             try:
                 _pid, value = os.waitpid(child, 0)
