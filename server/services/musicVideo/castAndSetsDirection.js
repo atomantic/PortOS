@@ -744,7 +744,8 @@ function normalizeProps(props, { fixed = [] } = {}) {
   const seen = new Set();
   const kept = (Array.isArray(props) ? props : []).filter((p) => p && p.name && p.description);
   const named = new Set(kept.map((p) => String(p.name).trim().toLowerCase()));
-  const added = fixed.filter((p) => p.description && !named.has(p.name.toLowerCase())).map((p) => ({ name: p.name, description: p.description }));
+  const added = fixed.filter((p) => p.name && !named.has(p.name.toLowerCase()))
+    .map((p) => ({ name: p.name, description: p.description || p.name }));
   return [...added, ...kept].slice(0, CAST_SETS_LIMITS.props).map((p, i) => {
     let id = slug(p.id) || slug(p.name) || `prop-${i + 1}`;
     while (seen.has(id)) id = `${id}-${i + 1}`;

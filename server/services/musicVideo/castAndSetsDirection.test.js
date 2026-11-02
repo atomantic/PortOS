@@ -364,4 +364,10 @@ describe('Cast & Sets props', () => {
     expect(edited.direction.props).toEqual([{ id: 'snapshot-camera', name: 'Snapshot camera', owner: '', description: 'black 35mm compact' }]);
     expect(edited.changed).toContain('props');
   });
+
+  it('keeps a named fixed object even when it has no catalog description', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: [] })),
+      { sections, fixedProps: [{ id: 'obj-1', name: 'Lantern', description: '' }] });
+    expect(direction.props).toEqual([{ id: 'lantern', name: 'Lantern', owner: '', description: 'Lantern' }]);
+  });
 });
