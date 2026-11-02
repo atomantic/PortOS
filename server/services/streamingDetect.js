@@ -225,7 +225,7 @@ function ecosystemAppBlocks(content) {
       const next = tokens[end];
       // Resolve only a whole initializer, never the literal prefix of an expression.
       const terminated = !next || [';', ','].includes(punctuation(end)) ||
-        (['const', 'let', 'var', 'module', 'export'].some(word => isWord(end, word)) &&
+        (next.t === 'id' && !['in', 'instanceof'].includes(next.v) &&
           /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
       if (terminated) bindings.set(tokens[i + 1].v, start);
     }

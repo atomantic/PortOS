@@ -475,6 +475,17 @@ module.exports = { apps: [
     expect(result.content).toContain('name: ALIAS');
   });
 
+  it('resolves semicolonless bindings before ordinary statements without executing them', () => {
+    const content = "const NAME = 'example-api'\nconsole.log('not executed')\n" +
+      "const apps = [{ name: NAME, env: { PORT: 6100 } }]\nconsole.log('not executed')\n" +
+      "module.exports = { apps };";
+    expect(parseEcosystemConfig(content).processes.map(p => p.name)).toEqual(['example-api']);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(parseEcosystemConfig(result.content).processes[0].ports.api).toBe(6200);
+  });
+
   it('leaves dynamic, empty, unresolved and cyclic process names undiscovered and untouched', () => {
     const content = "const COMPUTED = 'example-api' + suffix;\n" +
       "const FIRST = SECOND; const SECOND = FIRST; const EMPTY = '';\n" +
