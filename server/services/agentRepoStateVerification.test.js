@@ -941,7 +941,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       expect(state.result).toEqual({ success: true, executionSuccess: true });
     });
 
-  it.each([{ integrated: true }, { integrated: false }, { integrated: true, restart: true }])('reconciles an eventual merge after a terminal pre-merge report with exact proof (%j)', async ({ integrated, restart }) => {
+  it.each([{ delivered: true }, { delivered: false }, { delivered: true, restart: true }])('reconciles an eventual merge after a terminal pre-merge report with exact proof (%j)', async ({ delivered, restart }) => {
     const capture = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
       startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
     const originalResult = { success: false, executionSuccess: true, deliveryRecoveryOwned: true,
@@ -951,7 +951,8 @@ describe('verifyAgentRepoState — clean runs', () => {
       id: 'agent-1', taskId: 'task-1', status: 'completed', result: originalResult };
     getAgentRecord.mockResolvedValue(state);
     getTaskById.mockResolvedValue({ ...task(), status: 'completed' });
-    execGit.mockImplementation(async args => ({ exitCode: integrated && args[0] === 'merge-base' ? 0 : 1, stdout: '' }));
+    execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    if (!delivered) readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
     const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true',
       sourceAgentId: 'agent-1', sourceTaskId: 'task-1', reviewLoopPRBranch: BRANCH,
       reviewLoopPRUrl: 'https://github.com/example/repo/pull/7',
@@ -961,7 +962,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       readBranchCompletionPolicies.mockResolvedValueOnce([state]);
       await sweepRepoStateVerifications();
     } else await observeCompletedTask(followUp);
-    if (integrated) expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ deliveryVerified: true }));
+    if (delivered) expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', expect.objectContaining({ deliveryVerified: true }));
     else expect(recordRepoStateVerification).not.toHaveBeenCalled();
     expect(state.result).toEqual(originalResult);
     expect(updateTask).not.toHaveBeenCalled();
@@ -1175,10 +1176,27 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['unavailable', 'unmerged', 'not-integrated'])('keeps absent checkout delivery unverified when merge proof is %s', async scenario => {
+  it.each([true, false])('settles absent merged delivery before local objects are fetched (captured: %s)', async captured => {
+    const completedCheckouts = captured ? [{ version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD,
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } }] : [];
+    const state = { ...agentState({ completedCheckouts, repoStateVerification: { status: 'pending' },
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
+      result: { success: false, cleanupPending: true } };
+    execGit.mockRejectedValue(new Error('fatal: Not a valid commit name'));
+    expect(await run({ success: false, agentState: state })).toMatchObject({ verified: true, skipReason: null });
+    expect(recordCleanupOutcome).toHaveBeenLastCalledWith('agent-1', expect.objectContaining({
+      status: 'verified', reason: 'already-absent-merged', committedIntegrationVerified: true }));
+    expect(updateTask).toHaveBeenLastCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    expect(execGit).not.toHaveBeenCalledWith(expect.arrayContaining(['merge-base']), expect.anything(), expect.anything());
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['unavailable', 'unmerged'])('keeps absent checkout delivery unverified when merge proof is %s', async scenario => {
     if (scenario === 'unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
     if (scenario === 'unmerged') getPullRequestState.mockResolvedValueOnce({ status: 'known', state: 'OPEN' });
-    if (scenario === 'not-integrated') execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
     expect(await run({ agentState: agentState({ reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }) }))
       .toMatchObject({ verified: false, skipReason: 'absent-checkout-integration-unverified' });
     expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));

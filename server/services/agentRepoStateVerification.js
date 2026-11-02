@@ -1639,8 +1639,9 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
       && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
       { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   }
-  const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
-    { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
+  // The forge owns merged delivery. Completion often precedes the next fetch,
+  // so merge/target objects can be absent locally even after successful cleanup.
+  const integrated = !!forge && capturedCovered;
   // A run that never published (a no-change audit) has no PR to prove. When the
   // forge affirmatively reports none, no remote branch holds other work, and the
   // captured final head is already in the fetched default branch, the removed
