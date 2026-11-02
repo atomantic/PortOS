@@ -106,8 +106,10 @@ function sanitizeProviderBucket(raw) {
   if (isPlainObject(raw?.byModel)) {
     out.byModel = {};
     for (const [model, mRaw] of Object.entries(raw.byModel).slice(0, MAX_MODELS_PER_PROVIDER)) {
-      if (!isNonBlankStr(model)) continue;
-      out.byModel[model.slice(0, 200)] = sanitizeModelBucket(mRaw);
+      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model)) continue;
+      const trimmedModel = model.slice(0, 200);
+      if (POLLUTING_KEYS.has(trimmedModel)) continue;
+      out.byModel[trimmedModel] = sanitizeModelBucket(mRaw);
     }
   }
   return out;
@@ -121,8 +123,10 @@ function sanitizeActivityBucket(raw) {
   if (isPlainObject(raw?.byProvider)) {
     out.byProvider = {};
     for (const [pid, pRaw] of Object.entries(raw.byProvider).slice(0, MAX_PROVIDERS_PER_BUCKET)) {
-      if (!isNonBlankStr(pid)) continue;
-      out.byProvider[pid.slice(0, 200)] = sanitizeProviderBucket(pRaw);
+      if (!isNonBlankStr(pid) || POLLUTING_KEYS.has(pid)) continue;
+      const trimmedPid = pid.slice(0, 200);
+      if (POLLUTING_KEYS.has(trimmedPid)) continue;
+      out.byProvider[trimmedPid] = sanitizeProviderBucket(pRaw);
     }
   }
   return out;
@@ -132,7 +136,7 @@ function sanitizeActivityMap(raw, keyRe, limit) {
   const out = {};
   if (!isPlainObject(raw)) return out;
   for (const [key, bucket] of Object.entries(raw).slice(0, limit)) {
-    if (!keyRe.test(key)) continue;
+    if (!keyRe.test(key) || POLLUTING_KEYS.has(key)) continue;
     out[key] = sanitizeActivityBucket(bucket);
   }
   return out;
@@ -847,7 +851,11 @@ function costByGroup(report, labels, providers) {
 }
 
 const addInto = (target, source, scale = 1) => {
-  for (const [key, cost] of Object.entries(source)) target[key] = (target[key] || 0) + cost * scale;
+  if (!isPlainObject(source)) return;
+  for (const [key, cost] of Object.entries(source)) {
+    if (POLLUTING_KEYS.has(key)) continue;
+    target[key] = (Object.hasOwn(target, key) && typeof target[key] === 'number' ? target[key] : 0) + cost * scale;
+  }
 };
 
 const reportTokens = (row) => row.tokensIn + row.tokensOut + row.cacheReadTokens + row.cacheWriteTokens;

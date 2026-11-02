@@ -68,4 +68,41 @@ describe('claude code transcript usage', () => {
     const out = svc.sanitizeTranscriptDays({ '2026-09-10': { m: { messages: 1, input: -5, evil: 9, output: 'x' } }, bad: { m: {} }, '2026-09-11': 'nope' });
     expect(out).toEqual({ '2026-09-10': { m: { messages: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } });
   });
+
+  it('discards prototype-polluting model keys during scan and merge without polluting Object.prototype', async () => {
+    await writeFile(join(root, 'proj-a', 's1.jsonl'), [
+      line('p1', '__proto__', '2026-09-10T01:00:00Z', u(50)),
+      line('p2', 'constructor', '2026-09-10T01:00:00Z', u(50)),
+      line('p3', 'prototype', '2026-09-10T01:00:00Z', u(50)),
+      line('m1', 'model-valid', '2026-09-10T01:00:00Z', u(10)),
+    ].join('\n'));
+
+    const { days } = await svc.refreshLocalTranscriptUsage({ root, force: true });
+    expect(days['2026-09-10']['model-valid']).toBeDefined();
+    expect(Object.prototype.messages).toBeUndefined();
+    expect(Object.prototype.output).toBeUndefined();
+    expect(Object.prototype.input).toBeUndefined();
+    expect(Object.hasOwn(days['2026-09-10'], '__proto__')).toBe(false);
+    expect(Object.hasOwn(days['2026-09-10'], 'constructor')).toBe(false);
+    expect(Object.hasOwn(days['2026-09-10'], 'prototype')).toBe(false);
+  });
+
+  it('filters prototype polluting and inherited keys in sanitizeTranscriptDays', () => {
+    const raw = JSON.parse('{"2026-09-10":{"__proto__":{"messages":10,"output":50},"constructor":{"messages":1},"prototype":{"messages":1},"m":{"messages":2}},"__proto__":{"2026-09-10":{"m":{"messages":5}}}}');
+    const out = svc.sanitizeTranscriptDays(raw);
+    expect(Object.prototype.messages).toBeUndefined();
+    expect(Object.prototype.output).toBeUndefined();
+    expect(Object.keys(out['2026-09-10'])).toEqual(['m']);
+    expect(out['2026-09-10'].m.messages).toBe(2);
+  });
+
+  it('safely handles inherited Object.prototype property names in merge without producing NaN', async () => {
+    await writeFile(join(root, 'proj-a', 's1.jsonl'), [
+      line('t1', 'toString', '2026-09-10T01:00:00Z', u(10)),
+    ].join('\n'));
+
+    const { days } = await svc.refreshLocalTranscriptUsage({ root, force: true });
+    expect(days['2026-09-10'].toString).toEqual({ messages: 1, input: 1, output: 10, cacheRead: 10, cacheWrite: 100 });
+    expect(typeof Object.prototype.toString).toBe('function');
+  });
 });
