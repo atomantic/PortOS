@@ -4,7 +4,15 @@ import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 
-import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
+import { ownTestBodies, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+const repair = vi.hoisted(() => ({ repoPath: '/example/repo', task: null, owner: null }));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
+  dataRoot: () => repair.repoPath,
+  extraOverrides: () => ({ root: repair.repoPath }),
+}));
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(async () => repair.task) }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance' }));
 
 const owned = ownTestBodies(vitestIt);
 const it = owned.it;
@@ -13,12 +21,17 @@ const it = owned.it;
 // the temp repos are not a PortOS install, so the live registry read fails
 // closed and every verdict would come back blocked on it. Doubled as "no agents
 // running" — the condition each case below is actually about.
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
+vi.mock('./cosAgentLifecycle.js', () => ({
+  getAgents: async () => repair.owner ? [repair.owner] : [],
+  getAgentRecord: async () => repair.owner,
+}));
 
 // Otherwise real git repositories, not a mocked porcelain string: this module
 // decides whether an UNATTENDED process may move a user's checkout, and the
 // thing that would make that wrong is git behaving differently from the fixture.
 const { checkUpdateRepoReadiness, prepareUpdateRepo } = await import('./updateRepoReadiness.js');
+const { REPO_REPAIR_TASK_DESCRIPTION, verifyUpdateRepoRepairCompletion } = await import('./updateRepoRepairCompletion.js');
+const { PORTOS_APP_ID } = await import('../lib/appIdentity.js');
 
 const repos = [];
 const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf-8' });
@@ -58,7 +71,11 @@ function makeStaleSubmodule() {
   return { repo, checkout, pin, path };
 }
 
-beforeEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.restoreAllMocks();
+  repair.owner = null;
+  repair.task = null;
+});
 // Fail-fast cancellation can finish Vitest's wrapper while its Git subprocess
 // still owns the checkout. Drain those bodies before deleting the fixtures.
 afterAll(async () => {
@@ -68,6 +85,76 @@ afterAll(async () => {
 });
 
 describe('update repo readiness', () => {
+  function repairDispatch(repoPath) {
+    repair.repoPath = repoPath;
+    repair.task = { id: 'sys-repair', taskType: 'internal', status: 'in_progress',
+      description: REPO_REPAIR_TASK_DESCRIPTION, metadata: {
+        app: PORTOS_APP_ID, useWorktree: 'false', claimedBy: 'example-instance',
+        claimedAt: '2026-01-01T00:00:00Z', lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '3',
+      } };
+    repair.owner = { id: 'agent-repair', taskId: repair.task.id, status: 'running', metadata: {
+      instanceId: 'example-instance', workspacePath: repoPath,
+      completionTaskDispatch: { taskId: repair.task.id, taskType: 'internal', expected:
+        ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, repair.task.metadata[key]]),
+      },
+    } };
+    return () => verifyUpdateRepoRepairCompletion(structuredClone(repair.task), repair.owner.id, repoPath);
+  }
+
+  it('verifies a retained repair with no new commit while keeping normal update ownership guards', async () => {
+    const repo = makeRepo();
+    writeFileSync(join(repo, 'README.md'), 'existing work\n');
+    git(repo, 'commit', '-am', 'existing work');
+    const preserved = git(repo, 'rev-parse', 'HEAD');
+    git(repo, 'branch', 'preserved-work');
+    git(repo, 'push', 'origin', 'preserved-work');
+    git(repo, 'reset', '--hard', 'origin/main');
+    const verify = repairDispatch(repo);
+    const taskBefore = structuredClone(repair.task);
+    expect(await verify()).toBe(true);
+    // A subsequent repair attempt verifies the same result without manufacturing a commit.
+    expect(await verify()).toBe(true);
+    expect(repair.task).toEqual(taskBefore);
+    expect(git(repo, 'rev-parse', 'preserved-work')).toBe(preserved);
+    expect(git(repo, 'rev-parse', 'origin/preserved-work')).toBe(preserved);
+    expect(await checkUpdateRepoReadiness({ repoPath: repo })).toMatchObject({ ready: false, reasons: ['agent-at-work'] });
+    git(repo, 'push', 'origin', 'preserved-work:main');
+    git(repo, 'fetch', 'origin');
+    // Being behind is for the updater to resolve, not another repair attempt.
+    expect(await verify()).toBe(true);
+    const lifecycle = await import('./cosAgentLifecycle.js');
+    const agents = vi.spyOn(lifecycle, 'getAgents').mockResolvedValue([repair.owner,
+      { id: 'agent-other', status: 'paused', metadata: { workspacePath: repo } }]);
+    expect(await verify()).toBe(false);
+    agents.mockRejectedValueOnce(new Error('registry unavailable'));
+    expect(await verify()).toBe(false);
+  });
+
+  it('refuses unfinished Git state and mismatched or unreadable completion ownership', async () => {
+    const repo = makeRepo();
+    const verify = repairDispatch(repo);
+    writeFileSync(join(repo, 'README.md'), 'unfinished\n');
+    expect(await verify()).toBe(false);
+    git(repo, 'commit', '-am', 'unpublished');
+    expect(await verify()).toBe(false);
+    git(repo, 'push', 'origin', 'main');
+    expect(await verify()).toBe(true);
+    repair.task.metadata.repoRepair = { version: 1, repoPath: repo };
+    expect(await verify()).toBe(true);
+    repair.task.metadata.repoRepair.repoPath = '/example/different-repo';
+    expect(await verify()).toBe(false);
+    repair.task.metadata.repoRepair.repoPath = repo;
+    repair.owner.metadata.instanceId = 'another-instance';
+    expect(await verify()).toBe(false);
+    repair.owner.metadata.instanceId = 'example-instance';
+    repair.owner.metadata.completionTaskDispatch.expected[3][1] = '2';
+    expect(await verify()).toBe(false);
+    repair.owner.metadata.completionTaskDispatch.expected[3][1] = '3';
+    const store = await import('./cosTaskStore.js');
+    vi.spyOn(store, 'getTaskById').mockResolvedValueOnce(repair.task).mockResolvedValueOnce(null);
+    expect(await verify()).toBe(false);
+  });
+
   it('repairs a clean stale submodule without an agent, even with quoted paths', async () => {
     const { repo, checkout, pin, path } = makeStaleSubmodule();
     const before = await checkUpdateRepoReadiness({ repoPath: repo });
