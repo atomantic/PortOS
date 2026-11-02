@@ -1043,3 +1043,4 @@ export * from './mediaRowOwners.js';
 export * from './mediaOriginClaim.js';
 
 export * from './peerSyncEventSchema.js';
+export * from './musicVideoCastSetsImageEdit.js';

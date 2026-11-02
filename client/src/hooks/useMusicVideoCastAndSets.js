@@ -5,6 +5,9 @@ import { subscribeVisibility } from './useVisibilityEvent';
 import {
   getMusicVideoProject,
   startMusicVideoCastAndSets,
+  editMusicVideoCastAndSetsImage,
+  acceptMusicVideoCastAndSetsImageEdit,
+  discardMusicVideoCastAndSetsImageEdit,
   regenerateMusicVideoCastAndSets,
   editMusicVideoCastAndSetsDirection,
   applyMusicVideoCastAndSetsFeedback,
@@ -137,6 +140,9 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
   const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
+  const editImage = (input) => call(() => editMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Rendering an image edit for comparison');
+  const acceptImageEdit = (input) => call(() => acceptMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }), 'Image edit accepted — review the updated check-in');
+  const discardImageEdit = (input) => call(() => discardMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }));
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
@@ -179,5 +185,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, acknowledgeImage, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

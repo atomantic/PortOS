@@ -24,18 +24,18 @@ const hook = createMediaJobImageHook({
   initLog: '🎭 Music Video Cast & Sets image hook initialized',
   tagKey: 'musicVideo',
   identify: (tag) => (tag?.projectId && typeof tag.castAndSets?.key === 'string'
-    ? { projectId: tag.projectId, key: tag.castAndSets.key, revision: tag.castAndSets.revision }
+    ? { projectId: tag.projectId, key: tag.castAndSets.key, revision: tag.castAndSets.revision, editRequestId: tag.castAndSets.editRequestId || null }
     : null),
   serializeKey: ({ projectId }) => projectId,
   describe: ({ projectId, key }) => `${projectId}/${key}`,
-  attach: ({ projectId, key, revision, filename, job }) => settle({
-    projectId, key, revision, filename, productionRunId: job.params?.musicVideo?.productionRunId, productionStepKey: job.params?.musicVideo?.productionStepKey, jobId: typeof job.id === 'string' ? job.id : null,
+  attach: ({ projectId, key, revision, editRequestId, filename, job }) => settle({
+    projectId, key, revision, editRequestId, filename, productionRunId: job.params?.musicVideo?.productionRunId, productionStepKey: job.params?.musicVideo?.productionStepKey, jobId: typeof job.id === 'string' ? job.id : null,
   }).then((changed) => (changed ? { filename } : null)),
   onAttached: ({ projectId, key, filename }) => {
     console.log(`🎭 music-video cast & sets ${projectId.slice(0, 11)}/${key} ← ${filename}`);
   },
-  onTerminal: ({ projectId, key, revision, job }, status) => settle({
-    projectId, key, revision, status, productionRunId: job?.params?.musicVideo?.productionRunId, productionStepKey: job?.params?.musicVideo?.productionStepKey, jobId: typeof job?.id === 'string' ? job.id : null, error: job?.error || `The render was ${status}`,
+  onTerminal: ({ projectId, key, revision, editRequestId, job }, status) => settle({
+    projectId, key, revision, editRequestId, status, productionRunId: job?.params?.musicVideo?.productionRunId, productionStepKey: job?.params?.musicVideo?.productionStepKey, jobId: typeof job?.id === 'string' ? job.id : null, error: job?.error || `The render was ${status}`,
   }),
 });
 

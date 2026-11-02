@@ -1915,3 +1915,142 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
     expect(stale.status).toBe(409);
   });
 });
+
+
+describe('editing a saved Cast & Sets image', () => {
+  beforeEach(() => service.__setCastAndSetsDepsForTests(testDeps({ getSettings: async () => ({ imageGen: { codex: { enabled: true } } }) })));
+  const editUrl = (id, action = 'edit-image') => `/api/music-video/${id}/cast-and-sets/${action}`;
+  async function ready() {
+    onDisk('extra-style.png');
+    const project = await seed({ styleReferences: [{ imageId: 'extra-style.png' }] });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    await service.__settleCastAndSetsForTests();
+    return current(project.id);
+  }
+  async function requestEdit(project, instruction = 'Remove the lantern only') {
+    return request(app).post(editUrl(project.id)).send({ key: 'character', revision: project.castAndSets.revision,
+      imageId: project.castAndSets.images.character.imageId, instruction });
+  }
+  async function landEdit(project, job, filename = 'example-image-edit.png') {
+    writeFileSync(join(IMAGES(), filename), PNG);
+    return service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', jobId: job.id,
+      editRequestId: job.params.musicVideo.castAndSets.editRequestId, filename,
+      revision: job.params.musicVideo.castAndSets.revision,
+      productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
+  }
+
+  it('edits only the displayed image, previews without replacing it, and publishes only after acceptance and approval', async () => {
+    let project = await ready();
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      automation: { ...current.automation, checkins: { castAndSets: 'auto' } } } }));
+    await service.approveCastAndSets(project.id);
+    project = await current(project.id);
+    const before = project.castAndSets;
+    const count = jobs.length;
+    const instruction = '  Remove the lantern only.\nKeep the face exactly as it is.  ';
+    const preview = await request(app).post(editUrl(project.id, 'edit-image-preview')).send({ key: 'character', revision: before.revision, imageId: before.images.character.imageId, instruction });
+    expect(preview.status).toBe(200);
+    expect(preview.body.sentPrompt).toContain(instruction);
+    expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'cast-sets-image-edit' }));
+    expect(jobs).toHaveLength(count);
+    const rendered = await requestEdit(project, instruction);
+    expect(rendered.status).toBe(202);
+    expect(jobs).toHaveLength(count + 1);
+    const job = jobs.at(-1);
+    expect(job.params.initImagePath).toBe(join(IMAGES(), before.images.character.imageId));
+    expect(job.params.referenceImagePaths).toBeUndefined();
+    expect(job.params.prompt.endsWith(instruction)).toBe(true);
+    expect(job.params.promptAdditions).toEqual([expect.objectContaining({ id: 'cast-sets-image-edit' })]);
+    expect(rendered.body.project.castAndSets.status).toBe('approved');
+    expect(rendered.body.project.castAndSets.images.character.imageId).toBe(before.images.character.imageId);
+    expect(await landEdit(project, job)).toBe(true);
+    expect(await landEdit(project, job)).toBe(false);
+    let saved = await current(project.id);
+    expect(saved.castAndSets.images.character).toMatchObject({ imageId: before.images.character.imageId,
+      edit: { status: 'done', imageId: 'example-image-edit.png', instruction } });
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    const accepted = await request(app).post(editUrl(project.id, 'accept-image-edit')).send(decision);
+    expect(accepted.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('review');
+    expect(saved.castAndSets.revision).toBe(before.revision + 1);
+    expect(jobs).toHaveLength(count + 1);
+    expect(saved.castAndSets.images.character).toMatchObject({ imageId: 'example-image-edit.png',
+      submittedPrompt: preview.body.sentPrompt, submittedRevision: before.revision + 1,
+      submittedReferences: [{ kind: 'image', filename: before.images.character.imageId }], inspectionAcknowledgement: null });
+    expect(saved.castAndSets.images.character.history).toContain(before.images.character.imageId);
+    expect(saved.castAndSets.images.character.inspection.inputs.planPrompt).toContain(instruction);
+    expect(saved.castAndSets.images.character.inspection.inputs.imageId).toBe('example-image-edit.png');
+    for (const key of Object.keys(before.images).filter((key) => key !== 'character')) {
+      expect(saved.castAndSets.images[key]).toEqual(before.images[key]);
+    }
+    expect(saved.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe(before.images.character.imageId);
+    const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    expect(approved.status).toBe(200);
+    expect(approved.body.project.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe('example-image-edit.png');
+    expect(approved.body.project.concept.subjects.find((subject) => subject.role === 'protagonist')).toMatchObject({ name: 'Keeper' });
+  });
+
+  it('validates instructions, refuses remote host control and stale sources, and ignores discarded or superseded completions', async () => {
+    const project = await ready();
+    const input = { key: 'character', revision: project.castAndSets.revision,
+      imageId: project.castAndSets.images.character.imageId, instruction: 'Change the sleeve' };
+    for (const instruction of ['  ', 'x'.repeat(2001)]) {
+      expect((await request(app).post(editUrl(project.id)).send({ ...input, instruction })).status).toBe(400);
+    }
+    expect((await request(app).post(editUrl(project.id)).set('x-test-auth-method', 'basic').send(input)).status).toBe(403);
+    expect((await request(app).post(editUrl(project.id)).send({ ...input, imageId: 'unrelated.png' })).status).toBe(409);
+    const rendered = await requestEdit(project);
+    expect(rendered.status).toBe(202);
+    const job = jobs.at(-1);
+    expect((await requestEdit(project)).status).toBe(409);
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    expect((await request(app).post(editUrl(project.id, 'discard-image-edit')).send(decision)).status).toBe(200);
+    expect(await landEdit(project, job)).toBe(false);
+    expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
+    expect((await request(app).post(editUrl(project.id)).set('x-test-auth-method', 'session').send(input)).status).toBe(202);
+    const newer = jobs.at(-1);
+    await landEdit(project, newer);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, revision: current.castAndSets.revision + 1 } } }));
+    expect((await request(app).post(editUrl(project.id, 'accept-image-edit')).send({ key: 'character', requestId: newer.params.musicVideo.castAndSets.editRequestId })).status).toBe(409);
+    expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
+  });
+
+  it('charges an active run before queueing and settles a discarded edit without stranding its budget step', async () => {
+    const { project, run } = await productionCheckin({ maxGenerations: 30, spendCapUsd: 10 });
+    await runTo(project.id, 'review');
+    await service.__settleCastAndSetsForTests();
+    let saved = await current(project.id);
+    const generations = saved.productionRuns[0].usage.generations;
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((record) => ({ ...record, limits: { ...record.limits, maxGenerations: generations } })) } }));
+    const before = jobs.length;
+    expect((await requestEdit(await current(project.id))).status).toBe(409);
+    expect(jobs).toHaveLength(before);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((record) => ({ ...record, limits: { ...record.limits, maxGenerations: 30 } })) } }));
+    saved = await current(project.id);
+    expect((await requestEdit(saved)).status).toBe(202);
+    const job = jobs.at(-1);
+    expect(job.params.musicVideo.productionRunId).toBe(run.id);
+    const charged = (await current(project.id)).productionRuns[0];
+    expect(charged.usage.generations).toBe(generations + 1);
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    await request(app).post(editUrl(project.id, 'discard-image-edit')).send(decision);
+    expect(await landEdit(project, job)).toBe(true);
+    const completed = (await current(project.id)).productionRuns[0];
+    expect(completed.steps.find((step) => step.key === job.params.musicVideo.productionStepKey)).toMatchObject({ status: 'completed', jobId: job.id });
+    expect(completed.usage.generations).toBe(generations + 1);
+    expect((await requestEdit(await current(project.id))).status).toBe(202);
+    const missing = jobs.at(-1);
+    await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', jobId: missing.id,
+      editRequestId: missing.params.musicVideo.castAndSets.editRequestId, filename: 'missing-edit-result.png',
+      productionRunId: run.id, productionStepKey: missing.params.musicVideo.productionStepKey });
+    const rejected = await current(project.id);
+    expect(rejected.castAndSets.images.character.edit).toMatchObject({ status: 'failed', imageId: null });
+    expect(rejected.productionRuns[0].steps.find((step) => step.key === missing.params.musicVideo.productionStepKey).status).toBe('failed');
+  });
+});

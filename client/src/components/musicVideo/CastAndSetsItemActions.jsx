@@ -1,3 +1,4 @@
+import CastAndSetsImageEditor from './CastAndSetsImageEditor.jsx';
 import { useId, useRef, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -152,7 +153,7 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * protagonist. Shown only while the stage is not working. `formSubjects` are the
  * catalog-linked characters an age may be grounded on.
  */
-export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
+export default function CastAndSetsItemActions({ item, image, direction, revision, projectId, busy, onEditImage, onAcceptImageEdit, onDiscardImageEdit, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
   const [mode, setMode] = useState(null);
   const [resolution, setResolution] = useState(null);
   const [pending, setPending] = useState(null);
@@ -205,6 +206,9 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
   const actionBusy = busy || loading;
   return (
     <div className="space-y-2">
+      {image?.status === 'done' && onEditImage && <CastAndSetsImageEditor
+        key={`${projectId}:${revision}:${image.imageId}`} projectId={projectId} item={item} image={image} revision={revision} busy={busy}
+        onRender={onEditImage} onAccept={onAcceptImageEdit} onDiscard={onDiscardImageEdit} />}
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={actionBusy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
           <RotateCcw size={12} aria-hidden="true" /> Regenerate

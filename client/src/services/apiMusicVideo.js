@@ -607,6 +607,14 @@ export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // `keys` re-renders just those images (and what depends on them).
 export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const previewMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/edit-image-preview`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const editMusicVideoCastAndSetsImage = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/edit-image`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const acceptMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/accept-image-edit`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const discardMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/discard-image-edit`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Body: { protagonist?, world?, looks?, cast?, sets?, tests? } — the director's direct edits
 // (a list item is patched by id, a test by 1-based index; `remove: true` drops it).
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
