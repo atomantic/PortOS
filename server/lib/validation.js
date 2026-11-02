@@ -1706,13 +1706,15 @@ export const usageRollingCostQuerySchema = z.object({
 
 /** Query for GET /api/usage/providers. `family` narrows the read to a single
  * quota card (the per-card Refresh on the usage page) so one slow TUI scrape
- * isn't paid for every provider at once. */
+ * isn't paid for every provider at once. The peers scope reads only saved
+ * peer observations and never starts a local provider read. */
 export const providerUsageQuerySchema = z.object({
   refresh: z.enum(['0', '1', 'true', 'false']).optional(),
   family: z.string().regex(/^[a-z0-9-]{1,32}$/, 'family must be a provider family id').optional(),
   period: z.enum(['24h', '7d', '30d', 'week', 'month', 'reset']).optional(),
-  scope: z.enum(['instances']).optional(),
-});
+  scope: z.enum(['instances', 'peers']).optional(),
+}).refine((q) => q.scope !== 'peers' || !['1', 'true'].includes(q.refresh),
+  { message: 'peers scope only reads saved quota observations' });
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
  * reject non-integer/negative garbage instead of coercing it into counters. */

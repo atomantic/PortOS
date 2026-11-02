@@ -263,6 +263,12 @@ describe('socket.js — initSocket', () => {
     expect(io.emitted).toEqual([['provider-quota:updated', {}]]);
   });
 
+  it('forwards fleet billing invalidation without billing or quota data', () => {
+    io.emitted.length = 0;
+    settingsEvents.emit('usage:fleet-billing-updated', { privateContent: 'synthetic account detail' });
+    expect(io.emitted).toEqual([['usage:fleet-billing-updated', {}]]);
+  });
+
   it('forwards death-clock invalidations without personal data', () => {
     io.emitted.length = 0;
     meatspaceEvents.emit('death-clock:changed', {});

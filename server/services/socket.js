@@ -318,6 +318,7 @@ const SIMPLE_BRIDGES = [
   { emitter: jevEvents, event: 'heads', channel: 'jev:heads', payload: noPayload },
   { emitter: layaMlxEvents, event: 'updated', channel: 'laya:status', payload: noPayload },
   { emitter: providerQuotaEvents, event: 'updated', channel: 'provider-quota:updated', payload: noPayload },
+  { emitter: settingsEvents, event: 'usage:fleet-billing-updated', channel: 'usage:fleet-billing-updated', payload: noPayload },
   // Importer analyze-phase stage progress; each frame carries a `runId` so the
   // client ignores stragglers from a prior run.
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },

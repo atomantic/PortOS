@@ -13,7 +13,7 @@
  * the same toggle there.
  */
 
-import { getSettings, updateSettingsWith } from './settings.js';
+import { getSettings, getSettingsWithStatus, updateSettingsWith, settingsEvents } from './settings.js';
 
 const SETTINGS_KEY = 'usageApiBilledInstanceIds';
 
@@ -44,9 +44,15 @@ export function normalizeApiBilledInstanceIds(raw) {
 }
 
 /** Instance ids that pay API rates and must not count toward fleet totals. */
-export async function getApiBilledInstanceIds() {
-  const settings = await getSettings();
-  return normalizeApiBilledInstanceIds(settings?.[SETTINGS_KEY]);
+export async function getApiBilledInstanceIds({ requireReadable = false } = {}) {
+  const result = requireReadable ? await getSettingsWithStatus() : { settings: await getSettings() };
+  if (result.corrupt) throw new Error('Fleet billing settings are unavailable');
+  const { settings } = result;
+  const ids = settings?.[SETTINGS_KEY];
+  if (requireReadable && ids !== undefined && (!Array.isArray(ids) || ids.length > MAX_IDS || ids.some((id) => !isInstanceId(id)))) {
+    throw new Error('Fleet billing settings are unavailable');
+  }
+  return normalizeApiBilledInstanceIds(ids);
 }
 
 /**
@@ -59,6 +65,7 @@ export async function saveApiBilledInstanceIds(ids, options) {
   const next = await updateSettingsWith((current) => (
     { ...current, [SETTINGS_KEY]: normalized }
   ), options);
+  settingsEvents.emit('usage:fleet-billing-updated');
   return normalizeApiBilledInstanceIds(next?.[SETTINGS_KEY]);
 }
 
@@ -76,6 +83,7 @@ export async function setInstanceUsesSubscriptions(instanceId, usesSubscriptions
     else ids.add(instanceId);
     return { ...current, [SETTINGS_KEY]: normalizeApiBilledInstanceIds([...ids]) };
   }, options);
+  settingsEvents.emit('usage:fleet-billing-updated');
   return normalizeApiBilledInstanceIds(next?.[SETTINGS_KEY]);
 }
 

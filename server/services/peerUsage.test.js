@@ -452,6 +452,24 @@ describe('fleet report', () => {
     expect(fleet.subscriptionReport.totals.sessions).toBe(2);
   });
 
+  it('keeps API-billed peer token, block, and image observations in general usage', async () => {
+    localUsage.blockEvents = [];
+    const receipt = { id: 'a'.repeat(64), renderKey: 'b'.repeat(64), occurredAt: '2026-08-30T13:00:00.000Z',
+      identitySource: 'codex-session', driverTotal: 12 };
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({
+      imageReceipts: { complete: true, receipts: [receipt] },
+      blockEvents: [{ providerId: 'anthropic', at: Date.parse('2026-08-30T13:00:00Z') }],
+      claudeCode: { updatedAt: '2026-08-31T00:00:00.000Z', days: { '2026-08-30': { 'claude-synthetic': { output: 20 } } } },
+    }) } });
+    const options = { from: '2026-08-30', to: '2026-08-30', apiBilledInstanceIds: ['inst-peer'] };
+    const fleet = await getFleetUsage(options);
+    expect(fleet.report.totals).toMatchObject({ sessions: 4, tokensOut: 5000 });
+    expect(fleet.subscriptionReport.totals.sessions).toBe(2);
+    expect(fleet.blocks).toHaveLength(1);
+    expect(fleet.imageRenders.savedOutputs).toBe(1);
+    expect((await getFleetClaudeCodeModels(options)).totals.total).toBe(20);
+  });
+
   it('combines origin snapshots once and keeps period, provider, model and monthly totals consistent', async () => {
     const peer = peerEntry();
     await applyUsageRemote({ instances: { 'inst-peer': peer } });
@@ -1140,6 +1158,20 @@ describe('federated subscription-quota readings', () => {
   it('leaves out a peer that published no readings', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry() } });
     expect(await getFleetQuotaEntries()).toEqual([]);
+  });
+
+  it('excludes billed peers from retained quota snapshots and missing-report placeholders', async () => {
+    await applyUsageRemote({ instances: {
+      billed: peerEntry({ instanceId: 'billed', name: 'Billed peer', quotas: [quotaCard()] }),
+      kept: peerEntry({ instanceId: 'kept', name: 'Included peer', quotas: [quotaCard()] }),
+    } });
+    configuredPeers = [
+      { instanceId: 'billed', name: 'Billed peer', directions: ['outbound'], syncCategories: { usage: false } },
+      { instanceId: 'missing-billed', name: 'Missing billed peer', directions: ['outbound'] },
+      { instanceId: 'missing-included', name: 'Missing included peer', directions: ['outbound'] },
+    ];
+    const entries = await getFleetQuotaEntries({ excludeInstanceIds: ['billed', 'missing-billed'], includeEmpty: true });
+    expect(entries.map((entry) => entry.instanceId)).toEqual(['kept', 'missing-included']);
   });
 });
 

@@ -440,6 +440,15 @@ describe('usage routes', () => {
     expect(getProviderQuotas).toHaveBeenCalledWith({ wait: 'never', family: null, period: 'week' });
   });
 
+  it('GET /api/usage/providers supports saved peer-only reads and rejects a forced peer scrape', async () => {
+    getProviderQuotas.mockResolvedValue({ providers: [], federationUnavailable: false });
+    expect((await request(buildApp()).get('/api/usage/providers?scope=peers')).status).toBe(200);
+    expect(getProviderQuotas).toHaveBeenCalledWith({ wait: 'never', family: null, scope: 'peers' });
+    getProviderQuotas.mockClear();
+    expect((await request(buildApp()).get('/api/usage/providers?scope=peers&refresh=1')).status).toBe(400);
+    expect(getProviderQuotas).not.toHaveBeenCalled();
+  });
+
   it('GET /api/usage/providers rejects an invalid period parameter', async () => {
     const res = await request(buildApp()).get('/api/usage/providers?period=invalid');
     expect(res.status).toBe(400);

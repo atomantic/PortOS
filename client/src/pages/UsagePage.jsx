@@ -27,11 +27,18 @@ import { expireQuotaWindows, groupQuotaCards, mergeRefreshedFamily, nextQuotaRes
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
 const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 const FLEET_SYNC_EVENTS = ['sync:progress'];
+const FLEET_BILLING_EVENTS = ['usage:fleet-billing-updated'];
 const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
 const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
 const refreshDiagnostic = (card, requestOrder) => ({ ...card, requestOrder,
   ...(card.refreshUnavailable ? { error: 'Live quota refresh was unavailable; displayed readings may be out of date.', quotaStatus: undefined, quotaScope: undefined } : {}),
   refreshAttemptAt: new Date().toISOString() });
+
+function retainedEligiblePeers(cards, result) {
+  if (!Array.isArray(result.excludedInstanceIds)) return [];
+  const excluded = new Set(result.excludedInstanceIds);
+  return cards.filter((card) => card.origin?.self === false && !excluded.has(card.origin.instanceId));
+}
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -162,9 +169,10 @@ export function arrangeQuotaCells(quotas) {
 // Subscription usage for every enabled provider family (claude, codex, agy,
 // grok). Self-contained fetch/loading/error state so it always renders above
 // the PortOS-internal metrics.
-function ProviderQuotaSection() {
+function ProviderQuotaSection({ billingRevision }) {
   const [quotas, setQuotas] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [localLoaded, setLocalLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [refreshAllError, setRefreshAllError] = useState(false);
   const [coverage, setCoverage] = useState(null);
@@ -174,6 +182,8 @@ function ProviderQuotaSection() {
   const [passiveErrors, setPassiveErrors] = useState({});
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
   const mountedRef = useMounted();
+  const [peerBillingError, setPeerBillingError] = useState(false);
+  const [peerBillingLoading, setPeerBillingLoading] = useState(false);
   const quotaRequest = useRef(0);
   const quotaRequestOrder = useRef(0);
   const familyRequestOrder = useRef(new Map());
@@ -188,7 +198,9 @@ function ProviderQuotaSection() {
   const imageStatusRequest = useRef(0);
   const imageStatusApplied = useRef(0);
   const familyRevisions = useRef(new Map());
+  const peerFamilyRevisions = useRef(new Map());
   const activeFamilies = useRef(new Set());
+  const billingEpoch = useRef(0);
 
   const applyImageStatus = useCallback((result, token) => {
     if (!mounted.current || token === null || token <= imageStatusApplied.current || result?.imageQuotaComplete == null) return;
@@ -201,6 +213,7 @@ function ProviderQuotaSection() {
   const load = useCallback(async (refresh = false) => {
     const token = ++quotaRequest.current;
     const requestOrder = ++quotaRequestOrder.current;
+    const startingBillingEpoch = billingEpoch.current;
     const explicitToken = refresh ? ++explicitRequest.current : null;
     fullInFlight.current = token;
     const coverageToken = ++coverageRequest.current;
@@ -258,6 +271,8 @@ function ProviderQuotaSection() {
     if (token !== quotaRequest.current) return;
     fullInFlight.current = null;
     if (result?.providers) {
+      setLocalLoaded(true);
+      const billingChanged = startingBillingEpoch !== billingEpoch.current;
       if (!refresh) {
         // A family request only supersedes reads that began before it. A newer
         // passive failure must remain visible while an older refresh finishes.
@@ -305,7 +320,10 @@ function ProviderQuotaSection() {
       const presence = new Map(localPresence.current);
       const familyOrders = familyOrderAtCompletion;
       localFullRevision.current += 1;
-      if (!result.federationUnavailable) fullRevision.current += 1;
+      if (!result.federationUnavailable && !billingChanged) {
+        fullRevision.current += 1;
+        setPeerBillingError(false);
+      }
       // A family refresh can finish while this full read is in flight. Retain
       // its newer local card while still taking the full read's peer cards.
       const active = new Set(activeFamilies.current);
@@ -315,11 +333,14 @@ function ProviderQuotaSection() {
       }
       if (result.imageQuotaComplete === false) preserve.add('imagegen');
       setQuotas((previous) => {
-        if (!previous) return result.providers;
+        if (!previous) return billingChanged ? result.providers.filter((card) => card.origin?.self !== false) : result.providers;
         const priorLocals = previous.filter((card) => card.origin?.self !== false);
         const priorFamilies = new Set(priorLocals.map((card) => card.family));
+        const peers = billingChanged ? previous.filter((card) => card.origin?.self === false)
+          : result.federationUnavailable ? retainedEligiblePeers(previous, result)
+            : result.providers.filter((card) => card.origin?.self === false);
         return [
-          ...(result.federationUnavailable ? previous : result.providers).filter((card) => card.origin?.self === false),
+          ...peers,
           ...result.providers.filter((card) => card.origin?.self !== false && (!preserve.has(card.family) || !priorFamilies.has(card.family)))
             .map((card) => reconcileLocalQuota(priorLocals.find((prior) => prior.family === card.family), card)),
           ...priorLocals.filter((card) => preserve.has(card.family)).flatMap((card) => {
@@ -333,7 +354,7 @@ function ProviderQuotaSection() {
           }),
         ];
       });
-      if (coverageToken === coverageRequest.current) setCoverage(result);
+      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
       setError(true);
@@ -372,6 +393,7 @@ function ProviderQuotaSection() {
     const startingLocalFullRevision = localFullRevision.current;
     const requestOrder = ++quotaRequestOrder.current;
     familyRequestOrder.current.set(family, requestOrder);
+    const startingBillingEpoch = billingEpoch.current;
     const coverageToken = ++coverageRequest.current;
     const imageToken = family === 'imagegen' ? ++imageStatusRequest.current : null;
     const revision = (familyRevisions.current.get(family) || 0) + 1;
@@ -390,7 +412,8 @@ function ProviderQuotaSection() {
       // (its provider was turned off) — drop it rather than leave a reading
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
-      const fullReadApplied = startingFullRevision !== fullRevision.current;
+      const billingChanged = startingBillingEpoch !== billingEpoch.current;
+      const fullReadApplied = billingChanged || startingFullRevision !== fullRevision.current;
       const localFullReadApplied = startingLocalFullRevision !== localFullRevision.current;
       const local = result.providers.find((card) => card.family === family && card.origin?.self !== false);
       const presence = localPresence.current.get(family);
@@ -398,12 +421,20 @@ function ProviderQuotaSection() {
       if (!newerRemoval && local && !local.error && !local.refreshUnavailable && local.supported !== false && resolvesQuotaRefresh(local)) {
         familyObservations.current.set(family, local);
       }
-      const providers = newerRemoval
+      const familyProviders = newerRemoval
         ? [...result.providers.filter((card) => card.origin?.self === false), ...(presence.card ? [presence.card] : [])]
         : result.providers;
       const localUnavailable = !newerRemoval && family === 'imagegen'
         && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
-      setQuotas((prev) => mergeRefreshedFamily(prev, providers, family, { fullReadApplied, localFullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable }));
+      if (!billingChanged && !result.federationUnavailable) {
+        peerFamilyRevisions.current.set(family, (peerFamilyRevisions.current.get(family) || 0) + 1);
+      }
+      const providers = billingChanged ? familyProviders.filter((card) => card.origin?.self !== false) : familyProviders;
+      setQuotas((prev) => {
+        const safePrevious = !billingChanged && result.federationUnavailable
+          ? [...prev.filter((card) => card.origin?.self !== false), ...retainedEligiblePeers(prev, result)] : prev;
+        return mergeRefreshedFamily(safePrevious, providers, family, { fullReadApplied, localFullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable });
+      });
       setRefreshErrors((previous) => {
         const next = { ...previous };
         if (newerRemoval) {
@@ -422,7 +453,7 @@ function ProviderQuotaSection() {
         delete next[family];
         return next;
       });
-      if (coverageToken === coverageRequest.current) setCoverage(result);
+      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
       // The older full response may contain an older peer slot even when it
       // preserves this local refresh. Supersede it with a fresh cached read.
       if (fullInFlight.current !== null) void load();
@@ -437,6 +468,47 @@ function ProviderQuotaSection() {
       return next;
     });
   }, [load, applyImageStatus]);
+
+  // Billing invalidations carry no account data. Discard unverified peer cards
+  // immediately, even when a prior peer read is still in flight.
+  const invalidateBillingPeers = useCallback(() => {
+    const epoch = ++billingEpoch.current;
+    coverageRequest.current += 1;
+    setPeerBillingLoading(true);
+    setPeerBillingError(false);
+    setQuotas((previous) => previous?.filter((card) => card.origin?.self !== false) ?? previous);
+    return epoch;
+  }, []);
+
+  // Reload only saved eligible peers; this scope never starts a CLI scrape.
+  const reloadBillingPeers = useCallback(async () => {
+    const epoch = invalidateBillingPeers();
+    const startingFullRevision = fullRevision.current;
+    const startingFamilies = new Map(peerFamilyRevisions.current);
+    const coverageToken = coverageRequest.current;
+    const result = await api.getProviderUsage({ scope: 'peers', silent: true }).catch(() => null);
+    if (!mounted.current || epoch !== billingEpoch.current) return;
+    setPeerBillingLoading(false);
+    if (startingFullRevision !== fullRevision.current) return;
+    if (!result?.providers || result.federationUnavailable) {
+      setPeerBillingError(true);
+      return;
+    }
+    const changedFamilies = new Set();
+    for (const [family, revision] of peerFamilyRevisions.current) {
+      if (revision !== (startingFamilies.get(family) || 0)) changedFamilies.add(family);
+    }
+    setQuotas((previous) => [
+      ...(previous || []).filter((card) => card.origin?.self !== false),
+      ...result.providers.filter((card) => !changedFamilies.has(card.family)),
+      ...(previous || []).filter((card) => card.origin?.self === false && changedFamilies.has(card.family)),
+    ]);
+    if (coverageToken === coverageRequest.current) setCoverage(result);
+  }, [invalidateBillingPeers]);
+
+  useEffect(() => { if (billingRevision) void reloadBillingPeers(); }, [billingRevision, reloadBillingPeers]);
+  useSocketResource(() => reloadBillingPeers(), { events: FLEET_BILLING_EVENTS, immediate: false,
+    matchesEvent: () => { invalidateBillingPeers(); return true; } });
 
   // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
   useQuotaUpdates(load);
@@ -462,12 +534,14 @@ function ProviderQuotaSection() {
       </div>
 
       <p className="text-xs text-gray-500">Readings from the same provider are assumed to share an account. The latest available reading for each quota window is shown; allowances are not added.</p>
-      {coverage?.federationUnavailable && !quotas?.some((card) => card.limits?.length) && <p className="text-xs text-port-warning">Some quota data is unavailable.</p>}
+      {coverage?.federationUnavailable && <p className="text-xs text-port-warning" role="status">Some peer quota readings are unavailable; displayed quotas may be incomplete.</p>}
+      {peerBillingLoading && <p className="text-xs text-gray-500" role="status">Updating peer quota readings…</p>}
+      {peerBillingError && <p className="text-xs text-port-warning" role="status">Couldn&rsquo;t update peer quota readings; displayed quotas may be incomplete.</p>}
       {imageQuotaComplete === false && <p className="text-xs text-port-warning">Image quota status is unavailable.</p>}
-      {error && quotas && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh quota readings; retained readings may be stale.</p>}
+      {error && localLoaded && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh quota readings; retained readings may be stale.</p>}
       {refreshAllError && !error && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh all provider quotas; retained readings may be stale.</p>}
 
-      {loading && !quotas && (
+      {loading && !localLoaded && (
         // Reserve the quota-card grid below rather than a centered spinner
         // (#4147) — the cards are the whole section, so the reading arriving
         // shouldn't jump the page down by their height.
@@ -480,14 +554,14 @@ function ProviderQuotaSection() {
         />
       )}
 
-      {!loading && error && !quotas && (
+      {!loading && error && !localLoaded && (
         <div className="flex items-start gap-2 text-sm text-gray-400 py-2">
           <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
           <span>Couldn&rsquo;t read provider usage.</span>
         </div>
       )}
 
-      {quotas && (
+      {quotas && (localLoaded || !loading) && (
         // `contents` makes the grouped desktop cells transparent to the mobile
         // grid, so each provider gets its own compact cell without duplicating
         // the card tree (which would confuse screen readers and text queries).
@@ -508,7 +582,7 @@ function ProviderQuotaSection() {
               ))}
             </div>
           ))}
-          {quotas.length === 0 && (
+          {quotas.length === 0 && localLoaded && (
             <div className="col-span-2 sm:col-span-1 text-gray-500 text-sm">No enabled providers report subscription usage.</div>
           )}
         </div>
@@ -883,7 +957,7 @@ function getPeriodTopModels(usage) {
   }));
 }
 
-function InternalUsageMetrics() {
+function InternalUsageMetrics({ onBillingSaved }) {
   const [fleetRevision, setFleetRevision] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const period = searchParams.get('period') || DEFAULT_USAGE_PERIOD;
@@ -931,6 +1005,7 @@ function InternalUsageMetrics() {
   }, [fetchUsage]);
 
   useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
+  useSocketResource(fetchUsage, { events: FLEET_BILLING_EVENTS, immediate: false });
   useSocketResource(() => { setFleetRevision((value) => value + 1); return fetchUsage(); },
     { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
@@ -1148,7 +1223,7 @@ function InternalUsageMetrics() {
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
-      <FleetUsageCard fleet={usage.fleet} onSaved={fetchUsage} />
+      <FleetUsageCard fleet={usage.fleet} onSaved={async () => { onBillingSaved(); await fetchUsage(); }} />
 
       {/* Directly under the API estimate it is derived from: the estimate is the
           opportunity cost, this is what the quota plans actually cost to avoid it. */}
@@ -1332,11 +1407,13 @@ function InternalUsageMetrics() {
 }
 
 export function UsagePage() {
+  const [billingRevision, setBillingRevision] = useState(0);
+  const onBillingSaved = useCallback(() => setBillingRevision((value) => value + 1), []);
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
-        <ProviderQuotaSection />
-        <InternalUsageMetrics />
+        <ProviderQuotaSection billingRevision={billingRevision} />
+        <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>
     </PageLayout>
   );

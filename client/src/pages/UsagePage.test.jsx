@@ -15,7 +15,8 @@ const api = vi.hoisted(() => ({
   getUsageBackfillStatus: vi.fn(),
   getUsageRollingCost: vi.fn(() => Promise.resolve({ windowDays: 30, instanceCount: 1, series: [], points: [] })),
   startUsageBackfill: vi.fn(),
-  updateSubscriptionCosts: vi.fn()
+  updateSubscriptionCosts: vi.fn(),
+  updateUsageFleetBilling: vi.fn(),
 }));
 
 vi.mock('../services/api', () => api);
@@ -46,6 +47,171 @@ beforeEach(() => {
   api.getUsageBackfillStatus.mockResolvedValue({ status: 'idle' });
   api.startUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 2 });
   api.updateSubscriptionCosts.mockResolvedValue({ costs: { claude: 200 } });
+  api.updateUsageFleetBilling.mockResolvedValue({});
+});
+
+describe('UsagePage quota billing selection', () => {
+  const local = { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-01-01T00:00:00.000Z',
+    limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }], origin: { self: true } };
+  const peer = { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-01-02T00:00:00.000Z',
+    limits: [{ key: 'week', label: 'Weekly', percentUsed: 80, percentRemaining: 20 }],
+    origin: { self: false, instanceId: 'synthetic-peer', name: 'Synthetic peer', capturedAt: '2026-01-02T00:00:00.000Z' } };
+  const totals = { sessions: 2, messages: 3, tokensIn: 100, tokensOut: 200, estimatedCost: 1 };
+
+  beforeEach(() => {
+    api.getUsage.mockResolvedValue({ ...usage, fleet: { instances: [
+      { instanceId: 'self', name: 'Local', self: true, usesSubscriptions: true, totals },
+      { instanceId: 'synthetic-peer', name: 'Synthetic peer', usesSubscriptions: true, totals },
+    ] } });
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+  });
+
+  it('updates quota cards when billing is switched off and back on using saved peer readings', async () => {
+    let included = true;
+    api.updateUsageFleetBilling.mockImplementation(async ({ usesSubscriptions }) => { included = usesSubscriptions; return {}; });
+    api.getProviderUsage.mockImplementation(async ({ scope }) => ({ providers: scope === 'peers'
+      ? (included ? [peer] : []) : [local, ...(included ? [peer] : [])] }));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    api.getProviderUsage.mockClear();
+    fireEvent.click((await screen.findAllByRole('switch', { name: 'Count Synthetic peer toward subscription totals' }))[0]);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledWith({ scope: 'peers', silent: true }));
+    expect(api.getProviderUsage.mock.calls.every(([args]) => args.scope === 'peers')).toBe(true);
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Exclude Synthetic peer from subscription totals (pays API rates)' })[0]);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    expect(api.getUsage).toHaveBeenCalled();
+  });
+
+  it('keeps the existing quota selection when the billing save fails', async () => {
+    api.updateUsageFleetBilling.mockRejectedValueOnce(new Error('synthetic save failure'));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    api.getProviderUsage.mockClear();
+    fireEvent.click((await screen.findAllByRole('switch', { name: 'Count Synthetic peer toward subscription totals' }))[0]);
+    await waitFor(() => expect(api.updateUsageFleetBilling).toHaveBeenCalled());
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    expect(api.getProviderUsage).not.toHaveBeenCalled();
+  });
+
+  it('keeps the initial loading state when billing changes before the local read completes', async () => {
+    let finishInitial;
+    api.getProviderUsage.mockImplementation(({ scope }) => scope === 'peers'
+      ? Promise.resolve({ providers: [] }) : new Promise((resolve) => { finishInitial = resolve; }));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    expect(screen.getByLabelText('Reading provider usage')).toBeInTheDocument();
+    expect(screen.queryByText('No enabled providers report subscription usage.')).not.toBeInTheDocument();
+    await act(async () => finishInitial({ providers: [local, peer] }));
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('does not restore excluded peer cards from delayed full or family reads', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    let finishFull, finishFamily;
+    let fullReads = 0;
+    api.getProviderUsage.mockImplementation(({ scope, family }) => {
+      if (scope === 'peers') return Promise.resolve({ providers: [] });
+      if (family) return new Promise((resolve) => { finishFamily = resolve; });
+      return ++fullReads === 1 ? new Promise((resolve) => { finishFull = resolve; }) : Promise.resolve({ providers: [local] });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage' }); });
+    await waitFor(() => expect(finishFull).toBeTypeOf('function'));
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [local, peer] }));
+    await act(async () => finishFull({ providers: [local, peer] }));
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('preserves a newer local provider removal across a billing change and older family response', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ scope, family }) => {
+      if (family) return new Promise((resolve) => { finishFamily = resolve; });
+      return Promise.resolve({ providers: [], ...(scope === 'instances' ? { imageQuotaComplete: true } : {}) });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await waitFor(() => expect(finishFamily).toBeTypeOf('function'));
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage' }); });
+    expect(await screen.findByText('No enabled providers report subscription usage.')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [local, peer] }));
+    expect(screen.getByText('No enabled providers report subscription usage.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Grok' })).not.toBeInTheDocument();
+  });
+
+  it('retains the last local reading and its failure warning when peer eligibility is unknown', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    const failedLocal = { ...local, limits: [], fetchedAt: '2026-01-03T00:00:00.000Z', error: 'Synthetic local quota failure' };
+    api.getProviderUsage.mockResolvedValue({ providers: [failedLocal], federationUnavailable: true, excludedInstanceIds: null });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage' }); });
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.getByText('Synthetic local quota failure')).toBeInTheDocument();
+    expect(screen.getByText(/Some peer quota readings are unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('clears unverified peers and reports an unavailable peer-only read', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    api.getProviderUsage.mockImplementation(async ({ scope }) => scope === 'peers'
+      ? { providers: [], federationUnavailable: true } : { providers: [local, peer] });
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    expect(await screen.findByText(/Couldn’t update peer quota readings/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('does not retain peer quotas when a full read cannot verify billing settings', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValue({ providers: [local], federationUnavailable: true, excludedInstanceIds: null });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage' }); });
+    expect(await screen.findByText(/Some peer quota readings are unavailable/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('keeps verified eligible peers but drops newly billed peers when the peer store is unavailable', async () => {
+    const allowed = { ...peer, fetchedAt: '2026-01-01T12:00:00.000Z',
+      limits: [{ key: 'week', label: 'Weekly', percentUsed: 50, percentRemaining: 50 }],
+      origin: { self: false, instanceId: 'allowed-peer', name: 'Allowed peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer, allowed] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValue({ providers: [local], federationUnavailable: true, excludedInstanceIds: ['synthetic-peer'] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage' }); });
+    expect(await screen.findByText('50% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+    expect(screen.getByText(/Some peer quota readings are unavailable/)).toBeInTheDocument();
+  });
+
+  it('ignores an older peer-only response after a second billing invalidation', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    let finishOld;
+    let reads = 0;
+    api.getProviderUsage.mockImplementation(({ scope }) => {
+      if (scope !== 'peers') return Promise.resolve({ providers: [local, peer] });
+      return ++reads === 1 ? new Promise((resolve) => { finishOld = resolve; }) : Promise.resolve({ providers: [] });
+    });
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    await waitFor(() => expect(finishOld).toBeTypeOf('function'));
+    await act(async () => { socket.emit('usage:fleet-billing-updated', {}); });
+    await act(async () => finishOld({ providers: [peer] }));
+    await waitFor(() => expect(reads).toBe(2));
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
 });
 
 describe('UsagePage subscription savings', () => {
@@ -1061,15 +1227,15 @@ describe('UsagePage per-provider refresh', () => {
     let finishFamily;
     api.getProviderUsage.mockImplementation(({ family }) => family
       ? new Promise((resolve) => { finishFamily = resolve; })
-      : Promise.resolve({ providers: [local], federationUnavailable: true }));
+      : Promise.resolve({ providers: [local], federationUnavailable: true, excludedInstanceIds: [] }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
     await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledTimes(3));
     expect(screen.getByText('40% used')).toBeInTheDocument();
-    expect(screen.queryByText('Peer quota readings are unavailable.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Some peer quota readings are unavailable/)).toBeInTheDocument();
     await act(async () => finishFamily({ providers: [local, peer], federationUnavailable: false }));
     expect(screen.getByText('40% used')).toBeInTheDocument();
-    expect(screen.queryByText('Peer quota readings are unavailable.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Some peer quota readings are unavailable/)).toBeInTheDocument();
   });
 
   it('reconciles a full reading after a concurrent family refresh fails', async () => {
