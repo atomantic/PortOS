@@ -829,24 +829,16 @@ describe('the composer sends', () => {
 });
 
 describe('realtime', () => {
-  // TWO subscriptions on the same shared socket, not one: the page's own
-  // `useBeeperRealtime` (drives the rail's liveness dot and invalidation
-  // refetches) and the one `useBeeperOutbox` opens internally (#53, wired on
-  // #36's design) so the composer's send confirmation reacts to
-  // `message.upserted` without waiting on the page's debounced refetch. Both
-  // emit `beeper:subscribe` at mount and on every reconnect. Server-side this
-  // is a no-op redundancy, not a bug: `beeperSubscribers` is a `Set` keyed on
-  // the physical socket, so a second subscribe from the same socket dedupes,
-  // and both hook instances share BeeperChatSurface's mount lifecycle, so
-  // there is no unmount race where one instance's `beeper:unsubscribe` could
-  // kill the other's subscription out from under it.
-  it('subscribes on both realtime hooks and RE-SUBSCRIBES on every socket connect, so a reconnect is not silently dead', async () => {
+  // BeeperTab and useBeeperOutbox are sibling consumers on the shared socket.
+  // They share one refcounted room membership while each keeps its own event
+  // listeners for liveness, invalidation refetches, and send confirmation.
+  it('shares one room subscription across realtime hooks and re-subscribes on connect', async () => {
     renderTab();
     await screen.findByText('Nothing here');
-    expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(2);
+    expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(1);
 
     await act(async () => { for (const fn of socketMock.handlers.get('connect') || []) fn(); });
-    expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(4);
+    expect(socketMock.emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(2);
   });
 
   it('refetches the list and the open thread after an invalidation frame', async () => {

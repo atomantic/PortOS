@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 
 /**
  * Subscribe to the server's Beeper realtime relay (fork issue #33, decided on #12).
@@ -24,6 +25,7 @@ import socket from '../services/socket';
  * @param {(frame: object) => void} [options.onInvalidate] called per invalidation frame.
  */
 export default function useBeeperRealtime({ onInvalidate } = {}) {
+  useSocketSubscription('beeper');
   // `null` = the server has not spoken yet (not-yet-known), distinct from a
   // reported `down`. A card must not render "offline" for a question it has
   // never asked.
@@ -40,10 +42,6 @@ export default function useBeeperRealtime({ onInvalidate } = {}) {
   const socketSpokeRef = useRef(false);
 
   useEffect(() => {
-    const subscribe = () => socket.emit('beeper:subscribe');
-    subscribe();
-    socket.on('connect', subscribe);
-
     const handleInvalidate = (frame) => {
       setLastInvalidation(frame ?? null);
       onInvalidateRef.current?.(frame);
@@ -61,10 +59,8 @@ export default function useBeeperRealtime({ onInvalidate } = {}) {
     socket.on('beeper:realtime', handleState);
 
     return () => {
-      socket.off('connect', subscribe);
       socket.off('beeper:invalidate', handleInvalidate);
       socket.off('beeper:realtime', handleState);
-      socket.emit('beeper:unsubscribe');
     };
   }, []);
 
