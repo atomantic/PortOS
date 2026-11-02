@@ -186,8 +186,39 @@ it('opens a software update action in the existing guarded updater', async () =>
     triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
   }] });
   render(<Review />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Open PortOS update' }));
+  const drawer = await screen.findByRole('dialog');
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Open PortOS update' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/apps/portos-default/update');
+  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
+it('shows the harness update destination beside snooze in the action row', async () => {
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
+    title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example', drillLabel: 'Open harness',
+    triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
+  }] });
+  render(<Review />);
+  expect(await screen.findByRole('combobox', { name: 'Snooze Example CLI update available' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Open harness' }));
+  expect(routerState.navigate).toHaveBeenCalledWith('/ai/harnesses/example');
+  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
+it('uses the source destination instead of sending a semantic review descriptor as a mutation', async () => {
+  routerState.actionId = 'x:draft-example';
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'x:draft-example', source: 'x', sourceLabel: 'X drafts', required: true,
+    title: 'Draft awaiting review', drillTo: '/x/example/drafts',
+    operations: [{ id: 'review', label: 'Review', available: true }],
+    triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
+  }] });
+  render(<Review />);
+  const drawer = await screen.findByRole('dialog');
+  expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: 'Open source' })).toHaveLength(2);
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Open source' }));
+  expect(routerState.navigate).toHaveBeenCalledWith('/x/example/drafts');
   expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 

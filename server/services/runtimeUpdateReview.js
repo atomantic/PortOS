@@ -192,10 +192,14 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
   let checked = false;
   let timer = null;
   const removedHarnesses = new Set();
-  const items = () => (checked || rows.size ? [...rows.values()] : [unknown(null, row('runtime-check', 'Software update checks pending', 'Node.js, pm2 and harness checks have not completed yet.', UPDATE_LINK, 'unverified'))]).map((entry) => ({
-    ...entry,
-    ...(entry.unverified ? { summary: `${entry.unverifiedPrevious ? 'Status unverified; last known result:' : 'Status unverified.'} ${entry.summary}` } : {}),
-  }));
+  // Unknown checks and a newer upstream pm2 release are diagnostic. Keep them
+  // for caching and retry; the bundled pm2 changes with a PortOS dependency update.
+  const items = () => [...rows.values()]
+    .filter((entry) => entry.id !== 'pm2-upstream' && (!entry.unverified || entry.unverifiedPrevious))
+    .map((entry) => ({
+      ...entry,
+      ...(entry.unverified ? { summary: `Status unverified; last known result: ${entry.summary}` } : {}),
+    }));
   const refresh = () => {
     if (inflight) { again = true; return inflight; }
     inflight = (async () => {

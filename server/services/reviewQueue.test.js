@@ -156,6 +156,24 @@ describe('reviewQueue.buildQueue', () => {
     expect(newer.triageOperations.map((operation) => operation.id)).toEqual(['snooze']);
   });
 
+  it('counts only actionable runtime updates when checks are unverified', async () => {
+    const { __testing: { createRuntimeUpdateReviewMonitor } } = await vi.importActual('./runtimeUpdateReview.js');
+    const monitor = createRuntimeUpdateReviewMonitor({
+      readRuntime: async () => null,
+      readHarnesses: async () => [
+        { id: 'unknown', label: 'Unknown CLI', installed: true, probeState: 'available', package: 'example', version: '1.0.0', latestVersion: null },
+        { id: 'outdated', label: 'Outdated CLI', installed: true, probeState: 'available', package: 'example', version: '1.0.0', latestVersion: '2.0.0' },
+      ],
+      notify: vi.fn(), save: vi.fn().mockResolvedValue(undefined),
+    });
+    await monitor.refresh();
+    runtimeUpdateReview.getRuntimeUpdateReviewItems.mockImplementation(monitor.items);
+    const queue = await buildQueue();
+    expect(queue.items.map((item) => item.id)).toEqual(['updates:harness:outdated']);
+    expect(queue.sources.updates.total).toBe(1);
+    expect(queue.counts.total).toBe(1);
+  });
+
   it('normalizes each producer into the common row shape', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify me', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     const queue = await buildQueue();
