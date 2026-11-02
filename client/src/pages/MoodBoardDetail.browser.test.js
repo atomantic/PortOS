@@ -161,6 +161,17 @@ describe.skipIf(!chrome)('direct mood board upload in Chromium', () => {
       await page.getByRole('button', { name: 'Import pins', exact: true }).click();
       await vi.waitFor(() => expect(boards.a.items).toHaveLength(1));
       expect(boards.a.items[0].source).toBe(pinUrl);
+      const preview = page.getByRole('button', { name: 'Preview image', exact: true });
+      await preview.waitFor();
+      for (const constrained of [false, true]) {
+        if (constrained) await preview.evaluate(button => {
+          button.parentElement.style.width = '16px';
+          button.parentElement.style.height = '16px';
+        });
+        const bounds = await preview.boundingBox();
+        expect(bounds.width).toBeGreaterThanOrEqual(44);
+        expect(bounds.height).toBeGreaterThanOrEqual(44);
+      }
       expect(state.errors).toEqual([]);
     } finally { await page.close(); }
   });

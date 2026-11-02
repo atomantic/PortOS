@@ -3614,12 +3614,11 @@ describe('a11y conventions', () => {
         }
         let m = new RegExp(`^(min-)?(?:${dim}|size)-(.+)$`).exec(t);
         if (m) {
-          if (/^(?:full|screen|dvh|svh|lvh|dvw|\d+\/\d+)$/.test(m[2])) return Infinity;
           const size = sizeOf(m[2]);
-          if (size != null) {
-            if (m[1]) minimum = Math.max(minimum, size);
-            else fixed = fixed === null ? size : Math.min(fixed, size);
-          }
+          if (m[1]) minimum = Math.max(minimum, size ?? 0);
+          // Relative dimensions can shrink below the glyph inside a small parent.
+          // Only a known size or independent minimum proves a touch-size box.
+          else fixed = fixed === null ? (size ?? 0) : Math.min(fixed, size ?? 0);
         }
         m = /^p-(.+)$/.exec(t);
         if (m) all = sizeOf(m[1]) ?? 0;
@@ -3679,6 +3678,13 @@ describe('a11y conventions', () => {
     expect(probe('<button aria-label="Remove" className="p-3 py-3 pt-0"><X size={20} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="h-2 w-2 p-3"><X size={20} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="h-2 w-2 min-h-11 min-w-11 p-3"><X size={20} /></button>')).toBe(0);
+    // Relative sizes do not establish an unconditional 44px floor.
+    for (const relative of ['full', '1/2', '[50%]', 'screen', 'dvh']) {
+      const button = (minimum = '') => `<div className="h-4 w-4"><button aria-label="Remove" className="h-${relative} w-${relative} ${minimum}"><X size={14} /></button></div>`;
+      expect(probe(button())).toBe(1);
+      expect(probe(button('min-h-[44px] min-w-[44px]'))).toBe(0);
+    }
+    expect(probe('<button aria-label="Remove" className="h-full w-full p-3"><X size={20} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="flex-1"><X size={14} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="sm:min-h-[44px] sm:min-w-[44px]"><X size={14} /></button>')).toBe(1);
 

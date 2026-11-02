@@ -1021,7 +1021,7 @@ function MoodBoardEditor({ id }) {
                               if (target) setPreview(target);
                             }}
                             aria-label="Preview image"
-                            className="block w-full h-full cursor-zoom-in"
+                            className="min-h-11 min-w-11 block w-full h-full cursor-zoom-in"
                           >
                             <MediaImage thumbnail src={src} alt={displayText} loading="lazy" className="w-full h-full object-cover bg-port-bg" />
                           </button>
