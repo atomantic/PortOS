@@ -486,6 +486,19 @@ module.exports = { apps: [
     expect(parseEcosystemConfig(result.content).processes[0].ports.api).toBe(6200);
   });
 
+  it.each([
+    "NAME = 'example-worker'", "NAME += '-worker'", 'NAME++', 'NAME <<= 1',
+    "({ value: NAME } = { value: 'example-worker' })", "[NAME] = ['example-worker']",
+  ])('refuses stale names after %s, including aliases', (write) => {
+    const content = "let NAME = 'example-api'; const ALIAS = NAME;\n" + write +
+      "; module.exports = { apps: [{ name: ALIAS, env: { PORT: 6100 } }] };";
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
   it('leaves dynamic, empty, unresolved and cyclic process names undiscovered and untouched', () => {
     const content = "const COMPUTED = 'example-api'\n + suffix;\n" +
       "const FIRST = SECOND; const SECOND = FIRST; const EMPTY = '';\n" +
