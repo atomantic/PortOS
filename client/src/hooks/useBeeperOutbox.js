@@ -58,9 +58,9 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   const mountedRef = useMounted();
   const onSentRef = useRef(onSent);
   onSentRef.current = onSent;
-  const scopeRef = useRef({ conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false, reconciles: new Map() });
+  const scopeRef = useRef({ conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false });
   if (scopeRef.current.conversationId !== conversationId) {
-    scopeRef.current = { conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false, reconciles: new Map() };
+    scopeRef.current = { conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false };
   }
   const scope = scopeRef.current;
 
@@ -258,20 +258,17 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
 
   const reconcile = useCallback(async (entry) => {
     const generation = ++scope.refreshGeneration;
-    scope.reconciles.set(entry.id, generation);
     const interruptedRead = scope.readInFlight;
     const updated = await reconcileOutboxEntry(entry.id, { silent: true }).catch((err) => {
       if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
       return null;
     });
     if (!mountedRef.current || scopeRef.current !== scope) return;
-    const latestCheck = scope.reconciles.get(entry.id) === generation;
-    if (latestCheck) scope.reconciles.delete(entry.id);
     // A newer read may have captured the row before this check finished. Do
     // not overwrite it with the check response (another check may have won),
     // but re-read after the completed operation so the visible state converges.
     if (generation !== scope.refreshGeneration) {
-      if (updated && latestCheck) await refresh();
+      if (updated) await refresh();
       return;
     }
     if (updated) {
