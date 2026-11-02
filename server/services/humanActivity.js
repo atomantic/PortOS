@@ -513,21 +513,22 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
  *
  * Safety: refuses unbounded wipes. Accepts either:
  *   - `ids` (optionally scoped with `source`), or
- *   - `source` + (`chatGuid` and/or `handle`), or
+ *   - `source` + (`chatGuid`, `conversationId`, `threadId` and/or `handle`), or
  *   - `accountId` (alone or with `source`) — erases everything an account's sync
  *     copied in when the account is deleted (#12984)
  *
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, conversationId, handle, accountId, client } = {}) {
+export async function deleteEvents({ ids, source, chatGuid, conversationId, threadId, handle, accountId, client } = {}) {
   if (!client) await ensureReady();
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
   const hasConversation = conversationId != null && String(conversationId).length > 0;
+  const hasThread = threadId != null && String(threadId).length > 0;
   const hasHandle = handle != null && String(handle).length > 0;
   const hasAccount = accountId != null && String(accountId).length > 0;
-  if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasHandle))) return { deleted: 0 };
+  if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasThread || hasHandle))) return { deleted: 0 };
 
   const clauses = [];
   const params = [];
@@ -550,6 +551,10 @@ export async function deleteEvents({ ids, source, chatGuid, conversationId, hand
   if (hasConversation) {
     params.push(String(conversationId));
     clauses.push(conversationFilter('conversationId', source, params.length));
+  }
+  if (hasThread) {
+    params.push(String(threadId));
+    clauses.push(`metadata->>'threadId' = $${params.length}`);
   }
   if (hasHandle) {
     params.push(String(handle));

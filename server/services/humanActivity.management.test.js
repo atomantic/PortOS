@@ -19,6 +19,26 @@ it('deletes only exact source-scoped conversation IDs and refuses an unscoped co
   expect(query).toHaveBeenCalledWith(expect.stringContaining("source = $1 AND metadata->>'conversationId' = $2"), ['signal', 'opaque:%_id']);
 });
 
+it('deletes an exact Gmail thread within its source and account while refusing unbounded selectors', async () => {
+  for (const filters of [{ threadId: 'thread:%_123' }, { source: 'gmail' }, { source: 'gmail', threadId: '' }, { source: 'gmail', threadId: null }]) {
+    expect(await deleteEvents(filters)).toEqual({ deleted: 0 });
+  }
+  expect(query).not.toHaveBeenCalled();
+
+  query.mockResolvedValueOnce({ rowCount: 2 });
+  expect(await deleteEvents({ source: 'gmail', threadId: 'thread:%_123' })).toEqual({ deleted: 2 });
+  expect(query.mock.lastCall).toEqual([
+    expect.stringContaining("source = $1 AND metadata->>'threadId' = $2"),
+    ['gmail', 'thread:%_123'],
+  ]);
+
+  await deleteEvents({ source: 'gmail', accountId: 'account-example', threadId: 'thread:%_123' });
+  expect(query.mock.lastCall).toEqual([
+    expect.stringContaining("source = $1 AND account_id = $2 AND metadata->>'threadId' = $3"),
+    ['gmail', 'account-example', 'thread:%_123'],
+  ]);
+});
+
 it('guards ambiguous raw WhatsApp deletion and uses typed management selectors', async () => {
   await deleteEvents({ source: 'whatsapp', conversationId: 'family:%_' });
   expect(query.mock.calls[0][0]).toContain('COUNT(DISTINCT CASE');
