@@ -275,6 +275,7 @@ const FULL_TRIGGER_RULES = [
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
+  /^scripts\/(?:deferred-update\.mjs|update-headless-recovery\.test\.js)$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|windowsAgentProcess|windowsAgentSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
@@ -291,6 +292,7 @@ export const WINDOWS_RISK_RULES = [
 // one shared process helper must not pull all its application consumers onto
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
+  'scripts/update-headless-recovery.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
   'server/cos-runner/allowedCommands.test.js',
   'server/lib/agentGuard/index.test.js',

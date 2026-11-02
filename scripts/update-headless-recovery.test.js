@@ -1,7 +1,11 @@
+import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn, execFileSync } from 'child_process';
+import { spawn, spawnSync, execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
 import { fileURLToPath } from 'url';
 import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../server/lib/gitTestRepo.js';
 
@@ -47,6 +51,7 @@ async function makeSandbox({
   mkdirSync(join(repo, 'scripts'), { recursive: true });
   mkdirSync(join(repo, 'node_modules', 'pm2', 'bin'), { recursive: true });
 
+  installUpdateTestSupervisor(repo);
   copyFileSync(UPDATE_SH, join(repo, 'update.sh'));
   chmodSync(join(repo, 'update.sh'), 0o755);
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'sandbox', version: '0.0.0' }));
@@ -156,7 +161,7 @@ if (${stallDelete} && args.startsWith('delete')) {
 // serializing three full update scripts.
 function runUpdate(sandbox, { onStart } = {}) {
   return new Promise((resolve) => {
-    const env = { ...process.env, PATH: `${sandbox.bin}:${process.env.PATH}` };
+    const env = { ...process.env, PORTOS_DATA_ROOT: sandbox.repo, PATH: `${sandbox.bin}:${process.env.PATH}` };
     if (sandbox.forceClean) env.PORTOS_FORCE_CLEAN_WORKSPACES = '.';
     if (sandbox.nodeOptions) env.NODE_OPTIONS = sandbox.nodeOptions;
     if (sandbox.peerTarget) {
@@ -166,7 +171,7 @@ function runUpdate(sandbox, { onStart } = {}) {
     const child = spawn('bash', [join(sandbox.repo, 'update.sh')], { cwd: sandbox.repo, env });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', () => {});
+    child.stderr.on('data', (d) => { stdout += d; });
     child.on('close', (status) => resolve({ status, stdout }));
     onStart?.(child);
   });
@@ -379,17 +384,51 @@ describe('update.ps1 headless-install guard', () => {
   // The only two script-terminating exits that may bypass the recovery: the one
   // Stop-UpdateScript itself performs (after running it), and the final status.
   const SANCTIONED_EXITS = ['exit $Code', 'exit $verifyFailed'];
+  const admissionExits = ['exit $LASTEXITCODE', 'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }'];
 
   it('routes every fatal exit through the recovery', () => {
     const exits = ps1
       .map((line, i) => ({ line: line.trim(), number: i + 1 }))
       .filter(({ line }) => /(^|[{;]\s*)exit\b/i.test(line) || /\[Environment\]::Exit\(/i.test(line));
 
-    const offenders = exits.filter(({ line }) => !SANCTIONED_EXITS.includes(line));
+    const admission = exits.filter(({ line }) => admissionExits.includes(line));
+    expect(admission).toHaveLength(3);
+    for (const { number } of admission) {
+      expect(number < lineOf('New-Item -ItemType Directory') + 1 || ps1[number - 2].includes('--terminal')).toBe(true);
+    }
+    const recoveryExits = exits.filter(({ line }) => !admissionExits.includes(line));
+    const offenders = recoveryExits.filter(({ line }) => !SANCTIONED_EXITS.includes(line));
     expect(offenders, `exit(s) bypassing Restore-Pm2Apps: ${JSON.stringify(offenders)}`).toEqual([]);
     // ...and both sanctioned exits must still be there, so the guard can't be
     // "satisfied" by deleting the exit inside Stop-UpdateScript.
-    expect([...new Set(exits.map(e => e.line))].sort()).toEqual([...SANCTIONED_EXITS].sort());
+    expect([...new Set(recoveryExits.map(e => e.line))].sort()).toEqual([...SANCTIONED_EXITS].sort());
+  });
+
+  it.runIf(process.platform === 'win32')('publishes failed terminal evidence after recovery with application dependencies absent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'update-no-deps-'));
+    try {
+      installUpdateTestSupervisor(root, { standalone: true });
+      const admission = createMaintenanceAdmission(join(root, 'data'));
+      const operation = admission.deferredUpdate.request();
+      admission.deferredUpdate.acquire(operation.id);
+      const stop = ps1.slice(lineOf('function Stop-UpdateScript'), lineOf('# Backstop for a synchronous')).join('\n');
+      const env = { ...process.env, PORTOS_DATA_ROOT: root, PORTOS_DEFERRED_UPDATE_ID: operation.id };
+      // Run the copied disposable install as a standalone process, like boot smoke.
+      delete env.VITEST;
+      const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `
+        function Restore-Pm2Apps { Write-Output 'recovery-settled' }
+        & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ${stop}
+        Stop-UpdateScript 23
+      `], { cwd: root, encoding: 'utf8', env });
+      expect(result.status, result.stderr).toBe(23);
+      expect(result.stdout).toContain('recovery-settled');
+      expect(admission.deferredUpdate.get().operation.terminal).toEqual({ success: false });
+      admission.deferredUpdate.reconcile({ absent: () => true, platform: 'win32' });
+      expect(admission.held()).toBe(false);
+      expect(admission.deferredUpdate.get().result.success).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('keeps every Resolve-Pm2Command branch a plain array collected by @()', () => {

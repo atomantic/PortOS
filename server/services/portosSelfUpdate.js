@@ -1,42 +1,11 @@
-/**
- * The single launcher for PortOS's own update.sh / update.ps1.
- *
- * Two surfaces start a PortOS self-update — the Update page
- * (`POST /api/update/execute`) and App Management's Git tab (the `app:update`
- * socket handler for the PortOS app record) — and they used to carry two
- * different implementations of the same lifecycle. The Update page's version
- * was the correct one, so it is the one that lives here and both callers now
- * share it:
- *
- *   1. Refuse the update (preflight) before touching anything.
- *   2. Resolve the release tag the run is labelled with.
- *   3. Take the atomic `updateInProgress` lock, then re-check the guards that
- *      could have gone live during step 1-2's awaits.
- *   4. Launch `executeUpdate` and RETURN — never await it.
- *
- * Step 4 is the whole point. `update.sh` deletes this server's PM2 entries
- * partway through, so the process that launched it is killed long before the
- * script reaches its closing `pm2 start`. `executeUpdate`'s double-fork keeps
- * the SCRIPT alive across that (see `server/lib/detachedSpawn.js`), but nothing
- * can keep the awaiting caller alive — so a caller that awaits it simply never
- * runs its own completion code, and any UI waiting on that completion hangs on
- * "Stopping apps..." forever even though the install came back fine. The
- * client side of the contract is `usePortosRestartWatch`, which watches the
- * step stream and the health endpoint rather than a completion event.
- */
-
+/** Shared authenticated launcher; the script supervisor owns deferred admission. */
 import { ServerError } from '../lib/errorHandler.js';
-import { withStateLock } from './cosState.js';
+import { createMutex } from '../lib/asyncMutex.js';
 import { launchUpdate } from './updateExecutor.js';
 import * as updateChecker from './updateChecker.js';
-import {
-  agentsActiveError,
-  checkPortosUpdatePreflight,
-  countActiveCosAgents,
-  getPersistentMindImageWorkGuard,
-  persistentMindImageWorkError,
-  persistentMindStateUntrustedError,
-} from './updatePreflight.js';
+import { checkPortosUpdatePreflight } from './updatePreflight.js';
+
+const withLaunch = createMutex();
 
 // Well-formed semver release tag (e.g. "v1.27.0" or "v1.27.0-rc.1"). The tag
 // reaches a shell script, so anything option-shaped is refused outright.
@@ -98,7 +67,7 @@ function forceCleanWorkspacesFor(status) {
 }
 
 /**
- * Refuse, lock, and launch a PortOS self-update. Resolves as soon as the
+ * Validate and launch a deferred PortOS self-update. Resolves as soon as the
  * detached script is running — NOT when the update finishes.
  *
  * @param {object} options
@@ -111,14 +80,14 @@ function forceCleanWorkspacesFor(status) {
  *   `checkPortosUpdatePreflight` itself (to refuse BEFORE touching the checkout,
  *   and to report the refusal code its UI offers an acknowledgement for), so
  *   re-running the guards here would re-read the whole CoS state and re-walk
- *   every dep receipt for an answer already given. The post-lock re-check below
- *   is the authoritative one either way.
+ *   every dep receipt for an answer already given. The script rechecks image
+ *   state after acquiring the shared maintenance hold.
  * @param {'release'|'reconcile'|'refresh'} [options.mode]
  * @param {(step: string, status: string, message: string) => void} [options.onStep]
  *   Extra progress sink, for a caller with its own step stream.
  * @returns {Promise<{started: true, tag: string}>}
  */
-export async function startPortosSelfUpdate({
+async function startSelfUpdate({
   io,
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
@@ -127,50 +96,16 @@ export async function startPortosSelfUpdate({
   onStep,
   peerExecution,
 } = {}) {
-  // Never restart PortOS out from under a live CoS agent, in-flight Persistent
-  // Mind image work, or an unacknowledged fork. Fast-fail before the lock so
-  // every mode is covered before doing the work below; the post-lock re-check
-  // closes the window an agent could start in during it. The status is re-read
-  // even when the guards are skipped: a caller that already ran them did so
-  // before advancing the checkout, so its snapshot predates the pull whose
-  // stale workspaces this run has to clean.
+  // The Git-tab caller already advanced HEAD; read its new install state.
+  // Activity is deferred by the script, not blocked here by a process-local flag.
   const status = preflightAlreadyRun
     ? await updateChecker.getUpdateStatus()
-    : await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup });
+    : await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup, deferActivity: true });
 
   assertCanRun(status, mode);
   const tag = resolveTag(status, mode);
   if (!TAG_PATTERN.test(tag)) {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
-  }
-
-  // Atomic check-and-set: rejects if already in progress, preventing concurrent
-  // updates. Holding it is also what keeps CoS agent spawns off a process
-  // update.sh is about to `pm2 delete` (#4124) — `subAgentSpawner`,
-  // `agentLifecycle` and `persistentMindSupervisor` all gate on it.
-  const acquired = await updateChecker.setUpdateInProgress(true);
-  if (!acquired) {
-    throw new ServerError('Update already in progress', { status: 409, code: 'UPDATE_IN_PROGRESS' });
-  }
-
-  // Re-check after acquiring the lock: an agent (e.g. a scheduled/autopilot
-  // spawn) may have started live during the awaits above. If so, release the
-  // lock and reject rather than restart out from under it. A spawn that begins
-  // AFTER this, during update.sh itself, is closed from the spawn side by the
-  // lock we just took.
-  const postLock = await countActiveCosAgents();
-  if (postLock > 0) {
-    await updateChecker.setUpdateInProgress(false);
-    throw agentsActiveError(postLock);
-  }
-  const postLockImageCheck = await withStateLock(() => getPersistentMindImageWorkGuard()).catch(async (error) => {
-    await updateChecker.setUpdateInProgress(false);
-    throw error;
-  });
-  if (!postLockImageCheck.trusted || (!postLockImageCheck.safe && !acknowledgePersistentMindImageBackup)) {
-    await updateChecker.setUpdateInProgress(false);
-    if (!postLockImageCheck.trusted) throw persistentMindStateUntrustedError();
-    throw persistentMindImageWorkError(postLockImageCheck);
   }
 
   const emit = (step, stepStatus, message) => {
@@ -182,16 +117,12 @@ export async function startPortosSelfUpdate({
 
   const forceCleanWorkspaces = mode === 'release' ? undefined : forceCleanWorkspacesFor(status);
 
-  const reportFailure = async (err) => {
+  const reportFailure = (err) => {
     console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
     io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
-    // Rejections bypass recordUpdateResult, which normally releases the lock.
-    await updateChecker.setUpdateInProgress(false).catch(releaseErr => {
-      console.error(`❌ Failed to release update lock after launch failure: ${releaseErr.message}`);
-    });
   };
-  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(peerExecution ? { peerExecution } : {}) }).catch(async err => {
-    await reportFailure(err);
+  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
+    reportFailure(err);
     throw err;
   });
   if (!launch.started) {
@@ -219,4 +150,8 @@ export async function startPortosSelfUpdate({
   }).catch(reportFailure);
 
   return { started: true, tag };
+}
+
+export function startPortosSelfUpdate(options) {
+  return withLaunch(() => startSelfUpdate(options));
 }

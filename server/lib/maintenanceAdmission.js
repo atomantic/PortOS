@@ -3,11 +3,14 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { createMaintenanceJournal, maintenanceError as error, syncMaintenanceDirectory } from './maintenanceJournal.js';
+import { createDeferredUpdateAdmission } from './maintenanceDeferredUpdate.js';
 import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
+
+export { syncMaintenanceDirectory } from './maintenanceJournal.js';
 
 const operationSchema = z.object({
   id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
@@ -26,69 +29,26 @@ export const maintenanceJournalSchema = z.object({
   && state.hold?.revision === state.exclusive.holdRevision));
 export const maintenanceBeginSchema = z.object({ reason: z.string().trim().min(1).max(500) }).strict();
 export const maintenanceResumeSchema = z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict();
-const empty = () => ({ version: 1, revision: 0, hold: null, operations: [] });
-const error = (code = 'MAINTENANCE_HELD', message = 'Maintenance is holding new work. Existing work can finish.') =>
-  Object.assign(new Error(message), { status: code === 'MAINTENANCE_STALE' ? 409 : 503, code });
 export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(err?.code);
-
-export function syncMaintenanceDirectory(path, io = fs) {
-  if (process.platform === 'win32') return;
-  const fd = io.openSync(path, 'r');
-  try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
-}
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
   makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false } = {}) {
-  const directory = join(dataDir, 'workflow-maintenance');
-  const file = join(directory, 'state.json');
-  const lock = join(directory, 'transaction');
   const context = new AsyncLocalStorage();
   const events = new EventEmitter();
-  // A failed publication must not reopen admission in this process, even if
-  // an operator removes an interrupted transaction before restarting it.
-  let uncertain = false;
-  let failureReported = false;
-  const reportFailure = err => {
-    if (failureReported) return;
-    failureReported = true;
-    while (err.cause instanceof Error) err = err.cause;
-    console.error(`❌ Maintenance transaction failed (${err.code ?? 'UNKNOWN'}): ${String(err.message).replace(/\s+/g, ' ')}`);
-  };
-  const unavailable = cause => Object.assign(error('MAINTENANCE_UNAVAILABLE', 'Maintenance state needs recovery; new work remains held.'), cause ? { cause } : {});
-  const exists = path => {
-    try { io.lstatSync(path); return true; } catch (err) { if (err.code === 'ENOENT') return false; throw err; }
-  };
-  const read = () => {
-    if (uncertain) throw unavailable();
-    try {
-      if (!exists(file)) return empty();
-      if (!io.lstatSync(file).isFile()) throw unavailable();
-      return maintenanceJournalSchema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
-    } catch (err) { throw unavailable(err); }
-  };
-  // status()/held() are polled several times a second (media drain loop, spawn
-  // gates); re-parsing a journal that carries every settled operation allocated
-  // ~400 KB per call. Writers publish by renaming a new file into place, so any
-  // change gives it a new identity; the stat is taken before the read, so a
-  // racing publish can only cost a re-parse. Read-only: transactions mutate the
-  // state they read and must keep calling read() for a private copy.
-  let statusCache = null;
-  const readForStatus = () => {
-    if (uncertain) throw unavailable();
-    let stats;
-    try { stats = io.lstatSync(file); }
-    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(err); }
-    if (!stats.isFile()) throw unavailable();
-    const key = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
-    if (statusCache?.key !== key) statusCache = { key, state: read() };
-    return statusCache.state;
-  };
+  const { directory, lock, read, readForStatus, transaction, exists, unavailable, isUncertain, markUncertain } = createMaintenanceJournal(dataDir, {
+    io, assertWrite, makeId, validate: value => maintenanceJournalSchema.parse(value),
+    // Listener errors must not turn a committed reservation into failed admission.
+    changed: () => queueMicrotask(() => { for (const listener of events.listeners('changed')) {
+      try { listener(status()); } catch (err) { console.error(`❌ Maintenance notification failed: ${err.message}`); }
+    } }),
+  });
   const project = state => ({
     state: state.hold ? (state.operations.length || state.exclusive ? 'draining' : 'ready') : 'normal',
     revision: state.revision, hold: state.hold && { ...state.hold },
     blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
       ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
         startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
+    deferredUpdate: deferredUpdate.inspect(state),
     scope: 'PortOS agents, mind turns, provider runs, media renders and scheduled shell/script work, through cleanup and saving. Unrelated host applications are outside this scope.',
   });
   const status = () => {
@@ -100,7 +60,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         since = io.lstatSync(lock).mtime.toISOString();
         throw unavailable();
       }
-      if (uncertain) { cause = 'process-uncertain'; throw unavailable(); }
+      if (isUncertain()) { cause = 'process-uncertain'; throw unavailable(); }
       return project(readForStatus());
     } catch {
       return { state: 'unavailable', revision: null, hold: null, blockers: [],
@@ -108,58 +68,9 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         error: 'Maintenance state needs recovery. New work is held; readiness is unknown.' };
     }
   };
-  // Synchronous mkdir + read/replace is the shared linearization point. Never
-  // steal this lock by age/PID: a crash or failed fsync stays fail-closed.
-  const transaction = change => {
-    assertWrite(directory, 'workflow maintenance transaction');
-    if (uncertain) throw unavailable();
-    try {
-      io.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      // Writers do no async work while holding this lock. Same-process calls
-      // cannot contend; briefly yield the CPU to a competing server/runner.
-      // A crashed writer remains closed, rather than stealing its lock.
-      for (let attempt = 0; ; attempt++) {
-        try { io.mkdirSync(lock, { mode: 0o700 }); break; }
-        catch (err) {
-          if (err.code !== 'EEXIST' || attempt === 99) throw err;
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-        }
-      }
-    } catch (err) { reportFailure(err); throw unavailable(); }
-    let published = false;
-    let result;
-    try {
-      const state = read();
-      result = change(state);
-      state.revision++;
-      maintenanceJournalSchema.parse(state);
-      const pending = join(directory, `pending-${makeId()}.json`);
-      const fd = io.openSync(pending, 'wx', 0o600);
-      try { io.writeFileSync(fd, JSON.stringify(state) + '\n'); io.fsyncSync(fd); } finally { io.closeSync(fd); }
-      io.renameSync(pending, file);
-      syncMaintenanceDirectory(directory, io);
-      published = true;
-    } catch (err) {
-      // Refused admission/stale requests didn't attempt a publication.
-      if (['MAINTENANCE_HELD', 'MAINTENANCE_STALE'].includes(err.code)) published = true;
-      else { uncertain = true; reportFailure(err); }
-      throw err.code?.startsWith('MAINTENANCE_') ? err : unavailable();
-    } finally {
-      if (published) {
-        try { io.rmdirSync(lock); syncMaintenanceDirectory(directory, io); }
-        catch (err) { uncertain = true; reportFailure(err); }
-      }
-    }
-    if (uncertain) throw unavailable();
-    // Listener errors must never turn a committed reservation into a failed
-    // admission whose caller cannot own/release it.
-    queueMicrotask(() => { for (const listener of events.listeners('changed')) {
-      try { listener(status()); } catch (err) { console.error(`❌ Maintenance notification failed: ${err.message}`); }
-    } });
-    return result;
-  };
   const exclusive = createMaintenanceExclusive({ transaction, read, lockExists: () => exists(lock), makeId, error, now,
     verifyReceipt: verifyExclusiveReceipt });
+  const deferredUpdate = createDeferredUpdateAdmission({ transaction, read: readForStatus, makeId, error, now, directory, io, syncDirectory: syncMaintenanceDirectory });
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore() ?? null;
@@ -246,7 +157,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
           transaction(state => { state.operations = state.operations.filter(op => op.id !== id || op.unsettled); });
           return true;
         } catch {
-          if (uncertain || !exists(lock)) break;
+          if (isUncertain() || !exists(lock)) break;
           await new Promise(resolve => { const timer = setTimeout(resolve, 50); timer.unref?.(); });
         }
       }
@@ -270,7 +181,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       op.unsettled = true;
       op.uncertaintyStamp = randomUUID();
     } }); }
-    catch { uncertain = true; console.error('❌ Maintenance recovery record could not be saved; readiness remains unknown.'); }
+    catch { markUncertain(); console.error('❌ Maintenance recovery record could not be saved; readiness remains unknown.'); }
   };
   const markResourceUnsettled = (kind, resource) => markUnsettled(op => op.kind === kind && op.resource === resource);
   const markCurrentUnsettled = () => {
@@ -309,6 +220,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     transaction(state => {
       if (state.hold?.id !== expected.id || state.hold?.revision !== expected.revision)
         throw error('MAINTENANCE_STALE', 'This maintenance hold changed. Refresh before resuming.');
+      if (deferredUpdate.inspect(state)?.holdId === expected.id)
+        throw error('MAINTENANCE_STALE', 'The update owns this hold until its processes settle.');
       if (state.exclusive)
         throw error('MAINTENANCE_STALE', 'An exclusive maintenance operation owns this hold until verified reconciliation.');
       state.hold = null;
@@ -357,7 +270,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { deferredUpdate, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

@@ -1,3 +1,4 @@
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { join } from 'path';
 import { readFile, unlink } from 'fs/promises';
 import { EventEmitter } from 'events';
@@ -31,40 +32,13 @@ export const updateEvents = new EventEmitter();
 
 const withLock = createMutex();
 
-// ─── Synchronous in-memory mirror of the persisted `updateInProgress` flag ───
-//
-// The flag itself lives in `data/update.json` and is only readable through an
-// `await` (loadState). The CoS spawn engines need the answer SYNCHRONOUSLY, at
-// the top of a spawn, to hold a task rather than launch an agent into a process
-// `update.sh` is about to `pm2 delete` (issue #4124). Awaiting a disk read there
-// would both slow the hot dispatch path and re-open the very window the gate
-// exists to close, so this module keeps a boolean in lockstep with every write
-// it makes to the persisted flag.
-//
-// Semantics — deliberately PROCESS-LOCAL, and NOT hydrated from disk on boot:
-//   - It flips only where this module actually WRITES `state.updateInProgress`
-//     (setUpdateInProgress, recordUpdateResult, clearStaleUpdateInProgress's
-//     clear branch). A `setUpdateInProgress(true)` that loses the atomic
-//     check-and-set writes nothing, so it leaves the mirror alone.
-//   - It starts `false` on every boot because a *running* server process is by
-//     definition post-restart: `update.sh` pm2-deletes the old process before it
-//     starts a new one, so nothing this process spawns can be severed by an
-//     update that was already underway. Hydrating a persisted `true` (which
-//     survives a killed-mid-update cycle until `clearStaleUpdateInProgress`
-//     ages it out at 30 minutes) would instead wedge CoS for half an hour.
+// Legacy runtime-update callers still own this process-local flag. PortOS
+// self-updates additionally read the shared owner across server restarts.
 let updateInProgressMirror = false;
 
-/**
- * Is a self-update running in THIS process right now?
- *
- * Synchronous, allocation-free, and safe to call on every spawn attempt.
- * `true` from the moment `/api/update/execute` acquires the update lock until
- * the update settles (`recordUpdateResult`) or is released — i.e. exactly the
- * window in which `update.sh` may pm2-restart the server out from under a
- * freshly spawned agent.
- */
+/** True while a runtime update or acquired shared self-update hold is active. */
 export function isUpdateInProgress() {
-  return updateInProgressMirror;
+  return updateInProgressMirror || ['starting', 'running'].includes(maintenance.deferredUpdate.operation()?.phase);
 }
 
 let schedulerInterval = null;
@@ -77,6 +51,7 @@ const defaultState = () => ({
   updateInProgress: false,
   updateStartedAt: null,
   lastUpdateResult: null,
+  lastDeferredUpdateId: null,
   lastForkSync: null,
   autoUpdate: null
 });
@@ -309,6 +284,8 @@ export async function getUpdateStatus() {
   return {
     currentVersion,
     ...state,
+    deferredUpdate: maintenance.deferredUpdate.operation() ?? null,
+    updateInProgress: state.updateInProgress || ['starting', 'running'].includes(maintenance.deferredUpdate.operation()?.phase),
     updateAvailable: isNewer && !isIgnored,
     remoteInfo,
     upstream: { owner: UPSTREAM_OWNER, repo: UPSTREAM_REPO, fullName: UPSTREAM_FULL_NAME },
@@ -342,11 +319,12 @@ export async function getAutoUpdateRuntime() {
  * also collapses what used to be three separate loads of `update.json` per tick.
  */
 export async function getAutoUpdateGateState() {
+  await clearStaleUpdateInProgress();
   const state = await loadState();
   return {
     runtime: normalizeAutoUpdateRuntime(state.autoUpdate),
     lastUpdateResult: state.lastUpdateResult,
-    updateInProgress: state.updateInProgress === true,
+    updateInProgress: state.updateInProgress === true || !!maintenance.deferredUpdate.operation(),
   };
 }
 
@@ -463,6 +441,7 @@ export async function recordUpdateResult(result) {
  * re-processing it forever.
  */
 export async function processUpdateMarker() {
+  if (maintenance.deferredUpdate.operation()) return;
   const updateMarkerPath = join(PATHS.data, 'update-complete.json');
   const removeMarker = () => unlink(updateMarkerPath).catch(e => {
     if (e?.code !== 'ENOENT') console.error(`❌ Failed to remove update marker: ${e.message}`);
@@ -488,6 +467,11 @@ export async function processUpdateMarker() {
     return removeMarker();
   }
 
+  const updateResult = maintenance.deferredUpdate.get().result;
+  if (updateResult && Date.parse(updateResult.completedAt) >= Date.parse(marker.completedAt)) {
+    await clearStaleUpdateInProgress();
+    return removeMarker();
+  }
   const runningVersion = await getCurrentVersion();
   if (marker.version !== runningVersion) {
     console.error(`❌ Update marker version (${marker.version}) doesn't match running version (${runningVersion}) — recording as failed`);
@@ -511,8 +495,34 @@ const STALE_UPDATE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
  * This detects that condition via updateStartedAt age and clears it.
  */
 export async function clearStaleUpdateInProgress() {
+  const deferred = maintenance.deferredUpdate.reconcile();
+  if (deferred.operation) return false;
   return withLock(async () => {
     const state = await loadState();
+    if (deferred.result && state.lastDeferredUpdateId !== deferred.result.id) {
+      state.lastDeferredUpdateId = deferred.result.id;
+      const completedAt = Date.parse(deferred.result.completedAt);
+      const startedAt = Date.parse(state.updateStartedAt);
+      // The durable outcome can outlive later launch refusals or runtime updates.
+      // Consume it independently of the displayed result, without clearing a
+      // newer (or undated) active owner or replacing a more recent outcome.
+      if ((state.updateInProgress && (!Number.isFinite(startedAt) || startedAt >= completedAt))
+        || Date.parse(state.lastUpdateResult?.completedAt) >= completedAt) {
+        await saveState(state);
+        return false;
+      }
+      state.updateInProgress = false;
+      state.updateStartedAt = null;
+      state.lastUpdateResult = {
+        version: await getCurrentVersion(), success: deferred.result.success,
+        completedAt: deferred.result.completedAt, deferredUpdateId: deferred.result.id,
+        log: deferred.result.interrupted ? 'Update interrupted; its processes have settled' : (deferred.result.success ? '' : 'Update failed'),
+      };
+      await saveState(state);
+      updateInProgressMirror = false;
+      noteSystemActivity('update', deferred.result.success ? 'completion' : 'failure');
+      return true;
+    }
     if (!state.updateInProgress) return false;
 
     const startedAtMs = state.updateStartedAt ? new Date(state.updateStartedAt).getTime() : NaN;

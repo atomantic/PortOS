@@ -92,6 +92,32 @@ beforeEach(() => {
 });
 
 describe('excerpt render cancellation', () => {
+  it('keeps deferred update admission blocked through the final record write', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { mutateProjectRecord } = await import('./projects.js');
+    const id = 'excerpt-update-race';
+    prime(id);
+    const { jobId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    const pending = maintenance.deferredUpdate.request();
+    let save;
+    mutateProjectRecord.mockImplementationOnce((projectId, transform) => new Promise(resolve => {
+      save = () => {
+        const outcome = transform(h.store.get(projectId));
+        h.store.set(projectId, outcome.project);
+        resolve(outcome);
+      };
+    }));
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(save).toBeTypeOf('function'));
+    expect(maintenance.deferredUpdate.acquire(pending.id)).toBe(false);
+    save();
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(maintenance.deferredUpdate.acquire(pending.id)).toBe(true);
+    prime('held-render');
+    await expect(startExcerptRender('held-render', { startSec: 0, endSec: 2 })).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    maintenance.deferredUpdate.finish(pending.id, false);
+  });
+
   it('keeps a canceled encode owned until close, removes partial output, and settles once', async () => {
     const id = 'excerpt-cancel';
     prime(id);
@@ -141,6 +167,24 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
     expect(excerpt(id, excerptId).status).toBe('complete');
     expect(terminalFrames(jobId)[0].type).toBe('complete');
+  });
+
+  it('retires a completed excerpt after settled overlay scratch cleanup fails', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const id = 'excerpt-scratch-failure';
+    prime(id, { mode: 'composed', textCues: [{ id: 'cue', text: 'Test', startSec: 0, endSec: 2 }], style: {} });
+    removeCompositionScratch.mockRejectedValueOnce(new Error('Synthetic scratch removal failure'));
+    const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    h.overlays.resolve([]);
+    await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+    expect(excerpt(id, excerptId).status).toBe('complete');
+    const update = maintenance.deferredUpdate.request();
+    try { expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true); }
+    finally { maintenance.deferredUpdate.finish(update.id, false); }
   });
 
   it('aborts overlay capture without spawning and releases scratch and the excerpt slot', async () => {

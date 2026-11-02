@@ -969,6 +969,8 @@ export * from './sandboxDelegation.js';
 export * from './forgeMaintenanceTasks.js';
 
 export * from './maintenanceAdmission.js';
+export * from './maintenanceDeferredUpdate.js';
+export * from './updateImageGuard.js';
 export * from './maintenanceExclusive.js';
 export * from './peerExecutionAuthority.js';
 export * as peerAdminValidation from './peerAdminValidation.js';
@@ -1053,3 +1055,4 @@ export * from './imageRenderQuality.js';
 export * from './greyboxSequence.js';
 
 export * from './ecosystemPortEdits.js';
+export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal.js';

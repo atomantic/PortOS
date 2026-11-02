@@ -116,11 +116,14 @@ export function forkSyncRequiredError(remote, status) {
 export async function checkPortosUpdatePreflight({
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
+  deferActivity = false,
 } = {}) {
-  const activeCosAgents = await countActiveCosAgents();
-  if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
-  const renders = listActiveRenders();
-  if (renders.length > 0) throw rendersActiveError(renders);
+  if (!deferActivity) {
+    const activeCosAgents = await countActiveCosAgents();
+    if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
+    const renders = listActiveRenders();
+    if (renders.length > 0) throw rendersActiveError(renders);
+  }
 
   const imageCheck = await getPersistentMindImageWorkGuard();
   if (!imageCheck.trusted) throw persistentMindStateUntrustedError();

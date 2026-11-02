@@ -16,6 +16,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
+const { maintenance } = await import('../../lib/maintenanceAdmission.js');
 const ffmpegService = await import('../../lib/ffmpeg.js');
 const { findFfmpeg, runFfmpegProcess } = ffmpegService;
 const projects = await import('./projects.js');
@@ -510,4 +511,29 @@ describe('thumbnail frames', () => {
     expect(c).toBeGreaterThan(b * 1.5);
     expect(b).toBeGreaterThan(d);
   });
+});
+
+
+it.skipIf(!ffmpeg)('preserves stale kit files and retires admission after a terminal cleanup-reference read failure', { timeout: 120000 }, async () => {
+  const projectId = await renderedProject();
+  const filename = 'shared-kit-example.mp4';
+  const path = join(PATHS.videos, filename);
+  await writeFile(path, 'synthetic shared output');
+  await projects.mutateProjectRecord(projectId, current => ({ project: {
+    ...current, publishKit: { exports: [{ filename }], thumbnails: [] },
+  } }));
+  const list = vi.spyOn(projects, 'listProjects').mockRejectedValueOnce(new Error('Synthetic project store unavailable'));
+  try {
+    const { jobId } = await kit.startPublishKitBuild(projectId);
+    expect(await buildEnded(jobId)).toEqual({ type: 'error', error: 'Synthetic project store unavailable' });
+    expect(kit.isPublishKitBuildActive(projectId)).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe('synthetic shared output');
+    // Final record publication succeeded; only cleanup's reference read failed.
+    const published = (await projects.getProject(projectId)).publishKit;
+    expect(published.master.renderHistoryId).toBe('render-1');
+    expect(published.exports.some(output => output.filename === filename)).toBe(false);
+    const update = maintenance.deferredUpdate.request();
+    try { expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true); }
+    finally { maintenance.deferredUpdate.finish(update.id, false); }
+  } finally { list.mockRestore(); }
 });

@@ -7,6 +7,14 @@ trap '' PIPE
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
+# The supervisor acquires the shared hold only after existing workflows settle.
+if [ -n "${PORTOS_PEER_UPDATE_OPERATION_ID:-}" ]; then
+  node scripts/deferred-update.mjs --peer-enter "$PORTOS_PEER_UPDATE_OPERATION_ID"
+elif [ -z "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
+  exec node scripts/deferred-update.mjs
+else
+  node scripts/deferred-update.mjs --enter "$PORTOS_DEFERRED_UPDATE_ID" "$$"
+fi
 mkdir -p "$ROOT_DIR/data"
 
 # Log file for external command output — keeps noisy git/npm/node output
@@ -615,4 +623,7 @@ fi
 
 # Exit non-zero when the install did not come back. This script outlives the
 # server it restarts, so its status is the only signal a caller still has.
+if [ -n "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
+  node scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" "$verify_failed"
+fi
 exit "$verify_failed"

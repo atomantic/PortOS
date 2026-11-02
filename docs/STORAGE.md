@@ -1354,3 +1354,22 @@ matching ownership and either a never-dispatched reservation or a persisted
 settlement. A durable deletion intent permits an interrupted collection to
 resume. Unreadable, mismatched or replaced records and files are preserved for
 operator recovery rather than adopted or removed.
+
+### Deferred local self-updates
+
+The existing machine-local `data/workflow-maintenance/state.json` journal also
+holds a `deferred-update` operation using the existing extensible operation shape.
+Its bounded resource JSON carries phase, child and hold identity, so older running
+servers can still admit release children while updated source waits. The latest
+terminal outcome lives beside it in `update-result.json`, published under the
+same journal transaction before retiring the operation and hold. The existing
+`data/update.json` keeps the last consumed outcome ID separately from the displayed
+result, so a retained outcome cannot replace newer update activity.
+Waiting does not close workflow admission. The same journal transaction acquires
+an update hold only with no admitted operations, retaining it through restart
+and final command settlement. The record binds a supervisor PID, child process
+identity, hold identity and optional final script result. Absent operations mean no deferred update; no seed, migration or federation is added.
+The existing journal backup/restore protection applies. POSIX recovery requires
+owner and process-group absence; Windows additionally requires operation-bound
+terminal evidence. Unknown liveness remains held, never aged out. See
+[Self-Update](SELF_UPDATE.md) for the offline recovery command.
