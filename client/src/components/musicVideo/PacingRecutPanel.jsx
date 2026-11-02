@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { useMounted } from '../../hooks/useMounted.js';
 import { Scissors } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import { previewMusicVideoPacingRecut, recutMusicVideoToPacing } from '../../services/apiMusicVideo.js';
@@ -14,8 +15,7 @@ export default function PacingRecutPanel({ project, disabled, onApplied }) {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const active = useRef(true);
-  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+  const active = useMounted();
   const stale = preview && preview.updatedAt !== project.updatedAt;
   const readPreview = async () => {
     setOpen(true);

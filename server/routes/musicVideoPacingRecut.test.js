@@ -2,6 +2,7 @@
  * keeps original first-piece media and refuses stale or impossible plans. */
 import { it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
@@ -13,6 +14,7 @@ vi.mock('../lib/paths.js', async (load) => makePathsProxy(await load(), { dataRo
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: routes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const { assertCurrentPerformanceTakes } = await import('../services/musicVideo/performanceShot.js');
 const app = express();
 app.use(express.json());
 app.use('/api/music-video', routes);
@@ -37,7 +39,16 @@ it('previews and re-cuts every long shot, preferring a lyric start to a downbeat
   const second = await projects.addProjectScene(project.id, { label: 'Chorus', prompt: 'Sing', startSec: 8, endSec: 13, shotMode: 'performance' });
   const untimed = await projects.addProjectScene(project.id, { label: 'Untimed', prompt: 'Unchanged' });
   for (const scene of [first, second]) await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'person.png', videoHistoryId: 'clip-parent' });
+  const masterPath = join(ROOT(), 'song.wav');
+  writeFileSync(masterPath, 'example-song');
+  await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, scenes: current.scenes.map((scene) => scene.sceneId !== second.sceneId ? scene : {
+    ...scene, takes: scene.takes.map((take) => take.kind !== 'video' ? take : { ...take, shotInstruction: {
+      shotMode: 'performance', songInterval: { startSec: 8, endSec: 13 }, audioWindow: { startSec: 8, endSec: 13 },
+      audio: { sha256: createHash('sha256').update('example-song').digest('hex') }, edit: { inSec: 0, outSec: 5 },
+    } }),
+  }) } }));
   const before = await projects.getProject(project.id);
+  await expect(assertCurrentPerformanceTakes(before, masterPath)).resolves.toBeUndefined();
   const proposal = await preview();
   expect(proposal.status).toBe(200);
   expect(proposal.body).toMatchObject({ minSec: 1, maxSec: 3, total: 3, added: 3, skipped: [{ sceneId: untimed.sceneId }] });
@@ -48,7 +59,11 @@ it('previews and re-cuts every long shot, preferring a lyric start to a downbeat
   const saved = await apply(proposal.body.revision);
   expect(saved.status).toBe(200);
   expect(saved.body.added).toBe(3);
-  const scenes = (await projects.getProject(project.id)).scenes;
+  const recut = await projects.getProject(project.id);
+  // The real final-render gate accepts the preserved performance prefix: only
+  // its end shortened, so the original sung recording still starts in sync.
+  await expect(assertCurrentPerformanceTakes(recut, masterPath)).resolves.toBeUndefined();
+  const scenes = recut.scenes;
   expect(scenes).toHaveLength(6);
   expect(scenes[0]).toMatchObject({ sceneId: first.sceneId, referenceImageId: 'person.png', videoHistoryId: 'clip-parent', prompt: first.prompt });
   expect(scenes[3]).toMatchObject({ sceneId: second.sceneId, referenceImageId: 'person.png', videoHistoryId: 'clip-parent' });

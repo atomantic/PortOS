@@ -925,11 +925,10 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
       ...(needsBeat ? { beatAligned: true } : {}) };
     if (i === 0) {
       const takes = ensureSceneTakes(scene, now);
-      // A lip-synced take was generated for the old interval and the render
-      // refuses it as re-timed, so the selection is cleared (the take stays a
-      // candidate) and "Generate missing" fills it. A cutaway clip still starts
-      // where the first piece does, so it stays selected and is trimmed.
-      // Pacing also retains a performance prefix: its start remains in sync.
+      // The ordinary backend split clears a performance selection and leaves
+      // the take as a candidate. Pacing retains the start-aligned prefix:
+      // performanceShot's playsInSync explicitly permits shortening only its end.
+      // A cutaway clip also starts where the first piece does and is trimmed.
       return isPerformanceScene(scene) && !preserveClip
         ? { ...scene, ...timing, takes, videoHistoryId: null }
         : { ...scene, ...timing, takes };
