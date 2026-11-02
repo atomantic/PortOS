@@ -1,4 +1,5 @@
 import { execFile, spawn } from '../lib/childProcess.js';
+import { userInfo } from 'os';
 import { existsSync, mkdirSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
@@ -18,6 +19,13 @@ import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
 export { preflightDatabaseMaintenance } from './databasePreflight.js';
 
 const rootDir = PATHS.root;
+const getSysUser = (fallback = 'postgres') => {
+  try {
+    return userInfo()?.username || process.env.USERNAME || process.env.USER || fallback;
+  } catch {
+    return process.env.USERNAME || process.env.USER || fallback;
+  }
+};
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
 // Resolve the interpreter explicitly. A bare `bash` on Windows often resolves
 // (via PM2's PATH) to WSL, which mounts drives at /mnt/h and can't see the
@@ -612,7 +620,7 @@ async function syncDatabaseImpl(io) {
   // Ensure target has the portos role and database (native pg may lack the role)
   if (targetMode === 'native') {
     emit('start', { message: 'Ensuring native database role and schema exist...' });
-    const sysUser = process.env.USER || 'postgres';
+    const sysUser = getSysUser('postgres');
     const sysEnv = pgEnv(targetPort);
     // Create role if missing (connect as system superuser)
     await runCmd('psql', ['-h', 'localhost', '-p', targetPort, '-U', sysUser, '-d', 'postgres',
@@ -783,7 +791,7 @@ async function destroyDatabaseImpl(backend) {
   }
 
   // Native: drop the portos database (system pg stays running)
-  const sysUser = process.env.USER || 'portos';
+  const sysUser = getSysUser('postgres');
   const result = await runCmd('psql', [
     '-h', 'localhost', '-p', NATIVE_PORT, '-U', sysUser, '-d', 'postgres',
     '-c', `DROP DATABASE IF EXISTS ${pgQuoteIdentifier(pgDb)}`
