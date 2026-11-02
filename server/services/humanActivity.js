@@ -192,7 +192,6 @@ export function messageActivityCandidates(account, messages = []) {
       dedupeKey: `msg:${accountId || 'x'}:${externalId}`,
       metadata: {
         threadId: message.threadId || null,
-        conversationId: message.threadId || null,
         externalId,
         channel: source,
         // The counterpart handle for a RECEIVED message is the sender's email —

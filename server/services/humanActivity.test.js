@@ -154,13 +154,6 @@ describe('messageActivityCandidates', () => {
     // Privacy: summary is a collapsed preview, not the raw multi-line body.
     expect(c.summary).toBe('the full body with newlines');
   });
-  it('maps threadId to conversationId for thread-level activity management', () => {
-    const [c] = messageActivityCandidates(account, [
-      { externalId: 'e1', date: '2026-07-04T10:00:00Z', threadId: 'thread-99', from: 'friend@x.io', to: ['me@example.com'], subject: 'Hey' },
-    ]);
-    expect(c.metadata.threadId).toBe('thread-99');
-    expect(c.metadata.conversationId).toBe('thread-99');
-  });
   it('skips messages without a date or external id', () => {
     expect(messageActivityCandidates(account, [{ subject: 'no date' }])).toEqual([]);
     expect(messageActivityCandidates(account, [{ date: '2026-07-04T10:00:00Z' }])).toEqual([]);
