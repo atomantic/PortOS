@@ -654,6 +654,7 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
   if (diagnostics) {
     lines.push('## Fallback Tier');
     lines.push(`- **Tier:** ${diagnostics.tier} (${diagnostics.fixStrategy})`);
+    lines.push('- **Meaning:** This classifies the error; it does not establish that a fallback was attempted.');
     lines.push(`- **Error Type:** ${diagnostics.errorType}`);
     lines.push(`- **Failure Reason:** ${diagnostics.failureReason}`);
     lines.push('');

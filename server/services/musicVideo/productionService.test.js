@@ -949,6 +949,40 @@ describe('code-first production execution (#9301)', () => {
     expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'completed' })]);
   });
 
+  it('charges each CLI authoring batch and stops before a submission beyond the generation limit', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const cli = { id: AUTHORING.providerId, type: 'cli', command: 'claude', args: ['--print'] };
+    let submitted = 0;
+    author.mockImplementation(async (_id, input) => {
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      submitted += 1;
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      submitted += 1;
+    });
+    await start({ pool: [], authoring: AUTHORING, limits: { maxGenerations: 1, maxReviewAttempts: 1 } });
+    expect(submitted).toBe(1);
+    expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 1 } });
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['completed']);
+    expect(current().composition.document).toBeUndefined();
+  });
+
+  it('records each admitted CLI authoring batch before accepting its document', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const cli = { id: AUTHORING.providerId, type: 'cli', command: 'claude', args: ['--print'] };
+    author.mockImplementation(async (_id, input) => {
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      return storeMutation((project) => {
+        input.verifyCurrent(project);
+        const document = { directory: 'music-video/mv-example/composition/cli', source: { kind: 'generated' } };
+        return { project: { ...project, composition: { ...project.composition, documentDraft: document } }, document };
+      });
+    });
+    await start({ pool: [], authoring: AUTHORING });
+    expect(theRun()).toMatchObject({ status: 'running', usage: { generations: 2 }, documentCheckpoint: { directory: current().composition.document.directory } });
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['completed', 'completed']);
+  });
+
   it('authors a code-only plan with no media routes/jobs and completes only after its reviewed final render', async () => {
     seedCodeFirst(); const { author, render } = documentDoubles();
     await start({ pool: [], authoring: AUTHORING });
