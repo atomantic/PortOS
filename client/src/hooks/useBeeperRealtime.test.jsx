@@ -49,6 +49,19 @@ describe('useBeeperRealtime', () => {
     expect(handlers.get('connect')?.size ?? 0).toBe(0);
   });
 
+  it('keeps the server room subscribed until the last sibling consumer unmounts', () => {
+    const first = renderHook(() => useBeeperRealtime());
+    const second = renderHook(() => useBeeperRealtime());
+    expect(emitted.filter(([event]) => event === 'beeper:subscribe')).toHaveLength(1);
+
+    first.unmount();
+    expect(emitted.filter(([event]) => event === 'beeper:unsubscribe')).toHaveLength(0);
+    expect(handlers.get('beeper:invalidate')?.size).toBe(1);
+
+    second.unmount();
+    expect(emitted.filter(([event]) => event === 'beeper:unsubscribe')).toHaveLength(1);
+  });
+
   it('hands each invalidation frame to the caller and keeps the last one', () => {
     const onInvalidate = vi.fn();
     const { result } = renderHook(() => useBeeperRealtime({ onInvalidate }));

@@ -62,7 +62,6 @@ const ALLOWED = {
   // Already implement `subscribe(); socket.on('connect', subscribe);` by hand,
   // predating useSocketSubscription — correct today, migration optional per
   // #8110's acceptance criteria rather than mandatory in the same change.
-  'src/hooks/useBeeperRealtime.js': 're-subscribes beeper:* on connect already',
   'src/hooks/useMoltworldWs.js': 're-subscribes agents:* on connect already',
 };
 
