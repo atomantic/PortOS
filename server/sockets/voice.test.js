@@ -1024,3 +1024,51 @@ describe('voice:call:audio does not run a turn unless the call is up', () => {
     expect(getCallState().state).toBe('listening');
   });
 });
+
+
+describe('voice host startup cancellation', () => {
+  beforeEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+  });
+  afterEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+  });
+
+  it.each([
+    ['voice:call:attach', 'voice:call:detach', getCallState],
+    ['voice:call:attach', 'disconnect', getCallState],
+    ['voice:capture:start', 'voice:capture:stop', getCaptureState],
+    ['voice:capture:start', 'disconnect', getCaptureState],
+  ])('does not resume %s after %s during the enabled check', async (startEvent, cancelEvent, getState) => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const starting = host.fire(startEvent);
+    await host.fire(cancelEvent);
+    finishConfig({ enabled: true });
+    await starting;
+
+    expect(getState()).toMatchObject({ hostAttached: false, active: false });
+  });
+
+  it.each([
+    ['voice:call:attach', 'voice:capture:start', getCallState, getCaptureState],
+    ['voice:capture:start', 'voice:call:attach', getCaptureState, getCallState],
+  ])('keeps %s superseded by %s during configuration loading', async (oldEvent, newEvent, oldState, newState) => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const starting = host.fire(oldEvent);
+    await host.fire(newEvent);
+    finishConfig({ enabled: true });
+    await starting;
+
+    expect(oldState().hostAttached).toBe(false);
+    expect(newState().hostAttached).toBe(true);
+  });
+
+});

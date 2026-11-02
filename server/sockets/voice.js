@@ -447,6 +447,9 @@ export const registerVoiceHandlers = (socket) => {
   // reply, which is played into the call rather than out of the speakers.
   // ---------------------------------------------------------------------------
   const call = { endpointer: null, busy: false, ctrl: null, openingLine: '', openingLineFailures: 0 };
+  // Call and capture share one host; a stop, switch or disconnect supersedes
+  // startup even while the enabled check is still reading configuration.
+  let hostRequestGeneration = 0;
 
   // Speak the line the caller was rung to hear, once, as soon as the far end
   // picks up. Without this a mind-placed call connects to silence and the user
@@ -544,7 +547,9 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:call:attach', async () => {
     try {
+      const generation = ++hostRequestGeneration;
       if (!(await ensureEnabled('call'))) return;
+      if (generation !== hostRequestGeneration || socket.connected === false) return;
       // Mutually exclusive with meeting capture: both want the same BlackHole
       // input device and the same host tab, and a call also wants BlackHole
       // 2ch to talk back through — running both at once would fight over the
@@ -620,6 +625,7 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:call:detach', async () => {
     try {
+      hostRequestGeneration += 1;
       call.endpointer = null;
       emitCallState(await detachHost(socket));
     } catch (err) {
@@ -683,7 +689,9 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:capture:start', async () => {
     try {
+      const generation = ++hostRequestGeneration;
       if (!(await ensureEnabled('capture'))) return;
+      if (generation !== hostRequestGeneration || socket.connected === false) return;
       if (isCallActive() || getCallHost() === socket) {
         socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
         return;
@@ -710,6 +718,7 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:capture:stop', async () => {
     try {
+      hostRequestGeneration += 1;
       if (getCaptureHost() !== socket) return;
       // Finalize whatever speech is still buffered rather than dropping the
       // last few seconds of the meeting on the floor.
@@ -727,6 +736,7 @@ export const registerVoiceHandlers = (socket) => {
   });
 
   socket.on('disconnect', () => {
+    hostRequestGeneration += 1;
     // Drop this tab from the voice-output registry; if it was the sole
     // recipient, output is promoted to another live tab so proactive audio
     // keeps exactly one home.
