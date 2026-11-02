@@ -63,6 +63,14 @@ module.exports = { apps: [
     ]);
   });
 
+  it('preserves a quoted property name that contains a port-label suffix', () => {
+    const content = `module.exports = { apps: [
+  { name: 'x', script: 'server.js', ports: { "admin-api": 6000 } },
+] };`;
+
+    expect(parseEcosystemConfig(content).processes[0].ports).toEqual({ 'admin-api': 6000 });
+  });
+
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
     // Mirror the critical-mass shape: a server process that fans out IPC ports
     // to per-exchange engine processes.
@@ -391,6 +399,17 @@ module.exports = { apps: [{ name: 'quoted-api', script: 's.js', ports: { "api": 
     expect(out).toContain("'UI': 5100");
     expect(out).toContain('"api": 6100');
     expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6100);
+  });
+
+  it('does not treat a suffix of a quoted property name as the api key', () => {
+    const content = `module.exports = { apps: [
+  { name: 'x', script: 'server.js', ports: { "admin-api": 6000 } },
+] };`;
+    const edit = { processName: 'x', label: 'api', oldPort: 6000, newPort: 6100 };
+
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
   });
 
   it('does not touch unrelated numbers that merely equal an old port', () => {
