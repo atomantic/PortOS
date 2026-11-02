@@ -615,6 +615,20 @@ describe('the composer', () => {
 describe('the composer sends', () => {
   const OUTBOUND_TEXT = 'Placeholder outbound text';
 
+  it('shows an outbox load failure and recovers the hidden failed send on retry', async () => {
+    apiBeeper.listOutboxEntries.mockRejectedValueOnce(new Error('Outbox unavailable'))
+      .mockResolvedValueOnce({ entries: [{ id: 'failed-1', conversationId: CONV_A, body: 'Unsent example', state: 'failed' }] });
+    api.getBeeperConversation.mockResolvedValue(conversation({ network: 'whatsapp', title: 'Example Contact' }));
+    renderTab(`/messages/beeper/${CONV_A}`);
+
+    const alert = await screen.findByText(/Could not load pending and failed sends/);
+    expect(alert).toHaveTextContent('Outbox unavailable');
+    expect(screen.queryByText('No messages mirrored yet')).toBeNull();
+    fireEvent.click(within(alert.closest('[role="alert"]')).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Unsent example')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load pending and failed sends/)).toBeNull();
+  });
+
   const openComposer = async (overrides = {}) => {
     api.getBeeperConversation.mockResolvedValue(conversation({ network: 'whatsapp', title: 'Example Contact', ...overrides }));
     renderTab(`/messages/beeper/${CONV_A}`);
