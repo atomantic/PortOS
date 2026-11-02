@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, unlinkSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
 import { ownTestBodies, makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
-const facts = vi.hoisted(() => ({ repo: '', agents: [], owner: null, task: null, forge: true, pr: null }));
+const facts = vi.hoisted(() => ({ repo: '', agents: [], owner: null, task: null, forge: true, pr: null, prs: {}, names: {} }));
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('repair-completion-data-'), extraOverrides: { get root() { return facts.repo; } },
 }));
@@ -14,10 +14,13 @@ vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, co
   updateAgent: async (id, patch) => { Object.assign(facts.owner.metadata, patch.metadata); return facts.owner; },
 }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async (id, patch) => { Object.assign(facts.task, patch); return facts.task; }), getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }), getTaskById: vi.fn(async () => facts.task), addTask: vi.fn(async (data, type, options) => ({ data, type, options })) }));
-vi.mock('../lib/gitRemote.js', async original => ({ ...(await original()), getOriginInfo: async () => ({ isGithub: true, host: 'github.com', owner: 'example', fullName: 'example/PortOS' }) }));
-vi.mock('./github.js', () => ({ execGh: vi.fn(async () => {
+vi.mock('../lib/gitRemote.js', async original => ({ ...(await original()), getOriginInfo: async dir => ({ isGithub: true, host: 'github.com', owner: 'example', fullName: facts.names[dir] || 'example/PortOS' }) }));
+vi.mock('./github.js', () => ({ execGh: vi.fn(async (args, timeout, { cwd }) => {
+  expect(args).not.toContain('--jq'); // gh forbids --slurp together with --jq.
+  expect(args.at(-1)).toContain(`repos/${facts.names[cwd] || 'example/PortOS'}/pulls?`);
   if (!facts.forge) throw new Error('Unavailable');
-  return JSON.stringify([[facts.pr].filter(Boolean)]);
+  const pr = cwd === facts.repo ? facts.pr : facts.prs[cwd];
+  return JSON.stringify([[pr && { state: pr.state, merged_at: pr.merged_at, head: { sha: pr.headSha, repo: { full_name: pr.headRepo } }, base: { ref: pr.base } }].filter(Boolean)]);
 }) }));
 vi.mock('./codeReview.js', async original => ({ ...(await original()), getGoalFidelityConfig: async () => null }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: async () => null }));
@@ -65,17 +68,39 @@ async function dispatch() {
   facts.agents = [facts.owner];
   return facts.task;
 }
-function publish() {
-  const head = git(facts.repo, 'rev-parse', 'HEAD');
-  git(facts.repo, 'branch', 'preserved-work'); git(facts.repo, 'push', 'origin', 'preserved-work');
-  facts.pr = { state: 'open', merged_at: null, headSha: head, headRepo: 'example/PortOS', base: 'main' };
-  git(facts.repo, 'reset', '--hard', 'origin/main');
+function publish(dir = facts.repo) {
+  const head = git(dir, 'rev-parse', 'HEAD');
+  git(dir, 'branch', 'preserved-work'); git(dir, 'push', 'origin', 'preserved-work');
+  const pr = { state: 'open', merged_at: null, headSha: head, headRepo: facts.names[dir] || 'example/PortOS', base: 'main' };
+  if (dir === facts.repo) facts.pr = pr; else facts.prs[dir] = pr;
+  git(dir, 'reset', '--hard', 'origin/main');
   return head;
+}
+function submodule(parent, path, name = 'example/Child') {
+  const root = facts.repo;
+  const source = repo();
+  facts.repo = root;
+  git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', git(source, 'remote', 'get-url', 'origin'), path);
+  const child = join(parent, path);
+  git(child, 'config', 'user.email', 'test@example.com'); git(child, 'config', 'user.name', 'Example Tester');
+  facts.names[child] = name;
+  git(parent, 'add', '.'); git(parent, 'commit', '-m', 'track child'); git(parent, 'push', 'origin', 'main');
+  return child;
+}
+function localChildWork(child) {
+  writeFileSync(join(child, 'README.md'), 'existing child commit\n'); git(child, 'commit', '-am', 'existing child work');
+  writeFileSync(join(child, 'README.md'), 'staged child work\n'); git(child, 'add', '.');
+  writeFileSync(join(child, 'README.md'), 'unstaged child work\n');
+  writeFileSync(join(child, 'draft.txt'), 'untracked child work\n');
+}
+function preserveChild(child) {
+  git(child, 'commit', '-m', 'preserve staged child work'); git(child, 'add', '.');
+  git(child, 'commit', '-m', 'preserve unstaged child work'); return publish(child);
 }
 const evaluate = (task = facts.task) => evaluateSuccessCriteria({ task, agentId: 'agent-repair', success: true,
   workspacePath: facts.repo, startedAt: Date.now() });
 
-beforeEach(() => { vi.clearAllMocks(); Object.assign(facts, { agents: [], owner: null, task: null, forge: true, pr: null }); });
+beforeEach(() => { vi.clearAllMocks(); Object.assign(facts, { agents: [], owner: null, task: null, forge: true, pr: null, prs: {}, names: {} }); });
 afterAll(async () => { await owned.drain(); repos.forEach(dir => rmSync(dir, { recursive: true, force: true })); cleanupTempDataRoots(); });
 
 describe('checkout repair public completion boundary', () => {
@@ -212,8 +237,104 @@ describe('checkout repair public completion boundary', () => {
 
   it('queues the server-owned contract without inferring it from task prose', async () => {
     repo(); const queued = await queueRepoRepairTask(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
-    expect(queued.options.repoRepairContract).toMatchObject({ version: 1, instanceId: 'example-instance', repoPath: facts.repo });
+    expect(queued.options.repoRepairContract).toMatchObject({ version: 2, instanceId: 'example-instance', repoPath: facts.repo });
     expect(queued.data.targetInstanceId).toBe('example-instance');
     expect(queued.data.useWorktree).toBe(false); expect(queued.type).toBe('internal');
   });
+  it('queues and completes dirty child preservation without a parent commit or changed retry budgets', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child [one]');
+    const original = git(facts.repo, 'rev-parse', 'HEAD');
+    localChildWork(child); git(facts.repo, 'add', 'deps/child [one]');
+    const ready = await checkUpdateRepoReadiness({ repoPath: facts.repo });
+    expect(ready.reasons).toContain('uncommitted-changes');
+    const queued = await queueRepoRepairTask(ready);
+    const baseline = queued.options.repoRepairContract;
+    expect(baseline.submodules[0]).toMatchObject({ path: 'deps/child [one]', repository: { repoPath: child,
+      origin: git(child, 'remote', 'get-url', 'origin'), head: git(child, 'rev-parse', 'HEAD') } });
+    expect(baseline.files).toEqual([]); expect(baseline.submodules[0].repository.files).toHaveLength(3);
+    await dispatch(); const before = structuredClone(facts.task.metadata);
+    preserveChild(child); git(facts.repo, 'reset', '--hard', 'origin/main');
+    expect(await evaluate()).toBe(true); expect(git(facts.repo, 'rev-parse', 'HEAD')).toBe(original);
+    expect(facts.task.metadata).toEqual(before); expect(committedDuringRun).not.toHaveBeenCalled();
+    facts.prs[child].state = 'closed'; facts.prs[child].merged_at = '2026-01-01T00:02:00Z';
+    expect(await evaluate()).toBe(true);
+  });
+
+  it('excludes unchanged published children with no origin without overlooking new dirty work', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child'); git(child, 'remote', 'remove', 'origin');
+    writeFileSync(join(facts.repo, 'README.md'), 'parent work\n');
+    const queued = await queueRepoRepairTask(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
+    expect(queued.options.repoRepairContract.submodules).toEqual([]);
+    await dispatch(); git(facts.repo, 'commit', '-am', 'preserve parent'); publish();
+    expect(await evaluate()).toBe(true);
+    writeFileSync(join(child, 'README.md'), 'new child work\n');
+    await expect(captureRepoRepairContract(await checkUpdateRepoReadiness({ repoPath: facts.repo }))).rejects.toThrow();
+  });
+
+  it('captures a clean child commit newly pinned by an unpublished parent commit', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child');
+    writeFileSync(join(child, 'README.md'), 'local pinned commit\n'); git(child, 'commit', '-am', 'local pin');
+    git(facts.repo, 'commit', '-am', 'pin local child commit'); await dispatch();
+    expect(facts.task.metadata.repoRepairContract.submodules).toHaveLength(1);
+    const parentHead = git(facts.repo, 'rev-parse', 'HEAD'); publish();
+    const childHead = git(child, 'rev-parse', 'HEAD'); git(child, 'reset', '--hard', 'origin/main');
+    expect(await evaluate()).toBe(false);
+    git(child, 'reset', '--hard', childHead); publish(child);
+    expect(await evaluate()).toBe(true);
+    expect(git(facts.repo, 'rev-parse', 'preserved-work')).toBe(parentHead);
+  });
+
+  it('requires preservation of a staged parent gitlink independent of the child checkout HEAD', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child');
+    writeFileSync(join(child, 'pinned.txt'), 'staged pointer work\n'); git(child, 'add', '.'); git(child, 'commit', '-m', 'staged pin');
+    const pinned = git(child, 'rev-parse', 'HEAD'); git(facts.repo, 'add', 'deps/child');
+    git(child, 'reset', '--hard', 'origin/main'); localChildWork(child); await dispatch();
+    preserveChild(child); git(facts.repo, 'reset', '--hard', 'origin/main');
+    expect(await evaluate()).toBe(false);
+    git(child, 'checkout', 'preserved-work'); git(child, 'merge', '--no-edit', pinned);
+    git(child, 'push', 'origin', 'preserved-work'); facts.prs[child].headSha = git(child, 'rev-parse', 'HEAD');
+    git(child, 'checkout', '--detach', 'origin/main');
+    expect(await evaluate()).toBe(true);
+  });
+
+  it('recursively preserves nested child work and independently requires its own publication', async () => {
+    repo(); const outer = submodule(facts.repo, 'deps/outer', 'example/Outer');
+    const inner = submodule(outer, 'nested/inner', 'example/Inner');
+    git(facts.repo, 'commit', '-am', 'pin nested dependency'); git(facts.repo, 'push', 'origin', 'main');
+    localChildWork(inner); await dispatch();
+    expect(facts.task.metadata.repoRepairContract.submodules[0].repository.submodules[0].path).toBe('nested/inner');
+    preserveChild(inner); const proof = facts.prs[inner]; delete facts.prs[inner];
+    expect(await evaluate()).toBe(false); facts.prs[inner] = proof; expect(await evaluate()).toBe(true);
+  });
+
+  for (const kind of ['lost-work', 'lost-staged', 'unpublished-commit', 'origin', 'path', 'gitlink', 'child-pr', 'unreadable', 'other-owner', 'symlink']) it(`refuses submodule ${kind} at the public completion boundary`, async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child'); localChildWork(child); await dispatch();
+    if (kind === 'lost-work') { git(child, 'reset', '--hard', 'origin/main'); unlinkSync(join(child, 'draft.txt')); }
+    else if (kind === 'lost-staged') { git(child, 'add', '.'); git(child, 'commit', '-m', 'lost staged version'); publish(child); }
+    else preserveChild(child);
+    if (kind === 'unpublished-commit') delete facts.prs[child];
+    if (kind === 'origin') git(child, 'remote', 'set-url', 'origin', '/example/missing');
+    if (['path', 'gitlink'].includes(kind)) {
+      const evidence = facts.task.metadata.repoRepairContract.submodules[0];
+      if (kind === 'path') evidence.path = '../outside'; else evidence.headGitlink = 'a'.repeat(40);
+      facts.owner.metadata.completionTaskDispatch.repoRepairContract = structuredClone(facts.task.metadata.repoRepairContract);
+    }
+    if (kind === 'child-pr') facts.prs[child].headRepo = 'example/PortOS';
+    if (kind === 'unreadable') facts.forge = false;
+    if (kind === 'other-owner') facts.agents.push({ id: 'other-child-owner', status: 'paused', metadata: { workspacePath: child } });
+    if (kind === 'symlink') { const moved = child + '-moved'; renameSync(child, moved); symlinkSync(moved, child, 'dir'); }
+    expect(await evaluate()).toBe(false);
+  });
+
+  it('retains version-one and legacy repair completion contracts', async () => {
+    repo(); await dispatch(); const contract = facts.task.metadata.repoRepairContract;
+    contract.version = 1; delete contract.submodules;
+    facts.owner.metadata.completionTaskDispatch.repoRepairContract = structuredClone(contract);
+    expect(await evaluate()).toBe(true);
+    facts.task.description = 'Restore the PortOS checkout to a clean default branch so automatic updates can run';
+    facts.task.metadata.useWorktree = false;
+    delete facts.task.metadata.repoRepairContract; delete facts.owner.metadata.completionTaskDispatch.repoRepairContract;
+    expect(await evaluate()).toBe(true);
+  });
+
 });

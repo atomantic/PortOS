@@ -293,6 +293,7 @@ export async function queueRepoRepairTask(verdict) {
       + 'and push or PR any local commits that are not on origin. Do not run the update itself; PortOS resumes automatically '
       + 'once the checkout is clean.',
     '',
+    'Preserve recursive submodule work in each child repository using its own published refs/PRs; the server-owned contract binds child origins, parent gitlinks, commits and staged/working file versions. Restore clean children to the parent pins after preservation.',
     'Work in the primary checkout, not a worktree — the state that needs fixing is there.',
   ].filter((line) => line !== null).join('\n');
 
