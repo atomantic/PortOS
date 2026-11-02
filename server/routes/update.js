@@ -204,6 +204,12 @@ router.get('/node-runtime', asyncHandler(async (req, res) => {
   res.json(await getNodeRuntimeStatus());
 }));
 
+// GET /api/update/browser — the periodically observed managed Chrome version.
+router.get('/browser', asyncHandler(async (req, res) => {
+  const { getBrowserUpdateSnapshot } = await import('../services/runtimeUpdateReview.js');
+  res.json(getBrowserUpdateSnapshot());
+}));
+
 // POST /api/update/node-runtime — install an offered Node with nvm and restart
 // PortOS on it. Refuses while anything a restart would kill is running.
 // Progress streams on `portos:update:step`.

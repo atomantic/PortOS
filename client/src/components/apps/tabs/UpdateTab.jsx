@@ -6,6 +6,7 @@ import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
 import AutoUpdatePanel from './AutoUpdatePanel';
 import NodeRuntimePanel from './NodeRuntimePanel';
+import ChromeUpdatePanel from './ChromeUpdatePanel';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
@@ -473,6 +474,7 @@ export default function UpdateTab() {
         busy={updating || polling || syncingFork}
         onLaunch={(call) => runUpdate({}, null, call)}
       />
+      <ChromeUpdatePanel />
 
       {/* Update Progress */}
       {steps.length > 0 && (

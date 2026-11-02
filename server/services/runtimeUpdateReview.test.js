@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __testing } from './runtimeUpdateReview.js';
 import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
+import { __testing as restartTesting } from './browserUpdateRestart.js';
 
 const { createRuntimeUpdateReviewMonitor } = __testing;
+const { createBrowserRestartController } = restartTesting;
 
 const runtime = (overrides = {}) => ({
   node: { version: 'v26.10.0', inSupportedRange: true, securityBaseline: { minimum: '26.12.1', compliant: false } },
@@ -13,13 +15,14 @@ const runtime = (overrides = {}) => ({
 });
 const harness = (overrides = {}) => ({ id: 'codex', label: 'Codex CLI', installed: true, probeState: 'available', package: '@openai/codex', version: '1.0.0', latestVersion: '1.1.0', ...overrides });
 
-function fixture({ node = runtime(), harnesses = [harness()], cached = [] } = {}) {
+function fixture({ node = runtime(), harnesses = [harness()], cached = [], browser } = {}) {
   const deps = {
     readRuntime: vi.fn().mockResolvedValue(node),
     readHarnesses: vi.fn().mockResolvedValue(harnesses),
     notify: vi.fn(),
     load: vi.fn().mockResolvedValue(cached),
     save: vi.fn().mockResolvedValue(undefined),
+    ...(browser ? { readBrowser: vi.fn().mockResolvedValue(browser) } : {}),
   };
   return { deps, monitor: createRuntimeUpdateReviewMonitor(deps) };
 }
@@ -27,6 +30,112 @@ function fixture({ node = runtime(), harnesses = [harness()], cached = [] } = {}
 afterEach(() => vi.useRealTimers());
 
 describe('runtime update review monitor', () => {
+  it('raises only a confirmed installed Chrome update and clears it after the running version changes', async () => {
+    const browser = { state: 'restart-required', runningVersion: '156.0.8078.4', installedVersion: '156.0.8078.74', channel: 'stable' };
+    const { monitor, deps } = fixture({ node: status(), harnesses: [], browser });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([expect.objectContaining({ id: 'browser-chrome', drillTo: '/browser',
+      revision: '156.0.8078.4:156.0.8078.74', summary: expect.stringContaining('Review open work') })]);
+    deps.readBrowser.mockResolvedValue({ state: 'unverified' });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([]);
+    deps.readBrowser.mockResolvedValue({ state: 'current', runningVersion: '156.0.8078.74', installedVersion: '156.0.8078.74',
+      publishedVersions: { mac_arm64: '157.0.9000.1' } });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([]);
+    expect(monitor.browserSnapshot().publishedVersions.mac_arm64).toBe('157.0.9000.1');
+  });
+
+  it('discards cached or superseded browser actions until the current identity is verified', async () => {
+    const stale = { id: 'browser-chrome', title: 'old', summary: 'old', revision: 'old', drillTo: '/browser' };
+    const { monitor, deps } = fixture({ node: status(), harnesses: [], cached: [stale], browser: { state: 'unverified' } });
+    await monitor.start();
+    await vi.waitFor(() => expect(deps.readBrowser).toHaveBeenCalled());
+    expect(monitor.items()).toEqual([]);
+    deps.readBrowser.mockResolvedValue({ state: 'restart-required', runningVersion: '1.0.0.1', installedVersion: '1.0.0.2' });
+    await monitor.refresh();
+    expect(monitor.items()).toHaveLength(1);
+    let finish;
+    deps.readBrowser.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValue({ state: 'unverified' });
+    const pending = monitor.refresh();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    runtimeUpdateEvents.emit('changed', { browserChanged: true });
+    expect(monitor.items()).toEqual([]);
+    finish({ state: 'restart-required', runningVersion: '1.0.0.1', installedVersion: '1.0.0.2' });
+    await pending;
+    expect(monitor.items()).toEqual([]);
+    monitor.stop();
+  });
+
+  it('invalidates a stale action when the confirmation check finds a changed browser', async () => {
+    let observed = { state: 'restart-required', runningVersion: '1.0.0.1', installedVersion: '1.0.0.2', channel: 'stable', proof: 'first' };
+    const { monitor, deps } = fixture({ node: status(), harnesses: [], browser: observed });
+    deps.readBrowser.mockImplementation(async () => observed);
+    const controller = createBrowserRestartController({
+      readStatus: async () => observed,
+      restart: async ({ beforeRestart }) => { await beforeRestart(); },
+      newToken: () => 'review-ticket',
+    });
+    await monitor.start();
+    await vi.waitFor(() => expect(monitor.items().find(item => item.id === 'browser-chrome')).toBeDefined());
+    const preflight = await controller.prepare();
+    await vi.waitFor(() => expect(monitor.items().find(item => item.id === 'browser-chrome')).toBeDefined());
+    observed = { state: 'current', runningVersion: '1.0.0.2', installedVersion: '1.0.0.2', channel: 'stable', proof: 'changed' };
+    await expect(controller.confirm(preflight.ticket)).rejects.toMatchObject({ status: 409 });
+    await vi.waitFor(() => expect(monitor.items().some(item => item.id === 'browser-chrome')).toBe(false));
+    monitor.stop();
+  });
+
+  it('raises an actionable downgrade warning instead of a restart offer', async () => {
+    const { monitor } = fixture({ node: status(), harnesses: [], browser: {
+      state: 'downgrade-risk', runningVersion: '156.0.8078.74', installedVersion: '156.0.8078.4',
+    } });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([expect.objectContaining({ id: 'browser-chrome', severity: 'high',
+      nextAction: 'Update installed Chrome', revision: 'downgrade:156.0.8078.74:156.0.8078.4' })]);
+  });
+
+  it('reports a verified post-restart downgrade even when running and installed versions match', async () => {
+    const { monitor, deps } = fixture({ node: status(), harnesses: [], browser: {
+      state: 'current', runningVersion: '1.0.0.1', installedVersion: '1.0.0.1', channel: 'stable',
+      restartVerification: { state: 'older', expectedVersion: '1.0.0.2', expectedChannel: 'stable' },
+    } });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([expect.objectContaining({ id: 'browser-chrome', severity: 'high',
+      summary: expect.stringContaining('1.0.0.2') })]);
+    deps.readBrowser.mockResolvedValue({ state: 'unverified' });
+    await monitor.refresh();
+    expect(monitor.items()).toEqual([]);
+  });
+
+  it('performs a bounded follow-up after browser changes even without an open Browser page', async () => {
+    vi.useFakeTimers();
+    const { monitor, deps } = fixture({ node: status(), harnesses: [], browser: { state: 'unverified' } });
+    await monitor.start();
+    await vi.waitFor(() => expect(deps.readBrowser).toHaveBeenCalledTimes(1));
+    runtimeUpdateEvents.emit('changed', { browserChanged: true });
+    await vi.waitFor(() => expect(deps.readBrowser).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(deps.readBrowser).toHaveBeenCalledTimes(3);
+    monitor.stop();
+  });
+
+  it('does not make an unknown or mismatched browser an action and isolates failures from other update sources', async () => {
+    const { monitor, deps } = fixture({ browser: { state: 'unverified' } });
+    await monitor.refresh();
+    expect(monitor.items().some(item => item.id === 'browser-chrome')).toBe(false);
+    expect(monitor.items().some(item => item.id === 'node')).toBe(true);
+    deps.readBrowser.mockResolvedValue({ state: 'restart-required', runningVersion: '1.0.0.1', installedVersion: '1.0.0.2' });
+    deps.readRuntime.mockRejectedValue(new Error('offline'));
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'browser-chrome')).not.toHaveProperty('unverified');
+    expect(monitor.items().find(item => item.id === 'node')).toHaveProperty('unverified', true);
+    deps.readBrowser.mockResolvedValue({ state: 'configuration-mismatch' });
+    await monitor.refresh();
+    expect(monitor.items().some(item => item.id === 'browser-chrome')).toBe(false);
+  });
+
   it('projects the running versions, security priority, guarded actions, and distinct pm2 update paths', async () => {
     const { monitor, deps } = fixture();
     await monitor.refresh();

@@ -38,6 +38,7 @@ const navigateSchema = z.object({
   url: z.string().url()
     .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed')
 });
+const restartSchema = z.object({ ticket: z.string().uuid().optional() }).strict();
 
 // Empty string or null from a "clear" UI action → unset (undefined), so the launcher
 // falls back to the platform default Chrome instead of trying to spawn "".
@@ -122,10 +123,20 @@ router.post('/stop', asyncHandler(async (req, res) => {
   res.json(status);
 }));
 
+// GET /api/browser/update-preflight - Fresh, local-only evidence for a restart confirmation.
+router.get('/update-preflight', asyncHandler(async (_req, res) => {
+  const { prepareBrowserUpdateRestart } = await import('../services/browserUpdateRestart.js');
+  res.set('Cache-Control', 'no-store');
+  res.json(await prepareBrowserUpdateRestart());
+}));
+
 // POST /api/browser/restart - Restart the browser process
 router.post('/restart', asyncHandler(async (req, res) => {
+  const { ticket } = validateRequest(restartSchema, req.body || {});
   console.log('🔄 Browser restart requested');
-  const status = await browserService.restartBrowser();
+  const status = ticket
+    ? await (await import('../services/browserUpdateRestart.js')).confirmBrowserUpdateRestart(ticket)
+    : await browserService.restartBrowser();
   res.json(status);
 }));
 

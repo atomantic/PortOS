@@ -1672,6 +1672,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/system/health/details', JOB_TABLE],
   ['GET /api/system/processing', ACTIVE_WORK_READ],
   ['GET /api/update/auto', ACTIVE_WORK_READ],
+  ['GET /api/update/browser', 'Reads the cached Chrome version observation; fixed read-only process and CDP probes run in the background monitor, not in the request.'],
   ['GET /api/update/status', FORGE_READ],
   ['GET /api/usage', PROVIDER_USAGE],
   ['GET /api/usage/claude-code', PROVIDER_USAGE],
