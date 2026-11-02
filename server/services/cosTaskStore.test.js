@@ -2634,6 +2634,11 @@ describe('release attempt membership', () => {
       { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
     expect(result.error).toMatch(/release attempt membership/);
     expect((await getTaskById(task.id)).metadata.releaseAttempts).toBeUndefined();
+    // An attempt that cannot be recorded (here: no instance) never runs unrecorded.
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: 'first-start' };
+    expect((await updateTask(task.id, claim(1, 'first-start'), 'internal',
+      { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } })).error).toMatch(/release attempt membership/);
+    expect((await getTaskById(task.id)).status).toBe('pending');
   });
 
   it('does not let a peer certify an existing local task whose earlier dispatches went unrecorded', async () => {

@@ -18,15 +18,16 @@ export function parseReleaseAttempts(value) {
   return value;
 }
 
-/** Membership after one verified dispatch. `pristine` says no earlier dispatch
- * left accounting on the task, so a newly created record can be complete. */
+/** Membership after one verified dispatch, or null when it cannot be recorded
+ * (the store then refuses the dispatch, so no attempt runs unrecorded).
+ * `pristine` says no earlier dispatch left accounting on the task, so a newly
+ * created record can be complete. Malformed history stays an incomplete hold. */
 export function appendReleaseAttempt(current, attempt, { pristine }) {
   const entry = { agentId: attempt.agentId, startedAt: attempt.startedAt, instanceId: attempt.instanceId };
   const base = parseReleaseAttempts(current) || { version: 1, complete: current === undefined && pristine === true, attempts: [] };
-  const recorded = base.attempts.some(row => isDeepStrictEqual(row, entry));
-  // An unrecordable entry or malformed history cannot be repaired here; keep the hold explicit.
-  const fits = validAttempt(entry) && (recorded || base.attempts.length < MAX_ATTEMPTS);
-  return { version: 1, complete: base.complete && fits, attempts: fits && !recorded ? [...base.attempts, entry] : base.attempts };
+  if (base.attempts.some(row => isDeepStrictEqual(row, entry))) return base;
+  if (!validAttempt(entry) || base.attempts.length >= MAX_ATTEMPTS) return null;
+  return { ...base, attempts: [...base.attempts, entry] };
 }
 
 /** Peer/local union. Neither side can drop the other's entries or certify them
@@ -44,6 +45,8 @@ export function mergeReleaseAttempts(local, remote, { localHistory = false } = {
   const right = parseReleaseAttempts(remote);
   const attempts = [...(left?.attempts || [])];
   for (const entry of right?.attempts || []) if (!attempts.some(row => isDeepStrictEqual(row, entry))) attempts.push(entry);
+  // Local entries (already within the cap) always survive. A union beyond the
+  // cap is not representable, so it is recorded as an incomplete hold.
   const bounded = attempts.slice(0, MAX_ATTEMPTS);
   return { version: 1, complete: Boolean(left?.complete && right?.complete && bounded.length === attempts.length), attempts: bounded };
 }

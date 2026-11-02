@@ -915,8 +915,10 @@ async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata,
     || !agent.startedAt || agent.startedAt !== spawnBudgetOperation.startedAt) {
     return { error: 'Cannot record release attempt membership for this dispatch' };
   }
-  updatedMetadata[RELEASE_ATTEMPTS_KEY] = appendReleaseAttempt(prior,
+  const membership = appendReleaseAttempt(prior,
     { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(current.metadata) });
+  if (!membership) return { error: 'Cannot record release attempt membership for this dispatch' };
+  updatedMetadata[RELEASE_ATTEMPTS_KEY] = membership;
   return null;
 }
 
