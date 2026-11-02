@@ -453,6 +453,16 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it('rejects unknown labels without changing UI ports or undefined keys', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv-ui', script: 'vite', ports: { ui: 5173 }, env: { VITE_PORT: 5173, undefined: 5173 } }
+] };`;
+    const edit = { processName: 'srv-ui', label: 'unknown_label', oldPort: 5173, newPort: 5174 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
   it('discovers static names and targets only the requested bound process', () => {
     const content = `const API_NAME = 'example-api';
 let ALIAS = API_NAME;

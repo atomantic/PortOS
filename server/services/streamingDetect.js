@@ -766,6 +766,7 @@ function findAppBlock(content, processName) {
  * @returns {{ block: string, changed: boolean }}
  */
 function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
+  if (!['api', 'ui', 'devUi'].includes(label)) return { block, changed: false };
   // Swap the matched digits to a sentinel first, then resolve the sentinel to
   // the new value — so a label whose old/new values overlap another source in
   // the same block can't chain. Each prefix capture group is preserved, so only
@@ -858,7 +859,7 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
       blockPats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
       blockPats.push(`(--port\\s+)${NUM}`);                            // args --port N
       // Label-specific runtime env var (UI_PORT / DEV_UI_PORT) — PM2 launches with it.
-      blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env UI_PORT: N
+      if (LABEL_ENV_KEY) blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env UI_PORT: N
     }
     // Bare env `PORT` is the UI port when this is a UI-named process — rewrite it
     // even alongside an inline ports object (it's the runtime port PM2 uses).
@@ -906,13 +907,12 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
  */
 export function rewriteEcosystemPortsByProcess(content, edits) {
   const valid = (edits || []).filter(e =>
-    e && typeof e.processName === 'string' && typeof e.label === 'string' &&
+    e && typeof e.processName === 'string' && ['api', 'ui', 'devUi'].includes(e.label) &&
     Number.isInteger(e.oldPort) && Number.isInteger(e.newPort) &&
     e.oldPort > 0 && e.newPort > 0 && e.oldPort !== e.newPort);
-  if (valid.length === 0) return { content, applied: [], unapplied: [] };
-
   const applied = [];
-  const unapplied = [];
+  const unapplied = (edits || []).filter(e => e && !['api', 'ui', 'devUi'].includes(e.label));
+  if (valid.length === 0) return { content, applied, unapplied };
 
   // Group edits by process so a block is sliced once even when several labels
   // in it change (e.g. apiPort + uiPort that currently share a value).
