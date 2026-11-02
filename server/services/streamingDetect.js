@@ -321,7 +321,8 @@ function ecosystemAppBlocks(content) {
 /**
  * Extract and resolve PM2_HOME path from ecosystem config content.
  * Supports optional declaration keywords (const|let|var), handles single, double,
- * and backtick quote styles, and expands template variables (homedir(), userInfo().username, process.env.HOME).
+ * and backtick quote styles, ignores commented lines, gives declarations precedence
+ * over environment properties, and expands template variables only on backtick template literals.
  *
  * @param {string} content
  * @param {Function} [currentUsername]
@@ -334,14 +335,40 @@ function extractPm2Home(content, currentUsername = () => {
     return process.env.USERNAME || process.env.USER || 'user';
   }
 }) {
-  const pm2HomeMatch = content.match(/(?:(?:\bconst|\blet|\bvar)\s+)?['"]?\bPM2_HOME\b['"]?\s*[:=]\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/);
-  if (!pm2HomeMatch) return null;
+  const comments = commentRanges(content);
+  const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
 
-  let homePath = pm2HomeMatch[1] ?? pm2HomeMatch[2] ?? pm2HomeMatch[3];
-  homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
-  homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
-  homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
-  return homePath;
+  // First give precedence to actual PM2_HOME variable declarations / assignments:
+  // e.g. const PM2_HOME = `...`, let PM2_HOME = '...', var PM2_HOME = "...", PM2_HOME = `...`
+  const declRegex = /(?:(?:\bconst|\blet|\bvar)\s+)?\bPM2_HOME\b\s*=\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(declRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  // Fallback to property assignment in env / object blocks:
+  // e.g. PM2_HOME: `...`, PM2_HOME: '...', "PM2_HOME": "..."
+  const propRegex = /['"]?\bPM2_HOME\b['"]?\s*:\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(propRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  return null;
 }
 
 /**

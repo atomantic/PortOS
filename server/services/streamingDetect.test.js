@@ -122,6 +122,21 @@ describe('parseEcosystemConfig', () => {
     `;
     expect(parseEcosystemConfig(nodeOsPrefix).pm2Home).toBe(`${homedir()}/.pm2-node-os`);
 
+    // comments are ignored and declarations take precedence over env properties
+    const commentAndPrecedence = `
+      // PM2_HOME: '/old-commented'
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: '/from-env' } }] };
+      const PM2_HOME = '/from-decl';
+    `;
+    expect(parseEcosystemConfig(commentAndPrecedence).pm2Home).toBe('/from-decl');
+
+    // literal strings in single/double quotes do not expand template expressions
+    const literalSingleQuote = `
+      const PM2_HOME = '\${process.env.HOME}/.pm2-literal';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(literalSingleQuote).pm2Home).toBe('${process.env.HOME}/.pm2-literal');
+
     // returns null for unrelated identifiers or files without PM2_HOME
     expect(parseEcosystemConfig('const PM2_HOME_DIR = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
     expect(parseEcosystemConfig('const NOT_PM2_HOME = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
