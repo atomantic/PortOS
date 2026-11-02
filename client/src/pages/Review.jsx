@@ -402,6 +402,9 @@ export default function Review() {
   const queueSourceErrors = useMemo(
     () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
     [queue]);
+  const queueSourceIncomplete = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.incomplete),
+    [queue]);
   const selectedAction = useMemo(
     () => (queue?.items || []).find((item) => item.id === actionId) || null,
     [queue, actionId]);
@@ -556,7 +559,12 @@ export default function Review() {
                 Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
               </p>
             )}
-            {queue?.partial && (
+            {queueSourceIncomplete.length > 0 && (
+              <p role="status" className="text-xs text-gray-500">
+                Some checks for {queueSourceIncomplete.map(([, s]) => s.label).join(', ')} are unverified; automatic checks will retry.
+              </p>
+            )}
+            {queue?.partial && (queueSourceIncomplete.length === 0 || Object.values(queue.sources || {}).some(source => source.truncation)) && (
               <p role="status" className="text-xs text-gray-500">
                 This bounded view may omit additional actions; open a source to see its complete list.
               </p>

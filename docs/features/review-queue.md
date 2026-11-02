@@ -24,12 +24,15 @@ snapshot:
 
 The response also carries the compatibility `counts`, `generatedAt`, and row
 fields already consumed by the Review Hub. `total` and each
-`totalsBySource` value are `null` when a source failed or its bounded read was
-truncated. `partial` is true in either case; an unavailable source must never
+`totalsBySource` value are `null` when a source failed, its read was truncated,
+or its checks are incomplete. `partial` is true in those cases; an unavailable
+source must never
 be represented as an empty, healthy inbox.
 
 Each source descriptor includes `availability`, `available`, `error`,
-`truncation`, `lowerBound`, `total`, and `shown`. A numeric lower bound counts
+`truncation`, `incomplete`, `lowerBound`, `total`, and `shown`. An incomplete
+software-update source has checks still pending or retrying; it contributes no
+diagnostic rows to the action count. A numeric lower bound counts
 the unique rows collected from that source in the snapshot.
 
 ## Canonical rows

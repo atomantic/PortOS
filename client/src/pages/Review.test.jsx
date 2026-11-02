@@ -205,6 +205,16 @@ it('shows the harness update destination beside snooze in the action row', async
   expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 
+it('shows unverified update checks as background status instead of an action', async () => {
+  api.getReviewQueue.mockResolvedValueOnce({ partial: true, items: [], sources: {
+    updates: { label: 'Software updates', availability: 'partial', available: true, incomplete: true },
+  } });
+  render(<Review />);
+  expect(await screen.findByText('Some checks for Software updates are unverified; automatic checks will retry.')).toBeInTheDocument();
+  expect(screen.queryByText('Nothing needs you today')).not.toBeInTheDocument();
+  expect(screen.queryByRole('combobox', { name: /^Snooze/ })).not.toBeInTheDocument();
+});
+
 it('uses the source destination instead of sending a semantic review descriptor as a mutation', async () => {
   routerState.actionId = 'x:draft-example';
   api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{

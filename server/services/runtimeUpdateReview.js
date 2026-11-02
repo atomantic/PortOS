@@ -56,7 +56,7 @@ function readNodeEvidence(node, releases) {
  * not hide either.
  */
 function holdsPreviousNodeRow(previous, { security, unsupported, securityRevision }) {
-  if (!previous) return false;
+  if (!previous || (previous.unverified && !previous.unverifiedPrevious)) return false;
   if (unsupported && previous.severity !== 'high') return false;
   if (!security) return true;
   const previousSecurity = previous.revision?.startsWith('security:') ? previous.revision.slice('security:'.length) : null;
@@ -200,6 +200,11 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
       ...entry,
       ...(entry.unverified ? { summary: `Status unverified; last known result: ${entry.summary}` } : {}),
     }));
+  const snapshot = () => ({
+    items: items(),
+    // An unsupported comparison is not a failed check and cannot be retried.
+    incomplete: !checked || [...rows.values()].some((entry) => entry.id !== 'pm2-upstream' && entry.unverified && entry.retrySoon !== false),
+  });
   const refresh = () => {
     if (inflight) { again = true; return inflight; }
     inflight = (async () => {
@@ -247,7 +252,7 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
     tick();
   };
   const stop = () => { started = false; ready = false; clearTimeout(timer); runtimeUpdateEvents.off('changed', onChange); };
-  return { items, refresh, start, stop };
+  return { items, snapshot, refresh, start, stop };
 }
 
 const monitor = createRuntimeUpdateReviewMonitor({
@@ -258,6 +263,6 @@ const monitor = createRuntimeUpdateReviewMonitor({
   save: async (entries) => atomicWrite(CACHE_FILE, entries),
 });
 
-export const getRuntimeUpdateReviewItems = () => monitor.items();
+export const getRuntimeUpdateReviewSnapshot = () => monitor.snapshot();
 export const startRuntimeUpdateReview = () => monitor.start();
 export const __testing = { createRuntimeUpdateReviewMonitor };

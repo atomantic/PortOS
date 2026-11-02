@@ -87,10 +87,12 @@ describe('runtime update review monitor', () => {
     const manualHarness = harness({ id: 'manual', package: null, latestVersion: null });
     const { monitor, deps } = fixture({ node: status(), harnesses: [unknownHarness, manualHarness, harness()] });
     expect(monitor.items()).toEqual([]);
+    expect(monitor.snapshot().incomplete).toBe(true);
     await monitor.start();
     await vi.waitFor(() => expect(deps.save).toHaveBeenCalled());
     expect(monitor.items().map((item) => item.id)).toEqual(['harness:codex']);
     const saved = deps.save.mock.calls.at(-1)[0];
+    expect(monitor.snapshot().incomplete).toBe(true);
     expect(saved.find((item) => item.id === 'harness:unknown')).toMatchObject({ unverified: true, unverifiedPrevious: false, retrySoon: true });
     expect(saved.find((item) => item.id === 'harness:manual')).toMatchObject({ unverified: true, unverifiedPrevious: false, retrySoon: false });
 
@@ -99,6 +101,7 @@ describe('runtime update review monitor', () => {
     deps.readHarnesses.mockResolvedValue([harness({ id: 'unknown' }), manualHarness, harness()]);
     await monitor.refresh();
     expect(monitor.items().find((item) => item.id === 'harness:unknown')).toMatchObject({ revision: '1.0.0:1.1.0' });
+    expect(monitor.snapshot().incomplete).toBe(false);
     deps.readHarnesses.mockResolvedValue([harness({ id: 'unknown', probeState: 'unavailable' }), manualHarness, harness()]);
     await monitor.refresh();
     expect(monitor.items().find((item) => item.id === 'harness:unknown')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true, unverifiedPrevious: true });
@@ -321,6 +324,14 @@ describe('runtime row reconciliation', () => {
       node: { inSupportedRange: false }, releases: { latestInLine: { version: 'v26.13.0' }, securityVerified: false },
     }));
     expect(unsupported.node).toMatchObject({ revision: 'update:v26.13.0', severity: 'high', unverified: true, summary: expect.stringContaining('Unsupported runtime') });
+  });
+
+  it('replaces an unknown-only Node observation when a newer release is found', async () => {
+    const byId = await observe(
+      status({ releases: { securityVerified: false } }),
+      status({ releases: { latestInLine: { version: 'v26.14.0' }, securityVerified: false } }),
+    );
+    expect(byId.node).toMatchObject({ title: 'Node.js update available', revision: 'update:v26.14.0', unverified: true });
   });
 
   it('holds a security Node.js row when the unverified index repeats or lacks its target, but escalates an unsupported row', async () => {
