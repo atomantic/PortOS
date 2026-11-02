@@ -298,7 +298,7 @@ describe('catalog sheet routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ jobId: 'job-1', variant: 'blueprint', delegatedTo: null });
     const params = queuedParams();
-    expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint' });
+    expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint', inspect: true });
     expect(params.characterSheet).toBeUndefined();
     const ids = params.promptAdditions.map((a) => a.id);
     expect(ids).toEqual(['sheet-default-style', 'sheet-negatives']);
@@ -321,7 +321,7 @@ describe('catalog sheet routes', () => {
     expect(res.body).toMatchObject({ delegatedTo: 'universe', universeId: 'universe-1', entryId: 'char-entry-1', variant: 'standard' });
     const params = queuedParams();
     expect(params.characterSheet).toMatchObject({ universeId: 'universe-1', entryId: 'char-entry-1', variant: 'standard' });
-    expect(params.catalogAttach).toBeUndefined();
+    expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:standard', inspect: true });
     expect(params.referenceImagePaths[0]).toMatch(/canonical\.png$/);
     expect(params.prompt).toBe(preview.body.preview.sentPrompt);
   });
@@ -514,7 +514,7 @@ describe('catalog sheet routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ variant: 'look', role: 'look:wd-scarf', delegatedTo: null });
       const params = queuedParams();
-      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'look:wd-scarf' });
+      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'look:wd-scarf', inspect: true });
       expect(params.characterSheet).toBeUndefined();
       expect(sent.sentPrompt).toBe(params.prompt);
       expect(sent.promptAdditions).toEqual(params.promptAdditions);
@@ -786,7 +786,7 @@ describe('catalog sheet routes', () => {
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ role: 'sheet:blueprint@form-kid', delegatedTo: null });
       const params = queuedParams();
-      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint@form-kid' });
+      expect(params.catalogAttach).toEqual({ ingredientId: 'cat-chr-1', kind: 'reference', role: 'sheet:blueprint@form-kid', inspect: true });
       expect(params.prompt).toContain('oversized yellow raincoat');
       expect(params.prompt).not.toContain('silver coat');
       expect(params.prompt).not.toContain('short bob');
