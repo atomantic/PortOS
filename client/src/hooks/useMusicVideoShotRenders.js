@@ -44,7 +44,8 @@ export default function useMusicVideoShotRenders(project) {
 
   useEffect(() => {
     generation.current += 1;
-    if (!projectId || !composed) { setStatus(null); return undefined; }
+    setStatus(null);
+    if (!projectId || !composed) return undefined;
     const timer = setTimeout(() => refresh.current(), 600);
     return () => {
       clearTimeout(timer);
