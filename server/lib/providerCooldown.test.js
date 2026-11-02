@@ -42,6 +42,7 @@ describe('resolveProviderBench', () => {
   it('declines to bench a request-specific failure', () => {
     expect(resolveProviderBench({ category: 'content-refusal' })).toBeNull();
     expect(resolveProviderBench({ category: 'model-not-found' })).toBeNull();
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED })).toBeNull();
     expect(resolveProviderBench({ category: 'output-length' })).toBeNull();
   });
 

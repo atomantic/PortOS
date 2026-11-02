@@ -1860,6 +1860,35 @@ it('names the Casting changes since the sheet was built, and an image update cle
 
 // These regressions uniquely pin image-content review at the generation/approval boundary.
 describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
+  it('inspects standalone images with a verified local vision model instead of a text-only default', async () => {
+    const api = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true, defaultModel: 'qwen3-coder:30b' };
+    const providers = await import('../providers.js');
+    const ollama = await import('../ollamaManager.js');
+    const runner = await import('../promptRunner.js');
+    const { resolvePlateReviewer } = await import('./plateReview.js');
+    const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');
+    const spies = [
+      vi.spyOn(providers, 'getAllProviders').mockResolvedValue({ activeProvider: 'ollama', providers: [api] }),
+      vi.spyOn(ollama, 'getBaseUrl').mockReturnValue('http://localhost:11434'),
+      vi.spyOn(ollama, 'getInstalledModels').mockResolvedValue([{ id: 'qwen3-coder:30b' }, { id: 'gemma3:27b' }]),
+      vi.spyOn(ollama, 'getModelCapabilities').mockImplementation(async (id) => id === 'gemma3:27b' ? ['completion', 'vision'] : ['completion', 'tools']),
+      vi.spyOn(runner, 'runPromptThroughProvider').mockImplementation(async (args) => {
+        await args.beforeExecute({ provider: args.provider, model: args.model });
+        return { provider: api, model: args.model, runId: 'vision-run', text: JSON.stringify({ checks:
+          ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id, status: 'pass', note: 'Visible in the image.' })) }) };
+      }),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: resolvePlateReviewer, reviewImage: reviewCastSetsImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'pass' && image.inspection.model === 'gemma3:27b')).toBe(true);
+    expect(runner.runPromptThroughProvider).toHaveBeenCalled();
+    expect(runner.runPromptThroughProvider.mock.calls.every(([args]) => args.model === 'gemma3:27b' && args.allowFallback === false)).toBe(true);
+  });
+
   it('inspects a re-render without a production run using the API default even when a CLI is active (#14653)', async () => {
     const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
     const providers = await import('../providers.js');

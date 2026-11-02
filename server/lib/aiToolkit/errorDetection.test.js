@@ -965,6 +965,19 @@ describe('Error Detection', () => {
       expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
     });
 
+    it('recognizes Ollama\'s nested unsupported-image error without persisting the body', () => {
+      const body = JSON.stringify({ error: JSON.stringify({ error: {
+        message: 'Multimodal data provided, but model does not support multimodal requests.',
+        detail: 'private-example',
+      } }) });
+      const result = analyzeHttpError({ status: 400, statusText: 'Bad Request', body });
+      expect(result).toMatchObject({ category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED, message: 'The selected model does not support image inputs.' });
+      expect(JSON.stringify(result)).not.toContain('private-example');
+      expect(analyzeHttpError({ status: 500, statusText: 'Server Error', body }).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+      const echoed = JSON.stringify({ error: { message: 'Other bad request', prompt: 'Multimodal data provided, but model does not support multimodal requests.' } });
+      expect(analyzeHttpError({ status: 400, statusText: 'Bad Request', body: echoed }).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('preserves a status-zero readiness failure instead of inventing HTTP 0', () => {
       const result = analyzeHttpError({
         status: 0,
