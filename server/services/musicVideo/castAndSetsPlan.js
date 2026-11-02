@@ -41,6 +41,7 @@
  * its prompt. A code-only project plans no images at all.
  */
 
+import { FACE_SHEET_ANGLE_TEMPLATE, FACE_SHEET_TEMPLATE_INSTRUCTION } from '../../lib/faceSheetAngleTemplate.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
@@ -190,7 +191,8 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
 
 /**
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
- * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
+ * prompt, deps, refKeys, refImages?, refTemplates?, setId?, testIndex? } }`. Shipped
+ * `refTemplates` precede all identity references. `refKeys` name
  * other plan keys whose image is passed as a reference (in order), then
  * `refImages` (a linked catalog record's Casting images, else the reference
  * labeled with its name, then the director's character identity images)
@@ -285,8 +287,10 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     label: 'Face sheet',
     deps: ['character'],
     refKeys: ['character'],
+    refTemplates: [FACE_SHEET_ANGLE_TEMPLATE],
     refImages: identities,
     prompt: join(
+      FACE_SHEET_TEMPLATE_INSTRUCTION,
       `Photographic face reference sheet of the SAME person as the character reference, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BELOW IT, a ${expressionGrid(moods.length)} grid of tight close-ups of the moods`,
       identity(p),
       moods.length
@@ -412,7 +416,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       castId: c.id,
       deps: [key],
       refKeys: [key],
+      refTemplates: [FACE_SHEET_ANGLE_TEMPLATE],
       prompt: join(
+        FACE_SHEET_TEMPLATE_INSTRUCTION,
         `Photographic face reference sheet of the SAME person as the cast sheet, ${c.name}, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BOTTOM ROW, five close-ups of their moods, front or near-front`,
         identity(c),
         `Panels: ${CAST_FACE_MOODS}`,

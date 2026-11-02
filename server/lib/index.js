@@ -52,6 +52,7 @@ export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
 export * from './catalogAppearance.js';
 export * from './characterSheetReferences.js';
+export * from './faceSheetAngleTemplate.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';

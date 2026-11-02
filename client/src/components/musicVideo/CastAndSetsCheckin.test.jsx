@@ -137,6 +137,22 @@ describe('optional greybox references on Look', () => {
 });
 
 describe('Cast & Sets incremental references', () => {
+  it('shows the angle template first and opens its own preview before and after submission', async () => {
+    const openPreview = vi.fn();
+    const template = { kind: 'template', filename: 'music-video-face-angles.png' };
+    const facePlan = { face: { key: 'face', label: 'Face sheet', prompt: 'Follow the angle guide', deps: ['character'], refKeys: ['character'], refTemplates: [template.filename] } };
+    const initial = project({ character: done('keeper.png', 'Keeper') }, { plan: facePlan });
+    render(<Harness initial={initial} openPreview={openPreview} />);
+    const input = card('Face sheet').getByRole('img', { name: `Face sheet input: ${template.filename}` });
+    expect(input).toHaveAttribute('src', `/data/templates/${template.filename}`);
+    fireEvent.click(input.closest('button'));
+    expect(openPreview).toHaveBeenCalledWith(`template:${template.filename}`);
+    expect(castAndSetsPreviewItems(initial.castAndSets)[0]).toMatchObject({ key: `template:${template.filename}`, previewUrl: `/data/templates/${template.filename}` });
+    const submitted = project({ face: { ...done('face.png', 'Exact sent prompt'), submittedReferences: [template, { kind: 'image', filename: 'keeper.png' }] } }, { plan: facePlan });
+    await stage(submitted);
+    expect(card('Face sheet').getAllByRole('img').filter((img) => img.alt.includes(' input: ')).map((img) => img.getAttribute('src'))).toEqual([`/data/templates/${template.filename}`, '/data/images/keeper.png']);
+  });
+
   it('shows plan, completion, failure and regeneration from sockets while prompts and images remain inspectable', async () => {
     const view = render(<Harness initial={project()} />);
     expect(card('Keeper').getByText('Planned prompt')).not.toBeDisabled();

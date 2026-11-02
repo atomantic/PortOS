@@ -1125,7 +1125,11 @@ it('conditions the character, expressions and looks sheets on the director\'s ow
   const character = jobs.find((j) => keyOf(j) === 'character');
   expect(refs('character')).toEqual(['upload-face.png', 'rendered-face.png']);
   expect(character.params.prompt).toContain('SAME person as the identity reference images');
-  expect(refs('expressions')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('expressions')).toEqual(['music-video-face-angles.png', `${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  const face = jobs.findLast((j) => keyOf(j) === 'expressions');
+  const submitted = (await current(project.id)).castAndSets.images.expressions;
+  expect(submitted.submittedReferences[0]).toEqual({ kind: 'template', filename: 'music-video-face-angles.png' });
+  expect(readFileSync(face.params.referenceImagePaths[0]).subarray(1, 4).toString()).toBe('PNG');
   expect(refs('looks')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
   expect(refs('set:lab')).toBeUndefined();
 });
@@ -1158,6 +1162,7 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
   const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
   expect(refs('character')).toEqual(['keeper.png']);
   expect(refs('cast:mate')).toEqual(['mate.png']);
+  expect(refs('face:mate')).toEqual(['music-video-face-angles.png', `${job('cast:mate').id}.png`]);
   expect(job('cast:mate').params.prompt).toContain('SAME person as the reference image');
   expect(refs('set:harbor')).toEqual(['harbor.png']);
   expect(job('set:harbor').params.prompt).toContain('The same location as the reference image');
