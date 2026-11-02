@@ -454,10 +454,12 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 
 describe('rewriteEcosystemPortsByProcess', () => {
   it('rewrites only the active matching app when name follows other properties', () => {
-    const active = `{ script: 'server.js', metadata: { name: 'nested' }, name: 'example-api', env: { PORT: 6100 } }`;
+    const active = `{ script: 'server.js', pattern: /[}]/, metadata: { name: 'nested' }, name: 'example-api', env: { PORT: 6100 } }`;
     const content = `// { name: 'example-api', env: { PORT: 6100 } }
 /* { name: 'example-api', env: { PORT: 6100 } } */
 const example = "{ name: 'example-api', env: { PORT: 6100 } }";
+const pattern = /[}\"']/;
+const template = \`outer \${\`inner }\`}\`;
 module.exports = { apps: [
   ${active},
   { name: 'example-worker', env: { PORT: 6100 } }
@@ -1362,6 +1364,8 @@ describe('streamDetection frame sequence', () => {
 // { name: 'example-old-api', env: { PORT: 6109 } },
 /* module.exports = { apps: [{ name: 'example-block-api', env: { PORT: 6108 } }] }; */
 const example = "apps: [{ name: 'example-string-api', env: { PORT: 6107 } }]";
+const pattern = /[}\"']/;
+const template = \`outer \${\`inner }\`}\`;
 module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
 throw new Error('ecosystem source must not execute');
 `);

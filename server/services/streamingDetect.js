@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { homedir } from 'os';
+import { tokenize } from '../../scripts/lib/sourceTokens.js';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { parseEnvContents } from '../lib/portosEnv.js';
@@ -186,67 +187,42 @@ function findMatchingBrace(content, openBraceIdx) {
 }
 
 /**
- * Tokenize without evaluating source. Strings (including templates) stay opaque,
- * so example objects and interpolation braces cannot become app boundaries.
+ * Literal entries of apps arrays, shared by discovery and targeted writes.
+ * The dependency-free source lexer keeps regexes and nested templates opaque.
  */
-function ecosystemSourceTokens(content) {
-  const tokens = [];
-  for (let i = 0; i < content.length;) {
-    const start = i;
-    const char = content[i];
-    if (/\s/.test(char)) { i++; continue; }
-    if (char === '/' && content[i + 1] === '/') {
-      while (i < content.length && content[i] !== '\n') i++;
-      continue;
-    }
-    if (char === '/' && content[i + 1] === '*') {
-      const end = content.indexOf('*/', i + 2);
-      i = end < 0 ? content.length : end + 2;
-      continue;
-    }
-    if (char === "'" || char === '"' || char === '`') {
-      i++;
-      while (i < content.length && (content[i] !== char || isEscaped(content, i))) i++;
-      if (i === content.length) break;
-      i++;
-    } else if (/[\w$]/.test(char)) {
-      while (i < content.length && /[\w$]/.test(content[i])) i++;
-    } else {
-      i++;
-    }
-    tokens.push({ text: content.slice(start, i), start, end: i - 1 });
-  }
-  return tokens;
-}
-
-/** Literal entries of apps arrays, shared by discovery and targeted writes. */
 function ecosystemAppBlocks(content) {
-  const tokens = ecosystemSourceTokens(content);
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    return [];
+  }
   const stack = [];
   const blocks = [];
-  const isKey = (token, key) => [key, `'${key}'`, `"${key}"`].includes(token?.text);
+  const punctuation = index => tokens[index]?.t === 'p' ? tokens[index].v : null;
+  const isKey = (index, key) => ['id', 's'].includes(tokens[index]?.t) && tokens[index].v === key;
   const closes = { '}': '{', ']': '[', ')': '(' };
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    const previous = tokens[i - 1]?.text;
+    const symbol = punctuation(i);
+    const previous = punctuation(i - 1);
     const parent = stack.at(-1);
-    if (['{', '[', '('].includes(token.text)) {
+    if (['{', '[', '('].includes(symbol)) {
       stack.push({
-        open: token.text,
-        start: token.start,
-        apps: token.text === '[' && previous === ':' && isKey(tokens[i - 2], 'apps') &&
-          ['{', ','].includes(tokens[i - 3]?.text),
-        app: token.text === '{' && parent?.apps && ['[', ','].includes(previous),
+        open: symbol,
+        start: token.i,
+        apps: symbol === '[' && previous === ':' && isKey(i - 2, 'apps') &&
+          ['{', ','].includes(punctuation(i - 3)),
+        app: symbol === '{' && parent?.apps && ['[', ','].includes(previous),
         name: null,
       });
-    } else if (Object.hasOwn(closes, token.text)) {
+    } else if (Object.hasOwn(closes, symbol)) {
       const frame = stack.pop();
-      if (frame?.open !== closes[token.text]) return blocks;
-      if (frame.app && frame.name) blocks.push({ start: frame.start, end: token.end, name: frame.name });
-    } else if (parent?.app && previous === ':' && isKey(tokens[i - 2], 'name') &&
-      ['{', ','].includes(tokens[i - 3]?.text) && [',', '}'].includes(tokens[i + 1]?.text) &&
-      /^(['"])[\s\S]*\1$/.test(token.text)) {
-      parent.name = token.text.slice(1, -1);
+      if (frame?.open !== closes[symbol]) return blocks;
+      if (frame.app && frame.name) blocks.push({ start: frame.start, end: token.i, name: frame.name });
+    } else if (parent?.app && previous === ':' && isKey(i - 2, 'name') &&
+      ['{', ','].includes(punctuation(i - 3))) {
+      parent.name = token.t === 's' && [',', '}'].includes(punctuation(i + 1)) ? token.v : null;
     }
   }
   return blocks;
