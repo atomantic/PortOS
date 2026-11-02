@@ -453,6 +453,44 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it('discovers static names and targets only the requested bound process', () => {
+    const content = `const API_NAME = 'example-api';
+let ALIAS = API_NAME;
+var WORKER_NAME = \`example-worker\`;
+module.exports = { apps: [
+  { name: ALIAS, script: 'server.js', env: { PORT: 6100 } },
+  { name: WORKER_NAME, script: 'worker.js', env: { PORT: 6100 } },
+  { name: \`example-static\`, script: 'static.js', env: { PORT: 6100 } }
+] };`;
+    expect(parseEcosystemConfig(content).processes.map(p => p.name)).toEqual([
+      'example-api', 'example-worker', 'example-static',
+    ]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.unapplied).toEqual([]);
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100], ['example-static', 6100],
+    ]);
+    expect(result.content).toContain('name: ALIAS');
+  });
+
+  it('leaves dynamic, empty, unresolved and cyclic process names undiscovered and untouched', () => {
+    const content = "const COMPUTED = 'example-api' + suffix;\n" +
+      "const FIRST = SECOND; const SECOND = FIRST; const EMPTY = '';\n" +
+      "module.exports = { apps: [\n" +
+      "{ name: COMPUTED, env: { PORT: 6100 } },\n" +
+      "{ name: `example-${suffix}`, env: { PORT: 6100 } },\n" +
+      "{ name: MISSING, env: { PORT: 6100 } },\n" +
+      "{ name: FIRST, env: { PORT: 6100 } },\n" +
+      "{ name: EMPTY, env: { PORT: 6100 } }\n] };";
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
   it('rewrites only the active matching app when name follows other properties', () => {
     const active = `{ script: 'server.js', pattern: /[}]/, metadata: { name: 'nested' }, name: 'example-api', env: { PORT: 6100 } }`;
     const content = `// { name: 'example-api', env: { PORT: 6100 } }

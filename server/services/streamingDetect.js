@@ -220,7 +220,14 @@ function ecosystemAppBlocks(content) {
   let exported = null;
   for (let i = 0; i < tokens.length; i++) {
     if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
-      bindings.set(tokens[i + 1].v, i + 3);
+      const start = i + 3;
+      const end = (matching.get(start) ?? start) + 1;
+      const next = tokens[end];
+      // Resolve only a whole initializer, never the literal prefix of an expression.
+      const terminated = !next || [';', ','].includes(punctuation(end)) ||
+        (['const', 'let', 'var', 'module', 'export'].some(word => isWord(end, word)) &&
+          /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
+      if (terminated) bindings.set(tokens[i + 1].v, start);
     }
     if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
       exported = i + 4;
@@ -268,8 +275,11 @@ function ecosystemAppBlocks(content) {
     const object = resolve(i);
     if (punctuation(object) === '{') {
       const name = property(object, 'name');
-      if (name && name.end === name.start + 1 && tokens[name.start]?.t === 's' && tokens[name.start].v) {
-        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: tokens[name.start].v });
+      const token = name && name.end === name.start + 1 ? tokens[resolve(name.start)] : null;
+      const value = token?.t === 's' ? token.v
+        : token?.t === 'tpl' && token.exprs.length === 0 ? token.quasis[0] : null;
+      if (value) {
+        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: value });
       }
     }
     i = expressionEnd(i, limit);
