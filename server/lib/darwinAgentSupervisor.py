@@ -456,7 +456,7 @@ def inner(server, token):
         os.close(error_read)
         if failed:
             os.waitpid(child, 0)
-            send_message(connection, {'error': int(failed or b'0')})
+            send_message(connection, {'error': int(failed)})
             return 1
         send_message(connection, {'pid': child, 'created': created or '0'})
         # A stop is the supervisor's to deliver; the stub must outlive SIGTERM

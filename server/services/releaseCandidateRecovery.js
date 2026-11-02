@@ -147,9 +147,8 @@ async function publicationFence({ origin, api }, checkout, candidate, published)
   if (!Array.isArray(promotions) || promotions.length >= 100 || promotions.some(row => row?.head?.ref !== checkout.branch
     || row.head.repo?.full_name !== origin.fullName)) refuse('candidate-publication-ambiguous');
   if (!published) {
-    const tag = `refs/tags/v${candidate.version}`;
-    const tags = await api(`git/matching-refs/${tag.slice('refs/'.length)}`);
-    if (!Array.isArray(tags) || tags.some(row => row?.ref === tag)) refuse('candidate-release-tag-present');
+    const tags = await api(`git/matching-refs/tags/v${candidate.version}`);
+    if (!Array.isArray(tags) || tags.some(row => row?.ref === `refs/tags/v${candidate.version}`)) refuse('candidate-release-tag-present');
   }
   const { workflow_runs: runs } = await api('actions/workflows/release.yml/runs?branch=release&per_page=100');
   if (!Array.isArray(runs) || runs.some(run => run?.status !== 'completed')) refuse('candidate-release-workflow-active');
