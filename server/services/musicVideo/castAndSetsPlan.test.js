@@ -137,6 +137,20 @@ describe('Cast & Sets set plates', () => {
 describe('Cast & Sets test frames', () => {
   const tests = [{ setId: 'street', look: 'TEE', action: 'Renee coasts past on her bike', caption: 'hands off' }];
 
+  it('lets an in-set action use a signature prop without a sheet-only instruction', () => {
+    const direction = { ...DIRECTION,
+      protagonist: { ...DIRECTION.protagonist, signature: 'a black snapshot camera' },
+      tests: [{ setId: 'street', look: 'TEE', action: 'Renee holds the camera up to her eye', caption: 'the shutter clicks' }],
+    };
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, direction);
+    expect(plan['test:1'].prompt).toContain('Renee holds the camera up to her eye');
+    expect(plan['test:1'].prompt).not.toContain('carried objects belong on the prop sheet');
+    const prior = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, protagonist: { ...direction.protagonist, signature: '' } });
+    expect(plan['test:1'].prompt).toBe(prior['test:1'].prompt);
+    expect(plan.character.prompt).toContain('signature: a black snapshot camera');
+    expect(plan.character.prompt).toContain('carried objects belong on the prop sheet');
+  });
+
   it('lights the person by the plate so they never read as pasted in', () => {
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, look: 'Glossy anamorphic cinema', tests });
     expect(plan['test:1'].prompt).toContain('People are lit only by the light already in the place');
