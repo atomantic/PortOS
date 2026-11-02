@@ -153,6 +153,43 @@ module.exports = { apps: [{ name: 'example-server', ports: settings, metadata: s
       expect(await readFile(configPath, 'utf8')).toBe(content.replace('7000', '7100'));
     });
 
+  it.each([
+    "var NAME = 'example-server'; if (true) { var NAME = 'other-server'; }",
+    "var NAME = 'example-server'; if (true) { var { next: NAME } = { next: 'other-server' }; }",
+  ])('refuses block-contained reinitializations of process names: %s', async declaration => {
+    const before = await fixture(`${declaration}
+module.exports = { apps: [{ name: NAME, env: { PORT: 7000 } }] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it('updates API launch arguments with their declared API port', async () => {
+    const content = `module.exports = { apps: [{ name: 'example-server', ports: { api: 7000 }, args: '--port 7000' }] };`;
+    await fixture(content);
+    expect((await update({ apiPort: 7100 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replaceAll('7000', '7100'));
+  });
+
+  it.each(["'vite --port 7001'", "`vite --port ${7001}`"])(
+    'refuses argument strings also consumed by metadata: %s', async value => {
+      const before = await fixture(`const ARGS = ${value}; module.exports = { apps: [
+        { name: 'example-server', env: { PORT: 7000 } },
+        { name: 'example-ui', args: ARGS, metadata: { note: ARGS } }
+      ] };`, { devUiPort: 7001, pm2ProcessNames: ['example-server', 'example-ui'] });
+      await expectRefused(before, { devUiPort: 7101 });
+    });
+
+  it('discovers and updates a static backtick argument port', async () => {
+    const content = "module.exports = { apps: [{ name: 'example-ui', args: `vite --port 7001` }] };";
+    await fixture(content, { apiPort: null, uiPort: 7001, pm2ProcessNames: ['example-ui'] });
+    expect((await update({ uiPort: 7101 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replace('7001', '7101'));
+  });
+
+  it('refuses a compound export assignment whose right operand may be unused', async () => {
+    const before = await fixture(`module.exports ||= { apps: [{ name: 'example-server', env: { PORT: 7000 } }] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
   it('refuses opaque imported spreads without executing them', async () => {
     const before = await fixture(`const extra = require('./missing-helper.cjs');
 module.exports = { apps: [{ name: 'example-server', env: { PORT: 7000 }, ...extra() }] };`);

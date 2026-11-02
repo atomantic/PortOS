@@ -19,6 +19,16 @@ const isExport = node => node?.type === 'MemberExpression' && node.object.type =
   node.object.name === 'module' && (!node.computed || node.property.type === 'StringLiteral') && keyOf(node.property) === 'exports';
 const isPort = value => Number.isInteger(value) && value > 0 && value <= 65535;
 
+function bindingNames(pattern) {
+  if (!pattern) return [];
+  if (pattern.type === 'Identifier') return [pattern.name];
+  if (pattern.type === 'ObjectPattern') return pattern.properties.flatMap(property => bindingNames(property.value || property.argument));
+  if (pattern.type === 'ArrayPattern') return pattern.elements.flatMap(bindingNames);
+  if (pattern.type === 'AssignmentPattern') return bindingNames(pattern.left);
+  if (pattern.type === 'RestElement') return bindingNames(pattern.argument);
+  return [];
+}
+
 function contextFor(content) {
   const ast = parse(content, { sourceType: 'unambiguous' }).program;
   const bindings = new Map();
@@ -28,6 +38,7 @@ function contextFor(content) {
     if (exported && statement.type !== 'EmptyStatement') throw new Error('Statements after export');
     if (statement.type === 'VariableDeclaration') {
       for (const item of statement.declarations) {
+        if (bindingNames(item.id).some(name => ['module', 'exports'].includes(name))) throw new Error('Shadowed export binding');
         if (item.id.type === 'Identifier') {
           if (bindings.has(item.id.name) || ['module', 'exports'].includes(item.id.name)) throw new Error('Ambiguous binding');
           bindings.set(item.id.name, item.init);
@@ -36,7 +47,7 @@ function contextFor(content) {
     } else if (statement.type === 'FunctionDeclaration') bindings.set(statement.id.name, statement);
     else if (statement.type === 'ExportDefaultDeclaration') exported = statement.declaration;
     else if (statement.type === 'ExpressionStatement' && statement.expression.type === 'AssignmentExpression' && isExport(statement.expression.left)) {
-      if (exported) throw new Error('Multiple exports');
+      if (exported || statement.expression.operator !== '=') throw new Error('Ambiguous export');
       exportAssignment = statement.expression;
       exported = exportAssignment.right;
     }
@@ -143,9 +154,10 @@ function portSource(node, context, track = true) {
 }
 
 function argsSource(node, context, content) {
+  if (node) context.portReads.add(node);
   const resolved = context.resolve(node);
   const value = context.scalar(node);
-  if (typeof value === 'string' && resolved.type === 'StringLiteral') {
+  if (typeof value === 'string' && ['StringLiteral', 'TemplateLiteral'].includes(resolved.type)) {
     // Escaped strings cannot be mapped from cooked text back to source offsets.
     const raw = content.slice(resolved.start + 1, resolved.end - 1);
     if (raw !== value) return null;
@@ -153,7 +165,8 @@ function argsSource(node, context, content) {
     const match = /(?:^|\s)--port(?:\s+|=)(\d+)(?=\s|$)/.exec(raw);
     if (match) {
       const start = resolved.start + 1 + match.index + match[0].length - match[1].length;
-      return { value: Number(match[1]), start, end: start + match[1].length };
+      return { value: Number(match[1]), start, end: start + match[1].length,
+        containerStart: resolved.start, containerEnd: resolved.end };
     }
   }
   if (resolved?.type === 'TemplateLiteral') {
@@ -164,7 +177,10 @@ function argsSource(node, context, content) {
     for (let index = 0; index < resolved.expressions.length; index++) {
       if (/--port(?:\s+|=)$/.test(resolved.quasis[index].value.cooked) &&
           (/^(?:\s)/.test(resolved.quasis[index + 1].value.cooked) ||
-            (index === resolved.expressions.length - 1 && resolved.quasis[index + 1].value.cooked === ''))) return portSource(resolved.expressions[index], context);
+            (index === resolved.expressions.length - 1 && resolved.quasis[index + 1].value.cooked === ''))) {
+        const source = portSource(resolved.expressions[index], context);
+        return source ? { ...source, containerStart: resolved.start, containerEnd: resolved.end } : null;
+      }
     }
   }
   return null;
@@ -213,11 +229,18 @@ function processInfo(node, context, content) {
     if (!explicit?.size && values.at(-1) === null) delete ports[label];
   }
   const args = argsSource(fields.get('args'), context, content);
-  add(runtimeUiLabel, args, !explicit?.size && Object.keys(ports).length === 0);
+  const labels = Object.keys(ports);
+  const matchingLabels = labels.filter(label => ports[label] === args?.value);
+  const argsLabels = matchingLabels.length === 1 ? matchingLabels : labels.length > 0 ? labels : [runtimeUiLabel];
+  if (args && argsLabels.length === 1) add(argsLabels[0], args, !explicit?.size && labels.length === 0);
   const argsValue = context.scalar(fields.get('args'));
-  if (fields.has('args') && !args && (typeof argsValue !== 'string' || /--port(?:\s|=)/.test(argsValue))) {
-    if (!sources.has(runtimeUiLabel)) sources.set(runtimeUiLabel, []);
-    sources.get(runtimeUiLabel).push(null);
+  const uncertainArgs = args ? argsLabels.length !== 1 : fields.has('args') &&
+    (typeof argsValue !== 'string' || /--port(?:\s|=)/.test(argsValue));
+  if (uncertainArgs) {
+    for (const label of argsLabels) {
+      if (!sources.has(label)) sources.set(label, []);
+      sources.get(label).push(null);
+    }
   }
   if (!explicit?.size && Object.keys(ports).length === 0) add('api', portSource(fields.get('port'), context));
   const usesVite = /\bvite\b/i.test(context.scalar(fields.get('script')) || '') ||
@@ -242,6 +265,10 @@ function assertNoSideEffects(context) {
     return touches;
   };
   walk(ast, node => {
+    if (node.type === 'VariableDeclarator' && bindingNames(node.id).some(name => bindings.has(name) && bindings.get(name) !== node.init)) {
+      throw new Error('Uncertain binding reinitialization');
+    }
+    if (node.type === 'FunctionDeclaration' && bindings.has(node.id.name) && bindings.get(node.id.name) !== node) throw new Error('Uncertain function binding');
     if (node.type === 'VariableDeclarator' &&
         (node.id.type !== 'Identifier' || bindings.get(node.id.name) !== node.init) && touchesConfig(node.init)) {
       throw new Error('Unsupported configuration alias');
@@ -267,7 +294,8 @@ function markNonPortConsumers(context, processes) {
     const source = portSource(input, context, false);
     if (source) { forbidden.add(`${source.start}:${source.end}`); return; }
     const resolved = context.resolve(input);
-    if (resolved?.type === 'ObjectExpression') {
+    if (['StringLiteral', 'TemplateLiteral'].includes(resolved?.type)) forbidden.add(`${resolved.start}:${resolved.end}`);
+    else if (resolved?.type === 'ObjectExpression') {
       for (const property of resolved.properties) mark(property.value || property.argument, seen);
     } else if (resolved?.type === 'ArrayExpression') resolved.elements.forEach(element => mark(element, seen));
     else if (['MemberExpression', 'OptionalMemberExpression'].includes(input.type)) mark(input.object, seen);
@@ -282,7 +310,8 @@ function markNonPortConsumers(context, processes) {
   for (const proc of processes) {
     for (const sources of proc.sources.values()) {
       for (const source of sources) {
-        if (source && forbidden.has(`${source.start}:${source.end}`)) source.nonPortConsumer = true;
+        if (source && (forbidden.has(`${source.start}:${source.end}`) ||
+            forbidden.has(`${source.containerStart}:${source.containerEnd}`))) source.nonPortConsumer = true;
       }
     }
   }
