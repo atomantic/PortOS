@@ -98,6 +98,7 @@ const INHERITED_ENV = {
   PM2_ID: 'injected by pm2',
   pm_exec_path: 'injected by pm2',
   pm_id: 'injected by pm2',
+  USERNAME: 'Windows-provided OS account name used for native PostgreSQL administration',
   BUN_INSTALL: 'set by the Bun installer; PortOS only reads it to find the binary',
   HF_HOME: 'Hugging Face toolchain convention, shared with the Python side',
   HF_HUB_CACHE: 'Hugging Face toolchain convention, shared with the Python side',
