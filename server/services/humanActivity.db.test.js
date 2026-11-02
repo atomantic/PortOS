@@ -458,3 +458,38 @@ describe.skipIf(!runDb)('WhatsApp conversation management (#14694)', () => {
     expect(await listEvents({ source: 'whatsapp', conversationId: title })).toHaveLength(1);
   });
 });
+
+describe.skipIf(!runDb)('Message thread conversation management', () => {
+  it('groups threads by account and threadId and purges only the selected conversation', async () => {
+    const threadA = `${nonce}-thread-a`;
+    const threadB = `${nonce}-thread-b`;
+    const account1 = `${nonce}-acc-1`;
+    const account2 = `${nonce}-acc-2`;
+    await recordEvents([
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-1`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-2`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account2, dedupeKey: `${nonce}-gm-3`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-4`, metadata: { threadId: threadB } }),
+      mk({ source: 'gmail', accountId: null, dedupeKey: `${nonce}-gm-mbox`, metadata: { threadId: threadB } }),
+    ]);
+    const conversations = await listConversations({ source: 'gmail', q: nonce });
+    const convMap = new Map(conversations.map((r) => [r.chatGuid, r.eventCount]));
+    const keyAcc1ThreadA = JSON.stringify([account1, threadA]).replace(',', ', ');
+    const keyAcc2ThreadA = JSON.stringify([account2, threadA]).replace(',', ', ');
+    expect(convMap.get(keyAcc1ThreadA)).toBe(2);
+    expect(convMap.get(keyAcc2ThreadA)).toBe(1);
+    expect(convMap.get(JSON.stringify([account1, threadB]).replace(',', ', '))).toBe(1);
+    expect(convMap.get(threadB)).toBe(1);
+
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
+    expect(await deleteEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toEqual({ deleted: 2 });
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(0);
+    // Account 2 with same thread is preserved
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc2ThreadA })).toHaveLength(1);
+
+    // Mbox thread without accountId is selectable and purgeable by raw threadId
+    expect(await listEvents({ source: 'gmail', chatGuid: threadB })).toHaveLength(1);
+    expect(await deleteEvents({ source: 'gmail', chatGuid: threadB })).toEqual({ deleted: 1 });
+    expect(await listEvents({ source: 'gmail', chatGuid: threadB })).toHaveLength(0);
+  });
+});

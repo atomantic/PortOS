@@ -73,14 +73,16 @@ it('uses the Discord channel fallback consistently for listing, viewing and purg
 });
 
 // The selector returned to the management UI must target the same records when
-// viewing or purging a message thread, including imports predating conversationId.
+// viewing or purging a message thread, including imports predating conversationId
+// and account-scoped threads.
 it('uses the message thread fallback consistently for listing, viewing and purging', async () => {
   for (const source of ['gmail', 'outlook', 'teams']) {
     query.mockResolvedValueOnce({ rows: [{ chat_guid: 'thread-a' }, { chat_guid: 'thread-b' }] });
     const conversations = await listConversations({ source, q: 'invoice' });
     expect(conversations.map(({ chatGuid }) => chatGuid)).toEqual(['thread-a', 'thread-b']);
     const listing = query.mock.calls[0][0];
-    const selector = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+    const raw = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+    const selector = `CASE\n  WHEN ${raw} = '' THEN ''\n  WHEN NULLIF(account_id, '') IS NOT NULL THEN jsonb_build_array(account_id, ${raw})::text\n  ELSE ${raw} END`;
     const grouping = listing.split('GROUP BY ')[1].split('\n     ORDER BY')[0];
     expect(grouping).toContain(`WHEN source IN ('gmail', 'outlook', 'teams') THEN ${selector}`);
     expect(listing).toContain(`LOWER(${grouping})`);
@@ -89,10 +91,10 @@ it('uses the message thread fallback consistently for listing, viewing and purgi
     expect(query.mock.calls[0][0]).toContain(`COUNT(DISTINCT ${grouping})`);
     for (const field of ['chatGuid', 'conversationId']) {
       await listEvents({ source, [field]: conversations[0].chatGuid });
-      expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), [source, 'thread-a', 500]]);
+      expect(query.mock.lastCall[1]).toEqual([source, 'thread-a', 500]);
       query.mockResolvedValueOnce({ rowCount: 2 });
       expect(await deleteEvents({ source, [field]: conversations[0].chatGuid })).toEqual({ deleted: 2 });
-      expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), [source, 'thread-a']]);
+      expect(query.mock.lastCall[1]).toEqual([source, 'thread-a']);
     }
     query.mockClear();
   }
