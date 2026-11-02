@@ -344,13 +344,15 @@ describe('Cast & Sets check-in', () => {
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
     expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
     expect(character.params.prompt).toContain('Hands empty and relaxed');
-    expect(character.params.prompt).not.toContain('a brass lantern');
+    expect(character.params.prompt).toContain('signature: a brass lantern');
+    expect(character.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
 
     await land(project.id, ['character']);
     await until(async () => jobs.some((j) => keyOf(j) === 'looks'), 'the looks sheet');
     const looks = jobs.find((j) => keyOf(j) === 'looks');
     expect(looks.params.prompt).toContain('Hands empty and relaxed');
-    expect(looks.params.prompt).not.toContain('a brass lantern');
+    expect(looks.params.prompt).toContain('signature: a brass lantern');
+    expect(looks.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
     expect(looks.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual([`${character.id}.png`]);
     expect(jobs.some((j) => keyOf(j).startsWith('test:'))).toBe(false);
 
@@ -694,6 +696,10 @@ it('bounds submitted diagnostics and records only references served from approve
     referenceImagePaths: [join(ROOT(), 'private', 'unserved.png'), join(PATHS.imageRefs, 'uploaded.png'),
       ...Array.from({ length: 17 }, (_, i) => join(IMAGES(), `example-${i}.png`))],
   };
+  service.__setCastAndSetsDepsForTests(testDeps({
+    imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common,
+      ...(common.musicVideo.castAndSets.key === 'character' ? imageParamsOverrides : {}) }),
+  }));
   const project = await seed({ visualSpec: null });
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
@@ -1255,6 +1261,24 @@ it.each([
     await service.__settleCastAndSetsForTests();
     local.mockRestore();
   }
+});
+
+it('does not submit a face sheet when the renderer can send only its angle guide', async () => {
+  service.__setCastAndSetsDepsForTests(testDeps({
+    imageParams: async (_settings, route, common) => ({
+      mode: route.mode,
+      ...common,
+      ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(0, 1) } : {}),
+    }),
+  }));
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await until(async () => jobs.some((job) => keyOf(job) === 'character'), 'the character sheet');
+  await land(project.id, ['character']);
+  await until(async () => (await current(project.id)).castAndSets?.images?.expressions?.failures === 1, 'the ineligible face sheet');
+  const stage = (await current(project.id)).castAndSets;
+  expect(stage.images.expressions.error).toMatch(/both the angle guide and the character reference/);
+  expect(jobs.some((job) => keyOf(job) === 'expressions')).toBe(false);
 });
 
 it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {

@@ -458,6 +458,15 @@ async function enqueueImage(project, stage, key) {
   };
   const settings = await deps.getSettings();
   const baseParams = await deps.imageParams(settings, stage.route, common);
+  if (item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE)) {
+    const identityId = stage.images?.[item.refKeys?.[0]]?.imageId;
+    const identityPath = identityId ? resolveGalleryImage(identityId, { mustExist: false }) : null;
+    const sent = baseParams.referenceImagePaths || [];
+    if (!identityPath || !sent.includes(identityPath) || !sent.includes(referenceImagePaths[0])) {
+      throw new ServerError('Face sheets require a renderer that can send both the angle guide and the character reference',
+        { status: 409, code: 'CAST_SETS_ROUTE_INELIGIBLE' });
+    }
+  }
   const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
   // Persist the actual styled queue input, with only served local references.
   // Never expose the absolute host paths used by the provider transport.
