@@ -7,7 +7,7 @@
  * a pull request and merges it immediately rather than committing on the live checkout.
  *
  * `--migrate` rewrites a v1 file, or a historical `quality-snapshot.json`, to
- * canonical schema v2 using only the rows already in the file. It does not read
+ * canonical schema v3 using only the rows already in the file. It does not read
  * audit measurements and does not invent any.
  */
 import { getAppById, PORTOS_APP_ID } from '../server/services/apps.js';

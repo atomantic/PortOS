@@ -1,6 +1,6 @@
 /**
  * `.quality.json` — the numeric quality snapshot a repository carries at its
- * root. Writers emit canonical file schema v2 (`appQualitySnapshotFormat.js`).
+ * root. Writers emit canonical file schema v3 (`appQualitySnapshotFormat.js`).
  * That file is not the peer wire payload: federation stays on
  * `PORTOS_SCHEMA_VERSIONS.appQuality` v1.
  *
@@ -29,12 +29,12 @@ import { atomicWrite } from '../lib/fileCore.js';
 import {
   APP_QUALITY_LEGACY_SNAPSHOT_FILENAME,
   APP_QUALITY_SNAPSHOT_FILENAME,
+  APP_QUALITY_SNAPSHOT_MAX_BYTES,
   classifyQualitySnapshot,
-  serializeQualitySnapshot,
+  serializeQualitySnapshotResult,
 } from './appQualitySnapshotFormat.js';
 
-export { APP_QUALITY_SNAPSHOT_FILENAME };
-export const APP_QUALITY_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
+export { APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES };
 export const QUALITY_SNAPSHOT_BRANCH = 'portos/quality-snapshot';
 
 const snapshotPath = (repoPath, filename = APP_QUALITY_SNAPSHOT_FILENAME) => join(repoPath, filename);
@@ -131,10 +131,10 @@ function enqueue(repoPath, task) {
 }
 
 /**
- * Rebuild the app's numeric snapshot and land it as canonical v2 `.quality.json`
+ * Rebuild the app's numeric snapshot and land it as canonical v3 `.quality.json`
  * through an immediately-merged pull request. An empty snapshot never overwrites a
- * populated file. A v1 file is rewritten when current evidence exists. An
- * already-canonical v2 snapshot with the same records never reaches git.
+ * populated file. Older formats are rewritten when current evidence exists. An
+ * already-canonical v3 snapshot with the same records never reaches git.
  */
 export async function publishAppQualitySnapshot(app, deps = {}) {
   if (!app?.repoPath) return skipped(app, 'no-repo-path');
@@ -143,7 +143,7 @@ export async function publishAppQualitySnapshot(app, deps = {}) {
 
 /**
  * Convert a v1 `.quality.json` or historical `quality-snapshot.json` to canonical
- * v2 using only the rows already in the file. Same isolated worktree and pull
+ * v3 using only the rows already in the file. Same isolated worktree and pull
  * request as publication. Does not read the database and does not invent rows.
  */
 export async function migrateAppQualitySnapshot(app, deps = {}) {
@@ -161,11 +161,31 @@ async function readGitSnapshot(git, repoPath, spec) {
   } catch {
     return { status: 'unreadable' };
   }
-  if (!result || result.exitCode !== 0) return { status: 'absent' };
+  if (!result || result.exitCode !== 0) {
+    // A failed show can also mean a missing/corrupt object or an unreadable
+    // repository. Only a successful tree listing can prove the path is absent.
+    const separator = spec.indexOf(':');
+    if (separator < 1) return { status: 'unreadable' };
+    const tree = await git.execGit(['ls-tree', '-z', spec.slice(0, separator), '--', spec.slice(separator + 1)], repoPath,
+      { ignoreExitCode: true }).catch(() => null);
+    return tree?.exitCode === 0 && tree.stdout === '' ? { status: 'absent' } : { status: 'unreadable' };
+  }
   const body = result.stdout;
   if (typeof body !== 'string') return { status: 'absent' };
   if (Buffer.byteLength(body) > APP_QUALITY_SNAPSHOT_MAX_BYTES) return { status: 'oversize' };
   return { body, ...classifyQualitySnapshot(body) };
+}
+
+async function readPublishedGitSnapshot(git, repoPath, ref) {
+  const primary = await readGitSnapshot(git, repoPath, `${ref}:${APP_QUALITY_SNAPSHOT_FILENAME}`);
+  const legacy = await readGitSnapshot(git, repoPath, `${ref}:${APP_QUALITY_LEGACY_SNAPSHOT_FILENAME}`);
+  const blocked = [primary, legacy].find(stored => REWRITE_BLOCKED.has(stored.status));
+  if (blocked) return blocked;
+  const existing = [primary, legacy].filter(stored => stored.status !== 'absent');
+  if (!existing.length) return { status: 'absent' };
+  if (new Set(existing.map(stored => stored.repository)).size !== 1) return { status: 'repository-mismatch' };
+  return { ...existing[0], filename: primary.status === 'absent' ? APP_QUALITY_LEGACY_SNAPSHOT_FILENAME : APP_QUALITY_SNAPSHOT_FILENAME,
+    hasLegacy: legacy.status !== 'absent', records: existing.flatMap(stored => stored.records || []) };
 }
 
 function untouched(app, status) {
@@ -175,8 +195,9 @@ function untouched(app, status) {
 
 function sameSnapshot(stored, next) {
   if (!stored || stored.status === 'absent' || stored.status === 'unreadable') return false;
+  if (stored.filename === APP_QUALITY_LEGACY_SNAPSHOT_FILENAME) return false;
   if (stored.body === next) return true;
-  return stored.status === 'v2' && stored.canonical === next;
+  return stored.status === 'v3' && stored.canonical === next;
 }
 
 async function repoBase(app, git) {
@@ -193,20 +214,21 @@ function hasOrigin(remote) {
   return Boolean(remote?.origin && (remote.origin.fetch || remote.origin.push || remote.origin['']));
 }
 
-const SNAPSHOT_WINDOW_DAYS = 30;
-
 /**
- * Canonical text for the fresh evidence UNIONED with the rows already on the
- * default branch (same 30-day window). The fresh build only sees this install's
- * database plus whichever peers answer right now; a rewrite from that alone
- * silently deleted every row a peer (or an expired local row) had contributed
- * whenever the peer was offline. Fresh rows still win a same-day collision.
+ * Union local evidence with every previously published row. A local database
+ * cannot reconstruct the history contributed by another install. Daily
+ * coalescing happens in the format boundary using the real timestamps available.
  */
-function mergeWithPublished(snapshot, onDefault, now) {
-  const cutoff = new Date(now - SNAPSHOT_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
-  const kept = (onDefault.records || []).filter(record => record.assessedAt.slice(0, 10) >= cutoff);
+function mergeWithPublished(snapshot, onDefault) {
+  if (onDefault.repository && onDefault.repository !== snapshot.repository) return { reason: 'repository-mismatch' };
   const fresh = snapshot.measurements.map(({ measurementId, assessedAt, report }) => ({ ...report, assessedAt, measurementId }));
-  return serializeQualitySnapshot(snapshot.repository, [...kept, ...fresh]);
+  return serializeQualitySnapshotResult(snapshot.repository, [...(onDefault.records || []), ...fresh]);
+}
+
+function invalidSnapshot(app, result) {
+  if (result.reason) return skipped(app, result.reason);
+  if (Buffer.byteLength(result.body) > APP_QUALITY_SNAPSHOT_MAX_BYTES) return skipped(app, 'snapshot-too-large');
+  return null;
 }
 
 async function publishNow(app, deps) {
@@ -215,19 +237,20 @@ async function publishNow(app, deps) {
   // checkout never builds, and an empty projection never reaches git.
   if (!await git.isRepo(app.repoPath)) return skipped(app, 'not-a-repo');
   const build = deps.buildQualitySnapshot || (await import('./appQualityFederation.js')).buildQualitySnapshot;
-  const snapshot = await build(app, 30, deps);
+  const snapshot = await build(app, null, deps);
   if (!snapshot?.measurements?.length) return skipped(app, 'no-evidence');
 
   const base = await repoBase(app, git);
   if (base.skip) return base.skip;
-  const onDefault = await readGitSnapshot(
-    git, app.repoPath, `origin/${base.defaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
-  );
+  const onDefault = await readPublishedGitSnapshot(git, app.repoPath, `origin/${base.defaultBranch}`);
   if (REWRITE_BLOCKED.has(onDefault.status)) return untouched(app, onDefault.status);
-  const next = mergeWithPublished(snapshot, onDefault, deps.now ?? Date.now());
-  if (!next) return skipped(app, 'invalid-evidence');
+  if (onDefault.status === 'repository-mismatch') return skipped(app, 'repository-mismatch');
+  const merged = mergeWithPublished(snapshot, onDefault);
+  const invalid = invalidSnapshot(app, merged);
+  if (invalid) return invalid;
+  const next = merged.body;
   if (lastPublishedBody.get(app.repoPath) === next) return skipped(app, 'no-changes');
-  // v1 bytes are a real migration even when the scores match. Only v2 that
+  // Older bytes are a real migration even when the scores match. Only v3 that
   // already canonicalizes to `next` is "no changes".
   if (sameSnapshot(onDefault, next)) {
     lastPublishedBody.set(app.repoPath, next);
@@ -242,45 +265,41 @@ async function migrateNow(app, deps) {
   const base = await repoBase(app, git);
   if (base.skip) return base.skip;
 
-  let source = await readGitSnapshot(
-    git, app.repoPath, `origin/${base.defaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
-  );
-  let removeLegacy = false;
-  if (source.status === 'absent') {
-    source = await readGitSnapshot(
-      git, app.repoPath, `origin/${base.defaultBranch}:${APP_QUALITY_LEGACY_SNAPSHOT_FILENAME}`,
-    );
-    removeLegacy = source.status === 'v1' || source.status === 'v2';
-  }
+  const source = await readPublishedGitSnapshot(git, app.repoPath, `origin/${base.defaultBranch}`);
+  const removeLegacy = source.hasLegacy === true;
   if (source.status === 'absent') return skipped(app, 'no-legacy-file');
   if (REWRITE_BLOCKED.has(source.status)) return untouched(app, source.status);
-  if (!source.records?.length || !source.canonical) return skipped(app, 'no-evidence');
+  if (source.status === 'repository-mismatch') return skipped(app, 'repository-mismatch');
+  if (!source.records?.length) return skipped(app, 'no-evidence');
 
-  const next = source.canonical;
-  if (!removeLegacy && source.status === 'v2' && source.body === next) {
+  const serialized = serializeQualitySnapshotResult(source.repository, source.records);
+  const invalid = invalidSnapshot(app, serialized);
+  if (invalid) return invalid;
+  const next = serialized.body;
+  if (!removeLegacy && source.status === 'v3' && source.body === next) {
     lastPublishedBody.set(app.repoPath, next);
     return skipped(app, 'no-changes');
   }
   if (lastPublishedBody.get(app.repoPath) === next && !removeLegacy) return skipped(app, 'no-changes');
   return landOrReuse(app, git, base.defaultBranch, deps, next, source.records.length, {
     removeLegacy,
-    message: `chore: migrate quality snapshot to schema v2 (${source.records.length} measurements)`,
+    message: `chore: migrate quality snapshot to schema v3 (${source.records.length} measurements)`,
   });
 }
 
 // Remote rows can be newer than our initial default-branch read: another
 // install may have queued a PR, or landed it while our push lost its lease.
-// Keep those contributions while retaining full timestamps for local evidence
-// (the compact file has already reduced timestamps to UTC days).
-function mergeRemoteRows(next, stored, deps, options) {
+// Keep those contributions alongside full timestamps for local evidence.
+function mergeRemoteRows(next, stored, options) {
   const candidate = classifyQualitySnapshot(next);
+  if (stored.repository && stored.repository !== candidate.repository) return { reason: 'repository-mismatch' };
   if (options.snapshot) {
     return mergeWithPublished(options.snapshot, {
       records: [...candidate.records, ...(stored.records || [])],
-    }, deps.now ?? Date.now());
+    });
   }
   // Explicit format migration does not expire historical rows.
-  return serializeQualitySnapshot(candidate.repository, [...candidate.records, ...(stored.records || [])]);
+  return serializeQualitySnapshotResult(candidate.repository, [...candidate.records, ...(stored.records || [])]);
 }
 
 async function publicationGuard(app, git, defaultBranch, deps) {
@@ -320,19 +339,22 @@ function deferredPublication(app, reason) {
 async function landOrReuse(app, git, defaultBranch, deps, next, count, options = {}) {
   const guard = await publicationGuard(app, git, defaultBranch, deps);
   if (guard.reason) return deferredPublication(app, guard.reason);
-  const onBranch = await readGitSnapshot(
-    git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
-  );
-  const legacyOnBranch = options.removeLegacy
+  const onBranch = guard.remoteSha
+    ? await readPublishedGitSnapshot(git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}`)
+    : { status: 'absent' };
+  const legacyOnBranch = options.removeLegacy && guard.remoteSha
     ? await readGitSnapshot(git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}:${APP_QUALITY_LEGACY_SNAPSHOT_FILENAME}`)
     : { status: 'absent' };
   // The snapshot branch can hold a future file the default branch does not.
-  // Force-pushing canonical v2 over it would discard a format we do not read.
+  // Force-pushing canonical v3 over it would discard a format we do not read.
   if (REWRITE_BLOCKED.has(onBranch.status) || REWRITE_BLOCKED.has(legacyOnBranch.status)) {
     return untouched(app, REWRITE_BLOCKED.has(onBranch.status) ? onBranch.status : legacyOnBranch.status);
   }
-  next = mergeRemoteRows(next, onBranch, deps, options);
-  if (!next) return skipped(app, 'invalid-evidence');
+  if (onBranch.status === 'repository-mismatch') return skipped(app, 'repository-mismatch');
+  const merged = mergeRemoteRows(next, onBranch, options);
+  const invalid = invalidSnapshot(app, merged);
+  if (invalid) return invalid;
+  next = merged.body;
   if (sameSnapshot(onBranch, next) && legacyOnBranch.status === 'absent') {
     const reused = await reuseOpenSnapshotPr(app, git, defaultBranch, deps, guard.remoteSha);
     if (reused.published) lastPublishedBody.set(app.repoPath, next);
@@ -351,12 +373,13 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
     await git.fetchOrigin(app.repoPath, { prune: true });
     const freshDefaultBranch = await git.getDefaultBranch(app.repoPath);
     if (!freshDefaultBranch) throw new Error('Quality snapshot lease retry: default branch unavailable');
-    const onDefault = await readGitSnapshot(
-      git, app.repoPath, `origin/${freshDefaultBranch}:${APP_QUALITY_SNAPSHOT_FILENAME}`,
-    );
+    const onDefault = await readPublishedGitSnapshot(git, app.repoPath, `origin/${freshDefaultBranch}`);
     if (REWRITE_BLOCKED.has(onDefault.status)) return untouched(app, onDefault.status);
-    next = mergeRemoteRows(next, onDefault, deps, options);
-    if (!next) return skipped(app, 'invalid-evidence');
+    if (onDefault.status === 'repository-mismatch') return skipped(app, 'repository-mismatch');
+    const merged = mergeRemoteRows(next, onDefault, options);
+    const invalid = invalidSnapshot(app, merged);
+    if (invalid) return invalid;
+    next = merged.body;
     if (sameSnapshot(onDefault, next)) {
       lastPublishedBody.set(app.repoPath, next);
       return skipped(app, 'no-changes');

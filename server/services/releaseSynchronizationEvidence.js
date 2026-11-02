@@ -19,7 +19,7 @@ import { getAppById } from './apps.js';
 import { getBranchReconcileOutcome } from './branchReconcileOutcome.js';
 import { readCheckoutPathPresence, readLocalBranchPresence } from './repoCleanupObservation.js';
 import { buildQualitySnapshot } from './appQualityFederation.js';
-import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
+import { APP_QUALITY_SNAPSHOT_MAX_BYTES, classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 import { getActiveAgentIds } from './agentState.js';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
 
@@ -68,6 +68,7 @@ async function developmentVersionEvidence(ctx, publication) {
 
 async function readSynchronizationForge(origin, forgeExec, path, paginate = false, timeoutMs = undefined) {
   const args = ['api', '--hostname', origin.host, ...(paginate ? ['--paginate', '--slurp'] : []),
+    ...(path.startsWith('contents/.quality.json?') ? ['--header', 'Accept: application/vnd.github.object+json'] : []),
     `repos/${origin.fullName}${path ? `/${path}` : ''}`];
   return JSON.parse(await execGh(args, timeoutMs, forgeExec));
 }
@@ -281,13 +282,20 @@ export async function inspectReleaseSynchronization(entry, agents) {
   }
   await check('qualitySnapshot', async () => {
     if (obligations.synchronizationPr.status !== 'verified') wait('quality-awaits-development-sync');
-    const snapshot = await buildQualitySnapshot(ctx.app);
+    const snapshot = await buildQualitySnapshot(ctx.app, null);
     if (!snapshot || !Array.isArray(snapshot.measurements)) throw new Error('quality-evidence-unavailable');
     if (!snapshot.measurements.length) return { kind: 'no-local-evidence', developmentHead: target.developmentHead };
     const file = await ctx.api(`contents/.quality.json?ref=${target.developmentHead}`);
-    if (file.encoding !== 'base64' || !sha(file.sha) || typeof file.content !== 'string') hold('development-quality-unreadable');
-    const published = classifyQualitySnapshot(Buffer.from(file.content, 'base64').toString('utf8'));
-    if (published.status !== 'v2' || published.repository !== snapshot.repository) hold('development-quality-invalid');
+    if (!sha(file.sha)) hold('development-quality-unreadable');
+    // GitHub omits inline content for files above 1 MB. Fetch the same blob by
+    // SHA so the history limit does not become an implicit release blocker.
+    const content = file.encoding === 'none' && file.content === '' && Number.isSafeInteger(file.size)
+      && file.size <= APP_QUALITY_SNAPSHOT_MAX_BYTES ? await ctx.api(`git/blobs/${file.sha}`) : file;
+    if (content.sha !== file.sha || content.encoding !== 'base64' || typeof content.content !== 'string') hold('development-quality-unreadable');
+    const bytes = Buffer.from(content.content, 'base64');
+    if (bytes.length > APP_QUALITY_SNAPSHOT_MAX_BYTES) hold('development-quality-unreadable');
+    const published = classifyQualitySnapshot(bytes.toString('utf8'));
+    if (published.status !== 'v3' || published.repository !== snapshot.repository) hold('development-quality-invalid');
     const fresh = snapshot.measurements.map(({ measurementId, assessedAt, report }) => ({ ...report, measurementId, assessedAt }));
     const canonical = serializeQualitySnapshot(snapshot.repository, [...published.records, ...fresh]);
     if (!canonical || canonical !== published.canonical) hold('development-quality-snapshot-pending');

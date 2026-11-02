@@ -6,7 +6,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 const f = vi.hoisted(() => ({ agents: [], pr: null, review: null, reviews: [], checks: [], receipts: [],
-  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, failSave: false,
+  present: true, busy: false, unavailable: false, ancestor: true, quality: null, qualityFile: null, qualityBlob: null, failSave: false,
   missingSyncAncestry: false, retirementUnavailable: false, liveAgents: null, liveTrusted: true,
   forgeCalls: 0, checkoutHead: null, developmentVersion: null, lockVersion: null, lockRootVersion: null,
   hasLock: true, versionUnavailable: false, versionReads: [], developmentHead: null, compareUnavailable: false, runner: [] }));
@@ -89,6 +89,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
       packages: { '': { version: f.lockRootVersion } } })).toString('base64') };
   }
   else if (path.startsWith('contents/.quality.json?')) result = f.qualityFile;
+  else if (path.startsWith('git/blobs/')) result = f.qualityBlob;
   else throw new Error(`Unexpected synthetic forge endpoint: ${path}`);
   return JSON.stringify(result);
 } }));
@@ -159,6 +160,7 @@ beforeEach(async () => {
   f.missingSyncAncestry = false;
   f.retirementUnavailable = false;
   f.quality = { schemaVersion: 1, repository: 'f'.repeat(64), measurements: [] };
+  f.qualityBlob = null;
 });
 
 async function finishExecution({ retain = true } = {}) {
@@ -623,10 +625,23 @@ it('requires development quality evidence and refreshes it without redoing a suc
   await verifyReleaseSynchronizationTask(taskId);
   expect((await getReleaseSynchronization(identity)).obligations.qualitySnapshot.status).toBe('blocked');
   const body = qualityFileFromWireSnapshot(f.quality);
-  expect(classifyQualitySnapshot(body).status).toBe('v2');
+  expect(classifyQualitySnapshot(body).status).toBe('v3');
   f.qualityFile.content = Buffer.from(body).toString('base64');
   await finishExecution();
   f.review = null;
+  expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
+});
+
+it('verifies a large quality snapshot through its pinned Git blob', async () => {
+  f.quality = { ...f.quality, measurements: [{ measurementId: 'a'.repeat(64), assessedAt: '2026-01-01T00:00:00Z',
+    report: { version: 1, category: 'security', score: 80, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 2, totalFiles: 2 } }] };
+  const body = `${qualityFileFromWireSnapshot(f.quality)}${' '.repeat(1024 * 1024)}`;
+  f.qualityFile = { encoding: 'none', sha: '9'.repeat(40), content: '', size: Buffer.byteLength(body) };
+  f.qualityBlob = { encoding: 'base64', sha: '8'.repeat(40), content: Buffer.from(body).toString('base64') };
+  await verifyReleaseSynchronizationTask(taskId);
+  expect((await getReleaseSynchronization(identity)).obligations.qualitySnapshot.blocker).toBe('development-quality-unreadable');
+  f.qualityBlob.sha = '9'.repeat(40);
+  await finishExecution();
   expect((await verifyReleaseSynchronizationTask(taskId)).status).toBe('verified');
 });
 

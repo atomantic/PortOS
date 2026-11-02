@@ -33,7 +33,7 @@ import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
-  // Checked-in `.quality.json` is file schema v2 and must not bump this number.
+  // Checked-in `.quality.json` is file schema v3 and must not bump this number.
   appQuality: 1,
   // Memory pull negotiates this capability explicitly. Version numbers describe
   // the sender's local history; receivers retain their own monotonic history.

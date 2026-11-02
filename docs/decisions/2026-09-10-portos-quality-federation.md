@@ -184,3 +184,16 @@ filename, through the same temporary worktree, scoped commit, and
 merge-on-green pull request. It uses only rows already in the file. When the
 historical filename is the source, the commit also removes it. Unknown future
 formats stay in place.
+
+## November 2: preserve cross-install history
+
+The bounded release projection described above could discard another install's
+older results as soon as a different publisher ran. The repository file now
+preserves all published dates and unions local results with the default and open
+snapshot branches. The 30-day rule still controls score freshness, not retention.
+File schema v3 keeps real timestamps for new measurements. It chooses one
+deterministic value for conflicting date-only legacy records, whose exact order
+is unknown, and prefers a timestamped candidate. Older publishers
+recognize v3 as a future format and leave it untouched until upgraded. The peer
+wire schema remains v1. Publication refuses a 250,000-row or 16 MiB overflow
+without replacing the existing file, so capacity needs can be addressed explicitly.
