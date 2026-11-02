@@ -13,6 +13,7 @@ import { getBootCommit } from './installState.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
 import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { getAllTasks, getTaskById, updateTask } from './cosTaskStore.js';
+import { isDeepStrictEqual } from 'node:util';
 
 const SHA = /^[a-f0-9]{40}$/;
 const CATEGORY = 'runtime-verification';
@@ -56,6 +57,42 @@ async function prerequisiteReason(prerequisite) {
       ? 'Waiting for the configured idle update policy, including cooldown and readiness gates.'
       : 'Automatic updates are disabled; a supported operator update is required.';
   return `Runtime verification requires ${prerequisite.integratedCommit || prerequisite.requiredCommit || 'a verified merged fix'}; captured boot is ${getBootCommit() || 'unreadable'}. ${update}`;
+}
+
+/** A boot prerequisite authorizes verification, never establishes its outcome. */
+export async function verifyRuntimeVerificationContinuation(task, agentId) {
+  const owner = await getAgentRecord(agentId);
+  const live = await getTaskById(task.id);
+  const binding = owner?.metadata?.completionTaskDispatch;
+  const continuation = binding?.runtimeContinuation;
+  const p = continuation?.prerequisite;
+  const resumedAt = Date.parse(p?.resumedAt);
+  const dispatchedAt = Date.parse(live?.metadata?.lastSpawnedAt);
+  if (!live || live.status !== 'in_progress' || owner?.id !== agentId || owner.taskId !== task.id
+    || !matchesCompletionTaskDispatch(owner, live) || !matchesCompletionTaskDispatch(owner, task)
+    || !p || p.version !== 1 || p.status !== 'resumed' || p.taskId !== task.id || p.agentId === agentId
+    || live.metadata?.runtimeVerificationId !== `${task.id}:${p.agentId}`
+    || live.metadata.resumedFromAgentId !== p.agentId || live.metadata.blocker
+    || (live.metadata.app && live.metadata.app !== PORTOS_APP_ID)
+    || !isDeepStrictEqual(live.metadata.runtimeVerification, p) || !isDeepStrictEqual(task.metadata?.runtimeVerification, p)
+    || !['description', 'priority'].every(key => live[key] === continuation[key] && task[key] === continuation[key])
+    || !Number.isFinite(resumedAt) || !Number.isFinite(dispatchedAt) || resumedAt > dispatchedAt
+    || Number(live.metadata.totalSpawnCount) !== Number(p.totalSpawnCount) + 1
+    || !SHA.test(p.integratedCommit || '') || !SHA.test(p.bootCommit || '')) return null;
+  const original = await getAgentRecord(p.agentId);
+  if (original?.id !== p.agentId || original.taskId !== task.id || !['completed', 'failed'].includes(original.status)
+    || !p.dispatch || !matchesCompletionTaskDispatch(original, { ...live, metadata: p.dispatch })
+    || p.dispatch.lastSpawnedAt !== p.lastSpawnedAt || String(p.dispatch.totalSpawnCount) !== p.totalSpawnCount) return null;
+  const boot = getBootCommit();
+  const evidence = await integrationEvidence(p);
+  if (evidence.integratedCommit !== p.integratedCommit
+    || !await contains(p.integratedCommit, p.bootCommit) || !await contains(p.bootCommit, boot)) return null;
+  // Inspection awaited the forge. A changed task/dispatch must not borrow the
+  // result from the snapshot checked above.
+  if (!isDeepStrictEqual(await getTaskById(task.id), live)
+    || !isDeepStrictEqual((await getAgentRecord(agentId))?.metadata?.completionTaskDispatch, binding)
+    || !isDeepStrictEqual(await getAgentRecord(p.agentId), original)) return null;
+  return { status: 'verified' };
 }
 
 export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {

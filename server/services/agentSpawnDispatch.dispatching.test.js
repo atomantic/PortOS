@@ -67,7 +67,7 @@ import { execGh } from './github.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
@@ -92,6 +92,22 @@ beforeEach(() => {
 });
 
 describe('dispatchAgentRun ownership window', () => {
+  it('binds the runtime sweep release to the persisted resuming dispatch before launch', async () => {
+    const context = newContext();
+    const prerequisite = { version: 1, status: 'resumed', taskId: task.id, agentId: 'agent-original',
+      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '3' };
+    context.task = { ...task, status: 'pending', metadata: { runtimeVerification: prerequisite,
+      runtimeVerificationId: `${task.id}:agent-original`, resumedFromAgentId: 'agent-original',
+      lastSpawnedAt: prerequisite.lastSpawnedAt, totalSpawnCount: '3' } };
+    updateTask.mockImplementationOnce(async (_id, update) => ({ ...context.task, ...update }));
+    await dispatchAgentRun(context);
+    expect(updateAgent).toHaveBeenCalledWith(context.agentId, { metadata: { completionTaskDispatch: expect.objectContaining({
+      taskId: task.id, runtimeContinuation: { prerequisite, description: task.description, priority: undefined },
+      expected: expect.arrayContaining([['totalSpawnCount', 4]]),
+    }) } });
+    expect(spawnDirectly).toHaveBeenCalled();
+    expect(updateAgent.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
+  });
   it('does not spawn a release continuation retired after queue admission', async () => {
     const context = newContext();
     context.task = { ...task, metadata: { analysisType: 'release-sync' } };
