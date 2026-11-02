@@ -29,6 +29,8 @@ vi.mock('../lib/gitCommitProbe.js', () => ({
 import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
+import * as repoRepair from './updateRepoRepairCompletion.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 // The run window every commit-criterion assertion below is evaluated against
 // (#3637). A criterion-declaring call MUST pass one — without a window there is
@@ -37,6 +39,28 @@ const STARTED_AT = Date.parse('2026-08-09T00:00:00.000Z');
 
 describe('evaluateSuccessCriteria (#2344)', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('uses verified checkout repair rather than a run-window commit, and fails closed on inspection errors', async () => {
+    const verify = vi.spyOn(repoRepair, 'verifyUpdateRepoRepairCompletion');
+    const args = { task: { id: 'sys-repair', taskType: 'internal', description: repoRepair.REPO_REPAIR_TASK_DESCRIPTION,
+      metadata: { app: PORTOS_APP_ID, useWorktree: 'false' } }, agentId: 'agent-repair',
+      workspacePath: '/example/repo', success: true, startedAt: STARTED_AT };
+    try {
+      committedDuringRun.mockResolvedValue(false);
+      verify.mockResolvedValueOnce(true);
+      expect(await evaluateSuccessCriteria(args)).toBe(true);
+      expect(verify).toHaveBeenCalledWith(args.task, args.agentId, args.workspacePath);
+      verify.mockResolvedValueOnce(false);
+      expect(await evaluateSuccessCriteria(args)).toBe(false);
+      verify.mockRejectedValueOnce(new Error('inspection unavailable'));
+      expect(await evaluateSuccessCriteria(args)).toBe(false);
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(await evaluateSuccessCriteria({ ...args, task: { ...args.task, description: 'Ordinary implementation' } })).toBe(false);
+      expect(committedDuringRun).toHaveBeenCalledWith(args.workspacePath, STARTED_AT);
+    } finally {
+      verify.mockRestore();
+    }
+  });
 
   it('returns null (no declared criterion) for interactive/user tasks', async () => {
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'user' }, workspacePath: '/w' })).toBeNull();
