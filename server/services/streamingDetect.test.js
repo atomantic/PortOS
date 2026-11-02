@@ -453,6 +453,29 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it('rewrites only the active matching app when name follows other properties', () => {
+    const active = `{ script: 'server.js', metadata: { name: 'nested' }, name: 'example-api', env: { PORT: 6100 } }`;
+    const content = `// { name: 'example-api', env: { PORT: 6100 } }
+/* { name: 'example-api', env: { PORT: 6100 } } */
+const example = "{ name: 'example-api', env: { PORT: 6100 } }";
+module.exports = { apps: [
+  ${active},
+  { name: 'example-worker', env: { PORT: 6100 } }
+] };`;
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+
+    expect(result).toEqual({
+      content: content.replace(active, active.replace('6100', '6200')),
+      applied: [edit],
+      unapplied: [],
+    });
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100],
+    ]);
+  });
+
   it('splits a shared value (prod UI served by API, uiPort === apiPort) — rewrites only the touched label', () => {
     // Single process: bare PORT 6000 is BOTH the api port and (since no
     // dedicated ui process) the derived ui port. Changing only ui must NOT
@@ -1330,6 +1353,43 @@ describe('streamDetection frame sequence', () => {
       startCommands: ['npm start'],
       pm2ProcessNames: ['example-app'],
       pm2Status: [{ name: 'example-app', status: 'online', pid: 42 }]
+    });
+  });
+
+  it('ignores ecosystem app examples in comments and strings during import', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `
+// { name: 'example-old-api', env: { PORT: 6109 } },
+/* module.exports = { apps: [{ name: 'example-block-api', env: { PORT: 6108 } }] }; */
+const example = "apps: [{ name: 'example-string-api', env: { PORT: 6107 } }]";
+module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+throw new Error('ecosystem source must not execute');
+`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({
+      pm2ProcessNames: ['example-api'], apiPort: 6100, uiPort: null,
+    });
+  });
+
+  it('imports a literal app with script and nested properties before its name', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = {
+  apps: [
+    { script: 'server.js', metadata: { name: 'example-nested' },
+      /* name: 'example-comment' */ name: 'example-api', env: { PORT: 6100 } },
+    { script: 'worker.js', env: { PORT: 6101 }, "name": "example-worker" },
+    { script: 'dynamic.js', name: process.env.PROCESS_NAME, env: { PORT: 6102 } }
+  ]
+};`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({
+      pm2ProcessNames: ['example-api', 'example-worker'], apiPort: 6100, uiPort: null,
     });
   });
 

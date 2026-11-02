@@ -186,6 +186,73 @@ function findMatchingBrace(content, openBraceIdx) {
 }
 
 /**
+ * Tokenize without evaluating source. Strings (including templates) stay opaque,
+ * so example objects and interpolation braces cannot become app boundaries.
+ */
+function ecosystemSourceTokens(content) {
+  const tokens = [];
+  for (let i = 0; i < content.length;) {
+    const start = i;
+    const char = content[i];
+    if (/\s/.test(char)) { i++; continue; }
+    if (char === '/' && content[i + 1] === '/') {
+      while (i < content.length && content[i] !== '\n') i++;
+      continue;
+    }
+    if (char === '/' && content[i + 1] === '*') {
+      const end = content.indexOf('*/', i + 2);
+      i = end < 0 ? content.length : end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') {
+      i++;
+      while (i < content.length && (content[i] !== char || isEscaped(content, i))) i++;
+      if (i === content.length) break;
+      i++;
+    } else if (/[\w$]/.test(char)) {
+      while (i < content.length && /[\w$]/.test(content[i])) i++;
+    } else {
+      i++;
+    }
+    tokens.push({ text: content.slice(start, i), start, end: i - 1 });
+  }
+  return tokens;
+}
+
+/** Literal entries of apps arrays, shared by discovery and targeted writes. */
+function ecosystemAppBlocks(content) {
+  const tokens = ecosystemSourceTokens(content);
+  const stack = [];
+  const blocks = [];
+  const isKey = (token, key) => [key, `'${key}'`, `"${key}"`].includes(token?.text);
+  const closes = { '}': '{', ']': '[', ')': '(' };
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const previous = tokens[i - 1]?.text;
+    const parent = stack.at(-1);
+    if (['{', '[', '('].includes(token.text)) {
+      stack.push({
+        open: token.text,
+        start: token.start,
+        apps: token.text === '[' && previous === ':' && isKey(tokens[i - 2], 'apps') &&
+          ['{', ','].includes(tokens[i - 3]?.text),
+        app: token.text === '{' && parent?.apps && ['[', ','].includes(previous),
+        name: null,
+      });
+    } else if (Object.hasOwn(closes, token.text)) {
+      const frame = stack.pop();
+      if (frame?.open !== closes[token.text]) return blocks;
+      if (frame.app && frame.name) blocks.push({ start: frame.start, end: token.end, name: frame.name });
+    } else if (parent?.app && previous === ':' && isKey(tokens[i - 2], 'name') &&
+      ['{', ','].includes(tokens[i - 3]?.text) && [',', '}'].includes(tokens[i + 1]?.text) &&
+      /^(['"])[\s\S]*\1$/.test(token.text)) {
+      parent.name = token.text.slice(1, -1);
+    }
+  }
+  return blocks;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
  * @returns {{ processes: Array, pm2Home: string|null }}
@@ -275,78 +342,8 @@ export function parseEcosystemConfig(content) {
     }
   }
 
-  // Match each app block: { name: '...', ... }
-  // This regex captures app objects including nested braces
-  const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let match;
-  let _lastIndex = 0;
-
-  while ((match = appBlockRegex.exec(content)) !== null) {
-    const processName = match[1];
-    const startPos = match.index;
-
-    // Find the end of this app block by counting braces
-    let braceCount = 0;
-    let endPos = startPos;
-    let inString = false;
-    let stringChar = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let i = startPos; i < content.length; i++) {
-      const char = content[i];
-      const nextChar = i < content.length - 1 ? content[i + 1] : '';
-
-      // Handle line comments (// ...)
-      if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
-        inLineComment = true;
-        continue;
-      }
-      if (inLineComment && char === '\n') {
-        inLineComment = false;
-        continue;
-      }
-
-      // Handle block comments (/* ... */)
-      if (!inString && !inLineComment && char === '/' && nextChar === '*') {
-        inBlockComment = true;
-        continue;
-      }
-      if (inBlockComment && char === '*' && nextChar === '/') {
-        inBlockComment = false;
-        i++; // Skip the closing /
-        continue;
-      }
-
-      // Skip if in any comment
-      if (inLineComment || inBlockComment) continue;
-
-      // Backticks count as string delimiters so `${...}` braces don't perturb
-      // the count. Use isEscaped() so an even-length backslash run before a
-      // quote (e.g. `\\"`) correctly reads as not-escaped.
-      if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
-        if (!inString) {
-          inString = true;
-          stringChar = char;
-        } else if (char === stringChar) {
-          inString = false;
-          stringChar = null;
-        }
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') {
-          braceCount--;
-          if (braceCount === 0) {
-            endPos = i;
-            break;
-          }
-        }
-      }
-    }
-
-    const appBlock = content.substring(startPos, endPos + 1);
+  for (const { start, end, name: processName } of ecosystemAppBlocks(content)) {
+    const appBlock = content.substring(start, end + 1);
 
     // Extract ports - first try the PortOS standard 'ports' object
     let ports = {};
@@ -488,7 +485,6 @@ export function parseEcosystemConfig(content) {
     const usesVite = /\bvite\b/i.test(appBlock) || /VITE_PORT/i.test(appBlock);
 
     processes.push({ name: processName, port, ports, cwd, usesVite });
-    _lastIndex = endPos;
   }
 
   // Post-process: when an app has both an API process and Vite dev processes,
@@ -667,14 +663,7 @@ function replaceOutsideComments(str, re, replacement) {
  * that process's ports from. Returns the first match (parser semantics) or null.
  */
 function findAppBlock(content, processName) {
-  const re = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    if (m[1] !== processName) continue;
-    const end = findMatchingBrace(content, m.index);
-    if (end >= 0) return { start: m.index, end };
-  }
-  return null;
+  return ecosystemAppBlocks(content).find(block => block.name === processName) ?? null;
 }
 
 /**
