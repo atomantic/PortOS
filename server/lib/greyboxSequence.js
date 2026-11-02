@@ -13,7 +13,7 @@ export const greyboxSequenceSchema = z.object({
   durationSec: time.positive(),
   fps: z.number().int().min(1).max(60).default(24),
   anchorTracks: z.array(z.object({ anchorId: z.string(), keys: z.array(anchorKey).min(1).max(2000) }).strict()).max(80).default([]),
-  shots: z.array(z.object({ shotId: z.string(), startSec: time, endSec: time, keys: z.array(cameraKey).min(1).max(2000).optional() }).strict()).min(1).max(60),
+  shots: z.array(z.object({ id: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/).optional(), shotId: z.string(), startSec: time, endSec: time, keys: z.array(cameraKey).min(1).max(2000).optional() }).strict()).min(1).max(2000),
 }).strict().superRefine((plan, ctx) => {
   const fail = (message) => ctx.addIssue({ code: 'custom', message });
   if (plan.scene.source !== 'spec') fail('Sequence capture currently supports primitive layouts only; GLB sequence capture is not available.');
@@ -26,8 +26,9 @@ export const greyboxSequenceSchema = z.object({
   const shotIds = new Set();
   for (const [index, shot] of plan.shots.entries()) {
     if (!plan.scene.shots.some((s) => s.id === shot.shotId)) fail(`Unknown camera ${shot.shotId}`);
-    if (shotIds.has(shot.shotId)) fail(`Duplicate sequence shot ${shot.shotId}`);
-    shotIds.add(shot.shotId);
+    const clipId = shot.id || shot.shotId;
+    if (shotIds.has(clipId)) fail(`Duplicate clip id ${clipId}; give each cut a unique id`);
+    shotIds.add(clipId);
     if (shot.endSec <= shot.startSec || shot.endSec > plan.durationSec) fail('Shot ranges must have positive duration within the master timeline.');
     if (index && shot.startSec < plan.shots[index - 1].endSec) fail('Shots must be chronological and must not overlap.');
     if (Math.ceil(shot.endSec * plan.fps - 1e-8) <= Math.ceil(shot.startSec * plan.fps - 1e-8)) fail('Every shot must contain at least one output frame.');
@@ -54,7 +55,7 @@ function sample(keys, timeSec) {
 /** Evaluate any frame directly, including out of order. Never resets at a cut. */
 export function evaluateGreyboxSequence(plan, shotId, timeSec) {
   if (!Number.isFinite(timeSec) || timeSec < 0 || timeSec > plan.durationSec) throw new Error('Time is outside the master timeline');
-  const range = plan.shots.find((shot) => shot.shotId === shotId);
+  const range = plan.shots.find((shot) => (shot.id || shot.shotId) === shotId);
   if (!range) throw new Error('Unknown sequence shot');
   const anchors = plan.scene.anchors.map((anchor) => {
     const track = plan.anchorTracks.find((item) => item.anchorId === anchor.id);
@@ -62,7 +63,7 @@ export function evaluateGreyboxSequence(plan, shotId, timeSec) {
     const { position, facingDegrees } = sample(track.keys, timeSec);
     return { ...anchor, position, facingDegrees: ((facingDegrees % 360) + 540) % 360 - 180 };
   });
-  const camera = plan.scene.shots.find((shot) => shot.id === shotId);
+  const camera = plan.scene.shots.find((shot) => shot.id === range.shotId);
   const shot = range.keys ? { ...camera, ...sample(range.keys, timeSec) } : camera;
   if (shot.position.every((v, i) => Math.abs(v - shot.target[i]) < 1e-8)) throw new Error('Interpolated camera sits on its target');
   return { scene: { ...plan.scene, anchors }, shot };
@@ -73,6 +74,6 @@ export function greyboxSequenceFrames(plan) {
   return plan.shots.flatMap((shot) => {
     const start = Math.ceil(shot.startSec * plan.fps - 1e-8);
     const end = Math.ceil(shot.endSec * plan.fps - 1e-8);
-    return Array.from({ length: end - start }, (_, index) => ({ shotId: shot.shotId, frame: start + index, timeSec: (start + index) / plan.fps, shotFrame: index }));
+    return Array.from({ length: end - start }, (_, index) => ({ clipId: shot.id || shot.shotId, shotId: shot.shotId, frame: start + index, timeSec: (start + index) / plan.fps, shotFrame: index }));
   });
 }

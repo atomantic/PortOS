@@ -54,6 +54,17 @@ describe('offline greybox sequence contract', () => {
     expect(gapped.filter((f) => f.shotId === 'reverse')[0].frame).toBe(288);
   });
 
+  it('reuses one saved camera for more than sixty separately named cuts', () => {
+    const raw = input();
+    raw.durationSec = 70;
+    raw.shots = Array.from({ length: 70 }, (_, index) => ({ id: `clip-${index}`, shotId: 'wide', startSec: index, endSec: index + 1 }));
+    const plan = greyboxSequenceSchema.parse(raw);
+    const frames = greyboxSequenceFrames(plan);
+    expect(new Set(frames.map((frame) => frame.clipId)).size).toBe(70);
+    expect(evaluateGreyboxSequence(plan, 'clip-69', 69).shot.id).toBe('wide');
+    expect(frames.at(-1)).toMatchObject({ clipId: 'clip-69', shotId: 'wide', shotFrame: 23 });
+  });
+
   it.each([
     ['unknown anchor', (p) => { p.anchorTracks[0].anchorId = 'missing'; }],
     ['duplicate track', (p) => { p.anchorTracks.push(p.anchorTracks[0]); }],

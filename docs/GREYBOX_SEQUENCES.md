@@ -29,7 +29,10 @@ existing environment greybox contract. `durationSec` defines the master timeline
 350 to 370 crosses zero; 0 to 720 makes two turns. Values hold outside their
 keys. Add enough position keys to describe turns; interpolation is linear.
 
-`shots` reference saved cameras with absolute `startSec` / `endSec`. Optional
+`shots` reference saved cameras through `shotId`, with absolute `startSec` /
+`endSec`. Give each cut a unique `id` to reuse one camera across multiple cuts;
+when omitted, the camera ID is also the clip ID. `--shot` selects the clip ID.
+Up to 2,000 cuts can reuse the layout’s saved cameras. Optional
 camera keys contain absolute `timeSec`, `position`, `target`, `focalLengthMm`.
 The saved camera supplies aspect and visible figures. Camera position, target
 and lens interpolate linearly. Validation refuses unknown references, duplicate
@@ -38,8 +41,8 @@ is checked for coincident camera and target before any output/browser work.
 
 All shots share a frame grid (`frame / fps`) and half-open intervals, so even
 fractional-time cuts assign each frame to at most one shot. Gaps may represent
-memories/other locations; they never reset the performance. A 234.41-second
-performance at 24 fps ends at the first frame boundary at or after its duration.
+memories/other locations; they never reset the performance. A non-frame-aligned
+performance ends at the first frame boundary at or after its duration.
 Keep that quantization in mind when cutting to the original music. Evaluation
 does not mutate the source layout and supports sampling in arbitrary order.
 

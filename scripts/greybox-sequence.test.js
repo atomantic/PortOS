@@ -3,13 +3,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 
 it('plans without browser/provider work and refuses to overwrite an existing output', () => {
   const root = mkdtempSync(join(tmpdir(), 'greybox-sequence-cli-'));
   const output = join(root, 'export');
-  const script = new URL('./greybox-sequence.js', import.meta.url).pathname;
-  const input = new URL('../docs/examples/greybox-sequence.json', import.meta.url).pathname;
+  const script = fileURLToPath(new URL('./greybox-sequence.js', import.meta.url));
+  const input = fileURLToPath(new URL('../docs/examples/greybox-sequence.json', import.meta.url));
   const args = [script, '--input', input, '--output', output, '--plan-only'];
   try {
     expect(execFileSync(process.execPath, args, { encoding: 'utf8' })).toContain('Planned 480 frames');
