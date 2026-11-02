@@ -363,7 +363,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     // Unpersisted scheduled jobs retain their original task on the expected miss.
     const dispatchedTask = !updateResult.error && !updateResult.statusChanged && updateResult.id === task.id && updateResult.metadata
       ? { ...task, ...updateResult, taskType: task.taskType || 'user' } : task;
-    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask);
+    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask,
+      { ...task, status: expectedDispatchStatus, metadata: expectedDispatchMetadata });
 
     if (task.metadata?.autonomousJob && task.metadata?.jobId) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });

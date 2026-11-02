@@ -71,6 +71,7 @@ import {
 vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn(async () => ({})),
   getTaskById: vi.fn(async () => null),
+  getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })),
   addTask: vi.fn(async () => ({ id: 'investigation-test' })),
 }));
 vi.mock('./investigationTaskProducer.js', () => ({
@@ -621,6 +622,103 @@ describe('recovery output-hook dispatch (#3182)', () => {
       expect(addTask).not.toHaveBeenCalled();
     } finally { forge.mockRestore(); gitRead.mockRestore(); }
   });
+
+  // Uniquely catches a successful boot-release/dispatch/completion being
+  // requeued for having no new commit, and stale retries borrowing that release.
+  it.each(['verified', 'missing-binding', 'stale-retry', 'wrong-owner', 'missing-task', 'changed-task',
+    'changed-pr', 'changed-integration', 'unknown-boot', 'stale-boot', 'unreadable-forge', 'changed-dispatch',
+    'malformed-original', 'changed-during-inspection', 'sentinel-only', 'failed', 'interrupted', 'terminated', 'blocked', 'incomplete'])
+    ('settles runtime verification only with %s evidence', async kind => {
+      isProgrammaticIoTaskType.mockReturnValue(false);
+      const { getAllTasks } = await import('./cosTaskStore.js');
+      const { bindCompletionTaskDispatch } = await import('./agentCompletionTaskHandoff.js');
+      const { resolveRuntimeVerificationUpdate, sweepRuntimeVerifications } = await import('./runtimeVerification.js');
+      const state = await import('./cosState.js');
+      const github = await import('./github.js');
+      const git = await import('../lib/execGit.js');
+      const boot = await import('./installState.js');
+      let live = { id: TASK.id, taskType: 'internal', description: 'Verify deployed resolver', priority: 'MEDIUM',
+        status: 'in_progress', metadata: { isInvestigation: true, totalSpawnCount: 3, failureCount: 1,
+          claimedBy: 'instance-example', claimedAt: '2026-09-10T00:00:00Z', lastSpawnedAt: '2026-09-10T00:00:00Z' } };
+      persistedAgent.taskId = live.id;
+      persistedAgent.metadata.completionTaskDispatch = { taskId: live.id, taskType: 'internal',
+        expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, live.metadata[key]]) };
+      const original = { ...structuredClone(persistedAgent), status: 'completed' };
+      getAgentRecord.mockImplementation(async id => id === original.id ? original : persistedAgent);
+      getTaskById.mockImplementation(async () => kind === 'missing-task' && persistedAgent.id !== original.id ? null : structuredClone(live));
+      getAllTasks.mockImplementation(async () => ({ user: { tasks: [] }, cos: { tasks: [structuredClone(live)] } }));
+      updateTask.mockImplementation(async (_id, update) => {
+        live = { ...live, ...update, metadata: { ...live.metadata, ...update.metadata } };
+        return structuredClone(live);
+      });
+      const owners = vi.spyOn(state, 'readAgentsStateForSafetyCheck').mockResolvedValue({ trusted: true, agents: {} });
+      mergedTarget.getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'example/PortOS' });
+      const pr = { state: 'MERGED', url: 'https://github.com/example/PortOS/pull/123', headRefOid: 'a'.repeat(40),
+        mergeCommit: { oid: 'c'.repeat(40) }, baseRefName: 'main' };
+      const forge = vi.spyOn(github, 'execGh').mockImplementation(async args => JSON.stringify(args[0] === 'pr'
+        ? pr : { defaultBranchRef: { name: 'main' } }));
+      const gitRead = vi.spyOn(git, 'execGit').mockImplementation(async args => ({ stdout: 'd'.repeat(40),
+        exitCode: args[0] === 'merge-base' && args[3] === 'b'.repeat(40) ? 1 : 0 }));
+      boot.__setBootCommitForTest('b'.repeat(40));
+      try {
+        const parked = await resolveRuntimeVerificationUpdate(live, { status: 'blocked', reason: 'Wait for deployed fix.',
+          recovery: { mode: 'runtime', prUrl: pr.url, requiredCommit: pr.headRefOid } }, original.id);
+        await updateTask(live.id, parked);
+        await updateTask(live.id, { metadata: { runtimeVerificationReadyAgentId: original.id, resumedFromAgentId: original.id } });
+        boot.__setBootCommitForTest('d'.repeat(40));
+        expect(await sweepRuntimeVerifications()).toEqual({ resumed: [live.id] });
+        const pending = structuredClone(live);
+        persistedAgent = { id: 'agent-runtime-resumed', taskId: live.id, status: 'running', startedAt: new Date().toISOString(), metadata: {} };
+        await updateTask(live.id, { status: 'in_progress', metadata: { totalSpawnCount: 4, lastSpawnedAt: new Date(Date.now() + 1000).toISOString() } });
+        expect(await bindCompletionTaskDispatch(persistedAgent.id, live, pending)).toBe(true);
+        if (kind === 'missing-binding') delete persistedAgent.metadata.completionTaskDispatch.runtimeContinuation;
+        if (kind === 'stale-retry') {
+          const retry = { ...structuredClone(live), status: 'pending' };
+          live.metadata.totalSpawnCount = 5;
+          await bindCompletionTaskDispatch(persistedAgent.id, live, retry);
+          expect(persistedAgent.metadata.completionTaskDispatch).not.toHaveProperty('runtimeContinuation');
+        }
+        if (kind === 'wrong-owner') original.taskId = 'sys-unrelated';
+        if (kind === 'changed-task') live.description = 'A different objective';
+        if (kind === 'changed-pr') live.metadata.runtimeVerification.prUrl = 'https://github.com/example/PortOS/pull/124';
+        if (kind === 'changed-integration') pr.mergeCommit.oid = 'e'.repeat(40);
+        if (kind === 'unknown-boot') boot.__setBootCommitForTest(null);
+        if (kind === 'stale-boot') boot.__setBootCommitForTest('b'.repeat(40));
+        if (kind === 'changed-dispatch') live.metadata.claimedBy = 'another-instance';
+        if (kind === 'malformed-original') original.metadata.completionTaskDispatch.expected = [];
+        if (kind === 'changed-during-inspection') {
+          const inspect = forge.getMockImplementation();
+          forge.mockImplementationOnce(async args => {
+            const result = await inspect(args);
+            live.description = 'Changed while reading the forge';
+            return result;
+          });
+        }
+        if (kind === 'unreadable-forge') forge.mockRejectedValueOnce(new Error('Unavailable'));
+        const taskOutcome = { status: ['blocked', 'incomplete'].includes(kind) ? kind : 'completed', reason: 'Checked deployed resolver.' };
+        const result = await finalizeAgent({ agentId: persistedAgent.id, task: structuredClone(live), success: !['failed', 'terminated'].includes(kind),
+          exitCode: kind === 'failed' ? 1 : 0, duration: 1000, workspacePath: '/example/worktree',
+          ...(kind === 'interrupted' ? { executionInterruption: { category: 'timeout' } } : {}),
+          terminatedByUser: kind === 'terminated',
+          finalSummary: JSON.stringify({ summary: taskOutcome.reason, ...(kind === 'sentinel-only' ? {} : { taskOutcome }) }) });
+        expect(result.success).toBe(kind === 'verified');
+        expect(result.taskOutcome.status).toBe(kind === 'verified' ? 'completed' : kind === 'blocked' ? 'blocked' : 'incomplete');
+        expect(completeAgent).toHaveBeenCalledWith(persistedAgent.id, expect.objectContaining({
+          validationPassed: kind === 'terminated' ? null : kind === 'verified' }));
+        if (kind === 'verified') {
+          expect(live.status).toBe('completed');
+          expect(live.metadata).toMatchObject({ failureCount: 1, totalSpawnCount: 4 });
+          expect(resolveFailedTaskUpdate).not.toHaveBeenCalled();
+          expect(addTask).not.toHaveBeenCalled();
+        }
+      } finally {
+        owners.mockRestore(); forge.mockRestore(); gitRead.mockRestore(); boot.__setBootCommitForTest(null);
+        getTaskById.mockResolvedValue(null);
+        getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+        updateTask.mockResolvedValue({});
+        getAgentRecord.mockImplementation(async () => persistedAgent);
+      }
+    });
 
   it.each(['normal', 'recovered'])('preserves the bounded already-running decision through %s completion and interrupted replay', async mode => {
     isProgrammaticIoTaskType.mockReturnValue(false);

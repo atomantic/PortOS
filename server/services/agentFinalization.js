@@ -136,7 +136,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
   if (terminatedByUser) return null;
   if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
@@ -161,6 +161,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Only the server-owned selected-issue verifier supplies this proof. Ordinary
   // claim shipping keeps its existing PR/fidelity gates and undeclared criterion.
   if (success && hasClaimFlowContract(task) && claimDisposition?.status === 'verified') return true;
+  if (success && runtimeContinuation?.status === 'verified') return true;
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
@@ -2115,6 +2116,12 @@ async function finalizeAgentInCompletionContext({
 
   const taskType = task?.taskType || 'user';
 
+  const runtimeContinuation = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'completed'
+    && task.metadata?.runtimeVerification?.status === 'resumed'
+    ? await import('./runtimeVerification.js')
+      .then(({ verifyRuntimeVerificationContinuation }) => verifyRuntimeVerificationContinuation(task, agentId))
+      .catch(() => null) : null;
+
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
@@ -2132,14 +2139,19 @@ async function finalizeAgentInCompletionContext({
     claimDisposition,
     mergedReviewFollowUp,
     retirementCompletion,
+    runtimeContinuation,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
       return null;
     });
 
+  const runtimeCompletionMissing = task.metadata?.runtimeVerification?.status === 'resumed'
+    && !reportedTaskOutcome && validationPassed !== true;
   let taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
-    ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
+    ? { status: 'incomplete', reason: retirementCompletion.reason }
+    : runtimeCompletionMissing ? { status: 'incomplete', reason: 'Runtime verification completion was not established.' }
+      : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
   if (verdict.success) {
