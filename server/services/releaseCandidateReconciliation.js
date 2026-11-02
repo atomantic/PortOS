@@ -59,7 +59,8 @@ async function assertUnpromoted(repoPath, identity) {
     pulls = await candidateBranchPulls(forge, identity.branch);
     tip = await readReleaseBaseTip(forge);
   } catch { refuse('candidate-forge-unavailable'); }
-  if (!Array.isArray(pulls)) refuse('candidate-publication-ambiguous');
+  // A full page may hide an older promotion PR: fail closed rather than paginate.
+  if (!Array.isArray(pulls) || pulls.length >= 100) refuse('candidate-publication-ambiguous');
   if (pulls.some(pr => pr.state === 'open' || pr.merged_at)) refuse('candidate-promotion-exists');
   if (tip !== identity.releaseBase) refuse('candidate-release-base-changed');
 }

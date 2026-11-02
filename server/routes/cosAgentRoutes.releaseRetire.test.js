@@ -227,6 +227,11 @@ describe('POST /agents/:id/release-candidate retire (#14773)', () => {
     expect((await auditedCall()).body.retired).toBe(true);
   });
 
+  it('fails closed when the PR listing may be truncated', async () => {
+    fixture.pulls = Array.from({ length: 100 }, (_, index) => ({ number: index + 1, state: 'closed', merged_at: null }));
+    await refusal(undefined, 'candidate-publication-ambiguous');
+  });
+
   it('refuses when the release base moved or the forge is unavailable', async () => {
     fixture.releaseTip = 'f'.repeat(40);
     await refusal(undefined, 'candidate-release-base-changed');
