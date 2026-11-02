@@ -245,6 +245,7 @@ export default function SceneCard({
     preMusic ? `before the song · ${normalizePreMusic(scene.preMusic).durationSec.toFixed(2)}s` : null,
     !preMusic && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
     scene.beatAligned ? 'beat-aligned' : null,
+    scene.pacingCut ? 'pacing cut' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
   ].filter(Boolean).join(' · ');
   const typeSummary = [

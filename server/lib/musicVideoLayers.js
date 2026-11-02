@@ -93,6 +93,10 @@ export function sceneHasAuthoredSpan(scene) {
   return typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec;
 }
 
+/** Fixed shot timing is independent of whether its boundaries landed on beats. */
+export const sceneUsesAuthoredTiming = (scene) => Boolean(scene?.pacingCut || scene?.beatAligned
+  || (Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0));
+
 /**
  * Whether the render can include this scene as-is: footage needs its clip, a
  * still needs its reference frame and a span, and a card or code shot needs only a span.

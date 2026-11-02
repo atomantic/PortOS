@@ -15,6 +15,7 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 const { default: routes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { assertCurrentPerformanceTakes } = await import('../services/musicVideo/performanceShot.js');
+const { beatSnapClips } = await import('../services/musicVideo/render.js');
 const app = express();
 app.use(express.json());
 app.use('/api/music-video', routes);
@@ -67,9 +68,13 @@ it('previews and re-cuts every long shot, preferring a lyric start to a downbeat
   expect(scenes).toHaveLength(6);
   expect(scenes[0]).toMatchObject({ sceneId: first.sceneId, referenceImageId: 'person.png', videoHistoryId: 'clip-parent', prompt: first.prompt });
   expect(scenes[3]).toMatchObject({ sceneId: second.sceneId, referenceImageId: 'person.png', videoHistoryId: 'clip-parent' });
+  expect(scenes.slice(0, 3).map((scene) => scene.beatAligned)).toEqual([false, false, true]);
+  const exportPlan = beatSnapClips(scenes.slice(0, 5).map((scene) => ({ sceneId: scene.sceneId, duration: 10, inSec: 0, outSec: 10 })),
+    recut.audioAnalysis.beats, { scenes: recut.scenes });
+  expect(exportPlan.map((clip) => clip.duration)).toEqual(scenes.slice(0, 5).map((scene) => scene.endSec - scene.startSec));
   expect(scenes[5]).toEqual({ ...before.scenes[2], order: 5 });
   for (const [i, scene] of scenes.slice(0, 5).entries()) {
-    expect(scene.beatAligned).toBe(true);
+    expect(scene.pacingCut).toBe(true);
     expect(scene.endSec - scene.startSec).toBeGreaterThanOrEqual(1);
     expect(scene.endSec - scene.startSec).toBeLessThanOrEqual(3);
     if (i) expect(scene.startSec).toBe(scenes[i - 1].endSec);

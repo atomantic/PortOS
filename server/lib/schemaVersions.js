@@ -847,8 +847,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // which a v38 strict photo-sequence schema rejects. Optional, no backfill: absent is a plain sequence.
   // v40 = shot reference picks can exceed four and take cast-input snapshots can
   // exceed eight. Older peers reject or truncate those expanded arrays.
-  // v41 = pacing re-cut pieces carry beatNeedsReview; older scene writers drop it.
-  // Optional, no backfill: absent means the shot has no pending pacing beat review.
+  // v41 = pacing re-cut pieces carry beatNeedsReview/pacingCut; older scene writers drop them.
+  // Optional, no backfill: absent means no pending beat review or pacing-owned timing.
   musicVideoProjects: 41,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,

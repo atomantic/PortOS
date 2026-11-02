@@ -529,6 +529,7 @@ function buildScene(input, { order }) {
     endSec: input.endSec ?? null,
     beatAligned: input.beatAligned ?? false,
     ...(input.beatNeedsReview ? { beatNeedsReview: true } : {}),
+    ...(input.pacingCut ? { pacingCut: true } : {}),
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
     // #8964: a new shot never silently repeats its clip to fill a span — looping
@@ -745,7 +746,7 @@ export function applyStoryboardShotSync(project, plan) {
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
-const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'label', 'prompt', 'framePrompt', 'visualIntent',
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage'];
 
@@ -920,9 +921,12 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
   const hasTimedCues = (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
   const pieceLyrics = (piece) => (hasTimedCues ? sungLyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
 
+  const grid = [...(project.audioAnalysis?.beats || []), ...(project.audioAnalysis?.downbeats || [])];
+  const onGrid = (t) => t === 0 || t === project.audioAnalysis?.durationSec
+    || grid.some((beat) => Math.abs(beat - t) <= 0.005);
   const pieces = plannedPieces.map((piece, i) => {
     const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece),
-      ...(needsBeat ? { beatAligned: true } : {}) };
+      ...(needsBeat ? { pacingCut: true, beatAligned: onGrid(piece.startSec) && onGrid(piece.endSec) } : {}) };
     if (i === 0) {
       const takes = ensureSceneTakes(scene, now);
       // The ordinary backend split clears a performance selection and leaves
@@ -939,6 +943,7 @@ export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip 
         prompt: scene.prompt ?? '',
         framePrompt: scene.framePrompt ?? null,
         beatAligned: scene.beatAligned ?? false,
+        ...(scene.pacingCut ? { pacingCut: true } : {}),
         loop: scene.loop ?? false,
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
