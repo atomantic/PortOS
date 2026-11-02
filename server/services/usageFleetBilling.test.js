@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 let stored = {};
-vi.mock('./settings.js', () => ({
-  getSettings: vi.fn(async () => structuredClone(stored)),
-  updateSettingsWith: vi.fn(async (mutate) => {
-    stored = await mutate(structuredClone(stored));
-    return structuredClone(stored);
-  }),
-}));
+vi.mock('./settings.js', async () => {
+  const { EventEmitter } = await import('node:events');
+  return {
+    settingsEvents: new EventEmitter(),
+    getSettings: vi.fn(async () => structuredClone(stored)),
+    getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: structuredClone(stored) })),
+    updateSettingsWith: vi.fn(async (mutate) => {
+      stored = await mutate(structuredClone(stored));
+      return structuredClone(stored);
+    }),
+  };
+});
+import { settingsEvents, getSettingsWithStatus, updateSettingsWith } from './settings.js';
 
 import {
   normalizeApiBilledInstanceIds,
@@ -57,6 +63,24 @@ describe('setInstanceUsesSubscriptions', () => {
   it('ignores a blank instance id', async () => {
     expect(await setInstanceUsesSubscriptions('', false)).toEqual([]);
     expect(await getApiBilledInstanceIds()).toEqual([]);
+  });
+
+  it('refuses to guess quota eligibility from unreadable settings', async () => {
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: true, settings: {} });
+    await expect(getApiBilledInstanceIds({ requireReadable: true })).rejects.toThrow('Fleet billing settings are unavailable');
+    getSettingsWithStatus.mockResolvedValueOnce({ corrupt: false, settings: { usageApiBilledInstanceIds: 'invalid' } });
+    await expect(getApiBilledInstanceIds({ requireReadable: true })).rejects.toThrow('Fleet billing settings are unavailable');
+  });
+
+  it('invalidates quota selection after a successful save, but not after a failed save', async () => {
+    const listener = vi.fn();
+    settingsEvents.on('usage:fleet-billing-updated', listener);
+    await setInstanceUsesSubscriptions('inst-peer', false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    updateSettingsWith.mockRejectedValueOnce(new Error('synthetic save failure'));
+    await expect(setInstanceUsesSubscriptions('inst-peer', true)).rejects.toThrow('synthetic save failure');
+    expect(listener).toHaveBeenCalledTimes(1);
+    settingsEvents.off('usage:fleet-billing-updated', listener);
   });
 });
 

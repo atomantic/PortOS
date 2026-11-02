@@ -895,7 +895,35 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * therefore unified with what peers published for the same family before it is
  * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
+async function readPeerQuotaEntries({ includeEmpty = false } = {}) {
+  const excludedInstanceIds = await getApiBilledInstanceIds({ requireReadable: true }).catch((err) => {
+    console.error(`❌ Could not read quota billing selection: ${err?.message || err}`);
+    return null;
+  });
+  if (!excludedInstanceIds) return { entries: null, excludedInstanceIds: null };
+  const entries = await getFleetQuotaEntries({ excludeInstanceIds: excludedInstanceIds, ...(includeEmpty ? { includeEmpty: true } : {}) }).catch((err) => {
+    console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
+    return null;
+  });
+  return { entries, excludedInstanceIds };
+}
+
+function instancePeerQuotas({ entries, excludedInstanceIds }, family) {
+  return {
+    providers: (entries || []).flatMap((peer) => peer.quotas.filter((card) => !family || card.family === family).map((card) => ({
+      ...stampReadAt(pruneExpiredWindows(card, Date.now()), Date.now()), supported: card.supported !== false,
+      origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
+    }))),
+    unreportedInstances: (entries || []).filter((peer) => peer.usageExpected !== false && !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
+    federationUnavailable: entries === null,
+    excludedInstanceIds,
+  };
+}
+
 export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
+  // Billing changes only need the already-published peer readings. Do not
+  // start a local CLI scrape or rewrite the shared quota store for that read.
+  if (scope === 'peers') return instancePeerQuotas(await readPeerQuotaEntries({ includeEmpty: true }), family);
   const { cards, families, complete, imageQuotaComplete } = await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
@@ -905,30 +933,20 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, per
     recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
       console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
     }),
-    (scope === 'instances' ? getFleetQuotaEntries({ includeEmpty: true })
-      : getApiBilledInstanceIds().then((excludeInstanceIds) => getFleetQuotaEntries({ excludeInstanceIds })))
-      .catch((err) => {
-        // A federation read that fails must not take the cards down with it — a
-        // this-machine-only card is a smaller loss than an empty usage page.
-        console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
-        return scope === 'instances' ? null : [];
-      }),
+    readPeerQuotaEntries({ includeEmpty: scope === 'instances' }),
   ]);
   if (scope === 'instances') {
+    const peers = instancePeerQuotas(peerEntries, family);
     return {
+      ...peers,
       providers: [
         ...cards.map((card) => ({ ...card, origin: { self: true, name: 'This instance' } })),
-        ...(peerEntries || []).flatMap((peer) => peer.quotas.filter((card) => !family || card.family === family).map((card) => ({
-          ...stampReadAt(pruneExpiredWindows(card, Date.now()), Date.now()), supported: card.supported !== false,
-          origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
-        }))),
+        ...peers.providers,
       ],
-      unreportedInstances: (peerEntries || []).filter((peer) => peer.usageExpected !== false && !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
-      federationUnavailable: peerEntries === null,
       imageQuotaComplete,
     };
   }
-  return mergeFleetQuotaCards(cards, peerEntries);
+  return mergeFleetQuotaCards(cards, peerEntries.entries || []);
 }
 
 /** The local readings, before any federated merge. */

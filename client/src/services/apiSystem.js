@@ -290,7 +290,8 @@ export const startUsageBackfill = (options = {}) => request('/usage/backfill', {
 // Subscription-quota status for every enabled provider family (claude, codex,
 // agy, grok). Callers own their inline error UI — silent by default. `family`
 // narrows the read to a single card (the usage page's per-card Refresh) so one
-// provider's multi-second scrape isn't paid for all of them.
+// provider's multi-second scrape isn't paid for all of them. `scope: 'peers'`
+// reads only saved eligible peer observations, without a local provider scrape.
 export const getProviderUsage = ({ refresh = false, family = null, period = null, scope = null, ...options } = {}) => {
   const qs = new URLSearchParams();
   if (refresh) qs.set('refresh', '1');

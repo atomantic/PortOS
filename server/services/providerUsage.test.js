@@ -70,6 +70,8 @@ import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 import { getFleetQuotaEntries } from './peerUsage.js';
+import { getApiBilledInstanceIds } from './usageFleetBilling.js';
+import { recordLocalQuotaCards } from './providerQuotaShare.js';
 
 // Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
 // `needsProcessGroup` is false there and these sites spawn attached. The policy
@@ -383,6 +385,7 @@ describe('getProviderQuotas', () => {
     scrapeTuiUsage.mockReset();
     getImageGenQuota.mockClear();
     getFleetQuotaEntries.mockReset().mockResolvedValue([]);
+    getApiBilledInstanceIds.mockReset().mockResolvedValue([]);
   });
 
   it('returns separate peer-only and API-billed readings, ages windows, and reports old peers', async () => {
@@ -394,11 +397,54 @@ describe('getProviderQuotas', () => {
       { instanceId: 'inactive', name: 'Inactive peer', quotaReported: false, usageExpected: false, quotas: [] },
     ]);
     const result = await getProviderQuotas({ scope: 'instances' });
-    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ includeEmpty: true });
+    expect(getApiBilledInstanceIds).toHaveBeenCalledWith({ requireReadable: true });
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: [], includeEmpty: true });
     expect(result.providers).toHaveLength(2);
     expect(result.providers[0]).toMatchObject({ origin: { instanceId: 'a' }, limits: [], quotaStatus: 'expired', error: expect.stringMatching(/since reset/) });
     expect(result.providers[1]).toMatchObject({ origin: { instanceId: 'b' }, activity: [{ requests: 2 }] });
     expect(result.unreportedInstances).toEqual(['Old peer']);
+  });
+
+  it('excludes API-billed peers from instance quota readings and missing-report entries', async () => {
+    getAllProviders.mockResolvedValueOnce({ providers: [] });
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    const entries = [
+      { instanceId: 'billed', name: 'Billed peer', quotaReported: false, quotas: [{ family: 'grok', label: 'Grok', limits: [] }] },
+      { instanceId: 'included', name: 'Included peer', quotaReported: true, quotas: [{ family: 'grok', label: 'Grok', limits: [] }] },
+    ];
+    getFleetQuotaEntries.mockImplementationOnce(async ({ excludeInstanceIds }) => entries.filter((entry) => !excludeInstanceIds.includes(entry.instanceId)));
+    const result = await getProviderQuotas({ scope: 'instances' });
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: ['billed'], includeEmpty: true });
+    expect(result.providers.map((card) => card.origin.instanceId)).toEqual(['included']);
+    expect(result.unreportedInstances).toEqual([]);
+  });
+
+  it('reads eligible saved peer quotas without starting or recording a local provider read', async () => {
+    getAllProviders.mockClear(); getSettings.mockClear(); recordLocalQuotaCards.mockClear();
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    getFleetQuotaEntries.mockResolvedValueOnce([{ instanceId: 'included', name: 'Included peer', quotaReported: true,
+      quotas: [{ family: 'grok', label: 'Grok', limits: [] }] }]);
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result.providers).toEqual([expect.objectContaining({ family: 'grok', origin: expect.objectContaining({ instanceId: 'included' }) })]);
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: ['billed'], includeEmpty: true });
+    expect(getAllProviders).not.toHaveBeenCalled();
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(recordLocalQuotaCards).not.toHaveBeenCalled();
+    expect(scrapeTuiUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not include unverified peers if billing settings cannot be read', async () => {
+    getApiBilledInstanceIds.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result).toMatchObject({ providers: [], federationUnavailable: true });
+    expect(getFleetQuotaEntries).not.toHaveBeenCalled();
+  });
+
+  it('returns the verified exclusions if the saved peer store cannot be read', async () => {
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    getFleetQuotaEntries.mockRejectedValueOnce(new Error('synthetic peer-store failure'));
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result).toMatchObject({ providers: [], federationUnavailable: true, excludedInstanceIds: ['billed'] });
   });
 
   it('reports an unavailable image-quota read separately from a disabled image backend', async () => {

@@ -145,6 +145,8 @@ router.put('/fleet-billing', asyncHandler(async (req, res) => {
 // Refresh re-reads only the provider the user clicked instead of respawning
 // every provider's TUI scrape. An id that no longer resolves to an enabled
 // family answers with an empty list — the card is gone, not broken.
+// `?scope=peers` returns only eligible saved peer readings, without starting a
+// local provider read; the billing toggle uses it to update the quota cards.
 router.get('/providers', asyncHandler(async (req, res) => {
   const { refresh: refreshParam, family, period, scope } = validateRequest(providerUsageQuerySchema, req.query);
   const refresh = refreshParam === '1' || refreshParam === 'true';

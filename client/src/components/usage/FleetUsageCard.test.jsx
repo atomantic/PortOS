@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import FleetUsageCard, { applyFleetBilling } from './FleetUsageCard';
 
 const api = vi.hoisted(() => ({ updateUsageFleetBilling: vi.fn() }));
@@ -95,5 +95,55 @@ describe('FleetUsageCard', () => {
     expect(screen.getByText('1 of 2 instances on subscriptions')).toBeInTheDocument();
     expect(screen.getAllByText('API billed').length).toBeGreaterThan(0);
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
+  });
+
+  it('accepts later billing changes after the server confirms an optimistic toggle', async () => {
+    const { rerender } = render(<FleetUsageCard fleet={fleet} onSaved={vi.fn().mockResolvedValue({})} />);
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Count Studio toward subscription totals' })[0]);
+    expect(await screen.findByText('1 of 2 instances on subscriptions')).toBeInTheDocument();
+    rerender(<FleetUsageCard fleet={{ ...fleet, instances: [fleet.instances[0], { ...fleet.instances[1], usesSubscriptions: false }] }} />);
+    await waitFor(() => expect(screen.getByText('1 of 2 instances on subscriptions')).toBeInTheDocument());
+    rerender(<FleetUsageCard fleet={fleet} />);
+    expect(await screen.findByText('2 instances combined')).toBeInTheDocument();
+  });
+
+  it('accepts a newer server value even when another view reverses the saved toggle', async () => {
+    const onSaved = vi.fn().mockResolvedValue(null);
+    const { rerender } = render(<FleetUsageCard fleet={fleet} onSaved={onSaved} />);
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Count Studio toward subscription totals' })[0]);
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(screen.getByText('1 of 2 instances on subscriptions')).toBeInTheDocument();
+    rerender(<FleetUsageCard fleet={{ ...fleet, instances: [...fleet.instances] }} onSaved={onSaved} />);
+    expect(await screen.findByText('2 instances combined')).toBeInTheDocument();
+  });
+
+  it('keeps a second optimistic toggle while its save is pending', async () => {
+    let finishSecond;
+    api.updateUsageFleetBilling.mockResolvedValueOnce({}).mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+    const onSaved = vi.fn().mockResolvedValue(null);
+    const { rerender } = render(<FleetUsageCard fleet={fleet} onSaved={onSaved} />);
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Count Studio toward subscription totals' })[0]);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    const offSwitch = screen.getAllByRole('switch', { name: 'Exclude Studio from subscription totals (pays API rates)' })[0];
+    await waitFor(() => expect(offSwitch).toBeEnabled());
+    fireEvent.click(offSwitch);
+    rerender(<FleetUsageCard fleet={{ ...fleet, instances: [fleet.instances[0], { ...fleet.instances[1], usesSubscriptions: false }] }} onSaved={onSaved} />);
+    expect(screen.getByText('2 instances combined')).toBeInTheDocument();
+    await waitFor(() => expect(finishSecond).toBeTypeOf('function'));
+    await act(async () => finishSecond({}));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+  });
+
+  it('restores the last saved choice when a second toggle fails before a successful refetch', async () => {
+    api.updateUsageFleetBilling.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('synthetic failure'));
+    const onSaved = vi.fn().mockResolvedValue(null);
+    render(<FleetUsageCard fleet={fleet} onSaved={onSaved} />);
+    fireEvent.click(screen.getAllByRole('switch', { name: 'Count Studio toward subscription totals' })[0]);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    const offSwitch = screen.getAllByRole('switch', { name: 'Exclude Studio from subscription totals (pays API rates)' })[0];
+    await waitFor(() => expect(offSwitch).toBeEnabled());
+    fireEvent.click(offSwitch);
+    await waitFor(() => expect(api.updateUsageFleetBilling).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('1 of 2 instances on subscriptions')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Network } from 'lucide-react';
 import Pill from '../ui/Pill';
 import ToggleSwitch from '../ToggleSwitch';
@@ -63,6 +63,22 @@ function BillingToggle({ row, disabled, onToggle }) {
 export default function FleetUsageCard({ fleet, onSaved }) {
   const [overrides, setOverrides] = useState({});
   const [pending, setPending] = useState({});
+  const confirmedAt = useRef(new Map());
+  const latestFleet = useRef(fleet);
+  latestFleet.current = fleet;
+
+  // A successful read after the save is authoritative, even if another view
+  // changed the same switch again before this view observed the saved value.
+  useEffect(() => {
+    const resolved = [...confirmedAt.current].filter(([, baseline]) => baseline !== fleet).map(([id]) => id);
+    if (!resolved.length) return;
+    for (const id of resolved) confirmedAt.current.delete(id);
+    setOverrides((previous) => {
+      const next = { ...previous };
+      for (const id of resolved) delete next[id];
+      return next;
+    });
+  }, [fleet]);
 
   const rows = fleet?.instances || [];
   if (rows.length < 2) return null;
@@ -83,6 +99,11 @@ export default function FleetUsageCard({ fleet, onSaved }) {
 
   const toggleBilling = async (row) => {
     const next = !row.usesSubscriptions;
+    const hadOverride = Object.hasOwn(overrides, row.instanceId);
+    const priorOverride = overrides[row.instanceId];
+    const priorConfirmed = confirmedAt.current.has(row.instanceId);
+    const priorBaseline = confirmedAt.current.get(row.instanceId);
+    confirmedAt.current.delete(row.instanceId);
     setOverrides((prev) => ({ ...prev, [row.instanceId]: next }));
     setPending((prev) => ({ ...prev, [row.instanceId]: true }));
     const ok = await api.updateUsageFleetBilling(
@@ -93,14 +114,18 @@ export default function FleetUsageCard({ fleet, onSaved }) {
       return false;
     });
     if (!ok) {
+      const restorePrior = hadOverride && (!priorConfirmed || priorBaseline === latestFleet.current);
+      if (restorePrior && priorConfirmed) confirmedAt.current.set(row.instanceId, priorBaseline);
       // Revert the optimistic overlay; a successful save keeps it so a slow
       // refetch can't flash the old combined total back onto the card.
       setOverrides((prev) => {
         const copy = { ...prev };
-        delete copy[row.instanceId];
+        if (restorePrior) copy[row.instanceId] = priorOverride;
+        else delete copy[row.instanceId];
         return copy;
       });
     } else {
+      confirmedAt.current.set(row.instanceId, latestFleet.current);
       await onSaved?.();
     }
     setPending((prev) => {
