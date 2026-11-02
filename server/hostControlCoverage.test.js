@@ -604,6 +604,11 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/image-video/models/lora/:filename', REMOVES_RECORD],
   ['PATCH /api/image-video/models/registry/:id/availability', RECORDS],
   ['DELETE /api/image-video/models/store/:backend/:key', REMOVES_RECORD],
+  // Signal privacy controls only change PortOS records; they never access Signal's database.
+  ['PUT /api/signal/blocklist', RECORDS],
+  ['POST /api/signal/blocklist/conversations', REMOVES_RECORD],
+  ['POST /api/signal/purge', REMOVES_RECORD],
+
   // /api/imessage
   ['POST /api/imessage/blocklist', RECORDS],
   ['PUT /api/imessage/blocklist', RECORDS],

@@ -24,6 +24,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getEvent } from './calendarSync.js';
 import {
+  deleteAutoTouchpoints,
   listPeople,
   getPerson,
   createPerson,
@@ -625,4 +626,15 @@ describe('tribe service — checkDuplicateTribeIdentifiers', () => {
       { identifier: 'shared@x.com', people: [{ id: 'p1', name: 'Ada' }, { id: 'p2', name: 'Bea' }] },
     ]);
   });
+});
+
+it('purges Signal touchpoints by exact source and conversation metadata, including audit snapshots', async () => {
+  const transactionQuery = vi.fn()
+    .mockResolvedValueOnce({ rows: [{ id: 'example-touchpoint' }] })
+    .mockResolvedValueOnce({ rowCount: 2 });
+  withTransaction.mockImplementationOnce((work) => work({ query: transactionQuery }));
+  expect(await deleteAutoTouchpoints({ signalConversationId: 'opaque:%_id:child' })).toEqual({ touchpoints: 1, auditRows: 2 });
+  expect(transactionQuery).toHaveBeenNthCalledWith(1,
+    expect.stringContaining("source = 'signal' AND metadata->>'conversationId' = $1"), ['opaque:%_id:child']);
+  expect(transactionQuery).toHaveBeenNthCalledWith(2, expect.stringContaining('DELETE FROM record_audit'), [['example-touchpoint']]);
 });

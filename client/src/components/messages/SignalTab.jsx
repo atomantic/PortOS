@@ -1,3 +1,4 @@
+import SignalManager from './SignalManager';
 import { useState } from 'react';
 import SettingsLoadError from '../ui/SettingsLoadError';
 import { Save, Loader2, Lock, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
@@ -155,6 +156,8 @@ export function SignalTab() {
           )}
         </div>
       )}
+
+      <SignalManager />
 
       {(lastResult || status?.state?.cursorRowid > 0) && (
         <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">

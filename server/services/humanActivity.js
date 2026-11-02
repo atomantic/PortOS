@@ -492,13 +492,14 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, handle, accountId } = {}) {
-  await ensureReady();
+export async function deleteEvents({ ids, source, chatGuid, conversationId, handle, accountId, client } = {}) {
+  if (!client) await ensureReady();
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
+  const hasConversation = conversationId != null && String(conversationId).length > 0;
   const hasHandle = handle != null && String(handle).length > 0;
   const hasAccount = accountId != null && String(accountId).length > 0;
-  if (!hasIds && !hasAccount && !(source && (hasChat || hasHandle))) return { deleted: 0 };
+  if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasHandle))) return { deleted: 0 };
 
   const clauses = [];
   const params = [];
@@ -518,12 +519,17 @@ export async function deleteEvents({ ids, source, chatGuid, handle, accountId } 
     params.push(String(chatGuid));
     clauses.push(`metadata->>'chatGuid' = $${params.length}`);
   }
+  if (hasConversation) {
+    params.push(String(conversationId));
+    clauses.push(`metadata->>'conversationId' = $${params.length}`);
+  }
   if (hasHandle) {
     params.push(String(handle));
     clauses.push(`metadata->>'handle' = $${params.length}`);
   }
 
-  const result = await query(
+  const execute = client ? client.query.bind(client) : query;
+  const result = await execute(
     `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
     params,
   );
@@ -577,7 +583,7 @@ export async function listSourceCounts() {
 
 /**
  * Aggregate conversations for a single source (iMessage, Signal, …) grouped by
- * `metadata.chatGuid`. Newest activity first. Optional free-text `q` filters
+ * `metadata.chatGuid` or `metadata.conversationId`. Newest activity first. Optional free-text `q` filters
  * title/handle/summary. Cap defaults to 500 conversations.
  */
 export async function listConversations({ source, q, limit } = {}) {
@@ -591,14 +597,14 @@ export async function listConversations({ source, q, limit } = {}) {
       LOWER(COALESCE(title, '')) LIKE $${params.length}
       OR LOWER(COALESCE(summary, '')) LIKE $${params.length}
       OR LOWER(COALESCE(metadata->>'handle', '')) LIKE $${params.length}
-      OR LOWER(COALESCE(metadata->>'chatGuid', '')) LIKE $${params.length}
+      OR LOWER(COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '')) LIKE $${params.length}
     )`);
   }
   const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
   params.push(cap);
   const result = await query(
     `SELECT
-       COALESCE(metadata->>'chatGuid', '') AS chat_guid,
+       COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') AS chat_guid,
        MAX(title) AS title,
        MAX(NULLIF(metadata->>'handle', '')) AS handle,
        COUNT(*)::int AS event_count,
@@ -608,7 +614,7 @@ export async function listConversations({ source, q, limit } = {}) {
           FILTER (WHERE summary IS NOT NULL AND summary <> ''))[1] AS last_summary
      FROM human_activity_events
      WHERE ${clauses.join(' AND ')}
-     GROUP BY COALESCE(metadata->>'chatGuid', '')
+     GROUP BY COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '')
      ORDER BY MAX(happened_at) DESC
      LIMIT $${params.length}`,
     params,
@@ -664,7 +670,7 @@ export async function sourceStats(source) {
   const result = await query(
     `SELECT
        COUNT(*)::int AS event_count,
-       COUNT(DISTINCT COALESCE(metadata->>'chatGuid', ''))::int AS conversation_count,
+       COUNT(DISTINCT COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', ''))::int AS conversation_count,
        MIN(happened_at) AS earliest_at,
        MAX(happened_at) AS latest_at
      FROM human_activity_events
