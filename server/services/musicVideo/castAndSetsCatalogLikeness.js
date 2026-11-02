@@ -3,6 +3,7 @@
 // only saw a visual-spec reference labeled with the subject's exact name, so
 // a cast member linked from Casting rendered as a stranger.
 
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
@@ -11,7 +12,7 @@ import { fixedCasting, leadingAge } from './castAndSetsDirection.js';
 
 // The same likeness pick a Casting sheet render makes (guides, else portrait,
 // canon images and references), minus images left out of likeness.
-const likeness = (payload, media, want) => characterSheetReferenceCandidates(payload, media, want)
+const likeness = (payload, media, want) => characterSheetReferenceCandidates(payload, media, want, MUSIC_VIDEO_MAX_REFERENCE_CHOICES)
   .filter((c) => !c.leftOut).map((c) => c.filename);
 
 const onDisk = (filename) => !!(resolveGalleryImage(filename) || resolveImageRef(filename));
@@ -20,7 +21,7 @@ const onDisk = (filename) => !!(resolveGalleryImage(filename) || resolveImageRef
 // the canonical ones only fill in for an age with none.
 function subjectImages(payload, media, formId) {
   if (!formId) return likeness(payload, media, {});
-  const candidates = characterSheetReferenceCandidates(payload, media, { formId }).filter((c) => !c.leftOut);
+  const candidates = characterSheetReferenceCandidates(payload, media, { formId }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES).filter((c) => !c.leftOut);
   const own = candidates.filter((c) => c.scope === 'form');
   return (own.length ? own : candidates).map((c) => c.filename);
 }
@@ -55,7 +56,7 @@ export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
     if (!record || record.deleted || record.type !== f.kind) return;
     const rows = (Array.isArray(media) ? media : []).filter((m) => m && exists(m.mediaKey));
     if (f.kind === 'place') {
-      out[f.id] = { images: pickGuideMedia(rows).map((m) => m.mediaKey), forms: [] };
+      out[f.id] = { images: pickGuideMedia(rows, {}, MUSIC_VIDEO_MAX_REFERENCE_CHOICES).map((m) => m.mediaKey), forms: [] };
       return;
     }
     const payload = record.payload || {};
@@ -70,7 +71,7 @@ export async function loadCastAndSetsCatalogLikeness(project, deps = {}) {
       // Only an age's own images: the canonical ones show another age.
       forms: forms.map((form) => ({
         age: leadingAge(form.age),
-        images: characterSheetReferenceCandidates(payload, rows, { formId: form.id })
+        images: characterSheetReferenceCandidates(payload, rows, { formId: form.id }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES)
           .filter((c) => !c.leftOut && c.scope === 'form' && exists(c.filename)).map((c) => c.filename),
         ...(form.height ? { height: String(form.height).trim() } : {}),
       })).filter((form) => form.age !== null && (form.images.length || form.height)),

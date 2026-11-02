@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -22,9 +22,6 @@ import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
   falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
 } from '../lib/musicVideoShotTiming.js';
-
-// The project-wide limit on references flagged to condition every frame.
-export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
 
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried

@@ -13,7 +13,6 @@ import {
   getMusicVideoCharacterStyle, musicVideoCharacterStyleReferenceId, musicVideoCharacterStyleSnapshot,
   musicVideoCharacterStyleSubject, musicVideoCharacterStyleSubjectId,
 } from '../../lib/musicVideoCharacterStyles.js';
-import { MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../lib/musicVideoValidation.js';
 import { getCharacterStyleReferenceImage } from './characterStyles.js';
 
 const STYLE_SNAPSHOT_MAX = 4000;
@@ -139,7 +138,7 @@ function castCharacterStyle(subjects, previous, style) {
 
 /**
  * Keeps the project's character-sheet reference in step with this install's
- * sheet for the style: added (conditioning when a slot is free), replaced when
+ * sheet for the style: added as a conditioning candidate, replaced when
  * the sheet changed, removed with the style. A sheet already in the project as
  * a director's reference is marked as the character instead of added twice.
  * Returns `visualSpec` itself when nothing changed.
@@ -150,10 +149,9 @@ async function syncCharacterStyleSheet(visualSpec, existing, previous, style) {
   let references = baseRefs.filter((ref) => !drop.has(ref.id));
   const imageId = style ? await getCharacterStyleReferenceImage(style.id) : null;
   if (imageId) {
-    const freeSlot = references.filter((ref) => ref.condition).length < MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
     const same = references.findIndex((ref) => ref.imageId === imageId);
     if (same >= 0) {
-      references = references.map((ref, i) => (i === same ? { ...ref, role: 'character', condition: ref.condition || freeSlot } : ref));
+      references = references.map((ref, i) => (i === same ? { ...ref, role: 'character', condition: true } : ref));
     } else if (references.length < 24) {
       references = [...references, {
         id: musicVideoCharacterStyleReferenceId(style),
@@ -161,7 +159,7 @@ async function syncCharacterStyleSheet(visualSpec, existing, previous, style) {
         role: 'character',
         label: `${style.character.name} character sheet`,
         use: 'reference',
-        condition: freeSlot,
+        condition: true,
       }];
     }
   }

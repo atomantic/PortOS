@@ -8,11 +8,9 @@ import { escapeRegExp } from './textUtils.js';
  * Browser-safe reference selection shared by the board and production lanes.
  * The lists here are priority-ordered (identities, then set, props, the rest)
  * and run up to MUSIC_VIDEO_MAX_REFERENCE_CHOICES; a render sends as many of
- * them, in order, as its image renderer takes (musicVideoReferenceCapacity),
- * never a fixed count. MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES stays the
- * project-wide cap on references flagged to condition every frame.
+ * them, in order, as its image renderer takes (musicVideoReferenceCapacity).
+ * Flagging a reference adds a candidate, never a separate fixed render quota.
  */
-export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
 export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
 
 /**
@@ -130,7 +128,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   const flagged = eligible.some((m) => CAST_IMAGE_KINDS.has(m.kind) && m.library?.guide === true);
   const candidates = flagged ? sendable.filter((m) => m.library?.guide === true) : sendable;
   if (!candidates.length) return [];
-  return pickGuideMedia(candidates, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES)
+  return pickGuideMedia(candidates, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES)
     .map((m) => {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');
@@ -188,10 +186,9 @@ function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX
     const setId = Number.isInteger(scene?.sectionIndex)
       ? stage.direction?.songMap?.find((entry) => entry.section === scene.sectionIndex)?.setId : null;
     const plate = setId && references.find((ref) => ref?.id === `mvr-cs-set-${setId}` && ref.imageId);
-    // Check-in plates and cast sheets beyond the project-wide cap are still
-    // available for their own scenes. Their condition flag reflects that cap,
-    // not scene relevance. A supporting cast member's sheet joins the shots
-    // that name them, and so does a director's own character reference whose
+    // Check-in plates are selected by scene relevance, rather than sending
+    // every plate flagged on the project. A supporting cast member's sheet
+    // joins the shots that name them, and so does a director's own reference whose
     // label names someone the shot names.
     const featured = featuredCast(stage.direction, scene);
     const cast = featured

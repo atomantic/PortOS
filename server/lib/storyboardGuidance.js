@@ -8,8 +8,7 @@
  */
 
 export const STORYBOARD_GUIDANCE_ADDITION_ID = 'storyboard-guidance';
-// The panel plus this many references fit the image backends' reference caps
-// (MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, Grok's image_edit array).
+// Storyboard-guided clips reserve their own reference budget for the video model.
 export const STORYBOARD_GUIDANCE_MAX_REFERENCES = 4;
 // The fal model a storyboard-guided clip uses when the request names none.
 export const FAL_STORYBOARD_GUIDANCE_MODEL = 'bytedance/seedance-2.5/reference-to-video';

@@ -34,17 +34,17 @@ const scoped = (want, scope) => (want.formId ? { scope } : {});
 
 // Explicit guides own selection. Automatic fallback excludes derived looks,
 // sheets and archived media so a previous off-model render cannot seed itself.
-export function characterSheetReferenceCandidates(character, media = [], want = {}) {
+export function characterSheetReferenceCandidates(character, media = [], want = {}, limit = MAX_CAST_GUIDES) {
   const { want: wanted, formMatches, rejected, images, leftOut } = eligibleImages(character, media, want);
   want = wanted;
   const guides = images.filter((m) => m.library?.guide === true);
   const scopeOf = (m) => scoped(want, ownForm(m, want) ? 'form' : 'canonical');
   const sourceOf = (m) => (m.kind === 'portrait' ? 'Portrait' : 'Reference library');
   const leftOutCandidates = leftOut.map((m) => ({ filename: m.mediaKey, source: sourceOf(m), mediaKind: m.kind, leftOut: true, ...scopeOf(m) }));
-  if (guides.length) return [...pickGuideMedia(guides, want).map((m) => ({
+  if (guides.length) return [...pickGuideMedia(guides, want, limit).map((m) => ({
     filename: m.mediaKey, source: 'Render guide', mediaKind: m.kind, ...scopeOf(m),
   })), ...leftOutCandidates];
-  const candidates = pickGuideMedia(images.filter((m) => !DERIVED_ROLE.test(m.role || '')), want)
+  const candidates = pickGuideMedia(images.filter((m) => !DERIVED_ROLE.test(m.role || '')), want, limit)
     .map((m) => ({ filename: m.mediaKey, source: sourceOf(m), mediaKind: m.kind, ...scopeOf(m) }));
   const excluded = new Set(media.filter((m) => !m.deleted && (rejected.has(m.mediaKey) || !matchesReferenceVariant(m, want) || !formMatches(m))).map(m => m.mediaKey));
   const canon = [

@@ -44,14 +44,12 @@
 import { FACE_SHEET_ANGLE_TEMPLATE, FACE_SHEET_TEMPLATE_INSTRUCTION } from '../../lib/faceSheetAngleTemplate.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
-import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
 import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
-// Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
-const MAX_CONDITIONING = 4;
 const MAX_REFERENCES = 24;
 const MAX_SUBJECTS = 24;
 export const CAST_SETS_REF_PREFIX = 'mvr-cs-';
@@ -86,7 +84,7 @@ function identityImages(project, exclude = new Set()) {
   return [...new Set((project?.visualSpec?.references || [])
     .filter((r) => r?.role === 'character' && r.condition && r.imageId && !exclude.has(r.imageId)
       && !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX) && !isOutsideMusicVideoReference(r))
-    .map((r) => r.imageId))].slice(0, MAX_CONDITIONING);
+    .map((r) => r.imageId))].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
 }
 
 /**
@@ -102,7 +100,7 @@ function formBindings(project, forms, catalogLikeness) {
     const subject = subjects.find((s) => s.id === f.subjectId);
     if (!subject) return [f.id, { subjectId: f.subjectId, missing: 'subject', reserved: unlinkedSubjectImage(project, f) }];
     const catalog = catalogLikeness[subject.id]?.images || [];
-    const images = (catalog.length ? catalog : [subject.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING - 1);
+    const images = (catalog.length ? catalog : [subject.imageId].filter(Boolean)).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES - 1);
     return [f.id, images.length ? { subjectId: f.subjectId, images, imageId: subject.imageId } : { subjectId: f.subjectId, missing: 'image' }];
   }));
 }
@@ -243,17 +241,17 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   };
   const fixedImages = (f) => {
     const catalog = f && catalogLikeness[f.id]?.images;
-    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING);
+    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
   };
   const protagonistSubject = fixedFor('character', p.name, { protagonist: true });
   // An age-specific reference grounds its own form, never the present-day sheet.
   const formImages = new Set([...bindings.values()].map((b) => b.imageId || b.reserved).filter(Boolean));
-  const identities = [...new Set([...fixedImages(protagonistSubject), ...identityImages(project, formImages)].filter((id) => id && !formImages.has(id)))].slice(0, MAX_CONDITIONING);
+  const identities = [...new Set([...fixedImages(protagonistSubject), ...identityImages(project, formImages)].filter((id) => id && !formImages.has(id)))].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
   // An age form no subject is bound to: that age's own Casting images of the protagonist's record.
   const protagonistForms = catalogLikeness[protagonistSubject?.id]?.forms || [];
   const ageImages = (form) => {
     const age = leadingAge(form.age);
-    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MAX_CONDITIONING - 1);
+    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES - 1);
   };
   // Each person's height, the scale cue a sheet composited into a set lacks: the
   // direction's own, else the linked Casting record's, else a child age's median.
@@ -555,17 +553,16 @@ const castFaceReference = (c, images) => ({ id: castFaceReferenceId(c), imageId:
 
 /**
  * The visual-spec references the approved check-in contributes: the character
- * sheet (conditioning) first, then set plates by song coverage (conditioning
- * while the backend's reference cap allows, after any the director flagged
- * themselves), then the supporting cast sheets (conditioning only the shots
- * that feature them), then the looks and expression sheets as unconditioned
+ * sheet first, then set plates by song coverage as conditioning candidates
+ * after any the director flagged themselves. Each render takes as many as
+ * its own renderer accepts. Supporting cast sheets condition only the shots
+ * that feature them; the looks and expression sheets remain unconditioned
  * reference. Replaces any earlier Cast & Sets references; keeps the director's.
  * Room in the list is held for the sheets of the catalog-linked supporting
  * characters the director cast, so nothing else pushes one of them out.
  */
 export function castAndSetsReferences(project, stage) {
   const existing = (project?.visualSpec?.references || []).filter((r) => !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX));
-  let budget = Math.max(0, MAX_CONDITIONING - existing.filter((r) => r.condition).length);
   let room = Math.max(0, MAX_REFERENCES - existing.length);
   const images = stage?.images || {};
   const direction = stage?.direction || {};
@@ -575,10 +572,8 @@ export function castAndSetsReferences(project, stage) {
   const out = [];
   const push = (ref, wantsCondition, { sheet = false } = {}) => {
     if (!ref.imageId || room - (sheet ? 0 : held) <= 0) return;
-    const condition = wantsCondition && budget > 0;
-    if (condition) budget -= 1;
     room -= 1;
-    out.push({ ...ref, condition, use: 'reference' });
+    out.push({ ...ref, condition: wantsCondition, use: 'reference' });
   };
   const p = direction.protagonist || {};
   push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.height && `Height: ${p.height}`, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
