@@ -319,13 +319,123 @@ function ecosystemAppBlocks(content) {
 }
 
 /**
+ * Extract and resolve PM2_HOME path from ecosystem config content.
+ * Supports optional declaration keywords (const|let|var), handles single, double,
+ * and backtick quote styles, ignores commented lines and string literals containing
+ * assignments, gives declarations precedence over environment properties, decodes
+ * escapes in string literals, and expands template variables only on backtick template literals.
+ *
+ * @param {string} content
+ * @param {Function} [currentUsername]
+ * @returns {string|null}
+ */
+function extractPm2Home(content, currentUsername = () => {
+  try {
+    return userInfo()?.username || process.env.USERNAME || process.env.USER || 'user';
+  } catch {
+    return process.env.USERNAME || process.env.USER || 'user';
+  }
+}) {
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    tokens = null;
+  }
+
+  if (tokens) {
+    const resolveTemplate = (tok) => {
+      let result = tok.quasis[0] ?? '';
+      for (let k = 0; k < tok.exprs.length; k++) {
+        const expr = tok.exprs[k].map(t => t.v).join('');
+        if (expr === 'require(os).homedir()' || expr === 'require(node:os).homedir()' || expr === 'process.env.HOME') {
+          result += homedir();
+        } else if (expr === 'require(os).userInfo().username' || expr === 'require(node:os).userInfo().username') {
+          result += currentUsername();
+        } else {
+          result += '${' + expr + '}';
+        }
+        result += tok.quasis[k + 1] ?? '';
+      }
+      return result;
+    };
+
+    const resolveValueToken = (tok) => {
+      if (!tok) return null;
+      if (tok.t === 's') return tok.v;
+      if (tok.t === 'tpl') return resolveTemplate(tok);
+      return null;
+    };
+
+    // 1. First pass: look for declarations / assignments (PM2_HOME = ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (tok.t === 'id' && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === '=') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    // 2. Second pass: look for object properties (PM2_HOME: ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if ((tok.t === 'id' || tok.t === 's') && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === ':') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // Regex fallback if tokenization failed on malformed JS
+  const comments = commentRanges(content);
+  const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
+
+  // First give precedence to actual PM2_HOME variable declarations / assignments:
+  // e.g. const PM2_HOME = `...`, let PM2_HOME = '...', var PM2_HOME = "...", PM2_HOME = `...`
+  const declRegex = /(?:(?:\bconst|\blet|\bvar)\s+)?\bPM2_HOME\b\s*=\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(declRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  // Fallback to property assignment in env / object blocks:
+  // e.g. PM2_HOME: `...`, PM2_HOME: '...', "PM2_HOME": "..."
+  const propRegex = /['"]?\bPM2_HOME\b['"]?\s*:\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(propRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  return null;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
  * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export function parseEcosystemConfig(content) {
   const processes = [];
-  let pm2Home = null;
 
   const currentUsername = () => {
     try {
@@ -335,36 +445,7 @@ export function parseEcosystemConfig(content) {
     }
   };
 
-  // Extract PM2_HOME constant if defined (e.g., const PM2_HOME = `${require("os").homedir()}/.pm2-grace`)
-  // First try template literals (backticks) which can contain nested quotes
-  const templateMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*`([^`]+)`/);
-  if (templateMatch) {
-    let homePath = templateMatch[1];
-    // Replace common template expressions
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, currentUsername());
-    homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
-    pm2Home = homePath;
-  } else {
-    // Try regular string literals
-    const stringMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*['"]([^'"]+)['"]/);
-    if (stringMatch) {
-      pm2Home = stringMatch[1];
-    } else {
-      // Check for PM2_HOME in env blocks
-      const envPm2HomeMatch = content.match(/PM2_HOME\s*:\s*PM2_HOME/);
-      if (envPm2HomeMatch) {
-        // PM2_HOME is used but defined as a variable - try template literal first
-        const varTemplateMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
-        if (varTemplateMatch) {
-          let homePath = varTemplateMatch[1];
-          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, currentUsername());
-          pm2Home = homePath;
-        }
-      }
-    }
-  }
+  const pm2Home = extractPm2Home(content, currentUsername);
 
   // Extract top-level port constants (e.g., const CDP_PORT = 5549)
   const portConstants = {};

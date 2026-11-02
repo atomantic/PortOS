@@ -67,6 +67,97 @@ describe('parseEcosystemConfig', () => {
     }
   });
 
+  it('aligns PM2_HOME parsing across variable assignments, quotes, and env expansions', () => {
+    // Variable assignment without declaration keyword expanding process.env.HOME
+    const bareVarWithHome = `
+      PM2_HOME = \`\${process.env.HOME}/.pm2-custom\`;
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarWithHome).pm2Home).toBe(`${homedir()}/.pm2-custom`);
+
+    // Variable assignment with single quotes
+    const bareVarSingleQuote = `
+      PM2_HOME = '/custom/single/pm2';
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarSingleQuote).pm2Home).toBe('/custom/single/pm2');
+
+    // Variable assignment with double quotes
+    const bareVarDoubleQuote = `
+      PM2_HOME = "/custom/double/pm2";
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarDoubleQuote).pm2Home).toBe('/custom/double/pm2');
+
+    // let declaration with process.env.HOME
+    const letWithHome = `
+      let PM2_HOME = \`\${process.env.HOME}/.pm2-let\`;
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(letWithHome).pm2Home).toBe(`${homedir()}/.pm2-let`);
+
+    // var declaration with single quotes
+    const varSingleQuote = `
+      var PM2_HOME = '/var/pm2';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(varSingleQuote).pm2Home).toBe('/var/pm2');
+
+    // env property assignment with template literal
+    const envPropertyTemplate = `
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: \`\${process.env.HOME}/.pm2-env\` } }] };
+    `;
+    expect(parseEcosystemConfig(envPropertyTemplate).pm2Home).toBe(`${homedir()}/.pm2-env`);
+
+    // env property assignment with quoted string
+    const envPropertyString = `
+      module.exports = { apps: [{ name: 'app', env: { "PM2_HOME": "/env/direct/pm2" } }] };
+    `;
+    expect(parseEcosystemConfig(envPropertyString).pm2Home).toBe('/env/direct/pm2');
+
+    // node:os prefix support in require
+    const nodeOsPrefix = `
+      const PM2_HOME = \`\${require("node:os").homedir()}/.pm2-node-os\`;
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(nodeOsPrefix).pm2Home).toBe(`${homedir()}/.pm2-node-os`);
+
+    // ignores matches inside string literals
+    const stringLiteralIgnored = `
+      const desc = "Description: PM2_HOME = '/wrong/in/string'";
+      const PM2_HOME = "/actual/from/decl";
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(stringLiteralIgnored).pm2Home).toBe('/actual/from/decl');
+
+    // decodes escaped quotes in paths
+    const escapedQuotePath = `
+      const PM2_HOME = '/srv/it\\'s/pm2';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(escapedQuotePath).pm2Home).toBe("/srv/it's/pm2");
+
+    // comments are ignored and declarations take precedence over env properties
+    const commentAndPrecedence = `
+      // PM2_HOME: '/old-commented'
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: '/from-env' } }] };
+      const PM2_HOME = '/from-decl';
+    `;
+    expect(parseEcosystemConfig(commentAndPrecedence).pm2Home).toBe('/from-decl');
+
+    // literal strings in single/double quotes do not expand template expressions
+    const literalSingleQuote = `
+      const PM2_HOME = '\${process.env.HOME}/.pm2-literal';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(literalSingleQuote).pm2Home).toBe('${process.env.HOME}/.pm2-literal');
+
+    // returns null for unrelated identifiers or files without PM2_HOME
+    expect(parseEcosystemConfig('const PM2_HOME_DIR = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
+    expect(parseEcosystemConfig('const NOT_PM2_HOME = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
+    expect(parseEcosystemConfig('module.exports = { apps: [] };').pm2Home).toBeNull();
+  });
+
   it('parses quoted keys in inline ports and nested PORTS objects', () => {
     const content = `const PORTS = {
   "server": { "api": 6000 },
