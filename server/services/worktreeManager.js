@@ -447,6 +447,7 @@ function removalOutcome(worktreePath, { directory, registration }, failure = nul
  *   caller's fresh ownership/content gate, run before Git removal and rechecked
  *   after a refusal to report the current hold.
  *   Callers that share claim ownership hold its lock through this operation.
+ * @param {boolean} [opts.force=true] - allow Git to remove a dirty checkout.
  * Local content is not a hold here: callers retire only merged deliveries,
  * throwaway checkouts or a rolled-back add, whose ignored and uncommitted
  * bytes are disposable.
@@ -462,7 +463,7 @@ export async function forceRemoveWorktreeDir(repo, worktreePath, opts = {}) {
 // Hold reasons that mean the cleanup could not even decide, rather than a gate declining.
 const REMOVAL_FAULT_HOLDS = new Set(['worktree-ownership-unreadable', 'worktree-removal-refused']);
 
-async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation } = {}) {
+async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log = 'remove', subject = worktreePath, verifyRemoval, beforeMutation, force = true } = {}) {
   const logAll = label && log === 'all';
   let lastFailure = null;
   let heldReason = null;
@@ -471,20 +472,23 @@ async function forceRemoveWorktreeDirAdmitted(repo, worktreePath, { label, log =
     if (!entries) return 'worktree-ownership-unreadable';
     const holder = entries.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
     if (holder?.locked) return 'worktree-locked';
+    const { readRetirementCheckoutIdentity } = await import('../lib/retirementCheckoutObservation.js');
+    const identity = verifyRemoval && holder ? await readRetirementCheckoutIdentity(worktreePath) : null;
     const reason = verifyRemoval ? await verifyRemoval(holder, entries).catch(() => 'worktree-ownership-unreadable') : null;
     if (reason) return reason;
-    // Ownership checks await I/O. Refresh their registration afterward;
-    // Git's own removal still honors locks acquired after this final read.
+    // The callback can await I/O while a checkout is recreated at the same
+    // path and head. Compare both Git's fresh registration and its pointer.
     const fresh = await listWorktrees(repo).catch(() => null);
     if (!fresh) return 'worktree-ownership-unreadable';
     const current = fresh.find(wt => canonicalPath(wt.path) === canonicalPath(worktreePath)) || null;
     if (current?.locked) return 'worktree-locked';
     if (current?.branch !== holder?.branch || current?.head !== holder?.head) return 'worktree-holder-changed';
+    if (verifyRemoval && holder && await readRetirementCheckoutIdentity(worktreePath) !== identity) return 'worktree-holder-changed';
     return null;
   };
   heldReason = await check();
   if (!heldReason) await beforeMutation?.();
-  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, '--force'], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
+  if (!heldReason) await execGit(['worktree', 'remove', worktreePath, ...(force ? ['--force'] : [])], repo, { timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(async (err) => {
     lastFailure = errorExcerpt(err);
     if (label) console.log(`⚠️ ${label}: ${err.message}`);
     heldReason = await check();

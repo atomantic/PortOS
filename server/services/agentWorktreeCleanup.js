@@ -13,8 +13,10 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  */
 
 import { existsSync } from 'fs';
+import { realpath } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { emitLog } from './cosEvents.js';
 import { addTask, updateTask } from './cosTaskStore.js';
 import { forceSpawnTask } from './cos.js';
@@ -25,6 +27,7 @@ import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeM
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
+import { canonicalizePath } from '../lib/pathContainment.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
@@ -192,11 +195,12 @@ async function worktreeCleanupContext(agentId, options) {
       isWorktree: false,
       claimBranches,
       sourceWorkspace: metadata?.sourceWorkspace || metadata?.workspacePath || null,
+      agentState,
     };
   }
   const { sourceWorkspace, worktreeBranch } = metadata;
   if (!sourceWorkspace || !worktreeBranch) {
-    return { isWorktree: false, claimBranches, sourceWorkspace: sourceWorkspace || metadata?.workspacePath || null };
+    return { isWorktree: false, claimBranches, sourceWorkspace: sourceWorkspace || metadata?.workspacePath || null, agentState };
   }
   const normalized = cleanupOptions(options);
   return {
@@ -216,41 +220,157 @@ async function worktreeCleanupContext(agentId, options) {
   };
 }
 
-async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches }) {
+async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBranches, agentState }) {
   if (!sourceWorkspace || !Array.isArray(claimBranches) || !claimBranches.length) return [];
-  const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
-  const defaultBranch = await git.getDefaultBranch(sourceWorkspace).catch(() => 'main');
-  const { probePrForBranch } = await import('./prProbe.js');
+  const [{ probePrForBranch, isExactMergedPrHead }, { completedCheckoutReceiptValid, readCompletedCheckoutIdentity },
+    { withClaimOwnershipLock, readClaimOwnershipAgents, retireWithUnlockedArchive }, { claimCheckoutOwnerReason },
+    { forceRemoveWorktreeDir, deleteCompletedLocalBranch }, { readCheckoutPathPresence, readLocalBranchPresence }] = await Promise.all([
+    import('./prProbe.js'), import('./completedCheckoutEvidence.js'), import('./cosClaimOwnershipState.js'),
+    import('../lib/claimContinuation.js'), import('./worktreeManager.js'), import('./repoCleanupObservation.js'),
+  ]);
+  const warnings = [];
+  const held = (branch, reason) => `Claim cleanup ${branch} incomplete — ${reason}`;
+  const repository = await realpath(sourceWorkspace).catch(() => null);
+  if (!repository) return claimBranches.map(branch => held(branch, 'repository unavailable'));
   for (const branch of claimBranches) {
-    const holder = worktrees.find(wt => (wt.branch || '').replace(/^refs\/heads\//, '') === branch && wt.path !== sourceWorkspace) || null;
-    const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
-    const prMerged = probe?.prState === 'MERGED';
-    let cleanEmptyBranch = false;
-    if (!prMerged) {
-      const commitsAhead = await git.getCommitsAhead(sourceWorkspace, defaultBranch, branch).catch(() => null);
-      if (commitsAhead === 0) {
-        if (holder?.path && existsSync(holder.path)) {
-          const status = await execGit(['status', '--porcelain'], holder.path, { ignoreExitCode: true }).catch(() => null);
-          cleanEmptyBranch = status?.exitCode === 0 && !status.stdout.trim();
-        } else {
-          cleanEmptyBranch = true;
-        }
+    const captures = (agentState?.metadata?.completedCheckouts || []).filter(row => row.branch === branch
+      && completedCheckoutReceiptValid(agentState, row) && typeof row.repoPath === 'string'
+      && typeof row.path === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(row.head || '')
+      && resolve(row.repoPath) === resolve(repository));
+    const capture = captures.length === 1 ? captures[0] : null;
+    if (!capture) {
+      const [trees, refPresent] = await Promise.all([
+        listWorktrees(sourceWorkspace).catch(() => null), readLocalBranchPresence(sourceWorkspace, branch),
+      ]);
+      if (!trees || refPresent !== false || trees.some(tree => tree.branch === `refs/heads/${branch}`)) warnings.push(held(branch, 'checkout identity unavailable'));
+      else {
+        const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch);
+        if (remote) warnings.push(held(branch, remote));
       }
+      continue;
     }
-    if (!prMerged && !cleanEmptyBranch) continue;
-    if (holder?.path) {
-      await execGit(['worktree', 'unlock', holder.path], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-      await removeWorktree(sourceWorkspace, holder.path, { deleteBranch: true, force: true }).catch(() => null);
+    const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
+    const merged = isExactMergedPrHead(probe, capture.head);
+    if (!merged && !(probe?.readable === true && probe.prState === null)) {
+      warnings.push(held(branch, 'merged head not verified'));
+      continue;
     }
-    await execGit(['branch', '-D', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-    if (prMerged) {
-      await execGit(['push', 'origin', '--delete', branch], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-    }
-    emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${prMerged ? 'PR merged' : 'empty clean branch'})`, {
-      agentId, branchName: branch,
-    });
+    const owner = () => readClaimOwnershipAgents().then(agents => claimCheckoutOwnerReason({
+      branchName: branch, holderPath: capture.path, sourceWorkspace, agents, ignoreIds: [agentId],
+    }));
+    const ownerHold = () => withClaimOwnershipLock(owner).catch(() => 'claim-ownership-unreadable');
+    const deleteLocal = async () => {
+      let reason;
+      const deleted = await deleteCompletedLocalBranch(sourceWorkspace, branch, capture.head, { beforeMutation: async () => {
+        reason = await ownerHold();
+        if (reason) throw new Error(reason);
+      } }).catch(() => false);
+      return deleted ? null : reason || 'local branch deletion unverified';
+    };
+    const performCleanup = async () => {
+      const [trees, pathPresent, refPresent] = await Promise.all([
+        listWorktrees(sourceWorkspace).catch(() => null), readCheckoutPathPresence(capture.path), readLocalBranchPresence(sourceWorkspace, branch),
+      ]);
+      if (!trees || pathPresent === null || refPresent === null) return held(branch, 'checkout state unavailable');
+      const holder = trees.find(tree => canonicalizePath(tree.path) === canonicalizePath(capture.path));
+      if (!holder) {
+        if (pathPresent || trees.some(tree => tree.branch === `refs/heads/${branch}`)) return held(branch, 'checkout changed');
+        if (refPresent) {
+          const local = merged ? await deleteLocal() : 'unmerged work retained';
+          if (local) return held(branch, local);
+        }
+        if (merged) {
+          const remote = await deleteClaimRemoteBranch(sourceWorkspace, branch, capture.head, ownerHold);
+          if (remote) return held(branch, remote);
+        } else {
+          const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch);
+          if (remote) return held(branch, remote);
+        }
+        return null;
+      }
+      const verifyRemoval = (holder, trees) => withClaimOwnershipLock(async () => {
+        const reason = await owner();
+        if (reason) return reason;
+        if (!holder || holder.branch !== `refs/heads/${branch}` || holder.head !== capture.head) return 'checkout-changed';
+        const identity = await readCompletedCheckoutIdentity({ repoPath: sourceWorkspace, branch, path: capture.path, head: capture.head, worktrees: trees }).catch(() => null);
+        if (!identity || !isDeepStrictEqual(identity.incarnation, capture.incarnation)) return 'checkout-changed';
+        if (!merged) {
+          const base = await git.getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
+          const [status, contained] = await Promise.all([
+            execGit(['status', '--porcelain', '--untracked-files=all'], capture.path, { ignoreExitCode: true }).catch(() => null),
+            base ? execGit(['merge-base', '--is-ancestor', capture.head, `refs/remotes/origin/${base}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null) : null,
+          ]);
+          if (status?.exitCode !== 0 || status.stdout.trim() || contained?.exitCode !== 0) return 'unmerged work retained';
+        }
+        return null;
+      });
+      const removal = await forceRemoveWorktreeDir(sourceWorkspace, capture.path, { verifyRemoval, force: merged });
+      if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');
+      const local = await deleteLocal();
+      if (local) return held(branch, local);
+      if (merged) {
+        const remote = await deleteClaimRemoteBranch(sourceWorkspace, branch, capture.head, ownerHold);
+        if (remote) return held(branch, remote);
+      } else {
+        const remote = await retainedClaimRemoteBranch(sourceWorkspace, branch);
+        if (remote) return held(branch, remote);
+      }
+      emitLog('info', `🌳 Cleaned up claim branch ${branch} for ${agentId} (${merged ? 'PR merged' : 'empty clean branch'})`, { agentId, branchName: branch });
+      return null;
+    };
+    const result = await retireWithUnlockedArchive({
+      busy: () => held(branch, 'checkout-retirement-reserved'),
+      admit: async () => {
+        const reason = await owner();
+        return reason ? { result: held(branch, reason) } : { fence: { repoPath: sourceWorkspace, path: capture.path, branch } };
+      },
+      archive: async () => ({ result: await performCleanup() }),
+    }).catch(() => held(branch, 'cleanup failed or is unverified'));
+    if (result) warnings.push(result);
   }
-  return [];
+  return warnings;
+}
+
+// A stand-down or missing capture never authorizes remote deletion, but a
+// surviving (or unreadable) remote must remain visible as unfinished cleanup.
+async function retainedClaimRemoteBranch(repo, branch) {
+  const ref = `refs/heads/${branch}`;
+  const remote = await execGit(['ls-remote', '--heads', '--', 'origin', ref], repo,
+    { ignoreExitCode: true, timeout: 5000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).catch(() => null);
+  if (remote?.exitCode !== 0) return 'remote branch state unavailable';
+  const lines = remote.stdout.trim().split('\n').filter(Boolean);
+  if (!lines.length) return null;
+  const [head, actualRef, ...extra] = lines[0].split('\t');
+  if (lines.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(head) || actualRef !== ref || extra.length) return 'remote branch state unavailable';
+  return 'remote branch retained';
+}
+
+async function claimRemoteTarget(repo, opts) {
+  const [origin, pushes] = await Promise.all([
+    execGit(['remote', 'get-url', 'origin'], repo, opts).catch(() => null),
+    execGit(['remote', 'get-url', '--push', '--all', 'origin'], repo, opts).catch(() => null),
+  ]);
+  const urls = pushes?.stdout?.trim().split('\n').filter(Boolean) || [];
+  return origin?.exitCode === 0 && pushes?.exitCode === 0 && urls.length === 1 && urls[0] === origin.stdout.trim() ? urls[0] : null;
+}
+
+// Use the remote name after checking its target: passing an expanded URL back
+// to Git can apply an insteadOf rewrite a second time and reach another repo.
+async function deleteClaimRemoteBranch(repo, branch, head, ownerHold) {
+  const opts = { ignoreExitCode: true, timeout: 5000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } };
+  const target = await claimRemoteTarget(repo, opts);
+  if (!target) return 'remote target unverified';
+  const ref = `refs/heads/${branch}`;
+  const remote = await execGit(['ls-remote', '--heads', '--', 'origin', ref], repo, opts).catch(() => null);
+  if (remote?.exitCode !== 0) return 'remote branch state unavailable';
+  const lines = remote.stdout.trim().split('\n').filter(Boolean);
+  if (!lines.length) return null;
+  if (lines.length !== 1 || lines[0] !== `${head}\t${ref}`) return 'remote branch head changed';
+  const reason = await ownerHold();
+  if (reason) return reason;
+  if (await claimRemoteTarget(repo, opts) !== target) return 'remote target unverified';
+  const deletion = await execGit(['push', '--no-follow-tags', `--force-with-lease=${ref}:${head}`, '--', 'origin', `:${ref}`], repo, opts).catch(() => null);
+  return deletion?.exitCode === 0 ? null : 'remote branch deletion failed or is unverified';
 }
 
 async function probeWorktreePr(context, success) {

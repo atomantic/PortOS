@@ -910,7 +910,7 @@ describe('completeAgent idempotence (#3384)', () => {
     expect(await recordSuccessorCheckoutRetirement(id, record, proof)).toBe(false);
   });
 
-  it('drops replay inputs from durable terminal ledgers without erasing independent preservation holds', async () => {
+  it('keeps replay inputs for an independent pending repository audit even when another completion stage failed', async () => {
     const id = 'claim-terminal-ledger';
     const startedAt = '2026-01-01T00:00:00Z';
     mockCosState.state.agents[id] = { id, status: 'running', startedAt, output: [], metadata: {
@@ -923,8 +923,54 @@ describe('completeAgent idempotence (#3384)', () => {
     const archived = JSON.parse(await readFile(join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
     expect(archived.metadata.completionCleanup.status).toBe('failed');
     expect(archived.metadata.completionCleanup).not.toHaveProperty('context');
-    expect(archived.metadata.completionCleanup).not.toHaveProperty('replay');
+    expect(archived.metadata.completionCleanup.replay).toMatchObject({ kind: 'replay' });
     expect(archived.metadata.repoStateVerification.status).toBe('pending');
+    expect(await recordRepoStateVerification(id, { status: 'completed' })).toBe(true);
+    const settled = JSON.parse(await readFile(join(mockCosState.agentsDir, completed.completedAt.slice(0, 10), id, 'metadata.json'), 'utf8'));
+    expect(settled.metadata.completionCleanup).not.toHaveProperty('replay');
+  });
+
+  it.each(['cleanup hold', 'successful audit'])('keeps completion replay available until the pending %s settles', async mode => {
+    const id = 'claim-cleanup-replay';
+    const startedAt = '2026-01-01T00:00:00Z';
+    const replay = { version: 1, kind: 'replay', bytes: 123, sha256: 'a'.repeat(64) };
+    mockCosState.state.agents[id] = { id, status: 'completed', startedAt, completedAt: '2026-01-01T00:01:00Z',
+      result: mode === 'cleanup hold' ? { success: false, cleanupPending: true } : { success: true },
+      metadata: { repoStateVerification: { status: 'pending' }, completionCleanup: { status: 'pending', replay, stages: {} } } };
+    expect(await recordCompletionCleanup(id, startedAt, { status: 'completed' })).toBe(true);
+    expect(mockCosState.state.agents[id].metadata.completionCleanup.replay).toEqual(replay);
+    if (mode === 'cleanup hold') {
+      mockCosState.state.agents[id].result.cleanupPending = false;
+      expect(await recordCompletionCleanup(id, startedAt, { status: 'completed' })).toBe(true);
+    } else expect(await recordRepoStateVerification(id, { status: 'completed' })).toBe(true);
+    expect(mockCosState.state.agents[id].metadata.completionCleanup).not.toHaveProperty('replay');
+  });
+
+  it('settles a successful taskless audit without changing the original run result', async () => {
+    const id = 'successful-taskless-audit', startedAt = '2026-01-01T00:00:00Z';
+    const stages = Object.fromEntries(['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report', 'worktree']
+      .map(key => [key, { status: 'done' }]));
+    const record = { id, taskId: 'removed-task', status: 'completed', startedAt, completedAt: '2026-01-01T00:01:00Z',
+      result: { success: true, executionSuccess: true }, metadata: { instanceId: 'fixture-local',
+        repoStateVerification: { status: 'pending' }, completionCleanup: { version: 1, status: 'completed', stages,
+          replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'b'.repeat(64) } } } };
+    mockCosState.state.agents[id] = record;
+    expect(await settleAbsentTaskCompletion(id, structuredClone(record))).toBe(true);
+    const saved = mockCosState.state.agents[id];
+    expect(saved.result).toEqual(record.result);
+    expect(saved.metadata.repoStateVerification.status).toBe('completed');
+    expect(saved.metadata.completionCleanup).not.toHaveProperty('replay');
+  });
+
+  it('does not settle a successful taskless audit whose worktree stage is held', async () => {
+    const id = 'successful-held-taskless', startedAt = '2026-01-01T00:00:00Z';
+    const record = { id, taskId: 'removed-task', status: 'completed', startedAt, completedAt: '2026-01-01T00:01:00Z',
+      result: { success: true, executionSuccess: true }, metadata: { instanceId: 'fixture-local',
+        completionCleanup: { version: 1, status: 'pending', stages: { worktree: { status: 'held' } },
+          replay: { version: 1, kind: 'replay', bytes: 123, sha256: 'b'.repeat(64) } } } };
+    mockCosState.state.agents[id] = record;
+    expect(await settleAbsentTaskCompletion(id, structuredClone(record))).toBe(false);
+    expect(mockCosState.state.agents[id]).toEqual(record);
   });
 
   it('records transient capture failure as a durable unknown obligation without rerunning finalization', async () => {
