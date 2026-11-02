@@ -320,7 +320,7 @@ export default function VideoGen() {
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
-    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
     referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
     referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
@@ -1463,6 +1463,11 @@ export default function VideoGen() {
             </button>
             {optionsHint && (
               <span className="basis-full text-xs text-port-warning" role="status">{optionsHint}</span>
+            )}
+            {unavailableReferenceImageNames.length > 0 && (
+              <p role="status" className="basis-full text-xs text-port-warning">
+                The restored render used references that cannot be restored here: {unavailableReferenceImageNames.join(', ')}. Choose replacements or use the Music Video project.
+              </p>
             )}
             {/* Said BEFORE the button is pressed, not after the screen is already
                 dark. A user who first learns about the sleep by watching their

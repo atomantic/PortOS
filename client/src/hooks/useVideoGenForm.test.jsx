@@ -888,12 +888,15 @@ describe('useVideoGenForm', () => {
     await waitFor(() => expect(result.current.modelId).toBe(multimodal.id));
     act(() => result.current.applyResumedParams({
       modelId: multimodal.id, referenceImageFiles: ['saved-image.png'],
+      unavailableReferenceImageNames: ['catalog-guide.png'],
       referenceVideoIds: ['00000000-0000-4000-8000-000000000002'],
     }));
+    expect(result.current.unavailableReferenceImageNames).toEqual(['catalog-guide.png']);
     expect(result.current.buildGeneratePayload()).toMatchObject({
       referenceImageFiles: ['saved-image.png'], referenceVideoIds: ['00000000-0000-4000-8000-000000000002'],
     });
     act(() => result.current.applyResumedParams({ referenceImageFiles: [], referenceVideoIds: [] }));
+    expect(result.current.unavailableReferenceImageNames).toEqual([]);
     expect(result.current.buildGeneratePayload().referenceImageFiles).toBeUndefined();
     expect(result.current.buildGeneratePayload().referenceVideoIds).toBeUndefined();
   });

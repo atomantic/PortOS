@@ -16,6 +16,7 @@ import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poste
 import { basename } from 'path';
 import os from 'os';
 import { z } from 'zod';
+import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
@@ -1190,7 +1191,15 @@ const pickJobParams = (job) => {
     out.referenceVideoNames = params.referenceVideoPaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
   }
   if (Array.isArray(params.referenceImagePaths) && params.referenceImagePaths.length) {
-    out.referenceImageFiles = params.referenceImagePaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
+    // Only gallery-backed paths can be submitted again by filename. Internal
+    // cast guides may live in another image-input root with the same basename.
+    const references = params.referenceImagePaths.filter((p) => typeof p === 'string' && p)
+      .map((path) => ({ path, name: basename(path) }))
+      .map(({ path, name }) => ({ name, gallery: resolveGalleryImage(name, { mustExist: false }) === path }));
+    const files = references.filter((ref) => ref.gallery).map((ref) => ref.name);
+    const unavailable = references.filter((ref) => !ref.gallery).map((ref) => ref.name);
+    if (files.length) out.referenceImageFiles = files;
+    if (unavailable.length) out.unavailableReferenceImageNames = unavailable;
   }
   // A federated render's prompt and model live only inside the versioned marker
   // — the top-level copies are blanked so a downgraded build fails closed

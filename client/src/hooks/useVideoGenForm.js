@@ -84,6 +84,7 @@ export function useVideoGenForm({
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [unavailableReferenceImageNames, setUnavailableReferenceImageNames] = useState([]);
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingAudioFilename = searchParams.get('audioFilename');
   const incomingPrompt = searchParams.get('prompt');
@@ -1202,6 +1203,7 @@ export function useVideoGenForm({
     setIcReferenceImageFiles([]);
     setIcReferenceNames([]);
     setReferenceImageFiles([]);
+    setUnavailableReferenceImageNames([]);
     setReferenceVideoIds([]);
     setReferenceAudioFiles([]);
     if (typeof item.icStrength === 'number') setIcStrength(item.icStrength);
@@ -1364,6 +1366,7 @@ export function useVideoGenForm({
     // repopulates its picker and the submit gate unblocks without a re-pick.
     setIcReferenceImageFiles(Array.isArray(p.icReferenceImageFiles) ? p.icReferenceImageFiles : []);
     setReferenceImageFiles(Array.isArray(p.referenceImageFiles) ? p.referenceImageFiles : []);
+    setUnavailableReferenceImageNames(Array.isArray(p.unavailableReferenceImageNames) ? p.unavailableReferenceImageNames : []);
     setReferenceVideoIds(Array.isArray(p.referenceVideoIds) ? p.referenceVideoIds : []);
     // Uploaded voice files cannot be reconstructed from the display-only names.
     setReferenceAudioFiles([]);
@@ -1482,7 +1485,7 @@ export function useVideoGenForm({
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
-    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
     referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
     referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength,

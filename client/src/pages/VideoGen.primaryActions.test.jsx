@@ -64,6 +64,15 @@ describe('VideoGen primary actions', () => {
     expect(screen.getByTestId('video-primary-actions')).toContainElement(warning);
   });
 
+  it('shows unrestorable references beside the actions with mobile Options closed', async () => {
+    state.activeJob = { jobId: 'job-1', status: 'running', params: { unavailableReferenceImageNames: ['catalog-guide.png'] } };
+    await renderVideoGenPage();
+
+    const warning = await screen.findByText(/catalog-guide\.png.*Choose replacements or use the Music Video project/);
+    expect(screen.getByText('Options').closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByTestId('video-primary-actions')).toContainElement(warning);
+  });
+
   it('uses the same primary action bar for every video mode', async () => {
     await renderVideoGenPage();
     await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue(MODEL.id));

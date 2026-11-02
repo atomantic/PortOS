@@ -734,11 +734,25 @@ async function prepareVideoReferences({
   body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
   stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
 }) {
+  // The backend and capability-dependent model are already resolved here, and
+  // hosted/peer submissions have taken their own lanes. Add cast sheets only
+  // when they cannot displace caller-provided references or break a chain.
+  const hasRequestedReferences = body.referenceImageFiles?.length || body.referenceVideoIds?.length
+    || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
+  let referenceImagePaths = null;
+  if (body.musicVideo?.sceneId && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
+    const totalLimit = Number(effectiveModel?.maxReferenceTotal) || Infinity;
+    const limit = Math.min(extraReferenceImageLimit(effectiveModel), totalLimit - 1);
+    if (limit > 0) {
+      const { musicVideoLocalReferencePaths } = await import('../musicVideo/clipCastReferences.js');
+      const paths = await musicVideoLocalReferencePaths(body.musicVideo, limit, { excludePath: sourceImagePath });
+      if (paths.length) referenceImagePaths = paths;
+    }
+  }
   // Extra reference stills for a reference-to-video model. Rejected up-front on
   // a model that declares no `maxReferenceImages` (a silently dropped reference
   // would render a clip that ignores what the user supplied) and past the
-  // model's ceiling, which counts the first-frame input as the first image.
-  let referenceImagePaths = null;
+  // model's ceiling, which counts the source still as the first image.
   if (body.referenceImageFiles?.length) {
     const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
     if (imageCountError) {
