@@ -150,6 +150,9 @@ describe('POST /agents/:id/release-candidate retire (#14773)', () => {
     expect((await auditedCall()).body).toEqual({ retired: false, reason: 'candidate-task-unverified' });
     expect(fixture.task.status).toBe('in_progress');
     fixture.task.status = 'blocked';
+    fixture.pulls = [{ number: 9, state: 'open', merged_at: null }];
+    expect((await auditedCall()).body).toEqual({ retired: false, reason: 'candidate-promotion-exists' });
+    fixture.pulls = [];
     expect((await auditedCall()).body).toMatchObject({ retired: true, reconciliation: holdOf().reconciliation });
     expect(fixture.task.status).toBe('completed');
   });

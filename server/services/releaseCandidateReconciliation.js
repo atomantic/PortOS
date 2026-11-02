@@ -85,12 +85,15 @@ async function reconcile(agentId, reason, operator, state, save) {
     return { receipt: prior, task };
   }
   // A repeated request finishes a failed task update, but only while nothing
-  // has resumed the task or the repository since the receipt was recorded.
+  // has resumed the task, started release work or promoted the candidate since.
   if (!['blocked', 'pending'].includes(task.status)) refuse('candidate-task-unverified');
   const repoPath = await realpath(repository(successor)).catch(() => null);
   if (!repoPath) refuse('release-active');
   await assertRepositoryIdle(state, repoPath);
-  if (prior) return { receipt: prior, task };
+  if (prior) {
+    await assertUnpromoted(repoPath, prior.candidate);
+    return { receipt: prior, task };
+  }
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const identity = await candidateIdentity(state.agents[hold.predecessorAgentId] || await getAgentRecord(hold.predecessorAgentId), repoPath);
   await assertUnpromoted(repoPath, identity);
