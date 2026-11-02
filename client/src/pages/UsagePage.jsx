@@ -10,6 +10,7 @@ import Pill from '../components/ui/Pill';
 import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSocketResource } from '../hooks/useSocketResource';
+import useMounted from '../hooks/useMounted';
 import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
@@ -20,7 +21,7 @@ import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
-import { groupQuotaCards, mergeRefreshedFamily } from '../lib/quotaCards';
+import { expireQuotaWindows, groupQuotaCards, mergeRefreshedFamily, nextQuotaReset, reconcileLocalQuota } from '../lib/quotaCards';
 
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
@@ -28,7 +29,7 @@ const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 const FLEET_SYNC_EVENTS = ['sync:progress'];
 const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
 const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
-const refreshDiagnostic = (card) => ({ ...card,
+const refreshDiagnostic = (card, requestOrder) => ({ ...card, requestOrder,
   ...(card.refreshUnavailable ? { error: 'Live quota refresh was unavailable; displayed readings may be out of date.', quotaStatus: undefined, quotaScope: undefined } : {}),
   refreshAttemptAt: new Date().toISOString() });
 
@@ -61,7 +62,7 @@ function agyRepairLine(agy) {
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
-function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshError, imageReadError }) {
+function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshError, passiveError, imageReadError }) {
   const issueText = (issue) => {
     if (!issue?.error || issue.quotaStatus === 'expired') return null;
     if (issue.quotaStatus === 'limit_reached') {
@@ -73,11 +74,14 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshErro
     }
     return issue.error;
   };
-  let diagnostics = [...new Set([quota.providerIssue, refreshError, imageReadError].map(issueText).filter(Boolean))];
+  let diagnostics = [...new Set([quota.providerIssue, refreshError, passiveError, imageReadError].map(issueText).filter(Boolean))];
   const bodyQuota = { ...quota, note: null };
   if (!quota.imageRefusals && !quota.limits?.length && diagnostics.length) {
-    bodyQuota.error = diagnostics[0];
-    diagnostics = diagnostics.slice(1);
+    if (bodyQuota.error) diagnostics = diagnostics.filter((diagnostic) => diagnostic !== bodyQuota.error);
+    else {
+      bodyQuota.error = diagnostics[0];
+      diagnostics = diagnostics.slice(1);
+    }
   }
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
@@ -167,12 +171,19 @@ function ProviderQuotaSection() {
   const [imageQuotaComplete, setImageQuotaComplete] = useState(null);
   const [imageReadError, setImageReadError] = useState(null);
   const [refreshErrors, setRefreshErrors] = useState({});
+  const [passiveErrors, setPassiveErrors] = useState({});
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
+  const mountedRef = useMounted();
   const quotaRequest = useRef(0);
+  const quotaRequestOrder = useRef(0);
+  const familyRequestOrder = useRef(new Map());
+  const familyObservations = useRef(new Map());
+  const localPresence = useRef(new Map());
   const fullInFlight = useRef(null);
   const mounted = useRef(false);
   const explicitRequest = useRef(0);
   const fullRevision = useRef(0);
+  const localFullRevision = useRef(0);
   const coverageRequest = useRef(0);
   const imageStatusRequest = useRef(0);
   const imageStatusApplied = useRef(0);
@@ -189,6 +200,7 @@ function ProviderQuotaSection() {
 
   const load = useCallback(async (refresh = false) => {
     const token = ++quotaRequest.current;
+    const requestOrder = ++quotaRequestOrder.current;
     const explicitToken = refresh ? ++explicitRequest.current : null;
     fullInFlight.current = token;
     const coverageToken = ++coverageRequest.current;
@@ -199,15 +211,14 @@ function ProviderQuotaSection() {
     if (refresh) setRefreshAllError(false);
     const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
     applyImageStatus(result, imageToken);
+    const familyOrderAtCompletion = new Map(familyRequestOrder.current);
     // Even if a socket-driven cached read overtook Refresh all, its forced
     // scrape outcomes still matter. A newer family refresh owns that family's
     // status, so do not overwrite it with an older full request's result.
     if (refresh && mounted.current && explicitToken === explicitRequest.current) {
       setRefreshAllError(!result?.providers);
-      const changedFamilies = new Set(activeFamilies.current);
-      for (const [family, revision] of familyRevisions.current) {
-        if (revision !== (startingFamilies.get(family) || 0)) changedFamilies.add(family);
-      }
+      const changedFamilies = new Set([...familyOrderAtCompletion]
+        .filter(([, order]) => order > requestOrder).map(([family]) => family));
       if (result?.providers) setRefreshErrors((previous) => {
         const next = { ...previous };
         const localCards = result.providers.filter((item) => item.origin?.self !== false);
@@ -216,8 +227,30 @@ function ProviderQuotaSection() {
           if (!changedFamilies.has(family) && !localFamilies.has(family) && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
         }
         for (const card of localCards.filter((item) => !changedFamilies.has(item.family))) {
-          if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card);
+          const familyReadAt = Date.parse(familyObservations.current.get(card.family)?.fetchedAt);
+          const fullReadAt = Date.parse(card.fetchedAt);
+          if (card.error && !card.refreshUnavailable && Number.isFinite(familyReadAt)
+            && Number.isFinite(fullReadAt) && fullReadAt < familyReadAt) continue;
+          if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card, requestOrder);
           else if (resolvesQuotaRefresh(card)) delete next[card.family];
+        }
+        return next;
+      });
+      // A successful explicit read supersedes older passive diagnostics, but
+      // not a passive read that started after this request.
+      if (result?.providers) setPassiveErrors((previous) => {
+        const next = { ...previous };
+        const localCards = result.providers.filter((card) => card.origin?.self !== false);
+        const present = new Set(localCards.map((card) => card.family));
+        for (const family of Object.keys(next)) {
+          const newerFamily = (familyOrderAtCompletion.get(family) || 0) > requestOrder;
+          if (!newerFamily && (next[family]?.requestOrder || 0) <= requestOrder && !present.has(family)
+            && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+        }
+        for (const card of localCards) {
+          const newerFamily = (familyOrderAtCompletion.get(card.family) || 0) > requestOrder;
+          if (!newerFamily && (next[card.family]?.requestOrder || 0) <= requestOrder
+            && !card.error && !card.refreshUnavailable && resolvesQuotaRefresh(card)) delete next[card.family];
         }
         return next;
       });
@@ -225,21 +258,79 @@ function ProviderQuotaSection() {
     if (token !== quotaRequest.current) return;
     fullInFlight.current = null;
     if (result?.providers) {
+      if (!refresh) {
+        // A family request only supersedes reads that began before it. A newer
+        // passive failure must remain visible while an older refresh finishes.
+        const changedFamilies = new Set([...familyOrderAtCompletion]
+          .filter(([, order]) => order > requestOrder).map(([family]) => family));
+        const localCards = result.providers.filter((card) => card.origin?.self !== false && !changedFamilies.has(card.family));
+        // A definitive removal also retires the local refresh failure. Do not
+        // clear a failure merely because a cached read of a present provider
+        // succeeded, and never infer removal from an incomplete image read.
+        setRefreshErrors((previous) => {
+          let next = previous;
+          for (const [family, diagnostic] of Object.entries(previous)) {
+            const local = localCards.find((card) => card.family === family);
+            if (changedFamilies.has(family) || (diagnostic.requestOrder || 0) > requestOrder
+              || (family === 'imagegen' && result.imageQuotaComplete !== true)
+              || (local && local.supported !== false)) continue;
+            if (next === previous) next = { ...previous };
+            delete next[family];
+          }
+          return next;
+        });
+        setPassiveErrors((previous) => {
+          const next = { ...previous };
+          const present = new Set(localCards.map((card) => card.family));
+          for (const family of Object.keys(next)) {
+            if (!changedFamilies.has(family) && !present.has(family)
+              && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+          }
+          for (const card of localCards) {
+            if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card, requestOrder);
+            else if (resolvesQuotaRefresh(card)) delete next[card.family];
+          }
+          return next;
+        });
+      }
+      const localCards = result.providers.filter((card) => card.origin?.self !== false);
+      const byFamily = new Map(localCards.map((card) => [card.family, card]));
+      const knownFamilies = new Set([...localPresence.current.keys(), ...familyRequestOrder.current.keys(), ...byFamily.keys()]);
+      for (const family of knownFamilies) {
+        // An incomplete image read says neither that the provider exists nor
+        // that it was removed; keep the last definitive observation.
+        if (family === 'imagegen' && result.imageQuotaComplete !== true) continue;
+        localPresence.current.set(family, { order: requestOrder, card: byFamily.get(family) || null });
+      }
+      const presence = new Map(localPresence.current);
+      const familyOrders = familyOrderAtCompletion;
+      localFullRevision.current += 1;
       if (!result.federationUnavailable) fullRevision.current += 1;
       // A family refresh can finish while this full read is in flight. Retain
       // its newer local card while still taking the full read's peer cards.
-      const preserve = new Set(activeFamilies.current);
+      const active = new Set(activeFamilies.current);
+      const preserve = new Set(active);
       for (const [family, revision] of familyRevisions.current) {
         if (revision !== (startingFamilies.get(family) || 0)) preserve.add(family);
       }
       if (result.imageQuotaComplete === false) preserve.add('imagegen');
       setQuotas((previous) => {
         if (!previous) return result.providers;
-        const priorFamilies = new Set(previous.filter((card) => card.origin?.self !== false).map((card) => card.family));
+        const priorLocals = previous.filter((card) => card.origin?.self !== false);
+        const priorFamilies = new Set(priorLocals.map((card) => card.family));
         return [
           ...(result.federationUnavailable ? previous : result.providers).filter((card) => card.origin?.self === false),
-          ...result.providers.filter((card) => card.origin?.self !== false && (!preserve.has(card.family) || !priorFamilies.has(card.family))),
-          ...previous.filter((card) => card.origin?.self !== false && preserve.has(card.family)),
+          ...result.providers.filter((card) => card.origin?.self !== false && (!preserve.has(card.family) || !priorFamilies.has(card.family)))
+            .map((card) => reconcileLocalQuota(priorLocals.find((prior) => prior.family === card.family), card)),
+          ...priorLocals.filter((card) => preserve.has(card.family)).flatMap((card) => {
+            const familyIsNewer = (familyOrders.get(card.family) || 0) > requestOrder;
+            const observed = presence.get(card.family);
+            if (!familyIsNewer && observed?.order === requestOrder && !observed.card) return [];
+            if (!familyIsNewer && observed?.order === requestOrder && observed.card?.supported === false) return [observed.card];
+            if (!active.has(card.family)) return [card];
+            const incoming = result.providers.find((item) => item.origin?.self !== false && item.family === card.family);
+            return [incoming && incoming.supported !== false ? reconcileLocalQuota(card, incoming, { preferNewer: true }) : card];
+          }),
         ];
       });
       if (coverageToken === coverageRequest.current) setCoverage(result);
@@ -252,6 +343,25 @@ function ProviderQuotaSection() {
 
   useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; quotaRequest.current += 1; fullInFlight.current = null; }; }, [load]);
 
+  // One deadline-based timer updates the UI at the earliest known reset. A
+  // longer delay is re-armed at the browser timeout limit, without polling.
+  useEffect(() => {
+    const reset = nextQuotaReset(quotas);
+    if (reset === null) return undefined;
+    const maxDelay = 2_147_483_647;
+    let timer;
+    const schedule = () => {
+      const remaining = reset - Date.now();
+      timer = setTimeout(() => {
+        if (!mountedRef.current) return;
+        if (reset > Date.now()) schedule();
+        else setQuotas((previous) => previous ? expireQuotaWindows(previous) : previous);
+      }, Math.min(Math.max(remaining, 0), maxDelay));
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, [quotas, mountedRef]);
+
   // Refresh ONE provider card. The whole-section Refresh spawns every family's
   // scrape at once (10-20s each); this asks for the single card the user
   // clicked and swaps it in when the reading lands, leaving every other card's
@@ -259,6 +369,9 @@ function ProviderQuotaSection() {
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
     const startingFullRevision = fullRevision.current;
+    const startingLocalFullRevision = localFullRevision.current;
+    const requestOrder = ++quotaRequestOrder.current;
+    familyRequestOrder.current.set(family, requestOrder);
     const coverageToken = ++coverageRequest.current;
     const imageToken = family === 'imagegen' ? ++imageStatusRequest.current : null;
     const revision = (familyRevisions.current.get(family) || 0) + 1;
@@ -278,13 +391,35 @@ function ProviderQuotaSection() {
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
       const fullReadApplied = startingFullRevision !== fullRevision.current;
+      const localFullReadApplied = startingLocalFullRevision !== localFullRevision.current;
       const local = result.providers.find((card) => card.family === family && card.origin?.self !== false);
-      const localUnavailable = family === 'imagegen' && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
-      setQuotas((prev) => mergeRefreshedFamily(prev, result.providers, family, { fullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable }));
+      const presence = localPresence.current.get(family);
+      const newerRemoval = presence?.order > requestOrder && (!presence.card || presence.card.supported === false);
+      if (!newerRemoval && local && !local.error && !local.refreshUnavailable && local.supported !== false && resolvesQuotaRefresh(local)) {
+        familyObservations.current.set(family, local);
+      }
+      const providers = newerRemoval
+        ? [...result.providers.filter((card) => card.origin?.self === false), ...(presence.card ? [presence.card] : [])]
+        : result.providers;
+      const localUnavailable = !newerRemoval && family === 'imagegen'
+        && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
+      setQuotas((prev) => mergeRefreshedFamily(prev, providers, family, { fullReadApplied, localFullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable }));
       setRefreshErrors((previous) => {
         const next = { ...previous };
-        if (local?.error || local?.refreshUnavailable) next[family] = refreshDiagnostic(local);
+        if (newerRemoval) {
+          if ((next[family]?.requestOrder || 0) <= presence.order) delete next[family];
+          return next;
+        }
+        if ((next[family]?.requestOrder || 0) > requestOrder) return previous;
+        if (local?.error || local?.refreshUnavailable) next[family] = refreshDiagnostic(local, requestOrder);
         else if ((!local && !localUnavailable) || resolvesQuotaRefresh(local)) delete next[family];
+        return next;
+      });
+      if (newerRemoval || ((!local && !localUnavailable)
+        || (local && !local.error && !local.refreshUnavailable && resolvesQuotaRefresh(local)))) setPassiveErrors((previous) => {
+        if ((previous[family]?.requestOrder || 0) > (newerRemoval ? presence.order : requestOrder)) return previous;
+        const next = { ...previous };
+        delete next[family];
         return next;
       });
       if (coverageToken === coverageRequest.current) setCoverage(result);
@@ -367,6 +502,7 @@ function ProviderQuotaSection() {
                   refreshing={refreshingFamilies.has(quota.family)}
                   disabled={loading}
                   refreshError={refreshErrors[quota.family]}
+                  passiveError={passiveErrors[quota.family]}
                   imageReadError={quota.family === 'imagegen' ? imageReadError : null}
                 />
               ))}

@@ -1,3 +1,5 @@
+import { limitWindowExpired, normalizeResetAt } from '../../../server/lib/quotaReset.js';
+
 // Quota snapshots do not identify accounts. Grouping by family therefore uses
 // the shared-account assumption stated on the page, never a sum of readings.
 const hasReading = (card) => card.supported !== false && !card.error
@@ -8,6 +10,58 @@ const readTime = (card) => {
   const value = Date.parse(card.fetchedAt);
   return Number.isFinite(value) ? value : -Infinity;
 };
+
+// A local card can outlive one of its windows while a refresh is running.
+// Prune each window before retaining the observation in the browser.
+function unexpiredReading(card, now) {
+  if (!card || !hasReading(card)) return null;
+  const retained = { ...card, limits: (card.limits || []).filter((limit) => !limitWindowExpired(limit, { now })) };
+  return hasReading(retained) ? retained : null;
+}
+
+/** Find the next known reset without treating an unknown reset as expired. */
+export function nextQuotaReset(cards, now = Date.now()) {
+  let next = null;
+  for (const card of cards || []) for (const limit of card.limits || []) {
+    const { epochMs } = normalizeResetAt(limit, { now });
+    if (epochMs !== null && (next === null || epochMs < next)) next = epochMs;
+  }
+  return next;
+}
+
+/** Drop only windows that have reset and explain a card that lost its meters. */
+export function expireQuotaWindows(cards, now = Date.now()) {
+  let changed = false;
+  const expired = cards.map((card) => {
+    const limits = (card.limits || []).filter((limit) => !limitWindowExpired(limit, { now }));
+    if (limits.length === (card.limits?.length || 0)) return card;
+    changed = true;
+    return { ...card, limits, ...(!limits.length && !card.error
+      ? { error: 'Every window in this reading has since reset — refresh for a current one.', quotaStatus: 'expired' } : {}) };
+  });
+  return changed ? expired : cards;
+}
+
+/** Keep a usable local observation when a later response has no newer reading. */
+export function reconcileLocalQuota(previous, incoming, { preferNewer = false } = {}) {
+  if (!incoming || incoming.supported === false) return incoming;
+  const now = Date.now();
+  const retained = unexpiredReading(previous, now);
+  if (!retained) return incoming;
+  const incomingTime = readTime(incoming);
+  const retainedTime = readTime(retained);
+  const incomingIsOlder = Number.isFinite(incomingTime) && Number.isFinite(retainedTime) && incomingTime < retainedTime;
+  // A fresh server-side expiry must not revive a meter whose reset was unknown
+  // to this client. Older expiry telemetry cannot retire a newer observation.
+  if (incoming.quotaStatus === 'expired') {
+    if (incomingIsOlder && retained.limits?.length) return retained;
+    const confirmedLive = retained.limits?.filter((limit) => normalizeResetAt(limit, { now }).epochMs !== null) || [];
+    return confirmedLive.length ? { ...retained, limits: confirmedLive } : incoming;
+  }
+  if (incoming.error || (incoming.refreshUnavailable && !hasReading(incoming))) return retained;
+  if ((preferNewer || incoming.refreshUnavailable) && hasReading(incoming) && incomingIsOlder) return retained;
+  return incoming;
+}
 
 function chooseReading(cards) {
   return cards.reduce((best, card) => {
@@ -87,7 +141,7 @@ export function groupQuotaCards(quotas) {
 
 // A family refresh also returns peer snapshots. Accept newer peer slots without
 // letting a delayed response roll back a full sync that already arrived.
-export function mergeRefreshedFamily(previous, refreshed, family, { fullReadApplied = false, federationUnavailable = false, localUnavailable = false } = {}) {
+export function mergeRefreshedFamily(previous, refreshed, family, { fullReadApplied = false, localFullReadApplied = fullReadApplied, federationUnavailable = false, localUnavailable = false } = {}) {
   const local = refreshed.find((card) => card.family === family && card.origin?.self !== false);
   let localSeen = false;
   const peers = new Map(refreshed.filter((card) => card.family === family && card.origin?.self === false)
@@ -96,7 +150,7 @@ export function mergeRefreshedFamily(previous, refreshed, family, { fullReadAppl
     if (card.family !== family) return [card];
     if (card.origin?.self !== false) {
       localSeen = true;
-      return localUnavailable ? [card] : local ? [local] : [];
+      return localUnavailable ? [card] : local ? [reconcileLocalQuota(card, local, { preferNewer: localFullReadApplied })] : [];
     }
     const incoming = peers.get(card.origin.instanceId);
     if (!incoming) return fullReadApplied || federationUnavailable ? [card] : [];

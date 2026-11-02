@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupQuotaCards, mergeRefreshedFamily } from './quotaCards';
+import { expireQuotaWindows, groupQuotaCards, mergeRefreshedFamily } from './quotaCards';
 
 const reading = (overrides = {}) => ({
   family: 'grok', label: 'Grok', supported: true,
@@ -112,6 +112,54 @@ describe('groupQuotaCards', () => {
 describe('mergeRefreshedFamily', () => {
   const local = reading();
   const peer = reading({ origin: { self: false, instanceId: 'peer', capturedAt: '2026-01-01T00:00:00.000Z' } });
+  it('preserves a newer local result even when federation was unavailable', () => {
+    const older = reading({ fetchedAt: '2026-01-01T00:00:00.000Z', limits: [{ key: 'week', percentUsed: 40 }] });
+    const newer = reading({ fetchedAt: '2026-01-02T00:00:00.000Z', limits: [{ key: 'week', percentUsed: 80 }] });
+    expect(mergeRefreshedFamily([newer], [older], 'grok', { localFullReadApplied: true, federationUnavailable: true })[0].limits)
+      .toEqual(newer.limits);
+  });
+
+  it('does not revive an expired or disabled local provider', () => {
+    const expired = reading({ fetchedAt: '2026-01-02T00:00:00.000Z', limits: [], activity: [],
+      error: 'Window reset', quotaStatus: 'expired' });
+    const disabled = reading({ supported: false, limits: [], activity: [], note: 'Provider disabled' });
+    expect(mergeRefreshedFamily([local], [expired], 'grok')[0]).toEqual(expired);
+    const undated = { ...expired, fetchedAt: null };
+    expect(mergeRefreshedFamily([local], [undated], 'grok')[0]).toEqual(undated);
+    const activityOnly = reading({ fetchedAt: '2026-01-03T00:00:00.000Z', limits: [] });
+    expect(mergeRefreshedFamily([activityOnly], [expired], 'grok')[0]).toEqual(expired);
+    expect(mergeRefreshedFamily([local], [disabled], 'grok', { localFullReadApplied: true })[0]).toEqual(disabled);
+  });
+
+  it('retains only unexpired windows after an error', () => {
+    const now = Date.now();
+    const previous = reading({ limits: [
+      { key: 'session', percentUsed: 20, resetsAt: new Date(now - 1000).toISOString() },
+      { key: 'week', percentUsed: 80, resetsAt: new Date(now + 60_000).toISOString() },
+    ] });
+    const failed = reading({ limits: [], activity: [], error: 'Scrape failed' });
+    expect(mergeRefreshedFamily([previous], [failed], 'grok')[0].limits).toEqual([previous.limits[1]]);
+  });
+
+  it('retains only windows known to still be live after a newer expiry report', () => {
+    const previous = reading({ limits: [
+      { key: 'session', percentUsed: 20 },
+      { key: 'week', percentUsed: 80, resetsAt: new Date(Date.now() + 60_000).toISOString() },
+    ] });
+    const expired = reading({ fetchedAt: '2026-01-02T00:00:00.000Z', limits: [], activity: [],
+      error: 'Window reset', quotaStatus: 'expired' });
+    expect(mergeRefreshedFamily([previous], [expired], 'grok')[0].limits).toEqual([previous.limits[1]]);
+  });
+
+  it('leaves unknown resets intact while pruning another expired window', () => {
+    const now = Date.now();
+    const previous = reading({ limits: [
+      { key: 'unknown', percentUsed: 20 },
+      { key: 'expired', percentUsed: 80, resetsAt: new Date(now - 1000).toISOString() },
+    ] });
+    expect(expireQuotaWindows([previous], now)[0].limits).toEqual([previous.limits[0]]);
+  });
+
   it('accepts a same-version expiry and removes absent peers after a successful read', () => {
     const expired = { ...peer, limits: [], error: 'Expired' };
     expect(mergeRefreshedFamily([local, peer], [local, expired], 'grok')[1]).toEqual(expired);
