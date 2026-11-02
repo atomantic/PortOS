@@ -199,6 +199,18 @@ describe('runtime update review monitor', () => {
     expect(monitor.items().find(item => item.id === 'harness:manual')).toMatchObject({ revision: '1.0.0:1.1.0' });
   });
 
+  it('keeps a retryable npm check incomplete when the harness temporarily disappears', async () => {
+    const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+    expect(deps.save.mock.calls.at(-1)[0].find(item => item.id === 'harness:codex')).toMatchObject({ retrySoon: true, unverifiedPrevious: false });
+    deps.readHarnesses.mockResolvedValue([harness()]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0' });
+  });
+
   it('clears a harness after its explicit removal is rechecked', async () => {
     const { monitor, deps } = fixture();
     await monitor.start();

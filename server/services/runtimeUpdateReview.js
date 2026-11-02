@@ -164,7 +164,8 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
       if (removalsBeforeRead.has(harness.id)) { removedHarnesses.delete(harness.id); rows.delete(id); }
       else if (rows.has(id)) {
         const previous = rows.get(id);
-        if (previous.unverified && !previous.unverifiedPrevious) rows.delete(id);
+        // Script-installed diagnostics have no release comparison to retry.
+        if (previous.unverified && !previous.unverifiedPrevious && !harness.package) rows.delete(id);
         else rows.set(id, { ...unknown(previous), retrySoon: true });
       }
       continue;
