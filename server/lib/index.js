@@ -985,6 +985,7 @@ export * from './auditWorkflow.js';
 export * from './musicVideoCutEffects.js';
 export * from './musicVideoTransitions.js';
 export * from './musicVideoImageEffects.js';
+export * from './musicVideoGlitchCanvas.js';
 
 export * from './securityScanEvidence.js';
 

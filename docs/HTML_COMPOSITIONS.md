@@ -485,8 +485,27 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   `timing: { rate, leadSec, startSec }` (only for a retimed shot), and the page
   seeks `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
 - `song.json` — the same song block the code-rendered mode reads.
-- `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
-  it has one, else its still), named by `scenes[].media.src`.
+- `media/scene-<sceneId>.<ext>` — each scene's selected take, named by
+  `scenes[].media.src`. A selected still effect or photo sequence uses the
+  still even if the shot retains a clip; otherwise a clip takes precedence.
+
+Selected still effects also carry `scenes[].imageEffect` and, when an end
+image exists, `scenes[].media.end.src` naming its staged file. `effectFrames`
+lists the selected cut, end-glitch and in-shot effect parameters by absolute
+song frame. The layered template blends the end image using
+`imageEffectState(spec, shotFrame / fps, { fps })` from
+`musicVideoImageEffects.js`, then paints a matching effect frame with
+`globalThis.__portosMusicVideoGlitch(canvas, params, frame)`. PortOS installs
+that painter in the sandbox when the edit has selected glitches. Custom
+documents that implement these selected effects can declare support with
+`// portos-selected-effects: 1` in `engine.js` or
+`<!-- portos-selected-effects: 1 -->` in `index.html`.
+
+An older document that does not declare this support is refused when selected
+effects need it, rather than silently omitting them. In **Document source**,
+**Update layered engine** adopts an unmodified shipped layered engine as a new
+document version; customized engines remain untouched and need their own
+implementation. Updating invalidates earlier render-review evidence.
 
 Staged audio/video is streamed from disk by byte range rather than held in
 memory, so a song's worth of footage fits. The document stays on song time:

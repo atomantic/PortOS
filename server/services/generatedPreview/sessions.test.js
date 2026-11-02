@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const fixture = vi.hoisted(() => ({ page: null, playback: null, onEvent: null }));
+const fixture = vi.hoisted(() => ({ page: null, playback: null, onEvent: null, openError: null }));
 vi.mock('../musicVideo/projects.js', () => ({ getProject: async () => ({ composition: { document: { directory: 'example-document' } } }) }));
 vi.mock('../musicVideo/documentRender.js', () => ({ openIsolatedDocumentPreview: async ({ onEvent }) => {
+  if (fixture.openError) throw fixture.openError;
   fixture.onEvent = onEvent;
   return { page: fixture.page, scratchRoot: null, width: 390, height: 219, fps: 30, durationSec: 10,
     ...(fixture.playback ? { playback: fixture.playback } : {}) };
@@ -18,7 +19,18 @@ import { AUTHORED_PREVIEW_PLAYBACK_TARGET } from '../../lib/generatedPreviewPlay
 import { closeSession, registerGeneratedPreviewHandlers } from './sessions.js';
 
 const socket = { id: 'preview-test-socket', handlers: new Map(), emit: vi.fn(), on(event, fn) { this.handlers.set(event, fn); } };
-afterEach(async () => { for (const [event, payload] of socket.emit.mock.calls) if (event === 'generated-preview:opened') await closeSession(payload.sessionId); socket.handlers.clear(); socket.emit.mockClear(); fixture.playback = null; });
+afterEach(async () => { for (const [event, payload] of socket.emit.mock.calls) if (event === 'generated-preview:opened') await closeSession(payload.sessionId); socket.handlers.clear(); socket.emit.mockClear(); fixture.playback = null; fixture.openError = null; });
+
+it('sends the selected-effects remedy when a document preview cannot draw them', async () => {
+  fixture.openError = Object.assign(new Error('internal detail'), { code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED' });
+  registerGeneratedPreviewHandlers(socket);
+  const requestId = '00000000-0000-4000-8000-000000000003';
+  socket.handlers.get('generated-preview:open')({ requestId, kind: 'music-video', projectId: 'example' });
+  await vi.waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:error', {
+    requestId, code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED',
+    message: 'This composition cannot draw the selected shot effects. Update the layered engine under Document source, or add effect support to the custom document.',
+  }));
+});
 
 // Catches playback state being lost at the queued worker boundary, especially the final pause behind an active seek.
 describe('isolated document preview playback', () => {

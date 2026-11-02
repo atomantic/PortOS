@@ -294,6 +294,119 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     }
   }, 60000);
 
+  it('renders an end flash and a timed light leak identically in preview, full export and a mid-effect excerpt', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const names = ['effect-start.png', 'effect-end.png'];
+    const colors = ['#d02020', '#2040d0'];
+    const images = await Promise.all(colors.map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
+    await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), images[i])));
+    const created = await projects.createProject({ name: 'Synthetic selected effects' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, sections: [{ id: 'hook', label: 'Hook', startSec: 0, endSec: 2 }] },
+      scenes: [{ sceneId: 'effect', startSec: 0.26, endSec: 2, visualLayer: 'still', stillMove: 'hold',
+        referenceImageId: names[0], endImageId: names[1], imageEffect: 'end-flash', imageEffectSec: 0.5,
+        glitches: [{ atSec: 0.9, style: 'light-leak', lengthSec: 0.25, color: '#00ff00', edge: 'right', strength: 0.8 }] }],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const audio = join(PATHS.music, 'selected-effects.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=2', audio]);
+    const encode = async (name, windowStart, windowEnd) => {
+      const outputPath = join(PATHS.videos, name);
+      await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: name.replace('.mp4', ''),
+        audioPath: audio, outputPath, windowStart, windowEnd });
+      return execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    };
+    const full = await encode('selected-effects-full.mp4', 0, 2);
+    const excerpt = await encode('selected-effects-excerpt.mp4', 29 / 24, 37 / 24);
+    const pixel = (raw, frame, x) => {
+      const index = (frame * 64 * 36 + 18 * 64 + x) * 3;
+      return [...raw.subarray(index, index + 3)];
+    };
+    const preview = await buildDocumentPreview(project);
+    const assets = preview.assets.filter(asset => asset.url.startsWith('/data/images/')).map(asset => ({
+      key: asset.key, encoded: images[names.indexOf(decodeURIComponent(asset.url.split('/').at(-1)))].toString('base64'),
+    }));
+    const page = await browser.newPage();
+    try {
+      await page.setContent(preview.html);
+      await page.evaluate(assets => {
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          const asset = assets.find(item => item.key === data.key);
+          if (!asset) return;
+          const blob = new Blob([Uint8Array.from(atob(asset.encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: asset.key, blob }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: assets.map(asset => asset.key) }, '*');
+      }, assets);
+      await page.waitForFunction(() => globalThis.portosComposition);
+      const live = (frame, x) => page.evaluate(async ({ frame, x }) => {
+        await globalThis.portosComposition.seek(frame / 24);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(Math.round(canvas.width * x / 64), canvas.height / 2, 1, 1).data].slice(0, 3);
+      }, { frame, x });
+      for (const frame of [8, 17, 18, 24, 29, 30, 33, 36]) {
+        for (const x of [8, 32, 56]) {
+          const shown = await live(frame, x);
+          near(pixel(full, frame, x), shown, 24);
+          if (frame >= 29 && frame < 37) near(pixel(excerpt, frame - 29, x), shown, 24);
+        }
+      }
+      const before = await live(8, 32), flash = await live(18, 32), after = await live(24, 32);
+      expect(before[0]).toBeGreaterThan(before[2] + 80);
+      expect(Math.min(...flash)).toBeGreaterThan(240);
+      expect(after[2]).toBeGreaterThan(after[0] + 80);
+      const leak = await live(30, 56), clean = await live(36, 56);
+      expect(leak[1]).toBeGreaterThan(clean[1] + 10);
+    } finally { await page.close(); }
+  }, 90000);
+
+  it('repaints a chroma effect independently of the last image rendered', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const names = ['chroma-red.png', 'chroma-blue.png'];
+    const images = await Promise.all(['#ee2222', '#2222ee'].map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
+    await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), images[i])));
+    const created = await projects.createProject({ name: 'Synthetic deterministic effect' });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2, sections: [] },
+      scenes: names.map((name, i) => ({ sceneId: `s${i}`, startSec: i, endSec: i + 1, visualLayer: 'still', stillMove: 'hold',
+        referenceImageId: name, glitches: [{ atSec: 0, style: 'color-split' }] })),
+    } }));
+    await importDocumentTemplate(created.id);
+    const preview = await buildDocumentPreview(await projects.getProject(created.id));
+    const assets = preview.assets.map(asset => ({ key: asset.key,
+      encoded: images[names.indexOf(decodeURIComponent(asset.url.split('/').at(-1)))].toString('base64') }));
+    const page = await browser.newPage();
+    try {
+      await page.setContent(preview.html);
+      await page.evaluate(assets => {
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          const asset = assets.find(item => item.key === data.key);
+          if (!asset) return;
+          const blob = new Blob([Uint8Array.from(atob(asset.encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: asset.key, blob }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: assets.map(asset => asset.key) }, '*');
+      }, assets);
+      await page.waitForFunction(() => globalThis.portosComposition);
+      const [first, second] = await page.evaluate(async () => {
+        const context = document.getElementById('stage').getContext('2d');
+        await globalThis.portosComposition.seek(0);
+        await globalThis.portosComposition.seek(1);
+        const first = [...context.getImageData(0, 500, 80, 20).data];
+        await globalThis.portosComposition.seek(1);
+        return [first, [...context.getImageData(0, 500, 80, 20).data]];
+      });
+      expect(first).toEqual(second);
+      // The shifted blue channel leaves the left edge black, not a blue mask.
+      expect(first[2]).toBeLessThan(80);
+    } finally { await page.close(); }
+  }, 30000);
+
   it('keeps network refusal inside the owned capture browser and leaves the browsing session alive', async () => {
     const { openComposition } = await import('../htmlComposition/browser.js');
     const directory = 'compositions/synthetic-owned-refusal';

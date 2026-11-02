@@ -123,9 +123,13 @@ describe('music-video composition documents', () => {
     expect((await request(remote).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
   });
 
-  it('upgrades a recognized legacy engine without rewriting authored files or validating an old review', async () => {
+  it.each([
+    'musicVideoLayeredEngine.txt', 'musicVideoLayeredEngineBeforeEffects.js',
+    'musicVideoLayeredEngine11319.txt', 'musicVideoLayeredEngine11406.txt', 'musicVideoLayeredEngineOctober25.txt',
+  ])(
+    'upgrades the recognized %s engine without rewriting authored files or validating an old review', async fixture => {
     // Historical shipped bytes pin recognition independently of today's engine.
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
+    const legacy = await readFile(new URL(`./fixtures/${fixture}`, import.meta.url));
     const authored = { ...FILES, 'engine.js': legacy, 'generated.js': 'window.PORTOS_MV_GENERATED = { sections: {} };' };
     const imported = await uploadZip(project.id, createZip(Object.entries(authored).map(([name, data]) => ({ name, data }))));
     const original = imported.body.document.directory;
@@ -154,11 +158,65 @@ describe('music-video composition documents', () => {
     expect(again.body).toMatchObject({ changed: false, document: selected.composition.document });
   });
 
+  it('replaces the unchanged initial still-effect module when upgrading its shipped engine', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine11319.txt', import.meta.url));
+    const effects = await readFile(new URL('./fixtures/musicVideoImageEffects11319.txt', import.meta.url));
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+      { name: 'musicVideoImageEffects.js', data: effects },
+    ]));
+    const upgraded = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(upgraded.status).toBe(200);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    expect(files['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url)));
+  });
+
+  it('preserves the document when its legacy still-effect module was customized', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine11319.txt', import.meta.url));
+    const effects = await readFile(new URL('./fixtures/musicVideoImageEffects11319.txt', import.meta.url));
+    const customized = Buffer.concat([effects, Buffer.from('\n// authored customization')]);
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+      { name: 'musicVideoImageEffects.js', data: customized },
+    ]));
+    const directory = imported.body.document.directory;
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory });
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ code: 'COMPOSITION_ENGINE_CUSTOM' });
+    expect(result.body.error).toMatch(/still-effect module/);
+    expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    expect(files['engine.js']).toEqual(legacy);
+    expect(files['musicVideoImageEffects.js']).toEqual(customized);
+  });
+
+  it('retains a compatible shipped still-effect module and its extra export', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const effects = await readFile(new URL('./fixtures/musicVideoImageEffects14277.txt', import.meta.url));
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+      { name: 'musicVideoImageEffects.js', data: effects },
+    ]));
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(result.status).toBe(200);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    expect(files['musicVideoImageEffects.js']).toEqual(effects);
+  });
+
   it('refuses customized engines, pending candidates and invalid upgrade pointers without changing the document', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
     const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: PAGE }, { name: 'engine.js', data: Buffer.concat([legacy, Buffer.from('\n// authored customization')]) }]));
     const directory = imported.body.document.directory;
     const path = `/api/music-video/${project.id}/composition/document/engine/upgrade`;
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
+    } }));
+    expect((await request(app).get(`/api/music-video/${project.id}/composition/document/preview`)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
     const customized = await request(app).post(path).send({ directory });
     expect(customized.status).toBe(409);
     expect(customized.body.code).toBe('COMPOSITION_ENGINE_CUSTOM');
@@ -166,6 +224,85 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, composition: { ...current.composition, documentDraft: current.composition.document } } }));
     expect((await request(app).post(path).send({ directory })).body.code).toBe('COMPOSITION_DRAFT_STALE');
     expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
+  });
+
+  it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
+    const original = imported.body.document.directory;
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
+    } }));
+    const preview = `/api/music-video/${project.id}/composition/document/preview`;
+    const unsupported = await request(app).get(preview);
+    expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
+    expect(unsupported.body.error).toMatch(/Update the layered engine/);
+    const upgraded = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
+    expect(upgraded.body.changed).toBe(true);
+    expect((await request(app).get(preview)).status).toBe(200);
+  });
+
+  it('only blocks a document for effect frames inside the song', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
+    const untimed = { sceneId: 'unplaced', startSec: null, endSec: null, transitionIn: 'light-leak', glitches: [{ atSec: 0.5, style: 'light-leak' }] };
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'placed', startSec: 0, endSec: 2 }, untimed],
+    } }));
+    const preview = `/api/music-video/${project.id}/composition/document/preview`;
+    expect((await request(app).get(preview)).status).toBe(200);
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: [current.scenes[0], { ...untimed, startSec: 30, endSec: 32 }],
+    } }));
+    expect((await request(app).get(preview)).status).toBe(200);
+    // A transition centered just beyond the song can still lead into its last frames.
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: [current.scenes[0], { ...untimed, startSec: 2.1, endSec: 4 }],
+    } }));
+    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: [current.scenes[0], { ...untimed, startSec: 1, endSec: 2 }],
+    } }));
+    const unsupported = await request(app).get(preview);
+    expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
+  });
+
+  it('does not block for an end-image effect on a shot without a playable interval', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
+    await mkdir(join(ROOT(), 'images'), { recursive: true });
+    await writeFile(join(ROOT(), 'images', 'end.png'), 'synthetic end frame');
+    await writeFile(join(ROOT(), 'images', 'start.png'), 'synthetic start frame');
+    const incomplete = { sceneId: 'unplaced', startSec: 1, endSec: null, visualLayer: 'still', referenceImageId: 'start.png', imageEffect: 'end-fade', imageEffectSec: 0.5, endImageId: 'end.png' };
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'placed', startSec: 0, endSec: 1 }, incomplete],
+    } }));
+    const preview = `/api/music-video/${project.id}/composition/document/preview`;
+    expect((await request(app).get(preview)).status).toBe(200);
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      scenes: [current.scenes[0], { ...incomplete, endSec: 1.9 }],
+    } }));
+    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+  });
+
+  it('still detects an end-image effect when a later shot has no playable interval', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
+    await mkdir(join(ROOT(), 'images'), { recursive: true });
+    await writeFile(join(ROOT(), 'images', 'start.png'), 'synthetic start frame');
+    await writeFile(join(ROOT(), 'images', 'end.png'), 'synthetic end frame');
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 10 }, scenes: [
+        { sceneId: 'placed', startSec: 0, endSec: 10, visualLayer: 'still', referenceImageId: 'start.png', imageEffect: 'end-fade', imageEffectSec: 5, endImageId: 'end.png' },
+        { sceneId: 'unplaced', startSec: 2, endSec: null },
+      ],
+    } }));
+    const preview = `/api/music-video/${project.id}/composition/document/preview`;
+    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
   });
 
   it('preserves source document bytes when a fork imports revised code, including after source removal', async () => {

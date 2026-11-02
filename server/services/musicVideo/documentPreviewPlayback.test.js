@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { adaptStagedDocumentPreview } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
 
 const roots = [];
 const templates = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
@@ -109,6 +110,53 @@ describe('recognized staged composition playback capability', () => {
     expect(backs).toHaveLength(1);
     expect(backs[0].context.calls.filter(call => call[0] === 'reset')).toHaveLength(3);
     expect(events).toEqual([expect.objectContaining({ type: 'portos-mv:playback-error', epoch: 2 })]);
+    await api.dispose();
+  });
+
+  it('changes to a preloaded end frame during cooperative playback on the rounded shot frame', async () => {
+    const root = await staged();
+    expect(await adaptStagedDocumentPreview(root)).toMatchObject({ adapted: true });
+    let clock = 0, animation = null;
+    const canvases = [];
+    const makeCanvas = () => {
+      const calls = [];
+      const context = new Proxy({ calls }, { get(target, key) {
+        if (key in target) return target[key];
+        if (key === 'createImageData' || key === 'getImageData') return (_x, _y, w, h) => ({ data: new Uint8ClampedArray((w || _x) * (h || _y) * 4) });
+        if (key === 'measureText') return text => ({ width: String(text).length * 10 });
+        if (key === 'createRadialGradient' || key === 'createLinearGradient') return () => ({ addColorStop() {} });
+        if (key === 'createPattern') return () => ({});
+        return (...args) => { calls.push([key, ...args]); };
+      } });
+      const canvas = { width: 1920, height: 1080, context, getContext: () => context };
+      canvases.push(canvas); return canvas;
+    };
+    const loaded = [];
+    function TestImage() { this.naturalWidth = 1920; this.naturalHeight = 1080; }
+    Object.defineProperty(TestImage.prototype, 'src', { set(value) { this.url = value; loaded.push(value); queueMicrotask(() => this.onload()); } });
+    const front = makeCanvas();
+    const sandbox = { setTimeout, clearTimeout, queueMicrotask, Image: TestImage, performance: { now: () => clock },
+      requestAnimationFrame: callback => { animation = callback; return 1; }, cancelAnimationFrame: () => { animation = null; },
+      document: { getElementById: () => front, createElement: () => makeCanvas(), fonts: { load: () => Promise.resolve() } },
+      PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 2 }, song: { sections: [] }, composition: {},
+        scenes: [{ sceneId: 'still', startSec: 0.26, endSec: 2, visualLayer: 'still', imageEffect: { effect: 'end-glitch', changeSec: 0.5 },
+          media: { kind: 'image', src: 'start.png', end: { src: 'end.png' } } }] },
+      PORTOS_MV_EVENT_STATE: (_song, t) => ({ t, hold: false, activeEvents: [], reactiveGain: 0 }),
+      PORTOS_MV_IMAGE_EFFECTS: { imageEffectState, IMAGE_EFFECT_FOG_COLOR },
+      PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw() {} }) }, postMessage() {} };
+    sandbox.window = sandbox;
+    runInNewContext(await readFile(join(root, 'engine.js'), 'utf8'), sandbox);
+    const api = sandbox.portosComposition.previewPlayback;
+    const before = 17 / 24;
+    await api.prepare({ epoch: 1, t: before });
+    await api.play({ epoch: 1, sequence: 1, t: before, workerTime: 0 });
+    expect(loaded).toEqual(['start.png', 'end.png']);
+    const drawn = () => canvases.flatMap(canvas => canvas.context.calls.filter(call => call[0] === 'drawImage' && call[1] instanceof TestImage).map(call => call[1].url));
+    expect(drawn().at(-1)).toBe('start.png');
+    clock = 1000 / 24;
+    animation();
+    expect(drawn().at(-1)).toBe('end.png');
+    expect(loaded).toEqual(['start.png', 'end.png']);
     await api.dispose();
   });
 });

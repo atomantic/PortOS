@@ -278,6 +278,16 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
   });
 
+  it('shows the selected-effects upgrade remedy from the preview socket', async () => {
+    socket.emit.mockImplementation((event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      for (const fn of socket.__handlers.get('generated-preview:error') || []) fn({ requestId: payload.requestId,
+        code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED', message: 'Update the layered engine under Document source.' });
+    });
+    render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Update the layered engine under Document source.');
+  });
+
   it('applies film look and title-card edits made while the isolated worker is opening', async () => {
     socket.emit.mockImplementation(() => {});
     const look = { version: 1, preset: 'custom', grain: 0.4 };
