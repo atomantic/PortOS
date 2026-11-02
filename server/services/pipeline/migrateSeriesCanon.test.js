@@ -65,7 +65,9 @@ beforeEach(() => {
 
 describe('deriveOrphanUniverseId', () => {
   it('is deterministic for the same series id', () => {
-    expect(deriveOrphanUniverseId('series-abc-123')).toBe(deriveOrphanUniverseId('series-abc-123'));
+    const first = deriveOrphanUniverseId('series-abc-123');
+    expect(first).toMatch(/^[A-Za-z0-9-]{8,80}$/);
+    expect(deriveOrphanUniverseId('series-abc-123')).toBe(first);
   });
 
   it('produces a different id for a different series id', () => {

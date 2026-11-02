@@ -299,8 +299,10 @@ describe('isSeriesReviewFindingsStale', () => {
 // second start's options.
 describe('seriesReviewRequestSig', () => {
   it('matches for two starts that would run the same review', () => {
-    expect(seriesReviewRequestSig({ feedback: 'pacing drags', force: true }))
-      .toBe(seriesReviewRequestSig({ feedback: 'pacing drags', force: true }));
+    const first = seriesReviewRequestSig({ feedback: 'pacing drags', force: true });
+    expect(typeof first).toBe('string');
+    expect(first.length).toBeGreaterThan(0);
+    expect(seriesReviewRequestSig({ feedback: 'pacing drags', force: true })).toBe(first);
   });
 
   it('treats absent, empty, and whitespace-only feedback as the same (no) note', () => {

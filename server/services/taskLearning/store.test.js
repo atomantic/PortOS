@@ -185,8 +185,6 @@ describe('store.classifyUntypedTask (issue #2333)', () => {
     for (const input of inputs) {
       const first = classifyUntypedTask(input);
       expect(classifyUntypedTask(input)).toBe(first);
-      // re-classifying its own output-shaped task is stable (no drift)
-      expect(classifyUntypedTask({ taskType: first })).toBe(classifyUntypedTask({ taskType: first }));
     }
   });
 

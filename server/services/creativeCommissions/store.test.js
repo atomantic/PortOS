@@ -224,8 +224,8 @@ describe('assertValidSchedule', () => {
 
   it('throws ERR_VALIDATION for an underivable/invalid schedule', () => {
     expect(() => assertValidSchedule({ kind: 'DAILY' })).toThrow();
-    try { assertValidSchedule({ kind: 'CUSTOM', cron: 'not a cron' }); }
-    catch (e) { expect(e.code).toBe(ERR_VALIDATION); }
+    expect(() => assertValidSchedule({ kind: 'CUSTOM', cron: 'not a cron' }))
+      .toThrow(expect.objectContaining({ code: ERR_VALIDATION }));
   });
 
   it('accepts an anchored calendar recurrence', () => {
@@ -400,8 +400,9 @@ describe('updateCommission', () => {
   });
 
   it('throws NOT_FOUND for an unknown id', async () => {
-    try { await updateCommission('nope', { enabled: false }); }
-    catch (e) { expect(e.code).toBe(ERR_NOT_FOUND); }
+    await expect(
+      updateCommission('nope', { enabled: false }),
+    ).rejects.toMatchObject({ code: ERR_NOT_FOUND });
   });
 });
 

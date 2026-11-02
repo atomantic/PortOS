@@ -204,8 +204,9 @@ describe('clientInvestigationFingerprint (#6043)', () => {
   const INSTALL_FAILURE = 'Fix Example Runtime installer failure at the download stage';
 
   it('is deterministic for the same submitted failure — that is what makes dedup work', () => {
-    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE }))
-      .toBe(clientInvestigationFingerprint({ description: INSTALL_FAILURE }));
+    const first = clientInvestigationFingerprint({ description: INSTALL_FAILURE });
+    expect(first).toBe('unknown:ui-investigation:fix-example-runtime-installer-failure-at-the-download-stage');
+    expect(clientInvestigationFingerprint({ description: INSTALL_FAILURE })).toBe(first);
   });
 
   it('separates two different install failures', () => {

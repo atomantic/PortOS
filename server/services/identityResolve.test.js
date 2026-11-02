@@ -79,7 +79,10 @@ describe('identityResolve', () => {
   // resolver so a repeated counterpart handle is matched once, not once per event.
   it('memoizes repeated handles and enriches identically through an injected resolver', () => {
     const resolver = createHandleResolver(ctx);
-    expect(resolver('+15551234567')).toBe(resolver('+15551234567'));
+    const resolved = resolver('+15551234567');
+    expect(resolved).toBeDefined();
+    expect(resolved.displayName).toBe('Tribe Friend');
+    expect(resolver('+15551234567')).toBe(resolved);
     expect(resolver('+15559876543').displayName).toBe('Contact Only');
 
     let injectedCalls = 0;

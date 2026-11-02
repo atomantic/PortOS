@@ -316,7 +316,10 @@ describe('projectRunStates — replayable status', () => {
   it('is pure — replaying the same stream twice yields the same state', () => {
     // This is what makes "rebuild after a restart" and "read current status"
     // one code path: no clock, no I/O, no accumulated module state.
-    expect(projectRunStates(stream)).toEqual(projectRunStates(stream));
+    const first = projectRunStates(stream);
+    const second = projectRunStates(stream);
+    expect(first).toHaveLength(1);
+    expect(second).toEqual(first);
   });
 
   it('reports a still-open run as running', () => {

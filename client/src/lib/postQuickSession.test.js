@@ -107,7 +107,7 @@ describe('postQuickSession', () => {
       const heads = ["2026-03-01", "2026-03-02"].map(dayKey => pickedMathType({ dayKey, drillTypes: [] }));
       expect(new Set(heads).size).toBe(2);
       const plan = { dayKey: "2026-03-02", drillTypes: [] };
-      expect(pickedMathType(plan)).toBe(pickedMathType(plan));
+      expect(pickedMathType(plan)).toBe(heads[1]);
     });
 
     it("keeps the only candidate in a domain even when it is recent", () => {
