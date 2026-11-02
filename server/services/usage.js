@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
+import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 
@@ -224,7 +224,8 @@ export async function loadUsage() {
  */
 async function saveUsage() {
   summaryCache.clear();
-  usageData.lastUpdated = new Date().toISOString();
+  const previous = Date.parse(usageData.lastUpdated);
+  usageData.lastUpdated = new Date(Math.max(Date.now(), Number.isFinite(previous) ? previous + 1 : 0)).toISOString();
   await atomicWrite(USAGE_FILE, usageData);
 }
 
@@ -711,6 +712,10 @@ export async function recordSession(providerId, providerName, rawModel) {
   // Track hourly activity
   const hour = new Date().getHours();
   usageData.hourlyActivity[hour]++;
+  // Keep the day as well as the lifetime histogram so a selected reporting
+  // window can be answered without inventing timestamps for older sessions.
+  if (!Array.isArray(day.hourlyActivity)) day.hourlyActivity = Array(24).fill(0);
+  day.hourlyActivity[hour]++;
 
   await saveUsage();
   return usageData.totalSessions;
@@ -1031,34 +1036,46 @@ function usageRowCost(modelId, counts, rates, free) {
   return tokens + premium + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 
-export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null } = {}) {
+export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null, totalSessions = null, totalMessages = null, providerClasses = undefined, additionalSources = [] } = {}) {
   const configById = new Map((providers || []).map((p) => [p.id, p]));
   const agg = new Map(); // providerId -> { name, sessions, messages, tokensIn, tokensOut, byModel: Map }
   let breakdownSince = null;
 
-  const ensureAggregate = (pid, name) => {
-    if (!agg.has(pid)) {
-      agg.set(pid, {
+  const classification = (pid, classes) => {
+    if (classes === undefined) {
+      const config = configById.get(pid);
+      return { known: true, free: isFreeProvider(config || pid), family: config ? familyForProvider(config) : familyForProviderId(pid) };
+    }
+    const value = classes?.[pid];
+    return value ? { known: true, free: value.free, family: value.family } : { known: false, free: false, family: null };
+  };
+  const ensureAggregate = (pid, name, classes) => {
+    const billing = classification(pid, classes);
+    const key = JSON.stringify([pid, billing.known, billing.free, billing.family]);
+    if (!agg.has(key)) {
+      agg.set(key, {
+        id: pid,
         name,
+        billing,
         ...emptyUsageCounters(),
         source: null,
         byModel: new Map()
       });
     }
-    return agg.get(pid);
+    return agg.get(key);
   };
 
   // Fold a bucket's provider/model splits and any residual flat legacy counts.
   // Monthly rollups can contain both shapes when their source month straddled
   // the provider-breakdown rollout.
-  const foldBucket = (bucket) => {
+  const foldBucket = (bucket, classes) => {
     let representedSessions = 0;
     let representedMessages = 0;
     let representedTokensIn = 0;
     let representedTokensOut = 0;
     for (const [pid, pDay] of Object.entries(bucket.byProvider || {})) {
       const normalized = normalizeProvider(pid, pDay.name);
-      const p = ensureAggregate(normalized.id, normalized.name);
+      const p = ensureAggregate(normalized.id, normalized.name, classes);
       addUsageCounters(p, pDay);
       // A bucket with counts but no `source` predates the field — those counts
       // are estimates, so fold it in as such rather than leaving the row
@@ -1087,7 +1104,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     const bucketTokensOut = typeof bucket.tokensOut === 'number' ? bucket.tokensOut : (bucket.tokens || 0);
     const residualTokensOut = Math.max(0, bucketTokensOut - representedTokensOut);
     if (residualSessions || residualMessages || residualTokensIn || residualTokensOut) {
-      const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME);
+      const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME, classes);
       legacy.sessions += residualSessions;
       legacy.messages += residualMessages;
       legacy.tokensIn += residualTokensIn;
@@ -1097,56 +1114,61 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     }
   };
 
-  // Rolled-up monthly buckets first, so `breakdownSince` reflects the earliest
-  // month once old days have been collapsed. A `YYYY-MM` key overlaps the range
-  // whenever its month is within the from/to months (compared at month prefix).
-  const fromMonth = from ? from.slice(0, 7) : null;
-  const toMonth = to ? to.slice(0, 7) : null;
-  for (const [month, bucket] of Object.entries(monthlyActivity || {})) {
-    if (bucket?.byProvider) {
-      const monthStart = `${month}-01`;
-      if (!breakdownSince || monthStart < breakdownSince) breakdownSince = monthStart;
-    }
-    if (fromMonth && month < fromMonth) continue;
-    if (toMonth && month > toMonth) continue;
-    if (bucket) foldBucket(bucket);
-  }
-
-  for (const [date, day] of Object.entries(dailyActivity || {})) {
-    if (day?.byProvider && (!breakdownSince || date < breakdownSince)) breakdownSince = date;
-    if (from && date < from) continue;
-    if (to && date > to) continue;
-    if (day) foldBucket(day);
-  }
-
-  // The legacy POST /usage/tokens path historically updated only all-time
-  // totals. On an unbounded report, retain any portion not already represented
-  // by day/month buckets without double-counting normal recorded messages.
-  if (totalTokens) {
-    const represented = [...agg.values()].reduce((sum, provider) => ({
+  const representedCounters = () => [...agg.values()].reduce((sum, provider) => ({
       // `totalTokens.input` counts every billable input tier (see
       // recordMessages), so the represented side must include the cache tiers
       // too — otherwise a measured run's cache reads look unaccounted-for and
       // get re-added as a legacy residual, double-billing them.
       input: sum.input + provider.tokensIn + provider.cacheReadTokens + provider.cacheWriteTokens,
-      output: sum.output + provider.tokensOut
-    }), { input: 0, output: 0 });
-    const residualIn = Math.max(0, (totalTokens.input || 0) - represented.input);
-    const residualOut = Math.max(0, (totalTokens.output || 0) - represented.output);
-    if (residualIn > 0 || residualOut > 0) {
-      const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME);
-      legacy.tokensIn += residualIn;
-      legacy.tokensOut += residualOut;
-      legacy.source = mergeSource(legacy.source, 'estimate');
+      output: sum.output + provider.tokensOut,
+      sessions: sum.sessions + provider.sessions,
+      messages: sum.messages + provider.messages,
+    }), { input: 0, output: 0, sessions: 0, messages: 0 });
+
+  // Keep each origin's legacy residual separate: an overrepresented bucket on
+  // one machine must not conceal unbucketed tokens on another.
+  for (const source of [{ dailyActivity, monthlyActivity, totalTokens, totalSessions, totalMessages, providerClasses }, ...additionalSources]) {
+    const before = representedCounters();
+    const fromMonth = from ? from.slice(0, 7) : null;
+    const toMonth = to ? to.slice(0, 7) : null;
+    for (const [month, bucket] of Object.entries(source.monthlyActivity || {})) {
+      if (bucket?.byProvider) {
+        const monthStart = `${month}-01`;
+        if (!breakdownSince || monthStart < breakdownSince) breakdownSince = monthStart;
+      }
+      if (fromMonth && month < fromMonth) continue;
+      if (toMonth && month > toMonth) continue;
+      if (bucket) foldBucket(bucket, source.providerClasses);
+    }
+    for (const [date, day] of Object.entries(source.dailyActivity || {})) {
+      if (day?.byProvider && (!breakdownSince || date < breakdownSince)) breakdownSince = date;
+      if (from && date < from) continue;
+      if (to && date > to) continue;
+      if (day) foldBucket(day, source.providerClasses);
+    }
+    if (source.totalTokens || source.totalSessions != null || source.totalMessages != null) {
+      const after = representedCounters();
+      const residualIn = Math.max(0, (source.totalTokens?.input || 0) - (after.input - before.input));
+      const residualOut = Math.max(0, (source.totalTokens?.output || 0) - (after.output - before.output));
+      const residualSessions = Math.max(0, (source.totalSessions || 0) - (after.sessions - before.sessions));
+      const residualMessages = Math.max(0, (source.totalMessages || 0) - (after.messages - before.messages));
+      if (residualIn || residualOut || residualSessions || residualMessages) {
+        const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME, source.providerClasses);
+        legacy.tokensIn += residualIn;
+        legacy.tokensOut += residualOut;
+        legacy.sessions += residualSessions;
+        legacy.messages += residualMessages;
+        legacy.source = mergeSource(legacy.source, 'estimate');
+      }
     }
   }
 
   const totals = { ...emptyUsageCounters(), estimatedCost: 0 };
   const providerRows = [];
 
-  for (const [pid, p] of agg.entries()) {
-    const config = configById.get(pid);
-    const free = isFreeProvider(config || pid);
+  for (const [rowKey, p] of agg.entries()) {
+    const pid = p.id;
+    const { known, free, family } = p.billing;
     const providerRates = free ? null : resolveModelRates(pid === LEGACY_PROVIDER_ID ? null : pid, null);
     const models = [];
     let providerCost = 0;
@@ -1163,13 +1185,14 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       // The long-context subset is already inside the base counts. One extra
       // pass at the same short rates is the missing half of xAI's 2× bill.
       // Imagine units are not tokens; they price off the model id.
-      const cost = usageRowCost(model, m, rates, freeModel);
+      const cost = known ? usageRowCost(model, m, rates, freeModel) : 0;
       providerCost += cost;
       models.push({
         model,
         ...pickUsageCounters(m),
         source: m.source || 'estimate',
-        estimatedCost: roundCents(cost),
+        estimatedCost: known ? roundCents(cost) : null,
+        rawEstimatedCost: known ? cost : null,
         rateModel: rates?.rateModel ?? null,
         rateMatch: freeModel ? 'free' : rates.matched,
         inputPer1M: rates?.inputPer1M ?? 0,
@@ -1194,7 +1217,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     const modelLongOut = models.reduce((s, row) => s + row.longTokensOut, 0);
     const modelLongCacheRead = models.reduce((s, row) => s + row.longCacheReadTokens, 0);
     const modelLongCacheWrite = models.reduce((s, row) => s + row.longCacheWriteTokens, 0);
-    if (!free && (unattributedIn > 0 || unattributedOut > 0 || unattributedCacheRead > 0 || unattributedCacheWrite > 0
+    if (known && !free && (unattributedIn > 0 || unattributedOut > 0 || unattributedCacheRead > 0 || unattributedCacheWrite > 0
       || p.longTokensIn > modelLongIn || p.longTokensOut > modelLongOut
       || p.longCacheReadTokens > modelLongCacheRead || p.longCacheWriteTokens > modelLongCacheWrite)) {
       providerCost += usageRowCost(null, {
@@ -1211,19 +1234,23 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
 
     addUsageCounters(totals, p);
     totals.estimatedCost += providerCost;
+    if (!known && hasUsageCounts(p)) totals.costIncomplete = true;
 
     providerRows.push({
       id: pid,
+      rowKey,
       name: p.name,
-      free,
+      free: known ? free : null,
       // The subscription family this row's spend belongs to, stamped from the
       // config already in hand — so a consumer comparing plan cost against API
       // cost (lib/subscriptionSavings.js) groups rows without rebuilding this
       // provider-id → config map. Null for a row no plan covers.
-      family: familyForProvider(config),
+      family,
+      classificationKnown: known,
       ...pickUsageCounters(p),
       source: p.source || 'estimate',
-      estimatedCost: roundCents(providerCost),
+      estimatedCost: known ? roundCents(providerCost) : null,
+      rawEstimatedCost: known ? providerCost : null,
       rateMatch: pid === LEGACY_PROVIDER_ID
         ? 'fallback'
         : (models.some((model) => model.rateMatch !== 'exact' && model.rateMatch !== 'free') || unattributedIn > 0 || unattributedOut > 0
@@ -1234,6 +1261,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
   }
 
   providerRows.sort((a, b) => b.estimatedCost - a.estimatedCost || b.tokensOut - a.tokensOut);
+  totals.rawEstimatedCost = totals.estimatedCost;
   totals.estimatedCost = roundCents(totals.estimatedCost);
   // Report-level provenance: `measured` only when every row that carries counts
   // was read from a provider transcript, so the UI can state plainly whether the

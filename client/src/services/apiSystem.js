@@ -290,11 +290,12 @@ export const startUsageBackfill = (options = {}) => request('/usage/backfill', {
 // agy, grok). Callers own their inline error UI — silent by default. `family`
 // narrows the read to a single card (the usage page's per-card Refresh) so one
 // provider's multi-second scrape isn't paid for all of them.
-export const getProviderUsage = ({ refresh = false, family = null, period = null, ...options } = {}) => {
+export const getProviderUsage = ({ refresh = false, family = null, period = null, scope = null, ...options } = {}) => {
   const qs = new URLSearchParams();
   if (refresh) qs.set('refresh', '1');
   if (family) qs.set('family', family);
   if (period) qs.set('period', period);
+  if (scope) qs.set('scope', scope);
   const query = qs.toString();
   return request(`/usage/providers${query ? `?${query}` : ''}`, { silent: true, ...options });
 };

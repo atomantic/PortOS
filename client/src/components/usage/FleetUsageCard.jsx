@@ -26,7 +26,8 @@ export function applyFleetBilling(fleet, overrides = {}) {
     }
     return acc;
   }, {});
-  totals.estimatedCost = Math.round((totals.estimatedCost || 0) * 100) / 100;
+  totals.estimatedCost = Math.round((totals.rawEstimatedCost ?? totals.estimatedCost ?? 0) * 100) / 100;
+  totals.costIncomplete = included.some((row) => row.totals?.costIncomplete);
   return { instances, totals, includedCount: included.length };
 }
 
@@ -76,7 +77,7 @@ export default function FleetUsageCard({ fleet, onSaved }) {
     ? <Pill tone="context" size="xs" className="ml-2">This machine</Pill>
     : row.capturedAt && (
       <span className="ml-2 text-[10px] text-gray-500" title={row.capturedAt}>
-        synced {timeAgo(row.capturedAt)}
+        updated {timeAgo(row.capturedAt)}
       </span>
     ));
 
@@ -133,7 +134,7 @@ export default function FleetUsageCard({ fleet, onSaved }) {
           </p>
         </div>
         <div className="text-left sm:text-right">
-          <div className="text-xl font-bold text-port-success">{formatUsd(view.totals?.estimatedCost)}</div>
+          <div className="text-xl font-bold text-port-success">{view.totals.costIncomplete ? '≥ ' : ''}{formatUsd(view.totals?.estimatedCost)}</div>
           <div className="text-[10px] sm:text-xs text-gray-500">{combinedLabel}</div>
         </div>
       </div>

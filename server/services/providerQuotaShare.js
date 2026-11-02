@@ -47,7 +47,7 @@ export async function readLocalQuotaCards() {
   const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null);
   const quotas = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
   const capturedAt = isNonBlankStr(raw?.capturedAt) ? raw.capturedAt : latestFetchedAt(quotas);
-  return { quotas, capturedAt };
+  return { quotas, capturedAt, reported: raw?.complete === true };
 }
 
 /**
@@ -94,14 +94,18 @@ function nextStamp(prior) {
  * the `usage` sync category's checksum, and a page poll that re-serves
  * identical cached cards is not new information for a peer to pull.
  */
-export async function recordLocalQuotaCards(cards) {
+export async function recordLocalQuotaCards(cards, { families = null, complete = null } = {}) {
   const incoming = sanitizeQuotaCards(cards);
-  if (!incoming.length) return null;
+  if (!incoming.length && !families) return null;
   return withLock(async () => {
     const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null, { strict: true });
     const stored = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
     const byFamily = new Map(stored.map((card) => [card.family, card]));
     let changed = false;
+    if (families) {
+      const enabled = new Set(families);
+      for (const id of byFamily.keys()) if (!enabled.has(id)) { byFamily.delete(id); changed = true; }
+    }
     for (const card of incoming) {
       const incumbent = byFamily.get(card.family);
       if (incumbent && claimOf(incumbent) === claimOf(card)) continue;
@@ -116,6 +120,8 @@ export async function recordLocalQuotaCards(cards) {
       changed = true;
     }
     const quotas = [...byFamily.values()];
+    const isComplete = complete === null ? raw?.complete === true : complete;
+    if (isComplete !== (raw?.complete === true)) changed = true;
     const storedAt = isNonBlankStr(raw?.capturedAt) ? raw.capturedAt : latestFetchedAt(quotas);
     if (!changed) return { quotas, capturedAt: storedAt, changed: false };
     // Stamped on the WRITE, so the slot moves whenever its contents do — see
@@ -124,7 +130,7 @@ export async function recordLocalQuotaCards(cards) {
     // writes inside one millisecond would stamp the same instant and the second
     // reading would never be pulled.
     const capturedAt = nextStamp(storedAt);
-    await atomicWrite(PROVIDER_QUOTAS_FILE, { capturedAt, quotas });
+    await atomicWrite(PROVIDER_QUOTAS_FILE, { capturedAt, quotas, complete: isComplete });
     return { quotas, capturedAt, changed: true };
   });
 }

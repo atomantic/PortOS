@@ -49,6 +49,32 @@ beforeEach(() => {
 });
 
 describe('UsagePage subscription savings', () => {
+  it('updates fleet counts with the selected period and identifies unavailable data', async () => {
+    const report = (sessions, tokens, cost) => ({
+      providers: [{ id: 'example', name: 'Example', sessions, messages: sessions, tokensIn: tokens, tokensOut: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: cost, models: [] }],
+      totals: { sessions, messages: sessions, tokensIn: tokens, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: cost },
+    });
+    api.getUsage.mockImplementation(({ period }) => Promise.resolve({
+      ...usage,
+      report: period === '30d' ? report(300, 900, 30) : report(7, 21, 7),
+      activity: [{ date: '2026-01-01', label: '2026-01-01', sessions: period === '30d' ? 300 : 7 }],
+      hourlyActivity: Array(24).fill(0),
+      imageRenders: { incomplete: true, codexSessions: 0, savedOutputs: 0 },
+      coverage: { instanceCount: 2, missingInstances: ['Offline'], notSyncingInstances: [], incompleteMonths: ['2025-01'], hourlyIncomplete: true },
+    }));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('Usage from 2 reported instances; peer data reflects the last sync.')).toBeInTheDocument();
+    expect(screen.getByText(/No usage snapshot from Offline/)).toBeInTheDocument();
+    expect(screen.getByText(/Partial months 2025-01 are excluded/)).toBeInTheDocument();
+    expect(screen.getByText(/some instances did not report complete image receipts/)).toBeInTheDocument();
+    expect(screen.getByText(/older sessions or unavailable instances/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }));
+    await waitFor(() => expect(api.getUsage).toHaveBeenLastCalledWith({ period: '30d' }, { silent: true }));
+    expect(await screen.findByText('Showing usage for 30 days.')).toBeInTheDocument();
+    expect(screen.getAllByText('300').length).toBeGreaterThan(0);
+  });
+
   it('updates quota cards on completion without recurring fetches', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
@@ -62,7 +88,7 @@ describe('UsagePage subscription savings', () => {
     await act(async () => { socket.emit('provider-quota:updated', {}); });
     expect(await screen.findByText('Updated window')).toBeInTheDocument();
     expect(api.getProviderUsage).toHaveBeenCalledTimes(2);
-    expect(api.getProviderUsage).toHaveBeenLastCalledWith({ refresh: false });
+    expect(api.getProviderUsage).toHaveBeenLastCalledWith({ refresh: false, scope: 'instances' });
   });
 
   const savings = {
@@ -271,6 +297,96 @@ describe('UsagePage per-provider refresh', () => {
     api.getProviderUsage.mockResolvedValue({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] });
   });
 
+  it('keeps peer cards separate and refreshes only the local reading', async () => {
+    const peerName = 'an-unbroken-peer-name-'.repeat(5);
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } },
+      { ...card('grok', 'Grok', 40), origin: { self: false, instanceId: 'peer-a', name: peerName } },
+      { ...card('codex', 'Codex', 60), origin: { self: false, instanceId: 'peer-b', name: 'Peer B' } },
+    ], unreportedInstances: ['Offline'] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText((text) => text.startsWith(peerName))).toHaveClass('break-words');
+    expect(screen.getByText(/Quota reporting is unavailable from Offline/)).toBeInTheDocument();
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.getByText('60% used')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Refresh Grok usage' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Refresh Codex usage' })).not.toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 77), origin: { self: true, name: 'This instance' } }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('77% used')).toBeInTheDocument();
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+  });
+
+  it('reconciles fleet charts and quota cards when usage sync applies', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    await waitFor(() => expect(api.getUsageRollingCost).toHaveBeenCalled());
+    api.getProviderUsage.mockClear(); api.getUsage.mockClear(); api.getUsageRollingCost.mockClear();
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: false, scope: 'instances' }));
+    await waitFor(() => expect(api.getUsage).toHaveBeenCalled());
+    await waitFor(() => expect(api.getUsageRollingCost).toHaveBeenCalled());
+  });
+
+  it('does not replace a newer peer quota response with an older delayed one', async () => {
+    let release;
+    api.getProviderUsage.mockReset().mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    api.getProviderUsage.mockResolvedValue({ providers: [card('grok', 'Grok', 77)] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalled());
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('77% used')).toBeInTheDocument();
+    await act(async () => release({ providers: [card('grok', 'Grok', 20)] }));
+    expect(screen.getByText('77% used')).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('applies concurrent family refreshes even when a fleet read overlaps', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let finishGrok, finishClaude;
+    api.getProviderUsage.mockImplementation(({ family }) => {
+      if (family === 'grok') return new Promise((resolve) => { finishGrok = resolve; });
+      if (family === 'claude') return new Promise((resolve) => { finishClaude = resolve; });
+      return Promise.resolve({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Claude Code usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishClaude({ providers: [card('claude', 'Claude Code', 55)] }));
+    await act(async () => finishGrok({ providers: [card('grok', 'Grok', 77)] }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.getByText('77% used')).toBeInTheDocument();
+  });
+
+  it('retains a completed family refresh when an older fleet read arrives afterward', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let finishFamily, finishFleet;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : new Promise((resolve) => { finishFleet = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishFamily({ providers: [card('grok', 'Grok', 77)] }));
+    await act(async () => finishFleet({ providers: [card('grok', 'Grok', 20), card('claude', 'Claude Code', 10)] }));
+    expect(await screen.findByText('77% used')).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('reconciles a full reading after a concurrent family refresh fails', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let failFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((_, reject) => { failFamily = reject; })
+      : Promise.resolve({ providers: [card('grok', 'Grok', 55), card('claude', 'Claude Code', 10)] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => failFamily(new Error('synthetic failure')));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+  });
+
   it('re-reads only the clicked provider and swaps that card in', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 
@@ -280,7 +396,7 @@ describe('UsagePage per-provider refresh', () => {
     api.getProviderUsage.mockResolvedValueOnce({ providers: [card('grok', 'Grok', 77)] });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
 
-    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: true, family: 'grok', silent: false }));
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: true, family: 'grok', scope: 'instances', silent: false }));
     // The refreshed card updates; the untouched Claude card keeps its reading.
     expect(await screen.findByText('77% used')).toBeInTheDocument();
     expect(screen.getByText('10% used')).toBeInTheDocument();
@@ -303,7 +419,7 @@ describe('UsagePage per-provider refresh', () => {
     await waitFor(() => expect(grokRefresh).toBeDisabled());
     fireEvent.click(grokRefresh);
     expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
-    expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: true, family: 'grok', silent: false });
+    expect(api.getProviderUsage).toHaveBeenCalledWith({ refresh: true, family: 'grok', scope: 'instances', silent: false });
     // The untouched card stays tappable while Grok's scrape is in flight.
     expect(screen.getByRole('button', { name: 'Refresh Claude Code usage' })).toBeEnabled();
 
@@ -523,7 +639,7 @@ describe('arrangeQuotaCells', () => {
 
   it('collapses a shared cell to the one family of the pair that is enabled', () => {
     const cells = arrangeQuotaCells([q('grok'), q('claude')]);
-    expect(cells.map((c) => c.key)).toEqual(['claude', 'grok']);
+    expect(cells.map((c) => c.key)).toEqual(['self:claude', 'self:grok']);
   });
 
   it('renders a family it has no display preference for exactly once, in server order', () => {

@@ -3,8 +3,6 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null })) }));
-
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -16,8 +14,7 @@ vi.mock('../services/usage.js', () => ({
 }));
 
 vi.mock('../services/peerUsage.js', () => ({
-  getFleetUsage: vi.fn(async () => ({ instances: [], totals: null })),
-  getFleetMonthlyUsage: vi.fn(async () => ({ instanceCount: 1, series: [], history: [] })),
+  getFleetUsage: vi.fn(),
   getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
 }));
 
@@ -57,13 +54,12 @@ vi.mock('../services/usageBackfill.js', () => ({
 }));
 
 import * as usage from '../services/usage.js';
-import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetRollingCost, getFleetMonthlyUsage } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
 
@@ -75,31 +71,54 @@ const buildApp = () => {
   return app;
 };
 
+const fleetResult = (overrides = {}) => ({
+  instances: [], totals: null,
+  report: { providers: [], totals: { sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 12 } },
+  subscriptionReport: { providers: [], totals: { estimatedCost: 12 } },
+  firstActivityDay: '2026-01-01', subscriptionFirstActivityDay: '2026-01-01', activity: [], last7Days: [], hourlyActivity: null, totalToolCalls: null,
+  coverage: { instanceCount: 1, missingInstances: [], notSyncingInstances: [], incompleteMonths: [] },
+  monthly: { instanceCount: 1, series: [], history: [] },
+  imageRenders: { renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null },
+  ...overrides,
+});
+
 describe('usage routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getFleetUsage.mockResolvedValue(fleetResult());
   });
 
   it('GET /api/usage includes local image activity in the selected range without changing the text cost report', async () => {
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
     const response = await request(buildApp()).get('/api/usage?from=2026-07-01&to=2026-07-31');
     expect(response.status).toBe(200);
-    expect(getImageRenderUsage).toHaveBeenCalledWith({ from: '2026-07-01', to: '2026-07-31' });
+    expect(getFleetUsage).toHaveBeenCalledWith(expect.objectContaining({ from: '2026-07-01', to: '2026-07-31' }));
     expect(response.body.imageRenders).toEqual({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null });
     expect(response.body.report.totals.estimatedCost).toBe(12);
   });
 
-  it('keeps text reporting available when the optional image ledger is damaged', async () => {
+  it('keeps text reporting available when image coverage is incomplete', async () => {
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
-    getImageRenderUsage.mockRejectedValueOnce(new Error('Invalid image render usage receipt'));
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const response = await request(buildApp()).get('/api/usage');
-      expect(response.status).toBe(200);
-      expect(response.body.report.totals.estimatedCost).toBe(12);
-      expect(response.body.imageRenders).toEqual({ error: 'Image render usage is unavailable.' });
-      expect(logged).toHaveBeenCalled();
-    } finally { logged.mockRestore(); }
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ imageRenders: { incomplete: true, savedOutputs: 0 } }));
+    const response = await request(buildApp()).get('/api/usage');
+    expect(response.status).toBe(200);
+    expect(response.body.report.totals.estimatedCost).toBe(12);
+    expect(response.body.imageRenders).toEqual({ incomplete: true, savedOutputs: 0 });
+  });
+
+  it('returns the fleet report and compares subscription-covered usage without double pricing plans', async () => {
+    const all = { providers: [{ id: 'claude', free: false, models: [], tokensIn: 10, tokensOut: 20 }],
+      totals: { sessions: 9, messages: 4, tokensIn: 10, tokensOut: 20, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 90 } };
+    const covered = { providers: [{ id: 'claude', family: 'claude', estimatedCost: 70 }], totals: { estimatedCost: 70 } };
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ report: all, subscriptionReport: covered,
+      coverage: { instanceCount: 2, missingInstances: ['Offline'], notSyncingInstances: [], incompleteMonths: [] } }));
+    usage.getUsageSummary.mockReturnValue({ report: { providers: [], totals: { estimatedCost: 10 } }, freeTier: { providers: [], blocks: [] } });
+    const res = await request(buildApp()).get('/api/usage?from=2026-02-01&to=2026-02-07');
+    expect(res.status).toBe(200);
+    expect(res.body.report).toEqual(all);
+    expect(res.body.coverage.missingInstances).toEqual(['Offline']);
+    expect(res.body.imageRenders.savedOutputs).toBe(3);
+    expect(getSubscriptionSavings).toHaveBeenCalledWith(expect.objectContaining({ report: covered, from: '2026-02-01', to: '2026-02-07' }));
   });
 
   it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
@@ -113,7 +132,7 @@ describe('usage routes', () => {
       byProvider: { example: { tokens: 3000 } }
     });
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
-    getFleetUsage.mockResolvedValueOnce({ instances: [{ id: 'peer-a' }, { id: 'peer-b' }], totals: {} });
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ instances: [{ id: 'peer-a' }, { id: 'peer-b' }], totals: {} }));
     const collaborators = [usage.getUsageSummary, getAllProviders, getSubscriptionSavings,
       getApiBilledInstanceIds, getFleetUsage];
     const app = buildApp();
@@ -154,8 +173,8 @@ describe('usage routes', () => {
     usage.getUsageSummary.mockReturnValue({ totalSessions: 4, providers: ['anthropic'] });
     const res = await request(buildApp()).get('/api/usage');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      totalSessions: 4,
+    expect(res.body).toMatchObject({
+      totalSessions: 0,
       providers: ['anthropic'],
       subscriptionSavings: { configured: false, families: [] },
       fleet: { instances: [], totals: null },
@@ -166,25 +185,25 @@ describe('usage routes', () => {
     });
     const arg = usage.getUsageSummary.mock.calls[0][0];
     expect(arg.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(arg.to).toBeNull();
+    expect(arg.to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(arg.providers).toEqual([]);
     // The fleet breakdown must be priced over the SAME window as the summary,
     // or a peer row would silently report a different period than its heading.
-    expect(getFleetUsage).toHaveBeenCalledWith({ from: arg.from, to: null, providers: [], apiBilledInstanceIds: [] });
+    expect(getFleetUsage).toHaveBeenCalledWith({ from: arg.from, to: arg.to, providers: [], apiBilledInstanceIds: [] });
   });
 
-  it('GET /api/usage returns fleet monthly history independently of the selected report window', async () => {
+  it('GET /api/usage returns fleet monthly history for the selected report window', async () => {
     const monthly = {
       instanceCount: 2,
       series: [{ key: 'codex', label: 'Codex' }],
       history: [{ month: '2026-09', estimatedCost: 12, values: [12], tokens: 1000, partial: false }],
     };
-    getFleetMonthlyUsage.mockResolvedValueOnce(monthly);
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ monthly }));
     usage.getUsageSummary.mockReturnValue({ totalSessions: 4 });
     const res = await request(buildApp()).get('/api/usage?from=2026-10-01&to=2026-10-02');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ monthlyHistory: monthly.history, monthlySeries: monthly.series, monthlyInstanceCount: 2 });
-    expect(getFleetMonthlyUsage).toHaveBeenCalledWith({ providers: [] });
+    expect(getFleetUsage).toHaveBeenCalledWith(expect.objectContaining({ from: '2026-10-01', to: '2026-10-02' }));
   });
 
   it('GET /api/usage passes an explicit from/to range through', async () => {
@@ -234,7 +253,7 @@ describe('usage routes', () => {
     const res = await request(buildApp()).get('/api/usage?from=2026-02-01&to=2026-02-07');
     expect(res.status).toBe(200);
     expect(getSubscriptionSavings).toHaveBeenCalledWith({
-      report: { totals: { estimatedCost: 12 } },
+      report: { providers: [], totals: { estimatedCost: 12 } },
       providers: [{ id: 'claude-code' }],
       from: '2026-02-01',
       to: '2026-02-07',
@@ -242,15 +261,14 @@ describe('usage routes', () => {
     });
   });
 
-  // Only an unbounded window needs a start day inferred from history; paying
-  // for the scan on every 7d/30d request would throw the result away.
-  it('GET /api/usage only reads the first activity day for an unbounded range', async () => {
+  it('uses the earliest subscription-covered activity to price all-time plans', async () => {
     usage.getUsageSummary.mockReturnValue({});
     await request(buildApp()).get('/api/usage?period=7d');
-    expect(usage.getFirstActivityDay).not.toHaveBeenCalled();
+    expect(getSubscriptionSavings).toHaveBeenLastCalledWith(expect.objectContaining({ firstActivityDay: null }));
 
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ subscriptionFirstActivityDay: '2026-03-01' }));
     await request(buildApp()).get('/api/usage?period=all');
-    expect(usage.getFirstActivityDay).toHaveBeenCalled();
+    expect(getSubscriptionSavings).toHaveBeenLastCalledWith(expect.objectContaining({ firstActivityDay: '2026-03-01' }));
   });
 
   it('PUT /api/usage/subscriptions saves a price patch, including a null clear', async () => {

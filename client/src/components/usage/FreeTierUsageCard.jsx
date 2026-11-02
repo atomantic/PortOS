@@ -56,6 +56,7 @@ function BlockRow({ block }) {
         <span className="min-w-0 truncate text-white">
           {block.providerId}
           {block.model && <span className="font-mono text-gray-400"> · {block.model}</span>}
+          {block.originName && <span className="text-gray-500"> · {block.originName}</span>}
         </span>
         <span className="shrink-0 text-gray-500">{timeAgo(block.at ? new Date(block.at) : null, 'unknown time')}</span>
       </div>
@@ -115,6 +116,30 @@ function ProviderRow({ provider }) {
   );
 }
 
+// The report separates billing classifications; the free-tier overview should
+// show one count per provider/model even when those free classifications vary.
+function combineFreeProviders(providers) {
+  const groups = new Map();
+  const fields = ['sessions', 'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+  const merge = (target, row) => {
+    for (const field of fields) target[field] = (target[field] || 0) + (row[field] || 0);
+    if (target.source !== row.source) target.source = 'mixed';
+  };
+  for (const provider of providers) {
+    let group = groups.get(provider.id);
+    if (!group) {
+      group = { ...provider, models: [], modelMap: new Map() };
+      groups.set(provider.id, group);
+    } else merge(group, provider);
+    for (const model of provider.models || []) {
+      const previous = group.modelMap.get(model.model);
+      if (previous) merge(previous, model);
+      else group.modelMap.set(model.model, { ...model });
+    }
+  }
+  return [...groups.values()].map(({ modelMap, ...group }) => ({ ...group, models: [...modelMap.values()] }));
+}
+
 // Free-tier counterpart of the subscription-quota cards above it: queries and
 // tokens per free-tier provider/model over the selected period, plus the
 // observed limit blocks that stand in for a quota meter where the provider
@@ -122,7 +147,7 @@ function ProviderRow({ provider }) {
 // is made to build it (AI Provider Usage Policy), and every figure carries
 // its measured/estimated provenance.
 export default function FreeTierUsageCard({ freeTier }) {
-  const providers = freeTier?.providers || [];
+  const providers = combineFreeProviders(freeTier?.providers || []);
   const blocks = freeTier?.blocks || [];
   return (
     <div className="rounded-xl border border-port-border bg-port-card p-3 sm:p-4">
@@ -133,8 +158,8 @@ export default function FreeTierUsageCard({ freeTier }) {
         </Pill>
       </div>
       <p className="mb-2 text-[10px] text-gray-500 sm:text-xs">
-        Queries and tokens on free-tier quotas (e.g. opencode zen) over the selected period — tracked locally because
-        these providers expose no usage API. Unreported counts render as —, never 0.
+        Queries and tokens on free-tier quotas (e.g. opencode zen) over the selected period, from the available instance ledgers.
+        These providers expose no usage API. Unreported counts render as —, never 0.
       </p>
       {providers.length === 0 ? (
         <div className="py-2 text-sm text-gray-500">No free-tier usage recorded in this period.</div>
@@ -144,6 +169,9 @@ export default function FreeTierUsageCard({ freeTier }) {
             <ProviderRow key={provider.id} provider={provider} />
           ))}
         </div>
+      )}
+      {freeTier?.blocksIncomplete && (
+        <p className="mt-2 text-xs text-port-warning">Some instances have not reported their observed block history.</p>
       )}
       {blocks.length > 0 && (
         <div className="mt-3 border-t border-port-border pt-2">
@@ -156,8 +184,8 @@ export default function FreeTierUsageCard({ freeTier }) {
             ))}
           </div>
           <p className="mt-1 text-[10px] text-gray-500">
-            A block is a usage-limit refusal PortOS actually saw. Transient retries are not blocks. Volume since a
-            block is ledger-derived and understates providers whose runs carry no token counts.
+            Showing up to 20 recent blocks in the selected period. Each instance keeps at most 200; independently recorded blocks may overlap.
+            Volume is from the block&rsquo;s UTC day through the end of the selected period on that instance, and may be incomplete for older rollups.
           </p>
         </div>
       )}

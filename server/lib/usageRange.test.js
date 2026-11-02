@@ -5,15 +5,15 @@ describe('resolveUsageRange', () => {
   it('counts period days back from today inclusive', () => {
     const { from, to } = resolveUsageRange({ period: '30d' });
     const expected = new Date();
-    expected.setDate(expected.getDate() - 29);
+    expected.setUTCDate(expected.getUTCDate() - 29);
     expect(from).toBe(expected.toISOString().split('T')[0]);
-    expect(to).toBeNull();
+    expect(to).toBe(new Date().toISOString().split('T')[0]);
   });
 
   it('defaults to 7d when nothing is given', () => {
     const { from } = resolveUsageRange();
     const expected = new Date();
-    expected.setDate(expected.getDate() - 6);
+    expected.setUTCDate(expected.getUTCDate() - 6);
     expect(from).toBe(expected.toISOString().split('T')[0]);
   });
 

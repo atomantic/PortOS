@@ -40,10 +40,12 @@ const responses = {
   '/usage/backfill': { status: 'idle' },
   '/usage/rolling-cost': { windowDays: 30, instanceCount: 1, series: [], points: [] },
   '/usage/claude-code/models': { filesScanned: 0, models: [], totals: {} },
-  '/usage/providers': { providers: ['claude', 'agy', 'codex', 'grok'].map(family => ({
+  '/usage/providers': { providers: [...['claude', 'agy', 'codex', 'grok'].map(family => ({
     family, label: `Example ${family}`, supported: true,
     limits: [{ key: 'week', label: 'Weekly usage', percentUsed: 40, percentRemaining: 60 }],
-  })) },
+  })), { family: 'codex', label: 'Example peer', supported: true,
+    origin: { self: false, instanceId: 'synthetic-peer', name: 'syntheticpeername'.repeat(6) },
+    limits: [{ key: 'week', label: 'Weekly usage', percentUsed: 60, percentRemaining: 40 }] }] },
 };
 
 // Real route components and Tailwind, synthetic API only. Layout's classification

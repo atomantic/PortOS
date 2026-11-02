@@ -1711,6 +1711,7 @@ export const providerUsageQuerySchema = z.object({
   refresh: z.enum(['0', '1', 'true', 'false']).optional(),
   family: z.string().regex(/^[a-z0-9-]{1,32}$/, 'family must be a provider family id').optional(),
   period: z.enum(['24h', '7d', '30d', 'week', 'month', 'reset']).optional(),
+  scope: z.enum(['instances']).optional(),
 });
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
