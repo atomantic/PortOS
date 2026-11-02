@@ -8,6 +8,8 @@ describe('Music Video lighting on people', () => {
     expect(isAmateurLook('Glossy anamorphic cinema, teal and orange')).toBe(false);
     expect(isAmateurLook('Clean cinematic lighting; avoid VHS and amateur aesthetics')).toBe(false);
     expect(isAmateurLook('Faded Kodak Gold; harsh pop-up flash; no HDR, no gloss')).toBe(true);
+    expect(isAmateurLook('VHS-C home video with no studio lights')).toBe(true);
+    expect(isAmateurLook('Clean digital cinema; avoid VHS, camcorder grain, or Polaroid effects')).toBe(false);
   });
 
   it('allows bad light for an amateur look, and keeps people in the scene light when asked', () => {
