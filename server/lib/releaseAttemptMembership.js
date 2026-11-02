@@ -22,13 +22,11 @@ export function parseReleaseAttempts(value) {
  * left accounting on the task, so a newly created record can be complete. */
 export function appendReleaseAttempt(current, attempt, { pristine }) {
   const entry = { agentId: attempt.agentId, startedAt: attempt.startedAt, instanceId: attempt.instanceId };
-  const parsed = parseReleaseAttempts(current);
-  const base = parsed || { version: 1, complete: current === undefined && pristine === true, attempts: [] };
-  // Malformed history cannot be repaired from here; keep the hold explicit.
-  const complete = base.complete && validAttempt(entry) && base.attempts.length < MAX_ATTEMPTS;
-  const attempts = validAttempt(entry) && !base.attempts.some(row => isDeepStrictEqual(row, entry)) && base.attempts.length < MAX_ATTEMPTS
-    ? [...base.attempts, entry] : base.attempts;
-  return { version: 1, complete, attempts };
+  const base = parseReleaseAttempts(current) || { version: 1, complete: current === undefined && pristine === true, attempts: [] };
+  const recorded = base.attempts.some(row => isDeepStrictEqual(row, entry));
+  // An unrecordable entry or malformed history cannot be repaired here; keep the hold explicit.
+  const fits = validAttempt(entry) && (recorded || base.attempts.length < MAX_ATTEMPTS);
+  return { version: 1, complete: base.complete && fits, attempts: fits && !recorded ? [...base.attempts, entry] : base.attempts };
 }
 
 /** Peer/local union. Neither side can drop the other's entries or certify them
