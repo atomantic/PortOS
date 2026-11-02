@@ -22,12 +22,9 @@ let guardModule = null;
 const loadGuard = () => (guardModule ??= import('./testDataIsolation.js'));
 
 export const execFileAsync = promisify(execFile);
-const IS_WIN = process.platform === 'win32';
 
-// Call-time platform probe. `IS_WIN` above is a module-load snapshot (fine for
-// the path-shape helper at the bottom of this file); the Windows retry paths
-// below read the platform on every call so a POSIX host never carries a stale
-// decision and so the retry behavior is exercisable in tests.
+// Read the platform on each call so a POSIX host never carries a stale Windows
+// decision and Windows-specific behavior remains exercisable in tests.
 const isWindows = () => process.platform === 'win32';
 
 // Windows-only retry knobs (#4095). A destination lock from a concurrent reader
@@ -598,7 +595,7 @@ export async function dirSize(path, { strict = false } = {}) {
   } else if (!existsSync(path)) {
     return 0;
   }
-  if (IS_WIN) {
+  if (isWindows()) {
     // Pass the path via an env var so a literal apostrophe in the path can't
     // close the PowerShell string and inject commands.
     const result = await execFileAsync('powershell', [
@@ -610,7 +607,8 @@ export async function dirSize(path, { strict = false } = {}) {
       console.log(`⚠️ dirSize(${path}) failed: ${result.error.message}`);
       return 0;
     }
-    const bytes = parseInt(result.stdout.trim(), 10);
+    const trimmed = result.stdout.trim();
+    const bytes = trimmed === '' ? 0 : parseInt(trimmed, 10);
     if (!Number.isFinite(bytes) || bytes < 0) {
       if (strict) throw new Error(`Could not parse directory size for ${path}`);
       return 0;
