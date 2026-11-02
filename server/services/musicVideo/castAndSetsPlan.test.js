@@ -67,3 +67,20 @@ describe('Cast & Sets face sheets', () => {
     expect(refs.map((ref) => ref.id)).not.toContain('mvr-cs-face-kevin');
   });
 });
+
+describe('Cast & Sets set plates', () => {
+  it('keeps a set description that uses "their" for objects, and asks for separate, upright furniture', () => {
+    const sets = [{ id: 'food-court', name: 'Food court', lighting: 'hard flash',
+      description: 'The dead mall food court: molded chairs around round tables, shuttered counters with their menu boards blank; a photo booth against a pillar' }];
+    const prompt = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets })['set:food-court'].prompt;
+    expect(prompt).toContain('shuttered counters with their menu boards blank');
+    expect(prompt).toMatch(/furniture stands upright on its own legs, nothing stacked, interlocked or piled/);
+  });
+
+  it('still drops a sentence that pictures people in an empty plate', () => {
+    const sets = [{ id: 'lot', name: 'Lot', lighting: 'dusk', description: 'An empty dirt lot. The couple ride across it.' }];
+    const prompt = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets })['set:lot'].prompt;
+    expect(prompt).toContain('An empty dirt lot.');
+    expect(prompt).not.toContain('couple');
+  });
+});

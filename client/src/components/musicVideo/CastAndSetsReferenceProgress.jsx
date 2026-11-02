@@ -120,7 +120,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
       {image.status === 'done' && (
         <div className="rounded border border-port-border p-2 text-xs space-y-1" role="status">
           <p className={inspection?.verdict === 'pass' ? 'text-port-success' : 'text-port-warning'}>
-            {inspection?.verdict === 'pass' ? 'Vision: matches saved prompt' : inspection?.verdict === 'mismatch' ? 'Vision: prompt mismatch' : inspection?.verdict === 'pending' ? 'Vision: inspecting image…' : 'Vision: unreviewed'}
+            {inspection?.verdict === 'pass' ? 'Vision: matches saved prompt' : inspection?.verdict === 'mismatch' ? (inspection.checks?.some((c) => c.id === 'render-quality' && c.status === 'fail') ? 'Vision: rendering defect' : 'Vision: prompt mismatch') : inspection?.verdict === 'pending' ? 'Vision: inspecting image…' : 'Vision: unreviewed'}
           </p>
           {inspection?.discrepancy && <p className="break-words">{inspection.discrepancy}</p>}
           {accepted && inspection?.verdict !== 'pass' && <p>Explicitly acknowledged for this image.</p>}
