@@ -1,3 +1,5 @@
+import { localBackendForProvider } from '../lib/modelPinMembership.js'
+import { isLocalInstanceHost } from '../lib/localEndpoint.js'
 import { localModelSafety } from '../lib/localModelSafety.js';
 /**
  * Local LLM orchestration — unifies the Ollama and LM Studio backends behind
@@ -848,6 +850,43 @@ export async function getStatus() {
   }
 }
 
+// Compare the actual configured transports before using a manager's inventory.
+// Provider ids/names alone do not identify a daemon (they can target a peer).
+function modelEndpointIdentity(endpoint) {
+  if (!URL.canParse(endpoint)) return null
+  const url = new URL(endpoint)
+  const host = isLocalInstanceHost(url.hostname) ? 'loopback' : url.hostname
+  return `${url.protocol}//${host}:${url.port}${url.pathname.replace(/\/+$/, '').replace(/\/v1$/, '')}${url.search}`
+}
+
+function providerUsesBackend(provider, backend) {
+  const baseUrl = backend === 'ollama' ? ollamaManager.getBaseUrl() : lmStudioManager.getBaseUrl()
+  const identity = modelEndpointIdentity(provider?.endpoint)
+  return provider?.type === 'api' && identity !== null && identity === modelEndpointIdentity(baseUrl)
+}
+
+/** True/false only for reported metadata on the selected daemon; null is unknown. */
+export async function getModelVisionSupport(providerId, model) {
+  const provider = await getProviderById(providerId).catch(() => null)
+  const backend = localBackendForProvider(provider)
+  if (!backend || !providerUsesBackend(provider, backend)) return null
+  if (backend === 'ollama') {
+    const capabilities = await ollamaManager.getModelCapabilities(model).catch(() => null)
+    return Array.isArray(capabilities) && capabilities.length > 0
+      ? isVisionModel({ id: model, capabilities }) : null
+  }
+  const models = await lmStudioManager.getAvailableModels().catch(() => [])
+  const card = models.find((entry) => entry.id === model)
+  return card?.type || (Array.isArray(card?.capabilities) && card.capabilities.length > 0)
+    ? isVisionModel(card) : null
+}
+
+async function listVisionBackendModels(backend) {
+  const provider = await getProviderById(PROVIDER_ID[backend]).catch(() => null)
+  if (!providerUsesBackend(provider, backend)) return []
+  return listModels(backend).catch(() => [])
+}
+
 /**
  * Vision-capable installed models across both local backends, tagged with the
  * aiToolkit provider id (`ollama` / `lmstudio`) that serves them, PLUS
@@ -861,16 +900,11 @@ export async function listVisionModels() {
   // install/delete, so they stay accurate) — the picker doesn't need a forced
   // round-trip on every dataset-page load.
   const [ollama, lmstudio] = await Promise.all([
-    listModels('ollama').catch(() => []),
-    listModels('lmstudio').catch(() => [])
+    listVisionBackendModels('ollama'),
+    listVisionBackendModels('lmstudio')
   ])
-  // Ollama's /api/tags carries no vision flag, so the normalized `vision` above
-  // is id-regex only — it misses vision-capable models whose id has no
-  // `vl`/`vision` token (e.g. the `qwen3.6:35b` MoE). For each not already
-  // matched, consult /api/show capabilities (cached per model) so they surface
-  // in the picker. Models the id heuristic already caught skip the round-trip.
+  // Probe every model: a family name cannot override reported text-only metadata.
   const ollamaVision = await Promise.all(ollama.map(async (m) => {
-    if (m.vision) return m
     const capabilities = await ollamaManager.getModelCapabilities(m.id).catch(() => null)
     return { ...m, vision: isVisionModel({ id: m.id, capabilities }) }
   }))

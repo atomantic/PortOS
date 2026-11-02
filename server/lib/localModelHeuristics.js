@@ -156,7 +156,7 @@ export function isVisionModel(model) {
   if (type === 'vlm') return true;
   if (Array.isArray(model.capabilities)
     && model.capabilities.some((c) => String(c).toLowerCase() === 'vision')) return true;
-  if (type) return false; // explicit non-vision type — don't regex-guess past it
+  if (type || (Array.isArray(model.capabilities) && model.capabilities.length > 0)) return false;
   const id = model.id || model.name || '';
   return typeof id === 'string' && VISION_RE.test(id);
 }

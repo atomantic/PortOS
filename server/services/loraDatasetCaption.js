@@ -29,7 +29,7 @@ import { createSseRunner } from '../lib/sseUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { describeImageDataUrlDetailed } from './visionTest.js';
 import { getSettings } from './settings.js';
-import { listVisionModels } from './localLlm.js';
+import { listVisionModels, getModelVisionSupport } from './localLlm.js';
 import { isVisionModel } from '../lib/localModelHeuristics.js';
 import { getDataset, updateDataset, datasetImagePath } from './loraDatasets.js';
 import { loadDatasetSubject, extractSubjectSignaturePhrases } from './loraDatasetSubject.js';
@@ -190,31 +190,29 @@ function raceCancel(promise, signal) {
  * model is installed, throws a 409 with an actionable message — the run never
  * starts, so the user doesn't get N cryptic per-image 400s.
  *
- * Known gap (intentional): the heuristic-first short-circuit accepts a
- * regex-recognized explicit model WITHOUT confirming it's still installed —
- * skipping the two-backend scan is the whole point of the fast path. So a saved
- * `captionModel` that was later uninstalled slips past the up-front 409 and
- * fails per-image at the API instead (surfaced by the run's terminal error).
- * Validating every run against the live model list would defeat the fast path;
- * the picker's own list is the primary defense against a stale selection.
- *
- * `listVision` is injectable for tests; defaults to the localLlm scan.
+ * Authoritative metadata is checked on the selected endpoint before allowing
+ * name-based compatibility. Missing metadata retains the existing heuristic.
+ * `listVision` and `visionSupport` are injectable for deterministic tests.
  */
 export async function resolveCaptionModel({
-  providerId = null, model = null, settings = null, listVision = listVisionModels,
+  providerId = null, model = null, settings = null, listVision = listVisionModels, visionSupport = getModelVisionSupport,
 } = {}) {
   const explicitProvider = providerId || settings?.loraTraining?.captionProviderId || null;
   const explicitModel = model || settings?.loraTraining?.captionModel || null;
 
   if (explicitModel) {
-    // Heuristic-first: the common path (re-caption / caption-all with a picked
-    // model) passes a model the id regex already recognizes, so skip the
-    // two-backend vision scan entirely. Only scan when the id is opaque — then
-    // trust backend metadata (LM Studio `type:'vlm'`) before rejecting.
-    if (!isVisionModel(explicitModel)) {
+    const selectedProvider = explicitProvider || 'lmstudio';
+    const support = await visionSupport(selectedProvider, explicitModel).catch(() => null);
+    if (support === false) {
+      throw new ServerError(
+        `Caption model "${explicitModel}" is not vision-capable — pick a vision model.`,
+        { status: 409, code: 'LORA_CAPTION_NOT_VISION' },
+      );
+    }
+    if (support !== true && !isVisionModel(explicitModel)) {
       const visionModels = await listVision().catch(() => []);
       const known = visionModels.some((m) => m.id === explicitModel
-        && (!explicitProvider || m.providerId === explicitProvider));
+        && m.providerId === selectedProvider);
       if (!known) {
         throw new ServerError(
           `Caption model "${explicitModel}" is not vision-capable — pick a vision model (e.g. a Qwen-VL, LLaVA, or Llama 3.2 Vision build).`,
@@ -222,7 +220,7 @@ export async function resolveCaptionModel({
         );
       }
     }
-    return { providerId: explicitProvider || 'lmstudio', model: explicitModel };
+    return { providerId: selectedProvider, model: explicitModel };
   }
 
   // No explicit model — scan and auto-pick a vision model (preferring the
