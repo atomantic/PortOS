@@ -59,6 +59,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it('shows maintenance and quota-burn origins without confusing the two', () => {
+  const withMetadata = (metadata) => ({ ...agent, metadata: { ...agent.metadata, ...metadata } });
+  const view = render(<MemoryRouter><AgentCard agent={withMetadata({
+    taskQuotaBurnMaintenanceRunId: 'maint-example', taskQuotaBurnFamily: 'agy', taskOnDemandOrigin: 'quota-burn',
+  })} completed /></MemoryRouter>);
+
+  expect(screen.getByText('Maintenance run')).toHaveAttribute('title', 'Maintenance run maint-example');
+  expect(screen.queryByText('Quota burn')).not.toBeInTheDocument();
+
+  view.rerender(<MemoryRouter><AgentCard agent={withMetadata({ taskQuotaBurnFamily: 'grok' })} completed /></MemoryRouter>);
+  expect(screen.getByText('Quota burn')).toHaveAttribute('title', 'Quota burn: grok');
+  expect(screen.queryByText('Maintenance run')).not.toBeInTheDocument();
+
+  view.rerender(<MemoryRouter><AgentCard agent={agent} completed /></MemoryRouter>);
+  expect(screen.queryByText('Maintenance run')).not.toBeInTheDocument();
+  expect(screen.queryByText('Quota burn')).not.toBeInTheDocument();
+});
+
 describe('AgentCard runtime presentation', () => {
   const now = new Date('2026-07-13T10:00:00.000Z');
   const runningAt = (elapsedMs, metadata = {}) => ({
