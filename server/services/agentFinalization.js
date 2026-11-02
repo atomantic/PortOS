@@ -74,6 +74,7 @@ import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from
 import { issueNumberFromRef } from './issueReconcile.js';
 
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isUpdateRepoRepairTask, verifyUpdateRepoRepairCompletion } from './updateRepoRepairCompletion.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
@@ -138,12 +139,8 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  */
 export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
   if (terminatedByUser) return null;
-  if (task?.metadata?.repoRepairContract) {
-    if (!success || !agentId) return false;
-    return import('./repoRepairCompletion.js')
-      .then(({ verifyRepoRepairCompletion }) => verifyRepoRepairCompletion(task, agentId, workspacePath))
-      .catch(() => false);
-  }
+  if (isUpdateRepoRepairTask(task)) return success
+    && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
   if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';

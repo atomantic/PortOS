@@ -1879,7 +1879,8 @@ export async function findActiveAgentInWorkspace(dir, { includePaused = false, f
   });
   const target = resolve(dir);
   const busy = agents.find(agent =>
-    agent.id !== excludeAgentId && (agent.status === 'running' || (includePaused && agent.status === 'paused'))
+    agent.id !== excludeAgentId
+    && (agent.status === 'running' || (includePaused && agent.status === 'paused'))
     && agent.metadata?.workspacePath
     && resolve(agent.metadata.workspacePath) === target
   );

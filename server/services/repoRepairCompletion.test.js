@@ -26,7 +26,7 @@ vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () 
 
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
-import { captureRepoRepairContract } from './repoRepairCompletion.js';
+import { captureRepoRepairContract } from './updateRepoRepairCompletion.js';
 import { checkUpdateRepoReadiness, queueRepoRepairTask } from './updateRepoReadiness.js';
 import { evaluateSuccessCriteria, finalizeAgent } from './agentFinalization.js';
 import { resolveTaskOutcome } from '../lib/agentOutcome.js';
