@@ -1071,4 +1071,26 @@ describe('voice host startup cancellation', () => {
     expect(newState().hostAttached).toBe(true);
   });
 
+
+  it.each([
+    ['voice:call:attach', 'disabled', getCallState],
+    ['voice:call:attach', 'rejected', getCallState],
+    ['voice:capture:start', 'disabled', getCaptureState],
+    ['voice:capture:start', 'rejected', getCaptureState],
+  ])('drops a superseded %s configuration result when %s', async (event, outcome, getState) => {
+    let finishConfig;
+    let failConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise((resolve, reject) => { finishConfig = resolve; failConfig = reject; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const oldStartup = host.fire(event);
+    await host.fire(event);
+    if (outcome === 'disabled') finishConfig({ enabled: false });
+    else failConfig(new Error('old config read failed'));
+    await oldStartup;
+
+    expect(host.emitted.filter(frame => frame.event === 'voice:error')).toEqual([]);
+    expect(getState().hostAttached).toBe(true);
+  });
+
 });

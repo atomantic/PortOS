@@ -450,6 +450,23 @@ export const registerVoiceHandlers = (socket) => {
   // Call and capture share one host; a stop, switch or disconnect supersedes
   // startup even while the enabled check is still reading configuration.
   let hostRequestGeneration = 0;
+  const startHostWhenEnabled = async (stage, attach) => {
+    const generation = ++hostRequestGeneration;
+    const isCurrent = () => generation === hostRequestGeneration && socket.connected !== false;
+    try {
+      const config = await getVoiceConfig();
+      if (!isCurrent()) return;
+      if (!config.enabled) {
+        socket.emit('voice:error', { stage, message: 'voice mode disabled' });
+        return;
+      }
+      attach();
+    } catch (err) {
+      if (!isCurrent()) return;
+      console.error(`❌ voice ${stage} startup failed: ${err.message}`);
+      socket.emit('voice:error', { stage, message: err.message });
+    }
+  };
 
   // Speak the line the caller was rung to hear, once, as soon as the far end
   // picks up. Without this a mind-placed call connects to silence and the user
@@ -545,34 +562,26 @@ export const registerVoiceHandlers = (socket) => {
     }
   };
 
-  socket.on('voice:call:attach', async () => {
-    try {
-      const generation = ++hostRequestGeneration;
-      if (!(await ensureEnabled('call'))) return;
-      if (generation !== hostRequestGeneration || socket.connected === false) return;
-      // Mutually exclusive with meeting capture: both want the same BlackHole
-      // input device and the same host tab, and a call also wants BlackHole
-      // 2ch to talk back through — running both at once would fight over the
-      // device rather than fail closed with a clear reason.
-      if (isCaptureActive() || getCaptureHost() === socket) {
-        socket.emit('voice:call:state', { error: 'capture-active', hostAttached: false, active: false, state: 'idle' });
-        return;
-      }
-      const claim = attachHost(socket);
-      if (!claim.ok) {
-        // Refused, not displaced: two tabs reading the same device would each
-        // answer, and the loser could not tell it had been muted.
-        socket.emit('voice:call:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
-        return;
-      }
-      call.endpointer = createCallEndpointer();
-      setCallStateListener(emitCallState);
-      emitCallState(claim.state);
-    } catch (err) {
-      console.error(`❌ voice:call:attach failed: ${err.message}`);
-      socket.emit('voice:error', { stage: 'call', message: err.message });
+  socket.on('voice:call:attach', () => startHostWhenEnabled('call', () => {
+    // Mutually exclusive with meeting capture: both want the same BlackHole
+    // input device and the same host tab, and a call also wants BlackHole
+    // 2ch to talk back through — running both at once would fight over the
+    // device rather than fail closed with a clear reason.
+    if (isCaptureActive() || getCaptureHost() === socket) {
+      socket.emit('voice:call:state', { error: 'capture-active', hostAttached: false, active: false, state: 'idle' });
+      return;
     }
-  });
+    const claim = attachHost(socket);
+    if (!claim.ok) {
+      // Refused, not displaced: two tabs reading the same device would each
+      // answer, and the loser could not tell it had been muted.
+      socket.emit('voice:call:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+      return;
+    }
+    call.endpointer = createCallEndpointer();
+    setCallStateListener(emitCallState);
+    emitCallState(claim.state);
+  }));
 
   socket.on('voice:call:audio', async (payload = {}) => {
     try {
@@ -687,34 +696,26 @@ export const registerVoiceHandlers = (socket) => {
     return capture.queue;
   };
 
-  socket.on('voice:capture:start', async () => {
-    try {
-      const generation = ++hostRequestGeneration;
-      if (!(await ensureEnabled('capture'))) return;
-      if (generation !== hostRequestGeneration || socket.connected === false) return;
-      if (isCallActive() || getCallHost() === socket) {
-        socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
-        return;
-      }
-      const claim = attachCaptureHost(socket);
-      if (!claim.ok) {
-        socket.emit('voice:capture:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
-        return;
-      }
-      const started = startCapture(socket);
-      if (!started.ok) {
-        socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
-        return;
-      }
-      capture.endpointer = createCallEndpointer();
-      capture.queue = Promise.resolve();
-      setCaptureStateListener(emitCaptureState);
-      emitCaptureState(started.state);
-    } catch (err) {
-      console.error(`❌ voice:capture:start failed: ${err.message}`);
-      socket.emit('voice:error', { stage: 'capture', message: err.message });
+  socket.on('voice:capture:start', () => startHostWhenEnabled('capture', () => {
+    if (isCallActive() || getCallHost() === socket) {
+      socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
+      return;
     }
-  });
+    const claim = attachCaptureHost(socket);
+    if (!claim.ok) {
+      socket.emit('voice:capture:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
+      return;
+    }
+    const started = startCapture(socket);
+    if (!started.ok) {
+      socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
+      return;
+    }
+    capture.endpointer = createCallEndpointer();
+    capture.queue = Promise.resolve();
+    setCaptureStateListener(emitCaptureState);
+    emitCaptureState(started.state);
+  }));
 
   socket.on('voice:capture:stop', async () => {
     try {
