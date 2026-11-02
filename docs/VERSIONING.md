@@ -209,8 +209,47 @@ process-settled. A missing or incomplete record holds with
 `candidate-attempt-membership-unverified`. This includes a task that already had
 dispatches before membership was recorded. An unfinished member holds with
 `candidate-attempt-unsettled`, and another instance's member with
-`candidate-peer-attempt-unsettled`. Reconciling a legacy candidate that lacks
-this evidence is tracked in #14773.
+`candidate-peer-attempt-unsettled`. A legacy candidate that lacks this evidence
+is reconciled with the operator action below.
+
+**Reconciling a legacy held candidate:** a release interrupted before this
+evidence existed can stay held forever. After deciding to abandon it, an
+operator (or a PortOS-spawned agent holding `PORTOS_API_TOKEN`; a peer credential
+or a remote caller on a password-free install is refused by the host-control
+gate) retires the hold on the **held successor's** agent ID:
+
+```bash
+node scripts/portos-api.js POST "/api/cos/agents/$HELD_AGENT_ID/release-candidate" \
+  '{"action":"retire","reason":"Abandon the pre-hardening candidate; cut a fresh release"}'
+```
+
+Only the insufficient-evidence reasons are eligible
+(`INSUFFICIENT_EVIDENCE_HOLD_REASONS` in `server/lib/releasePublication.js`:
+missing contemporaneous lineage, terminal receipt, successor/task lineage or
+attempt membership, and an unrecognized private review receipt). Process and
+settlement holds, unsettled attempts, publication conflicts and transient
+forge/Git failures are never retired this way. It answers `{ "retired": false,
+"reason": ... }` and changes nothing when any of these holds:
+
+- a release or release synchronization agent of the **same repository** is live
+  (including the held successor itself; other repositories are unaffected);
+- the forge shows an open or merged promotion PR for the candidate branch;
+- the `release` branch no longer points at the candidate's recorded `Release-Base`;
+- the abandoned candidate's identity cannot be read from Git, or the task is not
+  `blocked`/`pending`.
+
+On success the server records a reconciliation receipt (server-derived operator,
+your reason, the prior hold reason, and the immutable cutoff, pin, head, tree,
+release base, branch and checkout path) on the held successor's
+`releaseCandidateRecovery.reconciliation` and on the task's
+`releaseCandidateReconciliation`, then closes the task with
+`resolution: "candidate-reconciled"` so a new release run can reserve a fresh
+cutoff. It never edits candidate files, review receipts, tags, attempt membership
+or the predecessor's history, and never marks a release published. The abandoned
+checkout stays for normal verified cleanup. Repeating the same request after a
+partial failure completes the task update; a different reason is refused. The
+hold must still be in the live agent registry: retry the held task first if its
+successor has aged out.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub
