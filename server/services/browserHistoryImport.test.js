@@ -118,8 +118,12 @@ describe('historyVisitToCandidate', () => {
     expect(c.title).toBe('only.example');
   });
   it('produces a stable dedupe key for the same instant + URL', () => {
-    const rec = { url: 'https://a.com/', time_usec: 1614624300000000, page_transition: 'LINK' };
-    expect(historyVisitToCandidate(rec).dedupeKey).toBe(historyVisitToCandidate(rec).dedupeKey);
+    const rec1 = { url: 'https://a.com/', time_usec: 1614624300000000, page_transition: 'LINK' };
+    const rec2 = { url: 'https://a.com/', time_usec: 1614624300000000, page_transition: 'TYPED' };
+    const first = historyVisitToCandidate(rec1);
+    const second = historyVisitToCandidate(rec2);
+    expect(first.dedupeKey).toMatch(/^browser:[a-f0-9]{24}$/);
+    expect(first.dedupeKey).toBe(second.dedupeKey);
   });
 });
 

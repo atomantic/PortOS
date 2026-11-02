@@ -118,7 +118,9 @@ describe('synthesizeWaveSketch', () => {
       { shape: 'noise', notes: [{ t: 0, d: 0.5 }, { t: 0.5, d: 0.5, hz: 3000 }] },
       { shape: 'sine', notes: [{ t: 0, d: 2, pitch: 'C3', env: [0, 1, 0] }] },
     ]));
-    expect(synthesizeWaveSketch(sketch)).toEqual(synthesizeWaveSketch(sketch));
+    const first = synthesizeWaveSketch(sketch);
+    expect(first.length).toBeGreaterThan(0);
+    expect(synthesizeWaveSketch(sketch)).toEqual(first);
   });
 
   it('never clips a dense drawing and applies the drawn contour', () => {

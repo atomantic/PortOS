@@ -134,7 +134,9 @@ describe('goalFidelityFingerprint', () => {
   // unfinished work; keying on it would file a second issue for one finding.
   it('does not vary with the verdict', () => {
     const task = { taskType: 'user', description: 'Add retry caps', metadata: { app: 'comics' } };
-    expect(goalFidelityFingerprint(task)).toBe(goalFidelityFingerprint(task));
+    const base = goalFidelityFingerprint(task);
+    expect(goalFidelityFingerprint({ ...task, verdict: 'rethink' })).toBe(base);
+    expect(goalFidelityFingerprint({ ...task, verdict: 'fix-first' })).toBe(base);
   });
 
   it('keeps the three-segment shape even with nothing to key on', () => {

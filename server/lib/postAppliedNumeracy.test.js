@@ -9,7 +9,9 @@ import {
 describe('Applied Numeracy', () => {
   it('generates reproducible packs from a seed', () => {
     const config = { seed: 4443, count: 5, difficulty: 2 };
-    expect(generateAppliedNumeracyDrill(config)).toEqual(generateAppliedNumeracyDrill(config));
+    const first = generateAppliedNumeracyDrill(config);
+    expect(first.questions).toHaveLength(5);
+    expect(generateAppliedNumeracyDrill(config)).toEqual(first);
   });
 
   it.each(APPLIED_NUMERACY_FAMILIES)('scores a server-rebuilt %s fixture', (family) => {

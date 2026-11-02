@@ -8,7 +8,10 @@ const pool = ['K', 'M', 'U', 'R', 'E', 'S', 'N', 'A', 'T'];
 describe('selectMorsePrompt', () => {
   it('is deterministic for a seed, pool, and progress snapshot', () => {
     const input = { seed: 'round-1', pool, materialMode: 'groups', groupLength: 5, progress: { charAccuracy: [{ char: 'M', attempts: 8, accuracy: 25 }], confusionPairs: [{ sent: 'M', guessed: 'R', count: 4 }] } };
-    expect(selectMorsePrompt(input)).toEqual(selectMorsePrompt(input));
+    const first = selectMorsePrompt(input);
+    expect(first.text).toBe('UMENM');
+    expect(first.materialMode).toBe('groups');
+    expect(selectMorsePrompt(input)).toEqual(first);
   });
 
   it('targets weak/confused characters while preserving a non-zero exploration floor', () => {

@@ -44,7 +44,10 @@ describe('postRotation', () => {
       const list = ['alpha', 'beta', 'gamma'];
       const heads = ['2026-03-01', '2026-03-02', '2026-03-03'].map(day => orderByRecencyRotation(list, { dayKey: day })[0]);
       expect(new Set(heads).size).toBe(3);
-      expect(orderByRecencyRotation(list, { dayKey })).toEqual(orderByRecencyRotation(list, { dayKey }));
+      const stable = orderByRecencyRotation(list, { dayKey });
+      expect(stable).toHaveLength(3);
+      expect(stable[0]).toBe(heads[1]);
+      expect(orderByRecencyRotation(list, { dayKey })).toEqual(stable);
     });
 
     it('still returns every candidate when all of them are recent, rotating among them', () => {

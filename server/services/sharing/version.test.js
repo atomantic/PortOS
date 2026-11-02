@@ -41,8 +41,14 @@ describe('sharing/version', () => {
   });
 
   it("getProducedByVersion falls back to 'unknown' on read failure", async () => {
-    getCurrentVersionMock.mockRejectedValueOnce(new Error('boom'));
-    const v = await version.getProducedByVersion();
-    expect(v).toBeTruthy();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 65_000);
+      getCurrentVersionMock.mockRejectedValueOnce(new Error('boom'));
+      const v = await version.getProducedByVersion();
+      expect(v).toBe('unknown');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
