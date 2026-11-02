@@ -3583,9 +3583,9 @@ describe('a11y conventions', () => {
     // dense desktop row stays compact with `pointer-coarse:min-h-11
     // pointer-coarse:min-w-11`; bare <summary> rows get their touch height from
     // the base rule in src/index.css.
-    // Each axis is estimated as max(explicit size, icon + 2 * padding) from
-    // unprefixed tokens (an `sm:` size does not apply on a phone), and must reach
-    // 44px. A `pointer-coarse:` min size of 44px+ satisfies its axis.
+    // Each axis estimates the hit area from unprefixed size and padding tokens
+    // (an `sm:` size does not apply on a phone) and must reach 44px. A
+    // `pointer-coarse:` min size of 44px+ satisfies its axis.
     const MIN_TOUCH_PX = 44;
     const toPx = (v) => (v == null ? null : /^\d+(?:\.\d+)?$/.test(v) ? parseFloat(v) * 4 : null);
     const arbPx = (v) => {
@@ -3601,35 +3601,46 @@ describe('a11y conventions', () => {
     const axisPx = (tokens, axis, icon) => {
       const dim = axis === 'h' ? 'h' : 'w';
       const pads = axis === 'h' ? ['py', 'pt', 'pb'] : ['px', 'pl', 'pr'];
-      let explicit = 0;
+      let minimum = 0;
+      let fixed = null;
       let all = 0;
-      const side = { a: 0, b: 0 };
+      let axial = null;
+      const side = { a: null, b: null };
       for (const t of tokens) {
         const coarse = /^pointer-coarse:(?:min-)?(?:size|[hw])-(.+)$/.exec(t);
         if (coarse && (sizeOf(coarse[1]) ?? 0) >= MIN_TOUCH_PX) {
           const kind = /^pointer-coarse:(?:min-)?(size|[hw])-/.exec(t)[1];
           if (kind === 'size' || kind === dim) return Infinity;
         }
-        let m = new RegExp(`^(?:min-)?(?:${dim}|size)-(.+)$`).exec(t);
+        let m = new RegExp(`^(min-)?(?:${dim}|size)-(.+)$`).exec(t);
         if (m) {
-          if (/^(?:full|screen|dvh|svh|lvh|dvw|\d+\/\d+)$/.test(m[1])) return Infinity;
-          explicit = Math.max(explicit, sizeOf(m[1]) ?? 0);
+          if (/^(?:full|screen|dvh|svh|lvh|dvw|\d+\/\d+)$/.test(m[2])) return Infinity;
+          const size = sizeOf(m[2]);
+          if (size != null) {
+            if (m[1]) minimum = Math.max(minimum, size);
+            else fixed = fixed === null ? size : Math.min(fixed, size);
+          }
         }
         m = /^p-(.+)$/.exec(t);
         if (m) all = sizeOf(m[1]) ?? 0;
         m = new RegExp(`^(?:${pads[0]})-(.+)$`).exec(t);
-        if (m) { side.a = side.b = sizeOf(m[1]) ?? 0; }
+        if (m) axial = sizeOf(m[1]) ?? 0;
         m = new RegExp(`^(?:${pads[1]})-(.+)$`).exec(t);
         if (m) side.a = sizeOf(m[1]) ?? 0;
         m = new RegExp(`^(?:${pads[2]})-(.+)$`).exec(t);
         if (m) side.b = sizeOf(m[1]) ?? 0;
       }
-      const padding = side.a || side.b ? side.a + side.b : all * 2;
-      return Math.max(explicit, icon + padding);
+      // Tailwind emits side-specific utilities after axis utilities regardless
+      // of their order in className.
+      const fallback = axial ?? all;
+      const padding = (side.a ?? fallback) + (side.b ?? fallback);
+      // With border-box sizing, a fixed size does not grow to fit its icon;
+      // the box can only expand enough to contain its own padding.
+      const box = fixed === null ? icon + padding : Math.max(fixed, padding);
+      return Math.max(minimum, box);
     };
     const reachesTouchSize = (cls, icon) => {
       const tokens = cls.split(/\s+/).filter(Boolean);
-      if (tokens.some((t) => /^(?:flex-1|self-stretch|grow)$/.test(t))) return true;
       return axisPx(tokens, 'h', icon) >= MIN_TOUCH_PX && axisPx(tokens, 'w', icon) >= MIN_TOUCH_PX;
     };
     const literalClass = (tag) => {
@@ -3663,6 +3674,12 @@ describe('a11y conventions', () => {
     expect(probe('<button aria-label="Remove" className="min-h-[44px] min-w-[44px]"><X size={14} /></button>')).toBe(0);
     expect(probe('<button aria-label="Remove" className="h-11 w-11"><X size={14} /></button>')).toBe(0);
     expect(probe('<button aria-label="Remove" className="p-3"><X size={20} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="p-3 px-0"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="p-3 pt-0 py-3"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="p-3 py-3 pt-0"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="h-2 w-2 p-3"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="h-2 w-2 min-h-11 min-w-11 p-3"><X size={20} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="flex-1"><X size={14} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="sm:min-h-[44px] sm:min-w-[44px]"><X size={14} /></button>')).toBe(1);
 
     const offenders = trackedJsxFiles().flatMap((file) => offendersIn(file, rawSourceOf(file)));

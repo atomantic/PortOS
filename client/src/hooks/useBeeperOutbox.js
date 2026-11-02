@@ -263,7 +263,14 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
       if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
       return null;
     });
-    if (!mountedRef.current || scopeRef.current !== scope || generation !== scope.refreshGeneration) return;
+    if (!mountedRef.current || scopeRef.current !== scope) return;
+    // A newer read may have captured the row before this check finished. Do
+    // not overwrite it with the check response (another check may have won),
+    // but re-read after the completed operation so the visible state converges.
+    if (generation !== scope.refreshGeneration) {
+      if (updated) await refresh();
+      return;
+    }
     if (updated) {
       scope.mutationVersion += 1;
       setEntries((prev) => prev.map((row) => row.id === updated.id ? updated : row));
