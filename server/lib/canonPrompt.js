@@ -315,11 +315,11 @@ export function flattenProps(props) {
 
 // `defaults` is consulted when the entry has no items at all — keeps the
 // reference-sheet prompt's expression / hand-gesture panels populated even
-// when the bible omitted them. Existing sheets cap at 7 entries; callers can
-// retain the full list when it is context for choosing a smaller set.
-export function flattenNamedList(items, defaults, { maxEntries = 7 } = {}) {
+// when the bible omitted them. Preserve the complete authored list; fixed-size
+// layouts choose their frames from this context.
+export function flattenNamedList(items, defaults) {
   const list = Array.isArray(items) && items.length > 0
     ? items.map((e) => (e?.name && e?.description ? `${e.name} (${e.description})` : trim(e?.name))).filter(Boolean)
     : [...defaults];
-  return (maxEntries === null ? list : list.slice(0, maxEntries)).join(', ');
+  return list.join(', ');
 }
