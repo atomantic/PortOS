@@ -12,29 +12,47 @@ const MAX_BACKOFF_MS = 3600000;
 const humanBoundaries = new Set(['auth-error', 'forbidden', 'permission-denied', 'permission-error', 'approval-required',
   'tool-approval', 'access-denied', 'security-refusal', 'sandbox-denied', 'content-refusal', 'content-filtered',
   'quota-exhausted', 'usage-limit', 'budget-exceeded', 'spending-limit', 'credits-exhausted', 'private-security-assessment-failed']);
+const diagnosableCandidateHolds = new Set(['candidate-successor-lineage-unverified', 'candidate-process-proof-unavailable']);
 const flatten = queues => [...(queues.cos?.tasks || []).map(task => ({ ...task, taskType: 'internal' })),
   ...(queues.user?.tasks || []).map(task => ({ ...task, taskType: 'user' }))];
+// A release coordinator can ask for approval because the service itself could
+// not establish recovery evidence. Investigate that service failure without
+// changing the coordinator's approval or granting it another release attempt.
+const candidateApproval = task => task?.metadata?.analysisType === 'do-release'
+  && task.metadata.blockedCategory === 'task-approval' && task.metadata.taskOutcome?.status === 'blocked'
+  && task.metadata.taskOutcome?.recovery?.mode === 'approval';
+const candidateHoldVerified = (task, owner) => {
+  if (!candidateApproval(task)) return true;
+  const metadata = owner?.agent?.metadata;
+  const hold = metadata?.releaseCandidateRecovery;
+  return metadata?.taskAnalysisType === 'do-release' && hold?.version === 1 && hold.status === 'held'
+    && diagnosableCandidateHolds.has(hold.reason) && typeof hold.predecessorAgentId === 'string'
+    && hold.predecessorAgentId.length > 0 && hold.predecessorAgentId !== owner.agentId;
+};
 const eligible = task => {
   const m = task?.metadata || {};
   const category = m.blockedCategory;
+  const candidate = candidateApproval(task);
   return task?.taskType === 'internal' && task.status === 'blocked' && typeof category === 'string'
     && m.spawnBudgetReconciledHold !== 'true'
-    && !isInvestigationTask(task) && !isPrivateSecurityTask(task) && !isTruthyMeta(task.approvalRequired)
+    && !isInvestigationTask(task) && !isPrivateSecurityTask(task) && !isTruthyMeta(task.approvalRequired) && !isTruthyMeta(m.approvalRequired)
     && !(typeof m.blocker === 'string' && m.blocker.trim())
     && m.recoveryOrigin?.subsystem !== 'repository-cleanup'
-    && m.taskOutcome?.recovery?.mode !== 'approval'
+    && (m.taskOutcome?.recovery?.mode !== 'approval' || candidate)
     && explicitPrCompletion(task) !== PR_COMPLETIONS.LEAVE_OPEN
-    && (!USER_DECISION_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
-    && (!PAUSED_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
+    && (!USER_DECISION_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted' || candidate)
+    && (!PAUSED_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted' || candidate)
     && ![category, m.lastErrorCategory].some(value => typeof value === 'string' && humanBoundaries.has(value.toLowerCase()));
 };
-const analysisFor = task => ({
-  category: `blocked-system-${task.metadata.blockedCategory}-${task.metadata.lastErrorCategory || task.metadata.taskOutcome?.status || 'failure'}`,
+const analysisFor = (task, owner) => ({
+  category: candidateApproval(task) ? `blocked-system-${owner.agent.metadata.releaseCandidateRecovery.reason}`
+    : `blocked-system-${task.metadata.blockedCategory}-${task.metadata.lastErrorCategory || task.metadata.taskOutcome?.status || 'failure'}`,
   message: 'A system task stopped before its work reached verified completion.',
   snippet: task.metadata.blockedReason || task.metadata.taskOutcome?.reason,
   blockedSystemRecovery: true,
   preserveOriginalBudget: true,
-  escalation: 'Re-read the original task, current owners and delivery evidence first. Reuse active fixes. Resolve the affected work within its original authority and budgets. Diagnose the underlying machine/product cause; repair a demonstrated code defect in an isolated checkout with a regression test, required review, CI, merge admission and own-checkout cleanup. Reuse and link an existing active fix instead of duplicating it. Verify that owner is still running on this instance before joining it. To wait for that owner, report an incomplete taskOutcome with recovery {mode: "dependency-wait", ownerTaskId, ownerAgentId, prUrl}; the server verifies the same repository, dispatch and remaining budget before recording the wait. An active internal dependency is not a human approval and is not investigation success. A linked task or status edit is not a correction: after verified delivery, continue this same investigation within its remaining budget, verify the original failure against the actual root-code fix/regression/review/CI/merge, or report a demonstrated environmental cause or actual external permission boundary. Do not claim an environment cause without causal evidence. Do not invent code defects for external permission failures or transient causes; record those accurately. Preserve unfinished work and original failure/spawn budgets. Do not requeue, reset, or mark the original task completed by hand; its existing verifier and budget rules own continuation. Do not retry denied operations, change credentials, spend limits or permissions, or bypass a genuine human approval. Report actual human-required boundaries on the original record; machine-recoverable failures must not create personal Brain/todo actions.',
+  escalation: 'Re-read the original task, current owners and delivery evidence first. Reuse active fixes. Resolve the affected work within its original authority and budgets. Diagnose the underlying machine/product cause; repair a demonstrated code defect in an isolated checkout with a regression test, required review, CI, merge admission and own-checkout cleanup. Reuse and link an existing active fix instead of duplicating it. Verify that owner is still running on this instance before joining it. To wait for that owner, report an incomplete taskOutcome with recovery {mode: "dependency-wait", ownerTaskId, ownerAgentId, prUrl}; the server verifies the same repository, dispatch and remaining budget before recording the wait. An active internal dependency is not a human approval and is not investigation success. A linked task or status edit is not a correction: after verified delivery, continue this same investigation within its remaining budget, verify the original failure against the actual root-code fix/regression/review/CI/merge, or report a demonstrated environmental cause or actual external permission boundary. Do not claim an environment cause without causal evidence. Do not invent code defects for external permission failures or transient causes; record those accurately. Preserve unfinished work and original failure/spawn budgets. Do not requeue, reset, or mark the original task completed by hand; its existing verifier and budget rules own continuation. Do not retry denied operations, change credentials, spend limits or permissions, or bypass a genuine human approval. Report actual human-required boundaries on the original record; machine-recoverable failures must not create personal Brain/todo actions.'
+    + (candidateApproval(task) ? ' The release approval remains in force. Do not publish, transfer or abandon its candidate, or invent lineage or process-settlement evidence. Diagnose and fix the recovery service independently; report any action still required to resume the release.' : ''),
 });
 const phaseFor = task => task.status === 'in_progress' ? 'investigating'
   : task.status === 'completed' ? 'diagnosed'
@@ -51,9 +69,16 @@ async function localOwner(task) {
     import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agentState.js'),
   ]);
   const [agent, instanceId, owners] = await Promise.all([getAgentRecord(agentId), getInstanceId(), readAgentsStateForSafetyCheck()]);
+  const registered = owners.agents?.[agentId];
+  // Completed agents eventually leave the live registry. For this diagnostic
+  // only, their indexed service archive can still identify the release hold;
+  // the trusted live inventory and runner maps below must still be clear.
+  const archivedCandidate = !registered && candidateApproval(task) && candidateHoldVerified(task, { agentId, agent })
+    && Number.isFinite(Date.parse(agent?.startedAt)) && Number.isFinite(Date.parse(agent?.completedAt))
+    && Date.parse(agent.completedAt) >= Date.parse(agent.startedAt) && Date.parse(agent.completedAt) <= Date.now();
   return instanceId && instanceId !== UNKNOWN_INSTANCE_ID && agent?.status === 'completed'
     && agent.taskId === task.id && agent.metadata?.instanceId === instanceId
-    && owners.trusted && owners.agents?.[agentId]?.startedAt === agent.startedAt
+    && owners.trusted && (registered?.startedAt === agent.startedAt || archivedCandidate)
     && !Object.values(owners.agents || {}).some(other => other.taskId === task.id && ['running', 'paused'].includes(other.status))
     && ![activeAgents, runnerAgents].some(entries => [...entries.values()].some(other => (other.taskId || other.task?.id) === task.id))
     ? { agentId, instanceId, agent } : null;
@@ -71,7 +96,7 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
   const ownerFor = deps.ownerFor || localOwner;
   const update = deps.update || (async (task, state, owner) => (await import('./cosTaskStore.js')).updateTask(task.id,
     { metadata: { blockedInvestigation: state } }, 'internal', { expectedStatus: 'blocked',
-      expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      expectedTask: { description: task.description, priority: task.priority, approvalRequired: task.approvalRequired, metadata: task.metadata },
       recoveryOwner: { id: owner.agentId, startedAt: owner.agent.startedAt, requireInactive: true } }));
   const permission = deps.permission || (async (fingerprint, tasks) => {
     const producer = await import('./investigationTaskProducer.js');
@@ -79,7 +104,7 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     return (await producer.resolveAutoInvestigationApproval(fingerprint, { now: now(), tasks })).loopReason;
   });
   const create = deps.create || (async (task, analysis, owner) => (await import('./agentErrorAnalysis.js'))
-    .createInvestigationTask(owner.agentId, task, analysis));
+    .createInvestigationTask(owner.agentId, task, analysis, candidateApproval(task) ? { expectedSourceTask: task } : {}));
   let tail = Promise.resolve();
   const write = async (task, state, owner) => {
     if (JSON.stringify(task.metadata?.blockedInvestigation) === JSON.stringify(state)) return task;
@@ -93,7 +118,8 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     const owner = await ownerFor(task);
     if (!owner) return { handled: false, reason: 'local-owner-unverified' };
     if (!budgetVerified(task, owner)) return { handled: false, reason: 'spawn-budget-reconciliation-required' };
-    const analysis = analysisFor(task);
+    if (!candidateHoldVerified(task, owner)) return { handled: false, reason: 'release-candidate-hold-unverified' };
+    const analysis = analysisFor(task, owner);
     const fingerprint = buildInvestigationFingerprint(task, analysis);
     const epoch = `${fingerprint}:${task.metadata.blockedAt || task.metadata.lastSpawnedAt || 'legacy'}`;
     const old = task.metadata.blockedInvestigation;
@@ -105,7 +131,9 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
       || related.find(row => ['pending', 'in_progress', 'blocked'].includes(row.status));
     if (existing) {
       state = { ...state, taskId: existing.id, attempts: 1, phase: phaseFor(existing), retryAt: null };
-      if (!existing.metadata?.affectedTasks?.includes(task.id)) await create(task, analysis, owner);
+      if (!existing.metadata?.affectedTasks?.includes(task.id) && !(await create(task, analysis, owner))?.id) {
+        return { handled: false, reason: 'investigation-source-changed' };
+      }
       await write(task, state, owner);
       return { handled: true, phase: state.phase, taskId: existing.id };
     }
@@ -135,6 +163,9 @@ export function _createBlockedSystemInvestigationRecovery(deps = {}) {
     const currentOwner = await ownerFor(current);
     if (!currentOwner || currentOwner.agentId !== owner.agentId || currentOwner.instanceId !== owner.instanceId
       || !budgetVerified(current, currentOwner)) return { handled: false, reason: 'spawn-budget-reconciliation-required' };
+    if (!candidateHoldVerified(current, currentOwner)
+      || (candidateApproval(current) && currentOwner.agent.metadata.releaseCandidateRecovery.reason
+        !== owner.agent.metadata.releaseCandidateRecovery.reason)) return { handled: false, reason: 'release-candidate-hold-unverified' };
     task = current;
     const created = await create(task, analysis, owner).catch(() => null);
     if (!created?.id) return defer('producer-unavailable');

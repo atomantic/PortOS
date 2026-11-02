@@ -66,6 +66,14 @@ const APPROVAL_REASON_HINTS = {
   'config:requireApproval': 'Held for you: this scheduled task type has Require approval turned on.'
 };
 
+const approvalDetailsReason = metadata => {
+  const outcome = metadata.taskOutcome;
+  const options = outcome?.recovery?.options;
+  const generated = typeof outcome?.reason === 'string' && Array.isArray(options)
+    ? `${outcome.reason}\nApproval required before proceeding.\nOptions:\n${options.map((option, index) => `${index + 1}. ${option}`).join('\n')}` : null;
+  return generated !== null && metadata.blockedReason === generated ? outcome.reason : metadata.blockedReason || outcome?.reason;
+};
+
 const getTaskEditData = (task, providers) => {
   const provider = task.metadata?.provider || '';
   // Tasks saved before Antigravity split model from effort carry a suffixed
@@ -729,7 +737,18 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                 && task.metadata?.blockedInvestigation?.sourceCategory === task.metadata?.blockedCategory
                 && task.metadata?.blockedInvestigation?.sourceBlockedAt === (task.metadata?.blockedAt || task.metadata?.lastSpawnedAt || 'legacy') ? <div className="mt-2">
                 <BlockedSystemRecovery recovery={task.metadata.blockedInvestigation} />
-                {task.metadata.blockedReason && <details className="mt-1">
+                {task.metadata.blockedCategory === 'task-approval' && <div className="mt-1 text-sm text-port-error/90">
+                  <p className="font-medium">Approval is still required.</p>
+                  {approvalDetailsReason(task.metadata) && <CollapsibleText
+                    id={`task-blocker-${idScope}-${task.id}`}
+                    text={approvalDetailsReason(task.metadata)}
+                    className="text-port-error/90"
+                  />}
+                  {Array.isArray(task.metadata.taskOutcome?.recovery?.options) && <ol className="list-decimal pl-5">
+                    {task.metadata.taskOutcome.recovery.options.map((option, index) => <li key={`${index}-${option}`}>{option}</li>)}
+                  </ol>}
+                </div>}
+                {task.metadata.blockedCategory !== 'task-approval' && task.metadata.blockedReason && <details className="mt-1">
                   <summary className="cursor-pointer text-sm text-port-text-muted">Original failure details</summary>
                   <CollapsibleText id={`task-blocker-${idScope}-${task.id}`} text={task.metadata.blockedReason} className="text-port-error/90" />
                 </details>}
