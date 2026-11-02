@@ -80,7 +80,9 @@ async function persist(ctx, status = 'running', { completed = false, revisionId 
   // scene bake) and the published output, so it commits under the backup
   // lease (#9982): a cut copies files before it dumps rows.
   await withBackupAssetPublication(() => store.saveStageRun(ctx.runId, status, snapshot(ctx), { completed, revisionId }));
-  emitCodeAnimationChanged(ctx.projectId);
+  // The terminal notification also needs the active slot retired; finish()
+  // emits it after this write settles while retaining admission through saving.
+  if (!completed) emitCodeAnimationChanged(ctx.projectId);
 }
 
 function remainingMs(ctx) {
@@ -497,6 +499,7 @@ async function finish(ctx, run) {
     console.error(`❌ Code Animation production run ${ctx.runId.slice(0, 8)} final status could not be saved: ${error.message}`);
   });
   activeRuns.delete(ctx.runId);
+  emitCodeAnimationChanged(ctx.projectId);
   console.log(`🎞️ Code Animation production run ${ctx.runId.slice(0, 8)} ${status}${ctx.state.stopReason ? ` (${ctx.state.stopReason})` : ''}`);
   return status;
 }

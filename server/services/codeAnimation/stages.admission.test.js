@@ -9,12 +9,20 @@ vi.mock('./projectStore.js', () => ({
 }));
 vi.mock('./projectFiles.js', async original => ({ ...await original(), readProjectFiles: vi.fn(async () => { throw new Error('Synthetic source read failure'); }) }));
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
-const { startProductionStageRun } = await import('./stages.js');
+const { startProductionStageRun, activeStageRunIds } = await import('./stages.js');
+const { emitCodeAnimationChanged } = await import('../socket.js');
 const { saveStageRun } = await import('./projectStore.js');
 
-it('holds update admission until a failed production run has saved its terminal status', async () => {
+it('holds update admission through terminal persistence and then announces the idle run', async () => {
   let save;
-  saveStageRun.mockImplementation(() => new Promise(resolve => { save = resolve; }));
+  let persistedStatus = null;
+  const notifications = [];
+  emitCodeAnimationChanged.mockImplementation(projectId => {
+    notifications.push({ projectId, persistedStatus, active: activeStageRunIds() });
+  });
+  saveStageRun.mockImplementation((_runId, status) => new Promise(resolve => {
+    save = () => { persistedStatus = status; resolve(); };
+  }));
   const { done } = await startProductionStageRun('project-example', {});
   await vi.waitFor(() => expect(save).toBeTypeOf('function'));
   const update = maintenance.deferredUpdate.request();
@@ -24,4 +32,5 @@ it('holds update admission until a failed production run has saved its terminal 
   expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
   await expect(startProductionStageRun('project-example', {})).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
   maintenance.deferredUpdate.finish(update.id, false);
+  expect(notifications.at(-1)).toEqual({ projectId: 'project-example', persistedStatus: 'failed', active: [] });
 });
