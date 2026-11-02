@@ -106,6 +106,7 @@ const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
+  syncCatalogImage: async (projectId, key) => (await import('./catalogCast.js')).syncCheckinImageToCatalog(projectId, key),
   previewPrompt: async (opts) => (await import('../imageGen/promptPreview.js')).previewQuickImageEdit(opts),
   resolveReviewer: async (opts) => (await import('./plateReview.js')).resolvePlateReviewer(opts),
   reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
@@ -847,8 +848,7 @@ export async function useCastAndSetsImage(projectId, { key, imageId }) {
   });
   publish(projectId, out.project);
   inBackground('The chosen image', projectId, async () => {
-    const { syncCheckinImageToCatalog } = await import('./catalogCast.js');
-    await syncCheckinImageToCatalog(projectId, key);
+    await deps.syncCatalogImage(projectId, key).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving chosen image to the catalog failed; approval will retry: ${err.message}`));
     await advance(projectId);
   });
   return { project: out.project };

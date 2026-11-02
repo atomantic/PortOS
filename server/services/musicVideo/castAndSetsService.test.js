@@ -2007,6 +2007,24 @@ describe('editing a saved Cast & Sets image', () => {
     expect(jobs).toHaveLength(count);
   });
 
+  it('keeps a chosen image reviewable when catalog synchronization is unavailable', async () => {
+    const project = await ready();
+    const syncCatalogImage = vi.fn(async () => { throw new Error('Example catalog outage'); });
+    service.__setCastAndSetsDepsForTests(testDeps({ syncCatalogImage }));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onDisk('chosen-gallery.png');
+    const selected = await request(app).post(editUrl(project.id, 'use-image')).send({ key: 'character', imageId: 'chosen-gallery.png' });
+    expect(selected.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('review');
+    expect(saved.castAndSets.images.character.imageId).toBe('chosen-gallery.png');
+    expect(saved.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe('chosen-gallery.png');
+    expect(syncCatalogImage).toHaveBeenCalledWith(project.id, 'character');
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('approval will retry'));
+    logged.mockRestore();
+  });
+
   it('refuses invalid, missing and unauthorized selections without mutating the stage', async () => {
     const project = await ready();
     onDisk('chosen-gallery.png');
