@@ -104,6 +104,15 @@ describe('Cast & Sets set plates', () => {
     const prompt = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets })['set:food-court'].prompt;
     expect(prompt).toContain('shuttered counters with their menu boards blank');
     expect(prompt).toMatch(/furniture stands upright on its own legs, nothing stacked, interlocked or piled/);
+    expect(prompt).toContain('Keep new details consistent with the described place and its era');
+  });
+
+  it('preserves an intentionally unusual set while asking for coherent additions', () => {
+    const description = 'A car is parked at a boarded-up abandoned house.';
+    const sets = [{ id: 'house', name: 'House', description }];
+    const prompt = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets })['set:house'].prompt;
+    expect(prompt).toContain(description);
+    expect(prompt).toContain('preserve explicitly requested or intentionally unusual details');
   });
 
   it('still drops a sentence that pictures people in an empty plate', () => {

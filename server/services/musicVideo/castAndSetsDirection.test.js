@@ -51,10 +51,19 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('The image generator never sees the mood board');
     expect(prompt).toContain('People and wardrobe sheets show empty, relaxed hands');
     expect(prompt).toContain('Put carried or held objects in props, never in these descriptions');
+    expect(prompt).toContain('avoid unexplained contradictions');
     expect(prompt).not.toContain('moodRefs');
     expect(prompt).toContain('Director guidance: keep it night-lit');
     expect(prompt).toContain('1. Chorus 0:20–1:00');
     expect(prompt).not.toContain('This is a REVISION');
+  });
+
+  it('keeps explicitly requested unusual set details ahead of general plausibility', () => {
+    const story = 'A car is parked at a boarded-up abandoned house.';
+    const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, prompt: story } });
+    expect(prompt).toContain(`Concept: ${story}`);
+    expect(prompt).toContain("preserve the director's requested story details, including deliberate unusual or stylized arrangements");
+    expect(prompt).not.toContain('a car belongs at a lived-in house');
   });
 
   it('designs from the song\'s Suno style, falling back to the track, and keeps it apart from the visual style', () => {

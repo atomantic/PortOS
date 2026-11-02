@@ -29,6 +29,16 @@ describe('Cast & Sets vision transport contract', () => {
     expect(runner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt).toMatch(/render-quality.*fused, melted or merged/s);
   });
 
+  it('checks for unintended logic errors without rejecting an explicitly requested unusual scene', async () => {
+    const scene = { ...inputs, planPrompt: 'A car is parked at a boarded-up abandoned house.' };
+    runner.runPromptThroughProvider.mockResolvedValueOnce(response());
+    await reviewCastSetsImage({ inputs: scene, reviewer });
+    const prompt = runner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt;
+    expect(prompt).toContain(JSON.stringify(scene.planPrompt));
+    expect(prompt).toContain('real-world logic errors that contradict the intended scene');
+    expect(prompt).toContain('Respect details explicitly requested or supported by the story');
+  });
+
   it('refuses incomplete evidence and an unexpected execution provider instead of accepting text-only confidence', async () => {
     runner.runPromptThroughProvider.mockResolvedValueOnce({ ...response(), text: '{"checks":[]}' });
     await expect(reviewCastSetsImage({ inputs, reviewer })).rejects.toThrow('incomplete inspection');
