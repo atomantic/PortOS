@@ -220,19 +220,21 @@ function ecosystemAppBlocks(content) {
   const bindings = new Map();
   const declarations = new Set();
   let exported = null;
+  const isCompleteStatementValue = start => {
+    const end = (matching.get(start) ?? start) + 1;
+    const next = tokens[end];
+    const continuesExpression = next?.t === 'tpl' ||
+      (next?.t === 'id' && ['in', 'instanceof'].includes(next.v)) ||
+      ['.', '?.', '[', '(', '+', '-', '*', '/', '%', '<', '>', '=', '&', '|', '^', '?'].includes(punctuation(end)) ||
+      (punctuation(end) === '!' && punctuation(end + 1) === '=');
+    return !next || [';', ',', '}'].includes(punctuation(end)) ||
+      (!continuesExpression && /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
+  };
   for (let i = 0; i < tokens.length; i++) {
     if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
       const start = i + 3;
-      const end = (matching.get(start) ?? start) + 1;
-      const next = tokens[end];
       // Resolve only a whole initializer, never the literal prefix of an expression.
-      const continuesExpression = next?.t === 'tpl' ||
-        (next?.t === 'id' && ['in', 'instanceof'].includes(next.v)) ||
-        ['.', '?.', '[', '(', '+', '-', '*', '/', '%', '<', '>', '=', '&', '|', '^', '?'].includes(punctuation(end)) ||
-        (punctuation(end) === '!' && punctuation(end + 1) === '=');
-      const terminated = !next || [';', ',', '}'].includes(punctuation(end)) ||
-        (!continuesExpression && /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
-      if (terminated) {
+      if (isCompleteStatementValue(start)) {
         bindings.set(tokens[i + 1].v, start);
         declarations.add(i + 1);
       }
@@ -247,13 +249,36 @@ function ecosystemAppBlocks(content) {
   // A declaration initializer is not a reliable name after any write. Be
   // conservative even for writes inside functions: configuration is never run.
   const openings = new Map([...matching].map(([open, close]) => [close, open]));
-  const invalidate = index => {
-    if (tokens[index]?.t === 'id' && !declarations.has(index) &&
-        !['.', '?.'].includes(punctuation(index - 1))) bindings.delete(tokens[index].v);
+  const invalidate = (index, mutation = false) => {
+    if (tokens[index]?.t !== 'id' || declarations.has(index) || ['.', '?.'].includes(punctuation(index - 1))) return;
+    let name = tokens[index].v;
+    const seen = new Set();
+    while (name && !seen.has(name)) {
+      seen.add(name);
+      const value = bindings.get(name);
+      bindings.delete(name);
+      name = mutation && tokens[value]?.t === 'id' ? tokens[value].v : null;
+    }
+  };
+  const invalidateTarget = index => {
+    let root = index;
+    let mutation = false;
+    while (root >= 0) {
+      const open = openings.get(root);
+      if (punctuation(root) === ']' && open !== undefined &&
+          (tokens[open - 1]?.t === 'id' || [']', ')'].includes(punctuation(open - 1)))) {
+        root = open - 1;
+        mutation = true;
+      } else if (['.', '?.'].includes(punctuation(root - 1))) {
+        root -= 2;
+        mutation = true;
+      } else break;
+    }
+    invalidate(root, mutation);
   };
   for (let i = 0; i < tokens.length; i++) {
     if (['++', '--'].includes(punctuation(i))) {
-      invalidate(i - 1);
+      invalidateTarget(i - 1);
       invalidate(i + 1);
     }
     if (punctuation(i) !== '=' || ['=', '>'].includes(punctuation(i + 1)) ||
@@ -262,10 +287,11 @@ function ecosystemAppBlocks(content) {
     let target = i - 1;
     while (['+', '-', '*', '/', '%', '&', '|', '^', '?', '<', '>'].includes(punctuation(target))) target--;
     const open = openings.get(target);
-    if (['}', ']'].includes(punctuation(target)) && open !== undefined) {
+    if (['}', ']'].includes(punctuation(target)) && open !== undefined &&
+        !(punctuation(target) === ']' && (tokens[open - 1]?.t === 'id' || [']', ')'].includes(punctuation(open - 1))))) {
       for (let j = open + 1; j < target; j++) invalidate(j);
     } else {
-      invalidate(target);
+      invalidateTarget(target);
     }
   }
   const resolve = (index, seen = new Set()) => {
@@ -295,16 +321,19 @@ function ecosystemAppBlocks(content) {
     return found;
   };
 
+  if (exported === null || !isCompleteStatementValue(exported)) return [];
   const config = resolve(exported);
   if (config === null) return [];
   const appsProperty = punctuation(config) === '{' ? property(config, 'apps') : null;
+  if (appsProperty && (matching.get(appsProperty.start) ?? appsProperty.start) + 1 !== appsProperty.end) return [];
   const apps = appsProperty ? resolve(appsProperty.start) : config;
   if (punctuation(apps) !== '[') return [];
   const blocks = [];
   const limit = matching.get(apps);
   for (let i = apps + 1; i < limit;) {
     if (punctuation(i) === ',') { i++; continue; }
-    const object = resolve(i);
+    const end = expressionEnd(i, limit);
+    const object = (matching.get(i) ?? i) + 1 === end ? resolve(i) : null;
     if (punctuation(object) === '{') {
       const name = property(object, 'name');
       const token = name && name.end === name.start + 1 ? tokens[resolve(name.start)] : null;
@@ -314,7 +343,7 @@ function ecosystemAppBlocks(content) {
         blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: value });
       }
     }
-    i = expressionEnd(i, limit);
+    i = end;
   }
   return blocks;
 }
