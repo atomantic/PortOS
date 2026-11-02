@@ -122,8 +122,8 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
       const prev = run.at(-1);
       const continues = prev
         && Math.abs(scene.startSec - prev.endSec) < EPS
-        && sameIdentity(scene.set, prev.set)
-        && sameIdentity(scene.protagonist, prev.protagonist);
+        && run.every((member) => sameIdentity(scene.set, member.set)
+          && sameIdentity(scene.protagonist, member.protagonist));
       if (prev && !continues) flush();
       run.push(scene);
     }

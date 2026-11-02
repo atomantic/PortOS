@@ -118,4 +118,13 @@ describe('planProjectSequenceCoverage (stored scenes carry no set/protagonist)',
   it('keeps grouping when no shot names a set or lead', () => {
     expect(plan([stored('a', 0, 3), stored('b', 3, 6)]).groups.map((g) => g.sceneIds)).toEqual([['a', 'b']]);
   });
+
+  it.each([
+    ['sets', { setReference: { subjectId: 'attic' } }, { setReference: { subjectId: 'roof' } }],
+    ['leads', { characterVariant: { ingredientId: 'cast-1' } }, { characterVariant: { ingredientId: 'cast-2' } }],
+  ])('does not bridge different %s through an unspecified shot', (_kind, first, last) => {
+    const result = plan([stored('a', 0, 3, first), stored('b', 3, 6), stored('c', 6, 9, last)]);
+    expect(result.groups.map((group) => group.sceneIds)).toEqual([['a', 'b']]);
+    expect(result.perShot.map((entry) => entry.sceneId)).toEqual(['c']);
+  });
 });
