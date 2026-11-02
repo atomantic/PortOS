@@ -453,11 +453,12 @@ const escapeLike = (value) => String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`
  *     touchpoint of that account, including hand-logged ones — the account and
  *     its event details are going away together.
  *   - `dedupePrefix`: any other source's dedupe-key family (e.g. `imsg:<chat>:`).
- *   - `signalConversationId`: exact Signal conversation metadata; opaque ids
+ *   - `signalConversationId` / `beeperConversationId`: exact source-scoped
+ *     conversation metadata; opaque ids
  *     never become wildcard or prefix expressions.
  * Returns counts only. An empty selector deletes nothing.
  */
-export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalConversationId, client } = {}) {
+export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalConversationId, beeperConversationId, client } = {}) {
   const clauses = [];
   const params = [];
   if (accountId != null && String(accountId).length > 0) {
@@ -472,6 +473,10 @@ export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalCon
   if (signalConversationId != null && String(signalConversationId).length > 0) {
     params.push(String(signalConversationId));
     clauses.push(`(source = 'signal' AND metadata->>'conversationId' = $${params.length})`);
+  }
+  if (beeperConversationId != null && String(beeperConversationId).length > 0) {
+    params.push(String(beeperConversationId));
+    clauses.push(`(source = 'message' AND metadata->>'conversationId' = $${params.length})`);
   }
   if (clauses.length === 0) return { touchpoints: 0, auditRows: 0 };
   if (!client) await ensureReady();
