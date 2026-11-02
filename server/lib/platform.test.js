@@ -33,7 +33,7 @@ describe('platform module', () => {
       const stdout = [
         '  TCP    0.0.0.0:445     0.0.0.0:0       LISTENING',
         '  TCP    127.0.0.1:6000  127.0.0.1:50000 ESTABLISHED',
-        '  TCP    [::]:7000        [::]:0          LISTENING',
+        '  TCPv6  [::]:7000        [::]:0          LISTENING',
       ].join('\n')
       expect(parseListeningPorts(stdout, 'win32')).toEqual([445, 7000])
     })

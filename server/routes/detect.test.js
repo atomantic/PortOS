@@ -115,7 +115,7 @@ describe('POST /api/detect/port listener discovery', () => {
   it.each([
     ['darwin', 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\nnode 321 user 12u IPv4 0x0 0t0 TCP *:8123 (LISTEN)', 'lsof -iTCP:8123 -sTCP:LISTEN -n -P', { command: 'node', pid: 321 }],
     ['linux', 'State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\nLISTEN 0 128 *:8123 *:* users:(("node",pid=654,fd=4))\nLISTEN 0 128 *:18123 *:* users:(("other",pid=999,fd=4))', 'ss -lntp', { command: 'node', pid: 654 }],
-    ['win32', '  TCP    0.0.0.0:8123       0.0.0.0:0       LISTENING       9876\r\n', 'netstat -ano -p tcp', { pid: 9876 }]
+    ['win32', '  TCPv6  [::]:8123         [::]:0          LISTENING       9876\r\n', ['netstat -ano -p tcp', 'netstat -ano -p tcpv6'], { pid: 9876 }]
   ])('detects the requested port and process on %s', async (targetPlatform, stdout, expectedCommand, processInfo) => {
     const app = await loadApp(targetPlatform, stdout);
     const response = await request(app).post('/api/detect/port').send({ port: 8123 });
@@ -123,7 +123,10 @@ describe('POST /api/detect/port listener discovery', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ port: 8123, inUse: true, process: processInfo });
     const { exec } = await import('../lib/childProcess.js');
-    expect(exec[Symbol.for('nodejs.util.promisify.custom')]).toHaveBeenCalledWith(expectedCommand);
+    const probe = exec[Symbol.for('nodejs.util.promisify.custom')];
+    for (const command of Array.isArray(expectedCommand) ? expectedCommand : [expectedCommand]) {
+      expect(probe).toHaveBeenCalledWith(command);
+    }
   });
 
   it('does not treat a larger Linux port containing the requested digits as occupied', async () => {

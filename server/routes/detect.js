@@ -197,14 +197,20 @@ router.post('/port', asyncHandler(async (req, res) => {
   };
 
   const targetPlatform = platform;
-  const command = targetPlatform === 'darwin'
-    ? `lsof -iTCP:${safePort} -sTCP:LISTEN -n -P`
-    : targetPlatform === 'linux'
-      ? 'ss -lntp'
-      : 'netstat -ano -p tcp';
   let stdout;
   try {
-    ({ stdout } = await execAsync(command));
+    if (targetPlatform === 'win32') {
+      const [ipv4, ipv6] = await Promise.all([
+        execAsync('netstat -ano -p tcp'),
+        execAsync('netstat -ano -p tcpv6')
+      ]);
+      stdout = `${ipv4.stdout}\n${ipv6.stdout}`;
+    } else {
+      const command = targetPlatform === 'darwin'
+        ? `lsof -iTCP:${safePort} -sTCP:LISTEN -n -P`
+        : 'ss -lntp';
+      ({ stdout } = await execAsync(command));
+    }
   } catch (error) {
     // lsof reports exit code 1 when no matching listener exists. Other probe
     // errors are surfaced by getListeningPorts rather than mistaken for free.
@@ -239,7 +245,7 @@ router.post('/port', asyncHandler(async (req, res) => {
           break;
         }
       } else {
-        const match = line.match(new RegExp(`^\\s*TCP\\s+\\S+:${safePort}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i'));
+        const match = line.match(new RegExp(`^\\s*TCP(?:v6)?\\s+\\S+:${safePort}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i'));
         if (match) {
           result.process = { pid: Number(match[1]) };
           break;
