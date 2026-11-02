@@ -69,8 +69,8 @@ describe('withStyleSnapshots (#9105)', () => {
       { concept: {}, visualSpec: { references: conditioned } });
     expect(out.concept.characterStyle).toContain('one clay-orange streak through the bangs');
     expect(out.concept.subjects.map((s) => [s.id, s.role])).toEqual([['mvc-style-claudia-slopcore', 'protagonist'], ['mvc-1', 'supporting']]);
-    // Four references already condition frames, so the sheet joins as a described reference only.
-    expect(out.visualSpec.references.at(-1)).toMatchObject({ id: 'mvr-style-claudia-slopcore', imageId: 'sheet.png', role: 'character', condition: false });
+    // Flags are candidates; the renderer caps the actual inputs at dispatch.
+    expect(out.visualSpec.references.at(-1)).toMatchObject({ id: 'mvr-style-claudia-slopcore', imageId: 'sheet.png', role: 'character', condition: true });
 
     const picked = { concept: { characterStyleId: 'claudia-slopcore', characterStyle: out.concept.characterStyle, subjects: out.concept.subjects }, visualSpec: out.visualSpec };
     const cleared = await withStyleSnapshots({ concept: { characterStyleId: null } }, picked);

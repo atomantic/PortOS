@@ -39,6 +39,7 @@ import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { resolveGalleryImage, resolveImageRef, resolveTemplateAsset } from '../../lib/pathSafety.js';
+import { musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
@@ -404,7 +405,7 @@ async function referencePaths(stage, item) {
     const path = resolveGalleryImage(id) || resolveImageRef(id);
     if (path && !paths.includes(path)) paths.push(path);
   }
-  return paths.slice(0, 4);
+  return paths;
 }
 
 /** Job params for one image on the stage's route (cloud provider bag or the local model). */
@@ -419,9 +420,14 @@ export async function imageJobParams(settings, route, common) {
   if (resolved.mode !== route.mode) throw new ServerError(`The ${route.mode} image backend is not available`, { status: 409, code: 'CAST_SETS_ROUTE_UNAVAILABLE' });
   if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
-  if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
-  const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: route.model || undefined });
-  return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
+  const local = resolved.cloud ? null : resolveLocalImageModel(settings, { modelId: route.model || undefined });
+  const capacity = musicVideoReferenceCapacity(route.mode, { modelId: resolved.cloud?.modelId || route.model, localModel: local?.selectedModel });
+  if (common.referenceImagePaths?.length && !capacity) throw new ServerError('The selected image renderer cannot use the Cast & Sets reference images', { status: 409, code: 'CAST_SETS_ROUTE_INELIGIBLE' });
+  const referenceImagePaths = common.referenceImagePaths?.slice(0, capacity);
+  const referenceImageStrengths = common.referenceImageStrengths?.slice(0, capacity);
+  const params = { ...common, ...(referenceImagePaths ? { referenceImagePaths } : {}), ...(referenceImageStrengths ? { referenceImageStrengths } : {}), cleanC2PA, denoise };
+  if (resolved.cloud) return { ...resolved.cloud.jobParams, ...params };
+  return { ...params, pythonPath: local.pythonPath, ...(local.selectedModel?.id ? { modelId: local.selectedModel.id } : {}) };
 }
 
 async function enqueueImage(project, stage, key) {

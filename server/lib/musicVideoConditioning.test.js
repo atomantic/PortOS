@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 
 const CAST_ID = 'cat-chr-example';
 const guide = (mediaKey, age, extra = {}) => ({ mediaKey, kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z', library: { variant: { age }, guide: true }, ...extra });
@@ -34,7 +34,8 @@ describe('musicVideoConditioningReferences with Casting guides', () => {
     // A renderer's capacity caps the list; without one it keeps every pick in priority order.
     expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five, null, { limit: 4 }))
       .toHaveLength(4);
-    expect(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five).length).toBeGreaterThan(4);
+    expect(ids(musicVideoConditioningReferences(project(authored), { characterVariant: { ingredientId: CAST_ID } }, five)))
+      .toEqual(['g1.png', 'g2.png', 'g3.png', 'g4.png', 'g5.png', 'lead.png', 'set.png']);
   });
 
   // Uniquely catches a guide the image route would reject (400) taking a slot a sendable guide should fill.

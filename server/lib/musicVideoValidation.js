@@ -294,10 +294,6 @@ export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'se
 // appear in the finished video as-is, and `motion-reference` is scaffolding
 // footage/stills for a hand-drawn or code-rendered pass — never final picture.
 export const MUSIC_VIDEO_REFERENCE_USES = ['reference', 'final-visible', 'motion-reference'];
-// The image backends accept at most four reference images for most models
-// (imageGen/prepareParams.js referenceCap), so a project conditions each
-// reference frame on at most this many of its flagged references.
-export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
 
 // One moodboard/reference asset. `condition: true` sends the image to frame
 // generation as a real conditioning input (`referenceImageFiles`) rather than
@@ -326,10 +322,7 @@ export const musicVideoVisualSpecSchema = z.object({
   cameraRules: z.string().max(2000).optional(),
   // An existing Mood Board this project draws inspiration from (display link).
   moodBoardId: z.string().max(64).nullable().optional(),
-}).strict().refine(
-  (spec) => (spec.references || []).filter((ref) => ref.condition).length <= MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES,
-  { message: `at most ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references can condition frames`, path: ['references'] },
-);
+}).strict();
 
 // `endImage` (#11173): a candidate for the scene's optional style-break end frame.
 export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video', 'endImage'];

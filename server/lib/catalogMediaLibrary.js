@@ -136,7 +136,7 @@ export function pickGuideMedia(media, want = {}, cap = MAX_CAST_GUIDES) {
   return [...pool]
     .sort((a, b) => score(b, want) - score(a, want) || time(b) - time(a))
     .filter((m) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
-    .slice(0, Math.max(0, Math.min(cap, MAX_CAST_GUIDES)));
+    .slice(0, Math.max(0, cap));
 }
 
 // Known incompatible looks never fill spare conditioning slots. Untagged

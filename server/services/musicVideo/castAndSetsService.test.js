@@ -383,9 +383,9 @@ describe('Cast & Sets check-in', () => {
     const refs = done.visualSpec.references;
     expect(refs[0]).toMatchObject({ imageId: 'user-ref.png', condition: true });
     expect(refs.find((r) => r.id === 'mvr-cs-character')).toMatchObject({ role: 'character', condition: true });
-    // Four conditioning slots: the director's own, the character sheet, then plates by song coverage.
-    expect(refs.filter((r) => r.condition).map((r) => r.id)).toEqual([refs[0].id, 'mvr-cs-character', 'mvr-cs-set-lab', 'mvr-cs-set-roof']);
-    expect(refs.find((r) => r.id === 'mvr-cs-set-harbor')).toMatchObject({ role: 'set', condition: false });
+    // Every set remains an ordered candidate; each renderer limits its actual inputs.
+    expect(refs.filter((r) => r.condition).map((r) => r.id)).toEqual([refs[0].id, 'mvr-cs-character', 'mvr-cs-set-lab', 'mvr-cs-set-roof', 'mvr-cs-set-harbor']);
+    expect(refs.find((r) => r.id === 'mvr-cs-set-harbor')).toMatchObject({ role: 'set', condition: true });
     expect(refs.find((r) => r.id === 'mvr-cs-looks')).toMatchObject({ role: 'wardrobe', condition: false });
     expect(done.concept.subjects.map((s) => [s.id, s.kind])).toEqual([
       ['s-band', 'character'], ['cs-protagonist', 'character'], ['cs-set-lab', 'place'], ['cs-set-harbor', 'place'], ['cs-set-roof', 'place'],
@@ -1218,6 +1218,45 @@ const fixedCastAnswer = () => JSON.stringify({ ...DIRECTION, cast: [
   ...['Gusta', 'Halden', 'Ivory', 'Jolie', 'Kitto'].map((name) => ({ name, role: '', description: 'invented', face: 'plain' })),
 ] });
 
+// Uniquely catches pre-selection or queue preparation cutting a capable renderer back to four.
+it.each([
+  { mode: 'codex', model: null, capacity: 5, localModel: null },
+  { mode: 'local', model: 'example-flux2', capacity: 4, localModel: { id: 'example-flux2', runner: 'flux2' } },
+  { mode: 'local', model: 'example-qwen', capacity: 10, localModel: { id: 'example-qwen', pipelineClass: 'QwenImage21Pipeline' } },
+])('saves every conditioning candidate and sends the $mode/$model allowance to a sheet (#14630)', async ({ mode, model, capacity, localModel }) => {
+  const guides = Array.from({ length: 12 }, (_, i) => `guide-${i}.png`);
+  onDisk(...guides);
+  const preparation = await import('../imageGen/prepareParams.js');
+  const local = vi.spyOn(preparation, 'resolveLocalImageModel').mockReturnValue({ pythonPath: 'python3', selectedModel: localModel });
+  try {
+    service.__setCastAndSetsDepsForTests(testDeps({
+      getSettings: async () => ({ imageGen: { codex: { enabled: true } } }),
+      resolveRoute: async () => ({ mode, model }),
+      imageParams: service.imageJobParams,
+      catalog: {
+        getIngredient: async () => ({ id: 'cat-lead', type: 'character', payload: {} }),
+        listMediaForIngredient: async () => guides.map((mediaKey) => ({ mediaKey, kind: 'reference' })),
+      },
+    }));
+    const project = await seed({ concept: { prompt: 'a vigil', subjects: [{ id: 'lead', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-lead' }] } });
+    const references = guides.map((imageId, i) => ({ id: `identity-${i}`, imageId, role: 'character', label: 'Keeper', condition: true }));
+    const saved = await request(app).patch(`/api/music-video/${project.id}`).send({ visualSpec: { references } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.visualSpec.references).toHaveLength(12);
+    await service.startCastAndSets(project.id);
+    await until(async () => jobs.some((job) => keyOf(job) === 'character'), 'the character sheet');
+    const sheet = jobs.find((job) => keyOf(job) === 'character');
+    expect(sheet.params.referenceImagePaths.map((path) => path.split(/[\\/]/).pop())).toEqual(guides.slice(0, capacity));
+    expect(sheet.params.referenceImageStrengths).toEqual(Array(capacity).fill(1));
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.plan.character.refImages).toEqual(guides);
+    expect(stage.images.character.submittedReferences.map((ref) => ref.filename)).toEqual(guides.slice(0, capacity));
+  } finally {
+    await service.__settleCastAndSetsForTests();
+    local.mockRestore();
+  }
+});
+
 it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {
   runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
   const project = await fixedCastProject();
@@ -1273,9 +1312,9 @@ it('keeps a catalog-conditioned sheet for every fixed supporting character throu
   const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
   const context = musicVideoDirectionContext(done.castAndSets.direction);
   for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
-  const { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } = await import('../../lib/musicVideoConditioning.js');
-  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES });
-  expect(shot).toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideoConditioning.js');
+  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: musicVideoReferenceCapacity('codex') });
+  expect(shot).toHaveLength(5);
   expect(shot[2].id).toBe('mvr-cs-cast-anika');
   // Uncapped, every named cast sheet is listed in order for a renderer that takes more.
   const all = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
