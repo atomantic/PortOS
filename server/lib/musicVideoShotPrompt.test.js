@@ -169,3 +169,15 @@ describe('reference map', () => {
     expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('reference-map');
   });
 });
+
+// Uniquely catches a local clip prompt overflowing LTX-2's 1024-token text encoder with the production bible (Hold Still, 2026-11-02).
+describe('local clip prompts', () => {
+  const shot = { sceneId: 's1', startSec: 0, endSec: 4, prompt: 'a lantern swings' };
+
+  it('leaves the production bible out of a local render that hears the song, and keeps it elsewhere', () => {
+    const ids = (input) => input.promptAdditions.map((item) => item.id);
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'local' }))).not.toContain('creative-context');
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'local' }))).toContain('project-style');
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'fal' }))).toContain('creative-context');
+  });
+});

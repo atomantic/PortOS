@@ -78,9 +78,12 @@ function composeShotModelInput(project, scene, {
   audioReactive = false, offsetSec = 0, fixes = '', audioReferenceModelId = null,
 } = {}) {
   const text = typeof authored === 'string' ? authored.trim() : '';
+  // A local renderer animates a start frame that already shows who and where, and its text
+  // encoder is short (LTX-2: 1024 Gemma tokens), so the production bible would overflow it.
+  const bible = backend !== 'local';
   const look = !asTyped && hears ? [
     addition('project-style', 'Project style', project?.concept?.style),
-    addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project) })),
+    bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project) })) : null,
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
   ] : [];
   const direction = asTyped ? [] : [
