@@ -21,11 +21,12 @@ const contains = async (dir, ancestor, head) => (await execGit(['merge-base', '-
 /** Capture work before a repair can move it; unreadable input never becomes an empty baseline. */
 export async function captureRepoRepairContract(verdict) {
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+  const { redactRemoteUrlCredentials } = await import('../lib/gitRemote.js');
   const dir = resolve(verdict.repoPath);
   if (dir !== resolve(PATHS.root)) throw new Error('Checkout repair must target this installation');
   const instanceId = await getInstanceId();
   if (!instanceId || instanceId === UNKNOWN_INSTANCE_ID) throw new Error('Checkout repair instance is unknown');
-  const origin = await git(dir, ['remote', 'get-url', 'origin']);
+  const origin = redactRemoteUrlCredentials(await git(dir, ['remote', 'get-url', 'origin']));
   const head = await git(dir, ['rev-parse', '--verify', 'HEAD^{commit}']);
   const paths = async args => (await execGit(args, dir)).stdout.split('\0').filter(Boolean);
   const [changed, untracked, staged] = await Promise.all([
@@ -107,6 +108,7 @@ async function preservedWork(contract, defaultBranch) {
 /** Read-only completion proof; never runs the update or changes dispatch/retry accounting. */
 async function verifyBoundRepoRepairCompletion(task, agentId, workspacePath) {
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
+  const { redactRemoteUrlCredentials } = await import('../lib/gitRemote.js');
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const { getTaskById } = await import('./cosTaskStore.js');
   const { checkUpdateRepoReadiness } = await import('./updateRepoReadiness.js');
@@ -121,7 +123,7 @@ async function verifyBoundRepoRepairCompletion(task, agentId, workspacePath) {
     || resolve(owner.metadata?.workspacePath || '') !== contract.repoPath || owner.metadata?.isWorktree
     || live?.status !== 'in_progress' || live.metadata.claimedBy !== instanceId || !matchesCompletionTaskDispatch(owner, task) || !matchesCompletionTaskDispatch(owner, live)
     || !isDeepStrictEqual(live.metadata.repoRepairContract, contract) || !isDeepStrictEqual(binding.repoRepairContract, contract)
-    || await git(contract.repoPath, ['remote', 'get-url', 'origin']) !== contract.origin) return false;
+    || redactRemoteUrlCredentials(await git(contract.repoPath, ['remote', 'get-url', 'origin'])) !== contract.origin) return false;
   // Completion requires a fresh origin read. The normal UI readiness poll may use cached refs.
   await fetchOrigin(contract.repoPath);
   const ready = await checkUpdateRepoReadiness({ repoPath: contract.repoPath, excludeAgentId: agentId });

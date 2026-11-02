@@ -14,7 +14,7 @@ vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, co
   updateAgent: async (id, patch) => { Object.assign(facts.owner.metadata, patch.metadata); return facts.owner; },
 }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async (id, patch) => { Object.assign(facts.task, patch); return facts.task; }), getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }), getTaskById: vi.fn(async () => facts.task), addTask: vi.fn(async (data, type, options) => ({ data, type, options })) }));
-vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ isGithub: true, host: 'github.com', owner: 'example', fullName: 'example/PortOS' }) }));
+vi.mock('../lib/gitRemote.js', async original => ({ ...(await original()), getOriginInfo: async () => ({ isGithub: true, host: 'github.com', owner: 'example', fullName: 'example/PortOS' }) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => {
   if (!facts.forge) throw new Error('Unavailable');
   return JSON.stringify([[facts.pr].filter(Boolean)]);
@@ -199,6 +199,15 @@ describe('checkout repair public completion boundary', () => {
     unlinkSync(join(facts.repo, 'draft[1].txt')); expect(await evaluate()).toBe(false);
     writeFileSync(join(facts.repo, 'draft[1].txt'), 'draft\n'); git(facts.repo, 'add', '.'); git(facts.repo, 'commit', '-m', 'preserve literal filename');
     publish(); expect(await evaluate()).toBe(true);
+  });
+
+
+  it('keeps HTTPS remote credentials out of persisted repair baselines', async () => {
+    repo(); git(facts.repo, 'remote', 'set-url', 'origin', 'https://example-user:example-secret@example.com/example/PortOS.git');
+    const contract = await captureRepoRepairContract(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
+    expect(contract.origin).toBe('https://***@example.com/example/PortOS.git');
+    expect(JSON.stringify(contract)).not.toContain('example-secret');
+    expect(JSON.stringify(contract)).not.toContain('example-user');
   });
 
   it('queues the server-owned contract without inferring it from task prose', async () => {
