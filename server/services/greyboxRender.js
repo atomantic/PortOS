@@ -14,6 +14,15 @@ const renderQueue = createKeyCachedQueue();
 export const renderGreyboxPng = (scene, shot) => renderQueue('browser', () => capture(scene, shot));
 
 async function capture(scene, shot) {
+  let result;
+  await captureFrames([{ scene, shot }], async (png) => { result = png; });
+  return result;
+}
+
+/** Stream fixed-time frames through one owned browser, awaiting each write. */
+export const renderGreyboxFrames = (frames, onFrame, { signal } = {}) => renderQueue('browser', () => captureFrames(frames, onFrame, signal));
+
+async function captureFrames(frames, onFrame, signal) {
   const { html, script } = await getGreyboxCapturePage();
   const { openComposition } = await import('./htmlComposition/browser.js');
   const parent = join(PATHS.data, 'greybox-renders');
@@ -25,15 +34,19 @@ async function capture(scene, shot) {
     await writeFile(join(scratch, 'viewer.js'), script);
     page = await openComposition(relative(PATHS.data, scratch), {
       ownedBrowser: true, isolation: 'required', contentSecurityPolicy: PREVIEW_PAGE_CSP,
-      signal: AbortSignal.timeout(45_000), lockLoopback: true,
+      signal: signal || AbortSignal.timeout(45_000), lockLoopback: true,
     });
-    const { width, height } = greyboxCaptureSettings(shot);
-    await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-    const png = await page.evaluate(`globalThis.captureGreybox(${JSON.stringify(scene)}, ${JSON.stringify(shot)})`, 'greybox capture');
-    if (typeof png !== 'string' || !png.startsWith('data:image/png;base64,') || png.length > 32 * 1024 * 1024) {
-      throw new Error('Greybox viewer did not return a PNG');
+    let index = 0;
+    for (const { scene, shot } of frames) {
+      signal?.throwIfAborted();
+      const { width, height } = greyboxCaptureSettings(shot);
+      await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      const png = await page.evaluate(`globalThis.captureGreybox(${JSON.stringify(scene)}, ${JSON.stringify(shot)})`, 'greybox capture');
+      if (typeof png !== 'string' || !png.startsWith('data:image/png;base64,') || png.length > 32 * 1024 * 1024) {
+        throw new Error('Greybox viewer did not return a PNG');
+      }
+      await onFrame(png.slice('data:image/png;base64,'.length), index++);
     }
-    return png.slice('data:image/png;base64,'.length);
   } finally {
     // A failed owned close preserves its evidence and must not report success.
     try { await page?.close(); }

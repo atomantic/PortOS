@@ -1069,3 +1069,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `musicVideoCastSetsImageEdit.js` | Shared exact-instruction Cast & Sets image-edit prompt and visible preservation addition. |
 
 | `imageRenderQuality.js` | Shared visible rendering-defect criteria for catalog sheets, Cast & Sets and shot stills. |
+
+| `greyboxSequence.js` | Offline sequence validation, absolute-time anchor/camera sampling and global frame-grid planning for greybox reference exports. |

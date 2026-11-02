@@ -26,6 +26,7 @@ const isolatedHost = process.platform === 'darwin' && existsSync('/usr/bin/sandb
   || process.platform === 'linux' && existsSync('/usr/bin/bwrap');
 const { getGreyboxCapturePage } = await import('./greyboxCapturePage.js');
 const { renderGreyboxPng } = await import('./greyboxRender.js');
+const { renderGreyboxFrames } = await import('./greyboxRender.js');
 // GreyboxCapture.jsx mounts GreyboxViewer.jsx through Vite's staged bundle;
 // these source references keep both client entry points in CI's selection contract.
 const scene = greyboxSceneSchema.parse({
@@ -116,5 +117,25 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
     expect({ width, height }).toEqual({ width: 1280, height: 720 });
     const { readdir } = await import('node:fs/promises');
     expect(await readdir(join(lazyTempDataRoot('portos-greybox-render-'), 'greybox-renders'))).toEqual([]);
+  });
+
+  it('reuses a capture page without leaking the previous frame camera or blocking', async () => {
+    const moved = { ...scene, anchors: scene.anchors.map((anchor) => ({ ...anchor, position: [-3, 0, 1] })) };
+    const shot = scene.shots[0];
+    const samples = [{ scene, shot }, { scene: moved, shot: { ...shot, position: [-8, 4, 12] } }, { scene, shot }];
+    const captures = [];
+    if (isolatedHost) {
+      await renderGreyboxFrames(samples, async (png) => { captures.push(png); });
+    } else {
+      const tab = await fixture.browser.newPage();
+      try {
+        await tab.setContent(html.replace('<script src="/viewer.js"></script>', ''));
+        await tab.addScriptTag({ content: script });
+        for (const sample of samples) captures.push((await tab.evaluate(({ scene, shot }) => globalThis.captureGreybox(scene, shot), sample)).split(',')[1]);
+      } finally { await tab.close(); }
+    }
+    expect(captures).toHaveLength(3);
+    expect(captures[0]).toEqual(captures[2]);
+    expect(captures[1]).not.toEqual(captures[0]);
   });
 });
