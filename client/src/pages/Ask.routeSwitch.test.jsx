@@ -69,13 +69,12 @@ describe('Ask across conversation route changes', () => {
   });
 
   it('keeps optimistic turns visible while a new conversation is still pending its server ID', async () => {
-    api.getAskConversation.mockResolvedValue(conversation('conv-a', 'Answer from A'));
-    api.streamAskTurn.mockImplementation(async (_payload, { onEvent }) => {
-      onEvent({ event: 'open', data: { conversationId: 'ask_123456789_abcdef01' } });
+    let emitEvent;
+    let finishStream;
+    api.streamAskTurn.mockImplementation((_payload, { onEvent }) => {
+      emitEvent = onEvent;
+      return new Promise((resolve) => { finishStream = resolve; });
     });
-    api.getAskConversation.mockImplementation(async (id) => id === 'ask_123456789_abcdef01'
-      ? new Promise(() => {})
-      : conversation('ask_111111111_aaaaaaaa', 'Answer from A'));
     const router = createMemoryRouter(
       [{ path: '/ask/:conversationId?', element: <Ask /> }],
       { initialEntries: ['/ask'] },
@@ -85,6 +84,21 @@ describe('Ask across conversation route changes', () => {
     const user = userEvent.setup();
     await user.type(screen.getByRole('textbox', { name: 'Question' }), 'A new question');
     await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('A new question')).toBeInTheDocument();
+
+    await act(async () => emitEvent({ event: 'open', data: { conversationId: 'ask_123456789_abcdef01' } }));
+    expect(router.state.location.pathname).toBe('/ask/ask_123456789_abcdef01');
+    expect(screen.getByText('A new question')).toBeInTheDocument();
+
+    await act(async () => emitEvent({ event: 'delta', data: { text: 'An answer in progress' } }));
+    expect(screen.getByText('A new question')).toBeInTheDocument();
+    expect(screen.getByText('An answer in progress')).toBeInTheDocument();
+
+    await act(async () => {
+      emitEvent({ event: 'done', data: { turn: { id: 'assistant-turn', role: 'assistant', content: 'An answer in progress' } } });
+      finishStream();
+    });
+    expect(screen.getByText('A new question')).toBeInTheDocument();
     expect(api.streamAskTurn).toHaveBeenCalledWith(
       { conversationId: undefined, question: 'A new question', mode: 'ask' },
       expect.any(Object),

@@ -524,6 +524,7 @@ export default function Ask() {
           if (event === 'open') {
             streamOpened = true;
             serverConvId = data.conversationId;
+            setActiveConv((prev) => prev?.id === 'pending' ? { ...prev, id: data.conversationId } : prev);
             // Pin the stream to its conversation id so the navigate() below
             // (which fires on first send) doesn't get treated as a
             // switch-away by the conversationId-change effect.
