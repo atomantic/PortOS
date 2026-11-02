@@ -27,3 +27,27 @@ it('guards ambiguous raw WhatsApp deletion and uses typed management selectors',
   expect(query.mock.calls[1][0]).toContain('jsonb_build_array(');
   expect(query.mock.calls[1][1]).toEqual(['whatsapp', '["scope", "family"]', 500]);
 });
+
+// The selector returned to the management UI must target the same records when
+// viewing or purging a channel, including imports predating conversationId.
+it('uses the Discord channel fallback consistently for listing, viewing and purging', async () => {
+  query.mockResolvedValueOnce({ rows: [{ chat_guid: 'channel-a' }, { chat_guid: 'channel-b' }] });
+  const conversations = await listConversations({ source: 'discord', q: 'channel' });
+  expect(conversations.map(({ chatGuid }) => chatGuid)).toEqual(['channel-a', 'channel-b']);
+  const listing = query.mock.calls[0][0];
+  const selector = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'channelId', ''), '')";
+  const grouping = listing.split('GROUP BY ')[1].split('\n     ORDER BY')[0];
+  expect(grouping).toContain(`WHEN source = 'discord' THEN ${selector}`);
+  expect(listing).toContain(`LOWER(${grouping})`);
+  await sourceStats('discord');
+  expect(query.mock.calls[1][0]).toContain(`COUNT(DISTINCT ${grouping})`);
+  for (const field of ['chatGuid', 'conversationId']) {
+    await listEvents({ source: 'discord', [field]: conversations[0].chatGuid });
+    expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), ['discord', 'channel-a', 500]]);
+    query.mockResolvedValueOnce({ rowCount: 2 });
+    expect(await deleteEvents({ source: 'discord', [field]: conversations[0].chatGuid })).toEqual({ deleted: 2 });
+    expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), ['discord', 'channel-a']]);
+  }
+  await listEvents({ source: 'signal', conversationId: 'channel-a' });
+  expect(query.mock.lastCall[0]).not.toContain("metadata->>'channelId'");
+});
