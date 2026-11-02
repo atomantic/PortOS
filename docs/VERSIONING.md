@@ -194,8 +194,22 @@ contemporaneous physical evidence, and unknown private review receipt versions
 also remain held. V1 review evidence retains unknown inspection provenance; V2
 keeps its actual inspection separate from later completion. Both are validated
 with the shared receipt contract and preserved byte-for-byte, never re-certified
-as a new review. POSIX settlement support remains tracked in #13944; first
-reservation after a pre-reservation interruption is tracked in #14005.
+as a new review. POSIX settlement support is tracked in #14771 (Linux) and
+#14772 (macOS); first reservation after a pre-reservation interruption is
+tracked in #14005.
+
+**Attempt membership:** every dispatch of a release task appends its agent,
+start time and instance to the task's service-owned `releaseAttempts` record.
+Retry resets, revives, ordinary task edits and archival never clear it; callers
+cannot write it, and a peer merge only unions entries. Recovery requires a
+complete record listing the predecessor and successor. Every other member must
+be this instance's, completed (in the live registry or the service archive) and
+process-settled. A missing or incomplete record holds with
+`candidate-attempt-membership-unverified`. This includes a task that already had
+dispatches before membership was recorded. An unfinished member holds with
+`candidate-attempt-unsettled`, and another instance's member with
+`candidate-peer-attempt-unsettled`. Reconciling a legacy candidate that lacks
+this evidence is tracked in #14773.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub

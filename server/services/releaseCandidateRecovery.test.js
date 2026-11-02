@@ -22,8 +22,13 @@ vi.mock('./cosState.js', () => ({
   saveState: async state => { fixture.saves++; fixture.disk = structuredClone(state); fixture.state = structuredClone(state); },
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => fixture.task }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.state.agents[id] }));
+// Fixtures that do not set membership get the store's record of the current
+// original/successor dispatches; an explicit `releaseAttempts: undefined` is absent.
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => fixture.task && (Object.hasOwn(fixture.task.metadata || {}, 'releaseAttempts')
+  ? fixture.task : { ...fixture.task, metadata: { ...fixture.task.metadata, releaseAttempts: { version: 1, complete: true,
+    attempts: ['agent-original', 'agent-successor'].map(id => fixture.state.agents[id]).filter(Boolean)
+      .map(agent => ({ agentId: agent.id, startedAt: agent.startedAt, instanceId: 'example-instance' })) } } }) }));
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.state.agents[id] || fixture.archive[id] }));
 // The supervised native receipt is tested by windowsAgentProcess.test.js.
 // Git, filesystem identity and durable retirement admission remain real here.
 vi.mock('./releaseCandidateSettlement.js', async original => {
@@ -63,7 +68,7 @@ let scratch, checkout, cutoff, head, reviewPath, original;
 const recover = () => recoverReleaseCandidate('agent-successor', 'agent-original');
 
 beforeEach(async () => {
-  fixture.task = { id: 'release-task', metadata: { resumedFromAgentId: 'agent-original' } };
+  fixture.archive = {};
   fixture.queue = createFileWriteQueue();
   fixture.unreadable = false;
   fixture.nativeProof = false;
@@ -101,7 +106,9 @@ beforeEach(async () => {
       workspacePath: fixture.repo, instanceId: 'example-instance', resumedFromAgentId: 'agent-original' } };
   original = structuredClone(source);
   fixture.disk = structuredClone(fixture.state);
+  fixture.task = { id: 'release-task', metadata: { resumedFromAgentId: 'agent-original' } };
 });
+const attempt = agent => ({ agentId: agent.id, startedAt: agent.startedAt, instanceId: 'example-instance' });
 
 afterEach(async () => {
   await bodies.drain();
@@ -422,4 +429,52 @@ test('refuses competing active successors and cannot replace an already recorded
   expect(await recover()).toMatchObject({ recovered: true });
   fixture.state.agents[competitor.id].status = 'running';
   expect(await recoverReleaseCandidate(competitor.id, 'agent-original')).toMatchObject({ recovered: false, reason: 'candidate-successor-conflict' });
+});
+
+describe('release attempt membership', () => {
+  const hold = reason => ({ recovered: false, reason, nextStep: expect.any(String) });
+  const earlier = (status = 'completed', instanceId = 'example-instance') => ({ id: 'agent-earlier', taskId: 'release-task', status,
+    startedAt: new Date(Date.now() - 60_000).toISOString(), completedAt: new Date(Date.now() - 30_000).toISOString(),
+    metadata: { taskAnalysisType: 'do-release', isWorktree: false, workspacePath: fixture.repo, instanceId } });
+  const list = agent => {
+    fixture.task.metadata.releaseAttempts ||= { version: 1, complete: true, attempts: [attempt(original), attempt(fixture.state.agents['agent-successor'])] };
+    fixture.task.metadata.releaseAttempts.attempts.unshift({ ...attempt(agent), instanceId: agent.metadata.instanceId });
+  };
+
+  test('holds a task whose membership is missing or began after an unrecorded attempt', async () => {
+    fixture.task.metadata.releaseAttempts = undefined;
+    expect(await recover()).toEqual(hold('candidate-attempt-membership-unverified'));
+    fixture.task.metadata.releaseAttempts = { version: 1, complete: false, attempts: [attempt(original), attempt(fixture.state.agents['agent-successor'])] };
+    expect(await recover()).toEqual(hold('candidate-attempt-membership-unverified'));
+    expect(fixture.state.agents['agent-successor'].metadata.releaseCandidate).toBeUndefined();
+  });
+
+  test('verifies an archived earlier attempt that left the live registry', async () => {
+    fixture.archive['agent-earlier'] = earlier();
+    list(fixture.archive['agent-earlier']);
+    expect(await recover()).toMatchObject({ recovered: true, branch });
+  });
+
+  test('holds for an archived attempt that is not completed, or one recorded on another instance', async () => {
+    fixture.archive['agent-earlier'] = earlier('running');
+    list(fixture.archive['agent-earlier']);
+    expect(await recover()).toEqual(hold('candidate-attempt-unsettled'));
+    fixture.task.metadata.releaseAttempts.attempts.shift();
+    list(earlier('completed', 'example-peer'));
+    expect(await recover()).toEqual(hold('candidate-peer-attempt-unsettled'));
+  });
+
+  test('holds when an earlier attempt lacks process settlement', async () => {
+    fixture.archive['agent-earlier'] = earlier();
+    list(fixture.archive['agent-earlier']);
+    fixture.processGate = async () => { fixture.processGate = null; fixture.processHold = 'candidate-process-proof-unavailable'; };
+    expect(await recover()).toEqual(hold('candidate-process-proof-unavailable'));
+  });
+
+  test('holds when membership changes during verification', async () => {
+    // Source settlement runs after the membership read, before the final recheck.
+    fixture.processGate = async () => { fixture.processGate = null; list(earlier()); };
+    expect(await recover()).toEqual(hold('candidate-attempt-membership-unverified'));
+    expect(fixture.state.agents['agent-successor'].metadata.releaseCandidateRecovery.status).toBe('held');
+  });
 });

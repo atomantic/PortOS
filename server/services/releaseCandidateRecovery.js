@@ -15,6 +15,7 @@ import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedChecko
   releaseCandidateBranch, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { readReleaseCandidateSettlement } from './releaseCandidateSettlement.js';
+import { RELEASE_ATTEMPTS_KEY, parseReleaseAttempts } from '../lib/releaseAttemptMembership.js';
 
 const refuse = reason => { throw Object.assign(new Error(reason), { recoveryReason: reason }); };
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -57,6 +58,31 @@ export async function releaseCandidateResumePointer(task, agentId) {
     || !hasReleaseCandidateBinding(source.metadata)) refuse('candidate-registration-unverified');
   await sourceCheckout(source);
   return { resumedFromAgentId: agentId };
+}
+
+/** Every recorded attempt except the successor must be this instance's,
+ * completed and process-settled. A retry count, PID or registry absence is not
+ * membership: only the store-owned dispatch record is. */
+async function settleAttemptMembership(task, source, successor, agents) {
+  const membership = parseReleaseAttempts(task?.metadata?.[RELEASE_ATTEMPTS_KEY]);
+  if (!membership?.complete) refuse('candidate-attempt-membership-unverified');
+  const instanceId = source.metadata.instanceId;
+  if (membership.attempts.some(row => row.instanceId !== instanceId)) refuse('candidate-peer-attempt-unsettled');
+  const listed = agent => membership.attempts.some(row => row.agentId === agent.id && row.startedAt === agent.startedAt);
+  if (!listed(source) || !listed(successor)) refuse('candidate-attempt-membership-unverified');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  for (const row of membership.attempts) {
+    if (row.agentId === successor.id) {
+      if (row.startedAt !== successor.startedAt) refuse('candidate-attempt-membership-unverified');
+      continue;
+    }
+    // Completed attempts leave the live registry; the service archive keeps them.
+    const record = row.agentId === source.id ? source : agents[row.agentId] || await getAgentRecord(row.agentId);
+    if (record?.id !== row.agentId || record.taskId !== task.id || record.startedAt !== row.startedAt
+      || record.status !== 'completed' || record.metadata?.instanceId !== instanceId) refuse('candidate-attempt-unsettled');
+    if (record !== source) await readReleaseCandidateSettlement(record);
+  }
+  return membership;
 }
 
 async function reviewSnapshot(checkout, pr, origin) {
@@ -211,11 +237,14 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
           if (agent.id === source.id || agent.id === successor.id || !releaseRun(agent) || agent.status === 'completed') continue;
           if (await realpath(repository(agent)) === repoPath) refuse('candidate-owner-ambiguous');
         }
+        const membership = await settleAttemptMembership(task, source, successor, state.agents);
         const settlement = await readReleaseCandidateSettlement(source);
         // Recheck physical generation, immutable head, forge and private review
         // bytes after the process/forge reads, before the single state commit.
         if (!equal(evidence, await inspectCandidate(source))) refuse('candidate-evidence-changed');
-        if ((await getTaskById(successor.taskId))?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
+        const current = await getTaskById(successor.taskId);
+        if (current?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
+        if (!equal(parseReleaseAttempts(current.metadata[RELEASE_ATTEMPTS_KEY]), membership)) refuse('candidate-attempt-membership-unverified');
         if (previous?.status === 'transferred') {
           if (!equal(previous.transfer, source.metadata.releaseCandidateSuccessor)) refuse('candidate-transfer-receipt-conflict');
           return { recovered: true, branch: target.branch, path: target.path,
