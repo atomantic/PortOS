@@ -293,5 +293,6 @@ export * from './musicVideoCutEffects.js';
 export * from './musicVideoTransitions.js';
 export * from './musicVideoShotEffects.js';
 export * from './musicVideoImageEffects.js';
+export * from './musicVideoGlitchCanvas.js';
 export * from './videoLoraStages.js';
 export * from './catalogImagePrompt.js';

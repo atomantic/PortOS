@@ -24,20 +24,23 @@ import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
  */
 
 import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
-import { isPathInsideDir } from '../../lib/pathSafety.js';
+import { isPathInsideDir, isTopLevelEntryName } from '../../lib/pathSafety.js';
 import { readZipArchive, unsafeZipEntryName } from '../../lib/zipArchive.js';
 import { createZip } from '../../lib/zipWriter.js';
 import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideoValidation.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
-import { scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { sceneTransitions } from '../../lib/musicVideoTransitions.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
 // and a render adds the staged scene media beside the document.
@@ -446,6 +449,8 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // The shipped engine before document end-frame and selected glitch effects.
+  '0cc9d52c4bbf82cec93b418e41e7cfe49a89f6feb0602c02ecdee6f00f9cf307',
   // #14276's engine: one photo at a time, before overlapping photo stacks (#14277).
   '934ee8ca6b42f642bec05019c208e54369d063f06b521384d20d54b0b8e0900a',
   '2844a20f3d6ad57022e97ae79705a9296479ff5a59cdebeaa9e48246d3d7a086',
@@ -467,6 +472,11 @@ const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
   '6289528435cb4b9cd535679a6492a6ecd22258213fc5361db13ae301dfda3cde',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
+
+function generatedLayeredEngineMatches(engine, reference) {
+  if (!reference || !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(reference))) return false;
+  try { return engine.equals(generatedCanvasPlaybackEngine(reference)); } catch { return false; }
+}
 
 /**
  * Explicitly adopt the shipped layered engine in a new immutable document.
@@ -491,12 +501,17 @@ export function upgradeDocumentEngine(projectId, directory) {
     const shipped = await readFile(join(TEMPLATE_ROOT, 'layered', 'engine.js'));
     const prior = engine ? await readFile(engine.abs) : null;
     if (!prior) throw refuse('This document has no supported layered engine', 'COMPOSITION_ENGINE_CUSTOM', 409);
-    if (engineDigest(prior) === engineDigest(shipped)) return { project, document: project.composition.document, changed: false };
-    if (!UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior))) {
+    const generated = project.composition.document.source?.kind === 'generated';
+    const referenceFile = generated && files.find(file => file.rel === 'engine-reference.js');
+    const reference = referenceFile ? await readFile(referenceFile.abs) : null;
+    const nextEngine = generated && reference ? generatedCanvasPlaybackEngine(shipped) : shipped;
+    if (engineDigest(prior) === engineDigest(nextEngine)) return { project, document: project.composition.document, changed: false };
+    if (generated && reference ? !generatedLayeredEngineMatches(prior, reference) : !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior))) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const loaded = await Promise.all(files.map(async file => ({
-      rel: file.rel, data: file.rel === 'engine.js' ? shipped
+      rel: file.rel, data: file.rel === 'engine.js' ? nextEngine
+        : generated && file.rel === 'engine-reference.js' ? shipped
         : file.rel === 'musicVideoImageEffects.js' && UPGRADABLE_IMAGE_EFFECT_MODULES.has(engineDigest(await readFile(file.abs)))
           ? await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url)) : await readFile(file.abs),
     })));
@@ -610,10 +625,28 @@ export async function documentDirectoryForRender(project) {
 }
 
 /** Every file a document ships, read into memory (the preview builder). */
-export async function readDocumentFiles(project, { requireLyricVisibility = true } = {}) {
+export async function readDocumentFiles(project, { requireLyricVisibility = true, requireSelectedEffects = true } = {}) {
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
+  if (requireSelectedEffects) {
+    const selectedTransitions = (project.scenes || []).some(scene => {
+      const transitions = sceneTransitions(scene);
+      return Boolean(transitions.transitionIn || transitions.transitionOut || transitions.shotGlitches?.length);
+    });
+    const endScenes = (project.scenes || []).filter(scene => scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
+      && scene.endImageId && documentSceneVisualLayer(project, scene, { generated: project.composition?.document?.source?.kind === 'generated' }) === 'still');
+    const selectedEnd = endScenes.some(scene => isTopLevelEntryName(scene.endImageId) && !scene.endImageId.includes('..')
+      && existsSync(join(PATHS.images, scene.endImageId)));
+    if (selectedTransitions || selectedEnd) {
+      const declarations = files.filter(file => ['engine.js', 'index.html'].includes(file.rel));
+      const marked = await Promise.all(declarations.map(async file =>
+        /^(?:\/\/ portos-selected-effects: 1|<!-- portos-selected-effects: 1 -->)$/m.test(await readFile(file.abs, 'utf8'))));
+      if (!marked.some(Boolean)) throw new ServerError('This composition does not declare support for the selected shot effects. Update the layered engine under Document source, or add effect support to the custom document.', {
+        status: 422, code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED',
+      });
+    }
+  }
   const sequences = (project.scenes || []).map(scene => scenePhotoSequence(scene)).filter(Boolean);
   if (sequences.length) {
     const engine = files.find(file => file.rel === 'engine.js');

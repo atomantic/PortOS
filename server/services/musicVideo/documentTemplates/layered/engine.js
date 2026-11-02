@@ -17,6 +17,7 @@
  */
 // portos-lyric-overlay-visibility: 1
 // portos-photo-sequence: 2
+// portos-selected-effects: 1
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
@@ -84,6 +85,7 @@
     .filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec) && s.endSec > s.startSec)
     .sort((a, b) => a.startSec - b.startSec)
     .map((s, i) => ({ ...s, index: i }));
+  const effectFrames = new Map((MV.effectFrames || []).map(effect => [effect.frame, effect.params]));
   function sceneAt(t) {
     let lo = 0; let hi = SCENES.length - 1; let r = -1;
     while (lo <= hi) { const m = (lo + hi) >> 1; if (SCENES[m].startSec <= t) { r = m; lo = m + 1; } else hi = m - 1; }
@@ -230,9 +232,13 @@
       if (!timing) return seekVideo(v, media, (media.inSec || 0) + local);
       return seekVideo(v, { ...media, inSec: timing.startSec }, timing.startSec + Math.max(0, local - timing.leadSec) * timing.rate);
     }
-    if (scene.photoSequence?.stacked && media.photos) return composePhotoStack(scene.photoSequence, media.photos, t);
     const photo = scene.photoSequence && media.photos?.[imageEffects.photoSequenceIndex(scene.photoSequence, t, { fps: FPS })];
-    return loadImage(photo?.src || media.src);
+    const source = scene.photoSequence?.stacked && media.photos
+      ? await composePhotoStack(scene.photoSequence, media.photos, t) : await loadImage(photo?.src || media.src);
+    // Keep both images ready: cooperative preview reuses this source while the
+    // effect changes inside the shot, so render must be able to blend either.
+    if (scene.imageEffect && media.end?.src) await loadImage(media.end.src);
+    return source;
   }
 
   // #14277: every photo visible at t, oldest first, onto one black frame, so the
@@ -543,7 +549,7 @@
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
     const authored = sectionFunction(t);
     const effect = source && scene?.visualLayer === 'still' && scene.media?.kind === 'image' && scene.imageEffect
-      ? imageEffects?.imageEffectState(scene.imageEffect, t - scene.startSec) : null;
+      ? imageEffects?.imageEffectState(scene.imageEffect, (frameOf(t) - Math.round(scene.startSec * FPS)) / FPS, { fps: FPS }) : null;
     if (scene) {
       const lt = t - scene.startSec; const d = scene.endSec - scene.startSec;
       const card = authored?.fn ? null : cardFor(scene);
@@ -553,7 +559,10 @@
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
         ctx.save();
         if (effect) ctx.filter = `contrast(${effect.contrast}) saturate(${effect.saturation})`;
-        drawCover(source, cameraView(scene, seg(t, scene.startSec, scene.endSec)), punch);
+        const view = cameraView(scene, seg(t, scene.startSec, scene.endSec));
+        drawCover(source, view, punch);
+        const end = effect?.end > 0 && scene.media.end?.src ? images.get(scene.media.end.src)?.el : null;
+        if (end) { ctx.globalAlpha = effect.end; drawCover(end, view, punch); }
         ctx.restore();
         if (effect) _flash(effect.fog, imageEffects.IMAGE_EFFECT_FOG_COLOR);
       }
@@ -578,6 +587,11 @@
     vignette(0.5);
     grain(t, 0.09);
     if (effect) _flash(effect.flash);
+    const glitch = effectFrames.get(frameOf(t));
+    if (glitch) {
+      if (!globalThis.__portosMusicVideoGlitch) throw new Error('Music-video effect painter is unavailable');
+      ctx.save(); globalThis.__portosMusicVideoGlitch(canvas, glitch, frameOf(t)); ctx.restore();
+    }
     drawHud(t);
     drawNarrativeEvents(state);
     if (lyricType) lyricType.draw(ctx, t, { width: W, height: H });

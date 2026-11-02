@@ -123,9 +123,10 @@ describe('music-video composition documents', () => {
     expect((await request(remote).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
   });
 
-  it('upgrades a recognized legacy engine without rewriting authored files or validating an old review', async () => {
+  it.each(['musicVideoLayeredEngine.txt', 'musicVideoLayeredEngineBeforeEffects.js'])(
+    'upgrades the recognized %s engine without rewriting authored files or validating an old review', async fixture => {
     // Historical shipped bytes pin recognition independently of today's engine.
-    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
+    const legacy = await readFile(new URL(`./fixtures/${fixture}`, import.meta.url));
     const authored = { ...FILES, 'engine.js': legacy, 'generated.js': 'window.PORTOS_MV_GENERATED = { sections: {} };' };
     const imported = await uploadZip(project.id, createZip(Object.entries(authored).map(([name, data]) => ({ name, data }))));
     const original = imported.body.document.directory;
@@ -159,6 +160,10 @@ describe('music-video composition documents', () => {
     const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: PAGE }, { name: 'engine.js', data: Buffer.concat([legacy, Buffer.from('\n// authored customization')]) }]));
     const directory = imported.body.document.directory;
     const path = `/api/music-video/${project.id}/composition/document/engine/upgrade`;
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
+    } }));
+    expect((await request(app).get(`/api/music-video/${project.id}/composition/document/preview`)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
     const customized = await request(app).post(path).send({ directory });
     expect(customized.status).toBe(409);
     expect(customized.body.code).toBe('COMPOSITION_ENGINE_CUSTOM');
@@ -166,6 +171,23 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, composition: { ...current.composition, documentDraft: current.composition.document } } }));
     expect((await request(app).post(path).send({ directory })).body.code).toBe('COMPOSITION_DRAFT_STALE');
     expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
+  });
+
+  it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
+    const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: legacy }]));
+    const original = imported.body.document.directory;
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
+    } }));
+    const preview = `/api/music-video/${project.id}/composition/document/preview`;
+    const unsupported = await request(app).get(preview);
+    expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
+    expect(unsupported.body.error).toMatch(/Update the layered engine/);
+    const upgraded = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
+    expect(upgraded.body.changed).toBe(true);
+    expect((await request(app).get(preview)).status).toBe(200);
   });
 
   it('preserves source document bytes when a fork imports revised code, including after source removal', async () => {

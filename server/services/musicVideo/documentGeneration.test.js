@@ -32,7 +32,8 @@ vi.mock('../promptRunner.js', () => ({
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { importDocumentTemplate } = await import('./compositionDocument.js');
+const { importDocumentTemplate, upgradeDocumentEngine } = await import('./compositionDocument.js');
+const { generatedCanvasPlaybackEngine } = await import('./generatedCanvasPlayback.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, reviseMixedMediaEvents, readMixedMediaCandidate, acceptMixedMediaDocument } = await import('./documentGeneration.js');
 
 const source = (color) => `function render(ctx, env) { ctx.fillStyle = '${color}'; ctx.fillRect(0, 0, env.width, env.height); }`;
@@ -803,6 +804,69 @@ describe('treatment-driven mixed-media document authoring', () => {
     } }));
     await expect(acceptMixedMediaDocument(id, second.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
     expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(second.directory);
+  });
+
+  it('revises an older generated candidate with selected effects without replacing its other sections', async () => {
+    const id = await fixture();
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current,
+      scenes: current.scenes.map(scene => scene.sceneId === 's-still' ? { ...scene, glitches: [{ atSec: 1, style: 'light-leak' }] } : scene),
+    } }));
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
+    const before = await manifestAt(first);
+    h.response = response({ still: '#00ff00' });
+    const revised = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
+    const after = await manifestAt(revised);
+    expect(after.sections.map(section => section.source)).toEqual([before.sections[0].source, source('#00ff00'), before.sections[2].source]);
+    expect((await readFile(join(PATHS.data, revised.directory, 'engine.js'), 'utf8'))).toContain('portos-selected-effects: 1');
+  });
+
+  it('upgrades an unchanged generated layered engine without changing authored sections', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
+  });
+
+  it('refuses to replace a customized generated layered engine', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const customized = Buffer.concat([generatedCanvasPlaybackEngine(legacy), Buffer.from('\n// authored customization')]);
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
+    await acceptMixedMediaDocument(id, first.directory);
+    await expect(upgradeDocumentEngine(id, first.directory)).rejects.toMatchObject({ code: 'COMPOSITION_ENGINE_CUSTOM' });
+    expect(await readFile(join(PATHS.data, first.directory, 'engine.js'))).toEqual(customized);
+  });
+
+  it('upgrades an older generated document with a plain layered engine and no reference file', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), legacy);
+    await unlink(join(PATHS.data, first.directory, 'engine-reference.js'));
+    await unlink(join(PATHS.data, first.directory, 'preview-playback.json'));
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    await expect(readFile(join(PATHS.data, result.document.directory, 'engine-reference.js'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });
 
   it('refuses a candidate after the uploaded master song changes without changing its analysis shape', async () => {

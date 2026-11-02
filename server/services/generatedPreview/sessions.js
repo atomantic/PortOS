@@ -77,6 +77,9 @@ function publicFailure(error) {
   if (code === 'PREVIEW_ISOLATION_UNAVAILABLE') {
     return { code, message: 'Isolated preview is unavailable on this host. Generated HTML is not run in this browser.' };
   }
+  if (code === 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED') {
+    return { code, message: 'This composition cannot draw the selected shot effects. Update the layered engine under Document source, or add effect support to the custom document.' };
+  }
   const safe = new Set(['NOT_ANALYZED', 'NO_TIMED_LYRICS', 'NO_TIMELINE', 'COMPOSITION_DOCUMENT_MISSING', 'NOT_CODE_MODE', 'NOT_FOUND']);
   if (safe.has(code)) return { code, message: String(error.message || 'Preview unavailable').slice(0, 300) };
   console.error(`❌ Generated preview failed: ${error?.message || error}`);
