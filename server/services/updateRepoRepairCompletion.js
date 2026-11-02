@@ -80,6 +80,13 @@ async function captureRepository(dir, ignored = new Set()) {
     paths(['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD']),
   ]);
   const links = await gitlinks(dir, head);
+  const { getDefaultBranch } = await import('./git.js');
+  const defaultBranch = links.size ? await getDefaultBranch(dir, { strict: true, allowRemote: false }) : null;
+  // Only pins already on the parent's published default may omit clean children.
+  // A local parent commit can introduce an otherwise clean, unpublished child commit.
+  const publishedTree = defaultBranch ? (await execGit(['ls-tree', '-r', '-z', `refs/remotes/origin/${defaultBranch}`], dir,
+    { ignoreExitCode: true })).stdout : '';
+  const publishedPins = new Set(publishedTree.split('\0'));
   const submodules = [];
   for (const link of links.values()) {
     childPath.parse(link.path);
@@ -87,11 +94,16 @@ async function captureRepository(dir, ignored = new Set()) {
     if (!info || info.isDirectory() && (await readdir(join(dir, link.path))).length === 0) {
       // An unchanged, uninitialized child contains no local work to preserve.
       if (link.indexGitlinks.length === 1 && link.indexGitlinks[0].stage === 0
-        && link.indexGitlinks[0].commit === link.headGitlink) continue;
+        && link.indexGitlinks[0].commit === link.headGitlink
+        && publishedPins.has(`160000 commit ${link.headGitlink}\t${link.path}`)) continue;
       if (!link.indexGitlinks.length) continue; // Parent deletion is captured as a file deletion below.
       throw new Error('Repair submodule evidence is unreadable');
     }
     const child = await childDirectory(dir, link.path);
+    const unchangedPin = link.indexGitlinks.length === 1 && link.indexGitlinks[0].stage === 0
+      && link.indexGitlinks[0].commit === link.headGitlink && await git(child, ['rev-parse', 'HEAD']) === link.headGitlink
+      && publishedPins.has(`160000 commit ${link.headGitlink}\t${link.path}`);
+    if (unchangedPin && !(await execGit(['status', '--porcelain', '-z', '--ignore-submodules=none', '--untracked-files=all'], child)).stdout) continue;
     submodules.push({ ...link, repository: await captureRepository(child) });
   }
   const childPaths = new Set(submodules.filter(link => link.headGitlink && link.indexGitlinks.length).map(link => link.path));

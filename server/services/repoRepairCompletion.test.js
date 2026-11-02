@@ -260,6 +260,30 @@ describe('checkout repair public completion boundary', () => {
     expect(await evaluate()).toBe(true);
   });
 
+  it('excludes unchanged published children with no origin without overlooking new dirty work', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child'); git(child, 'remote', 'remove', 'origin');
+    writeFileSync(join(facts.repo, 'README.md'), 'parent work\n');
+    const queued = await queueRepoRepairTask(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
+    expect(queued.options.repoRepairContract.submodules).toEqual([]);
+    await dispatch(); git(facts.repo, 'commit', '-am', 'preserve parent'); publish();
+    expect(await evaluate()).toBe(true);
+    writeFileSync(join(child, 'README.md'), 'new child work\n');
+    await expect(captureRepoRepairContract(await checkUpdateRepoReadiness({ repoPath: facts.repo }))).rejects.toThrow();
+  });
+
+  it('captures a clean child commit newly pinned by an unpublished parent commit', async () => {
+    repo(); const child = submodule(facts.repo, 'deps/child');
+    writeFileSync(join(child, 'README.md'), 'local pinned commit\n'); git(child, 'commit', '-am', 'local pin');
+    git(facts.repo, 'commit', '-am', 'pin local child commit'); await dispatch();
+    expect(facts.task.metadata.repoRepairContract.submodules).toHaveLength(1);
+    const parentHead = git(facts.repo, 'rev-parse', 'HEAD'); publish();
+    const childHead = git(child, 'rev-parse', 'HEAD'); git(child, 'reset', '--hard', 'origin/main');
+    expect(await evaluate()).toBe(false);
+    git(child, 'reset', '--hard', childHead); publish(child);
+    expect(await evaluate()).toBe(true);
+    expect(git(facts.repo, 'rev-parse', 'preserved-work')).toBe(parentHead);
+  });
+
   it('requires preservation of a staged parent gitlink independent of the child checkout HEAD', async () => {
     repo(); const child = submodule(facts.repo, 'deps/child');
     writeFileSync(join(child, 'pinned.txt'), 'staged pointer work\n'); git(child, 'add', '.'); git(child, 'commit', '-m', 'staged pin');
