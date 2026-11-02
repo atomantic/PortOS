@@ -37,6 +37,7 @@ const {
   classifyFixTier,
   buildFixDiagnostics,
   escalateProviderFailure,
+  handleErrorRecovery,
   FIX_TIERS,
 } = await import('./autoFixer.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
@@ -66,6 +67,37 @@ function emitProviderFailure({ provider = 'Primary CLI', model = 'm-1', runId = 
     },
   });
 }
+
+describe('autoFixer investigation outcome logs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    _resetAutoFixerForTests();
+  });
+
+  it.each([false, true])('reports created or reused tasks at each entry point (duplicate=%s)', async (duplicate) => {
+    const task = { id: 'outcome-task', duplicate };
+    addTask.mockResolvedValueOnce(task).mockResolvedValueOnce(task).mockResolvedValueOnce(task);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    emitProviderFailure();
+    await vi.advanceTimersByTimeAsync(5500);
+    emitCriticalError();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await handleErrorRecovery('MANUAL_ERROR')).toEqual(task);
+
+    const lines = log.mock.calls.map(([line]) => line);
+    expect(lines).toContain(`✅ AI provider investigation task ${duplicate ? 'reused' : 'filed'}: outcome-task [tier 4: escalate]`);
+    expect(lines).toContain(`✅ Auto-fix task ${duplicate ? 'reused' : 'created'}: outcome-task`);
+    expect(lines).toContain(`✅ Recovery task ${duplicate ? 'reused' : 'created'}: outcome-task`);
+  });
+});
 
 describe('autoFixer — defer + noteFallbackHandled', () => {
   beforeEach(() => {

@@ -576,7 +576,7 @@ async function createAIProviderInvestigationTask(error) {
       scope: ctx.provider
     })
   });
-  console.log(`✅ AI provider investigation task filed: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
+  console.log(`✅ AI provider investigation task ${task.duplicate ? 'reused' : 'filed'}: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
   return task;
 }
 
@@ -751,7 +751,7 @@ async function createAutoFixTask(error) {
       scope: error.code
     })
   });
-  console.log(`✅ Auto-fix task created: ${task.id}`);
+  console.log(`✅ Auto-fix task ${task.duplicate ? 'reused' : 'created'}: ${task.id}`);
 
   return task;
 }
@@ -817,7 +817,7 @@ export async function handleErrorRecovery(errorCode, context) {
     context: context || `User requested investigation of error code: ${errorCode}`,
     fingerprint: investigationFingerprint({ kind: 'manual-recovery', scope: errorCode })
   });
-  console.log(`✅ Recovery task created: ${task.id}`);
+  console.log(`✅ Recovery task ${task.duplicate ? 'reused' : 'created'}: ${task.id}`);
 
   return task;
 }
