@@ -1333,6 +1333,38 @@ describe('streamDetection frame sequence', () => {
     });
   });
 
+  it('reads PORT and VITE_PORT as exact independent active keys', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), 'VITE_PORT=6101\nSOME_PORT=6200\nPORT=6100\n');
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 6100, devUiPort: 6101, uiPort: 6100 });
+  });
+
+  it('ignores commented keys and accepts quoted numeric ports', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), '# PORT=6109\nPORT="6100"\n# VITE_PORT=6200\nVITE_PORT=\'6101\'\n');
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 6100, devUiPort: 6101, uiPort: 6100 });
+  });
+
+  it('keeps ecosystem ports as fallback when active .env ports are invalid', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), 'PORT=70000\nVITE_PORT=0\n');
+    writeFileSync(join(dir, 'ecosystem.config.cjs'),
+      `module.exports = { apps: [{ name: 'example-app', script: 'server.js', ports: { api: 4321, ui: 4322, devUi: 4323 } }] };\n`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 4321, uiPort: 4322, devUiPort: 4323 });
+  });
+
   it('stops after the validate error frame when the directory is missing', async () => {
     dir = mkdtempSync(join(tmpdir(), 'detect-frames-'));
     const { frames, completed } = await run(join(dir, 'does-not-exist'));
