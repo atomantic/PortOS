@@ -348,6 +348,24 @@ describe('Cast & Sets per-image actions', () => {
     expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['cast:dad'] }, { silent: true });
   });
 
+  it('keeps an invalid prop line in the editor instead of silently deleting it', async () => {
+    const props = [{ id: 'camera', name: 'Camera', description: 'a red camera' }];
+    const plan = { ...photoPlan, props: { key: 'props', kind: 'props', label: 'Props', prompt: 'props', deps: [], refKeys: [] } };
+    const withProps = sheet('review', { direction: { ...direction, props }, plan });
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: withProps });
+    render(<Harness initial={withProps} locked={false} />);
+    fireEvent.click(card('Props').getByRole('button', { name: 'Edit Props' }));
+    const field = card('Props').getByLabelText(/One prop per line/);
+    fireEvent.change(field, { target: { value: 'Camera a red camera' } });
+    fireEvent.click(card('Props').getByRole('button', { name: 'Save and re-render' }));
+    expect(card('Props').getByRole('alert')).toHaveTextContent(/name and description/);
+    expect(field.value).toBe('Camera a red camera');
+    expect(api.editMusicVideoCastAndSetsDirection).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: 'Camera: a red camera' } });
+    await act(async () => { fireEvent.click(card('Props').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project', { props: [{ ...props[0], owner: '' }] }, { silent: true });
+  });
+
   it('edits structured wardrobe sections and exposes automatic test controls', async () => {
     const photoDirection = { ...direction, looks: [{ name: 'Rain', description: 'coat', chapters: 'chorus' }] };
     const plan = { ...photoPlan,
