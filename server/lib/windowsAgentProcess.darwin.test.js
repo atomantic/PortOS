@@ -146,6 +146,25 @@ setInterval(()=>{},1000);`);
     } finally { child.kill(); await closed; }
   }, 30000);
 
+  it('still stops and settles a PTY agent whose server-side terminal has stopped draining output', async () => {
+    const pty = await import('node-pty');
+    await reserveWindowsAgentProcess(agent);
+    const flood = `const chunk = 'x'.repeat(65536); const write = () => process.stdout.write(chunk, write); write();`;
+    const prepared = prepareWindowsAgentLaunch(agent.id, process.execPath, ['-e', flood], { cwd: root, env: process.env, pty: true });
+    const child = watchWindowsAgentProcess(pty.spawn(prepared.command, prepared.args, { cwd: root, env: process.env, cols: 80, rows: 24 }), prepared);
+    const closed = new Promise(resolve => child.onExit(resolve));
+    let received = 0;
+    child.onData(data => { received += data.length; });
+    try {
+      await vi.waitFor(() => expect(received).toBeGreaterThan(0), { timeout: 10000 });
+      child.pause();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      child.kill();
+      await waitForFile(join(root, 'settled.json'));
+      expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0, exitCode: 143 });
+    } finally { child.resume(); child.kill(); await closed; }
+  }, 30000);
+
   it('keeps helper-missing, lost-supervisor, proofless and transplanted receipts held', async () => {
     const path = process.env.PATH;
     const empty = join(PATHS.data, 'no-python');

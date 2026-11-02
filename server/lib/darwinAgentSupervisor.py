@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 GRACE_SECONDS = 5
 POLL_SECONDS = 0.05
 HELLO_TIMEOUT_SECONDS = 15
+RELAY_BUFFER_LIMIT = 1 << 20
 PROC_PIDTBSDINFO, BSDINFO_SIZE = 3, 136
 PROC_PIDCOALITIONINFO, COALITIONINFO_SIZE = 20, 40
 SOL_LOCAL, LOCAL_PEERPID = 0, 2
@@ -221,22 +222,26 @@ def wait_for_hello(listener, token, own):
     return connection, coalition
 
 
-def relay(source, target):
+def read_into(source, pending):
+    """Append what the source has; 'closed' at EOF or once the source failed."""
     try:
         data = os.read(source, 65536)
+    except BlockingIOError:
+        return 'wait'
     except OSError:
-        return False
-    if not data:
-        return False
-    view = memoryview(data)
-    while view:
-        try:
-            view = view[os.write(target, view):]
-        except BlockingIOError:
-            select.select([], [target], [], POLL_SECONDS)
-        except OSError:
-            return True  # the reader went away; keep draining the agent
-    return True
+        return 'closed'
+    pending += data
+    return 'data' if data else 'closed'
+
+
+def flush(target, pending):
+    """Write what the target accepts without blocking; a gone reader drops it."""
+    try:
+        del pending[:os.write(target, pending)]
+    except BlockingIOError:
+        pass
+    except OSError:
+        pending.clear()
 
 
 def copy_window_size(master):
@@ -300,18 +305,25 @@ def supervise(request, directory):
         stage = 'started-receipt'
         proof = {'kind': PROOF_KIND, 'version': 1, 'coalition': str(coalition)}
         write_receipt(directory, 'started.json', {'owner': owner, 'pid': root, 'created': created, 'proof': proof})
-        stdin_open = pty
+        # PTY relay buffers. A full buffer stops reading its source, so a server
+        # that stops draining applies backpressure to the agent while stops and
+        # coalition accounting keep running in this loop.
+        stdin_open, output, keyboard = pty, bytearray(), bytearray()
         while True:
             stage = 'reap'
             readers = [connection] if connection else []
+            writers = [1] if output else []
             if master is not None:
-                readers.append(master)
-                if stdin_open:
+                if len(output) < RELAY_BUFFER_LIMIT:
+                    readers.append(master)
+                if stdin_open and len(keyboard) < RELAY_BUFFER_LIMIT:
                     readers.append(0)
-            ready = []
-            if readers:
+                if keyboard:
+                    writers.append(master)
+            ready = writable = []
+            if readers or writers:
                 try:
-                    ready = select.select(readers, [], [], POLL_SECONDS)[0]
+                    ready, writable = select.select(readers, writers, [], POLL_SECONDS)[:2]
                 except InterruptedError:
                     pass
             else:
@@ -325,13 +337,18 @@ def supervise(request, directory):
                     pass
                 connection.close()
                 connection = None
-            if master is not None and master in ready and not relay(master, 1):
+            if master in ready and read_into(master, output) == 'closed':
                 os.close(master)
                 master = None
-            if 0 in ready and master is not None and not relay(0, master):
+                keyboard.clear()
+            if 0 in ready and read_into(0, keyboard) == 'closed':
                 # The server's terminal closed: that is a hangup, not EOF input.
                 stdin_open = False
                 request_stop(None, None)
+            if master is not None and master in writable:
+                flush(master, keyboard)
+            if 1 in writable:
+                flush(1, output)
             if resized and master is not None:
                 resized = False
                 copy_window_size(master)
@@ -349,8 +366,13 @@ def supervise(request, directory):
             if connection is None and live_members(coalition) == 0:
                 break
         if master is not None:
-            while relay(master, 1):
+            while read_into(master, output) == 'data':
                 pass
+        # The tree is gone; give the server a bounded chance at its last output.
+        deadline = time.monotonic() + 1
+        while output and time.monotonic() < deadline:
+            if select.select([], [1], [], POLL_SECONDS)[1]:
+                flush(1, output)
         stage = 'exit-code'
         if status is None:
             # Only an escalated stop kills the stub before it reports.
