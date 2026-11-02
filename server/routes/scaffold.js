@@ -7,7 +7,8 @@ import { exec } from '../lib/childProcess.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { promisify } from 'util';
 import { platform } from 'os';
-import { createApp, getReservedPorts, notifyAppsChanged } from '../services/apps.js';
+import { createApp, notifyAppsChanged } from '../services/apps.js';
+import { allocatePorts } from '../services/ports.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, scaffoldDirectoriesQuerySchema, scaffoldSchema, scaffoldTemplateCreateBodySchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
@@ -180,37 +181,6 @@ router.post('/templates/create', asyncHandler(async (req, res) => {
   return scaffoldApp(req, res);
 }));
 
-/**
- * Find the next available ports starting from USER_APP_PORT_START
- * Returns { apiPort, uiPort } for the next contiguous pair
- */
-const USER_APP_PORT_START = 5570;
-const USER_APP_PORT_END = 5599;
-
-async function findNextAvailablePorts(needsApi, needsUi) {
-  const reservedPorts = await getReservedPorts();
-  const reserved = new Set(reservedPorts);
-
-  let apiPort = null;
-  let uiPort = null;
-
-  for (let port = USER_APP_PORT_START; port <= USER_APP_PORT_END; port++) {
-    if (reserved.has(port)) continue;
-
-    if (needsApi && !apiPort) {
-      apiPort = port;
-      reserved.add(port);
-    } else if (needsUi && !uiPort) {
-      uiPort = port;
-      reserved.add(port);
-    }
-
-    if ((!needsApi || apiPort) && (!needsUi || uiPort)) break;
-  }
-
-  return { apiPort, uiPort };
-}
-
 // Shared scaffold logic
 async function scaffoldApp(req, res) {
   // Validate + normalize the COMPLETE request before ANY filesystem write or
@@ -235,9 +205,23 @@ async function scaffoldApp(req, res) {
 
   const needs = templateNeedsPorts[template] || { api: false, ui: false };
   if ((needs.api && !apiPort) || (needs.ui && !uiPort)) {
-    const allocated = await findNextAvailablePorts(needs.api && !apiPort, needs.ui && !uiPort);
-    if (needs.api && !apiPort) apiPort = allocated.apiPort;
-    if (needs.ui && !uiPort) uiPort = allocated.uiPort;
+    const needsApiPort = needs.api && !apiPort;
+    const needsUiPort = needs.ui && !uiPort;
+    const explicitlyAssignedPorts = [apiPort, uiPort].filter(Boolean);
+    const allocated = await allocatePorts(
+      Number(needsApiPort) + Number(needsUiPort),
+      explicitlyAssignedPorts
+    );
+    if (allocated.length !== Number(needsApiPort) + Number(needsUiPort)
+      || allocated.some((port) => explicitlyAssignedPorts.includes(port))) {
+      throw new ServerError('No available ports found for application scaffolding', {
+        status: 409,
+        code: 'NO_PORTS_AVAILABLE'
+      });
+    }
+    let nextPort = 0;
+    if (needsApiPort) apiPort = allocated[nextPort++];
+    if (needsUiPort) uiPort = allocated[nextPort];
   }
 
   // Sanitize name for directory

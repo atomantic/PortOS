@@ -81,13 +81,13 @@ export async function checkPortsAvailable(ports) {
  * Allocate N ports, preferring the managed band and overflowing just past it.
  * Skips listeners, ports reserved by registered apps, and browser-blocked ports.
  */
-export async function allocatePorts(count = 1) {
+export async function allocatePorts(count = 1, excludedPorts = []) {
   const reservedPorts = await getReservedPorts();
   return findAvailablePorts(
     DEFAULT_PORT_RANGE_START,
     DEFAULT_PORT_RANGE_END + PORT_OVERFLOW,
     count,
     undefined,
-    reservedPorts
+    [...reservedPorts, ...excludedPorts]
   );
 }

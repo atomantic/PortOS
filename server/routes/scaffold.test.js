@@ -39,6 +39,10 @@ vi.mock('../services/apps.js', () => ({
   notifyAppsChanged: vi.fn()
 }));
 
+vi.mock('../services/ports.js', () => ({
+  allocatePorts: vi.fn().mockResolvedValue([5570, 5571])
+}));
+
 vi.mock('../lib/workspaceRoots.js', () => ({
   isWithinAllowedRoots: vi.fn(() => true),
   outsideAllowedRootsMessage: vi.fn((realPath, { field = 'path' } = {}) => `${field} is outside allowed directories: ${realPath}`)
@@ -60,6 +64,7 @@ import { writeFile, readdir, rm } from 'fs/promises';
 import { exec } from '../lib/childProcess.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { createApp } from '../services/apps.js';
+import { allocatePorts } from '../services/ports.js';
 import { scaffoldVite } from './scaffoldVite.js';
 import { scaffoldPortOS } from './scaffoldPortOS.js';
 import { scaffoldXcode } from '../services/xcodeScaffold.js';
@@ -155,6 +160,39 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     // (directory creation) and registered the app.
     expect(ensureDir).toHaveBeenCalledWith(join('/tmp/workspace', 'my-app'));
     expect(createApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('excludes an explicit sibling port from automatic allocation', async () => {
+    allocatePorts.mockResolvedValueOnce([5571]);
+    const res = await request(app).post('/api/scaffold').send({
+      name: 'My App', template: 'vite-express', parentDir: '/tmp/workspace', apiPort: 5570
+    });
+
+    expect(res.status).toBe(200);
+    expect(allocatePorts).toHaveBeenCalledWith(1, [5570]);
+    expect(scaffoldVite).toHaveBeenCalledWith(expect.objectContaining({ apiPort: 5570, uiPort: 5571 }));
+  });
+
+  it('rejects an allocator result that collides with an explicit sibling port', async () => {
+    allocatePorts.mockResolvedValueOnce([5570]);
+    const res = await request(app).post('/api/scaffold').send({
+      name: 'My App', template: 'vite-express', parentDir: '/tmp/workspace', apiPort: 5570
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_PORTS_AVAILABLE');
+    expectZeroMutations();
+  });
+
+  it('returns port exhaustion before filesystem writes', async () => {
+    allocatePorts.mockResolvedValueOnce([]);
+    const res = await request(app).post('/api/scaffold').send({
+      name: 'My App', template: 'vite-react', parentDir: '/tmp/workspace'
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('NO_PORTS_AVAILABLE');
+    expectZeroMutations();
   });
 
   it('bounds every git stage without prompting or disabling hooks and signing', async () => {
