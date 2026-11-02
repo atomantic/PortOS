@@ -179,7 +179,7 @@ export default function RollingCostCard({ coverage, fleetRevision }) {
         </div>
       </div>
 
-      {(data?.pricingIncomplete || coverage?.classificationUnreported?.length > 0 || coverage?.missingInstances?.length > 0 || coverage?.notSyncingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
+      {(data?.pricingIncomplete || coverage?.classificationUnreported?.length > 0 || coverage?.missingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
 
       <div className="flex gap-1" role="group" aria-label="Chart range">
         {RANGES.map((r) => (

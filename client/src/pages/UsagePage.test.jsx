@@ -49,6 +49,22 @@ beforeEach(() => {
 });
 
 describe('UsagePage subscription savings', () => {
+  it('describes retained opted-out history without showing a missing-data warning', async () => {
+    api.getUsage.mockResolvedValue({ ...usage,
+      coverage: { instanceCount: 2, missingInstances: [], notSyncingInstances: ['Saved peer'], incompleteMonths: [],
+        classificationUnreported: [], transcriptUnreported: [], hourlyIncomplete: false },
+      imageRenders: { incomplete: false, codexSessions: 0, savedOutputs: 0 },
+      freeTier: { providers: [], blocks: [], blocksIncomplete: false },
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const note = await screen.findByText('Usage sync is off for Saved peer. Their saved history remains included.');
+    expect(note).not.toHaveClass('text-port-warning');
+    expect(screen.queryByText(/No usage snapshot from/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Partial chart: some instance history/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/some instances did not report complete image receipts/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/have not reported their observed block history/)).not.toBeInTheDocument();
+  });
+
   it('updates fleet counts with the selected period and identifies unavailable data', async () => {
     const report = (sessions, tokens, cost) => ({
       providers: [{ id: 'example', name: 'Example', sessions, messages: sessions, tokensIn: tokens, tokensOut: 0,
@@ -101,6 +117,14 @@ describe('UsagePage subscription savings', () => {
     }],
     totals: { monthlyCost: 0, periodCost: 0, apiCost: 0, savings: 0, savingsPercent: null, multiplier: null }
   };
+
+  it('does not label complete subscription savings partial because fleet pricing is incomplete', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, subscriptionSavings: { ...savings, costIncomplete: false },
+      coverage: { instanceCount: 2, pricingIncomplete: true, missingInstances: [], notSyncingInstances: [], incompleteMonths: [] } });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText(/Fleet API cost includes only classified usage and is incomplete/)).toBeInTheDocument();
+    expect(screen.queryByText(/API costs and savings are incomplete/)).not.toBeInTheDocument();
+  });
 
   it('renders the savings editor from the report payload', async () => {
     api.getUsage.mockResolvedValue({ ...usage, subscriptionSavings: savings });

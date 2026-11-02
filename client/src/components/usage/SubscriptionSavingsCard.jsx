@@ -161,7 +161,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
           <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
             What your quota plans cost over {windowLabel}, against the API-rate equivalent across instances marked as using subscriptions. Each shared plan is priced once.
           </p>
-          {savings.costIncomplete && <p className="text-xs text-port-warning">Some provider classifications are unavailable; API costs and savings are incomplete.</p>}
+          {savings.costIncomplete && <p className="text-xs text-port-warning">Some subscription-covered usage or provider classifications are unavailable; API costs and savings are incomplete.</p>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {dirty && (

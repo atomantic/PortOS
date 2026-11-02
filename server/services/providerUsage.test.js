@@ -391,6 +391,7 @@ describe('getProviderQuotas', () => {
       { instanceId: 'a', name: 'Peer A', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [{ key: 'week', resetsAt: '2026-01-02T00:00:00.000Z', percentUsed: 100 }], activity: [] }] },
       { instanceId: 'b', name: 'Peer B', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [], activity: [{ period: 'week', requests: 2, sessions: 1 }] }] },
       { instanceId: 'old', name: 'Old peer', quotaReported: false, quotas: [] },
+      { instanceId: 'inactive', name: 'Inactive peer', quotaReported: false, usageExpected: false, quotas: [] },
     ]);
     const result = await getProviderQuotas({ scope: 'instances' });
     expect(getFleetQuotaEntries).toHaveBeenCalledWith({ includeEmpty: true });
