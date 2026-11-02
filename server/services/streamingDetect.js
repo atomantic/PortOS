@@ -4,6 +4,7 @@ import { join, basename, dirname } from 'path';
 import { homedir } from 'os';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { parseEnvContents } from '../lib/portosEnv.js';
 import { detectAppIcon } from './appIconDetect.js';
 import { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType } from './appProcessTypes.js';
 export { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType };
@@ -1266,10 +1267,17 @@ async function applyEnvPorts(dirPath, result, configFiles) {
   const envPath = join(dirPath, '.env');
   if (!existsSync(envPath)) return;
   const content = await readFile(envPath, 'utf-8').catch(() => '');
-  const portMatch = content.match(/PORT\s*=\s*(\d+)/i);
-  if (portMatch) result.apiPort = parseInt(portMatch[1], 10);
-  const viteMatch = content.match(/VITE_PORT\s*=\s*(\d+)/i);
-  if (viteMatch) result.devUiPort = parseInt(viteMatch[1], 10);
+  const env = parseEnvContents(content);
+  const readTcpPort = (key) => {
+    const value = env.get(key);
+    if (value === undefined || !/^\d+$/.test(value)) return null;
+    const port = Number(value);
+    return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+  };
+  const apiPort = readTcpPort('PORT');
+  if (apiPort !== null) result.apiPort = apiPort;
+  const devUiPort = readTcpPort('VITE_PORT');
+  if (devUiPort !== null) result.devUiPort = devUiPort;
   configFiles.push('.env');
 }
 
