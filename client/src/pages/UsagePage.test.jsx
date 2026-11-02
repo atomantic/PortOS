@@ -306,10 +306,10 @@ describe('UsagePage per-provider refresh', () => {
       { ...card('codex', 'Codex', 60), origin: { self: false, instanceId: 'peer-b', name: 'Peer B' } },
     ], unreportedInstances: ['Offline'] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    expect(await screen.findByText((text) => text.startsWith(peerName))).toHaveClass('break-words');
-    expect(screen.getByText(/Quota reporting is unavailable from Offline/)).toBeInTheDocument();
-    expect(screen.getByText(/Account identity is unavailable/)).toBeInTheDocument();
-    expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(await screen.findByText('40% used')).toBeInTheDocument();
+    expect(screen.queryByText((text) => text.includes(peerName))).not.toBeInTheDocument();
+    expect(screen.queryByText(/Quota reporting is unavailable from Offline/)).not.toBeInTheDocument();
+    expect(screen.getByText(/readings from the same provider are assumed to share an account/i)).toBeInTheDocument();
     expect(screen.queryByText('20% used')).not.toBeInTheDocument();
     expect(screen.getAllByRole('heading', { name: 'Grok' })).toHaveLength(1);
     expect(screen.getByText('60% used')).toBeInTheDocument();
@@ -427,7 +427,7 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.getByText(/Scrape failed/)).toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], activity: [] }] });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
-    expect(await screen.findByText('No rate-limit data reported')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh Grok usage' })).toBeEnabled());
     expect(screen.getByText(/Scrape failed/)).toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, fetchedAt: new Date().toISOString() }] });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
@@ -447,6 +447,30 @@ describe('UsagePage per-provider refresh', () => {
       { ...card('grok', 'Grok', 20), limits: [], error: 'Forced scrape failed' }] }));
     expect(await screen.findByText(/Forced scrape failed/)).toBeInTheDocument();
     expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
+  it('shows an unsuccessful live refresh even when fallback telemetry contains a meter', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 25), refreshUnavailable: true }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('25% used')).toBeInTheDocument();
+    expect(screen.getByText('Live quota refresh was unavailable; displayed readings may be out of date.')).toBeInTheDocument();
+    expect(screen.queryByText(/^This instance/)).not.toBeInTheDocument();
+  });
+
+  it('shows a failed live refresh when its local fallback expired but a peer meter is current', async () => {
+    const local = { ...card('grok', 'Grok', 20), fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'Local Box' } };
+    const peer = { ...card('grok', 'Grok', 55), fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('55% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], quotaStatus: 'expired', error: 'Old window reset', refreshUnavailable: true }, peer] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('Live quota refresh was unavailable; displayed readings may be out of date.')).toBeInTheDocument();
+    expect(screen.getByText('55% used')).toBeInTheDocument();
+    expect(screen.queryByText('Old window reset')).not.toBeInTheDocument();
+    expect(screen.queryByText('Peer')).not.toBeInTheDocument();
   });
 
   it('retains a forced refresh network failure after a cached read overtakes it', async () => {
@@ -479,28 +503,29 @@ describe('UsagePage per-provider refresh', () => {
   });
 
   it('keeps an image failure when an incomplete read omits the local card', async () => {
-    const local = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
-      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
-    const peer = { ...local, origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    const local = { family: 'imagegen', label: 'Image Gen', supported: true,
+      limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100 }], metrics: [], origin: { self: true, name: 'This instance' } };
+    const peer = { ...local, limits: [], metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: false, instanceId: 'peer', name: 'Peer' } };
     api.getProviderUsage.mockResolvedValue({ providers: [local, peer], imageQuotaComplete: true });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     await screen.findByRole('button', { name: 'Refresh Image Gen usage' });
-    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, metrics: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
     expect(await screen.findByText(/Local image read failed/)).toBeInTheDocument();
-    expect(screen.getAllByText('No renders')).toHaveLength(2);
-    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, metrics: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
+    expect(screen.getByText(/Grok images: refusal observed/)).toBeInTheDocument();
+    expect(screen.queryByText('No renders')).not.toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
-    expect(await screen.findByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
-    expect(screen.getAllByText('No renders')).toHaveLength(2);
+    expect(await screen.findByText('Image quota status is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText(/Grok images: refusal observed/)).toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: false });
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
-    expect(await screen.findByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+    expect(await screen.findByText('Image quota status is unavailable.')).toBeInTheDocument();
     expect(screen.getByText(/Local image read failed/)).toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: true });
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
     await waitFor(() => expect(screen.queryByText(/Local image read failed/)).not.toBeInTheDocument());
-    expect(screen.queryByText('Image quota status on this instance is unavailable.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Image quota status is unavailable.')).not.toBeInTheDocument();
   });
 
   it('keeps image failure status when another family refresh starts later', async () => {
@@ -518,21 +543,21 @@ describe('UsagePage per-provider refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
     await act(async () => finishImage({ providers: [], imageQuotaComplete: false }));
     await act(async () => finishGrok({ providers: [grok], imageQuotaComplete: null }));
-    expect(screen.getByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
-    expect(screen.getByText('No renders')).toBeInTheDocument();
+    expect(screen.getByText('Image quota status is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('Image providers do not report a quota meter.')).toBeInTheDocument();
   });
 
   it('shows a passive image error beside the retained observation, including without a prior card', async () => {
-    const image = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
-      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
+    const image = { family: 'imagegen', label: 'Image Gen', supported: true,
+      limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100 }], metrics: [], origin: { self: true, name: 'This instance' } };
     api.getProviderUsage.mockResolvedValue({ providers: [image], imageQuotaComplete: true });
     const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    expect(await screen.findByText('No renders')).toBeInTheDocument();
-    const failed = { ...image, metrics: [], error: 'Synthetic ledger failure' };
+    expect(await screen.findByText(/Grok images: refusal observed/)).toBeInTheDocument();
+    const failed = { ...image, limits: [], error: 'Synthetic ledger failure' };
     api.getProviderUsage.mockResolvedValueOnce({ providers: [failed], imageQuotaComplete: false });
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
     expect(await screen.findByText(/Synthetic ledger failure/)).toBeInTheDocument();
-    expect(screen.getByText('No renders')).toBeInTheDocument();
+    expect(screen.getByText(/Grok images: refusal observed/)).toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [], imageQuotaComplete: false });
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
     expect(screen.getByText(/Synthetic ledger failure/)).toBeInTheDocument();
@@ -560,7 +585,7 @@ describe('UsagePage per-provider refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
     await act(async () => finishImage({ providers: [], imageQuotaComplete: false }));
-    expect(screen.getByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('Image quota status is unavailable.')).toBeInTheDocument();
   });
 
   it('keeps another forced failure without overwriting a newer family refresh', async () => {
@@ -595,11 +620,12 @@ describe('UsagePage per-provider refresh', () => {
       : Promise.resolve({ providers: [local], federationUnavailable: true }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
-    expect(await screen.findByText('Peer quota readings are unavailable.')).toBeInTheDocument();
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledTimes(3));
     expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.queryByText('Peer quota readings are unavailable.')).not.toBeInTheDocument();
     await act(async () => finishFamily({ providers: [local, peer], federationUnavailable: false }));
     expect(screen.getByText('40% used')).toBeInTheDocument();
-    expect(screen.getByText('Peer quota readings are unavailable.')).toBeInTheDocument();
+    expect(screen.queryByText('Peer quota readings are unavailable.')).not.toBeInTheDocument();
   });
 
   it('reconciles a full reading after a concurrent family refresh fails', async () => {
@@ -717,13 +743,14 @@ describe('UsagePage federated quota readings', () => {
     expect(await screen.findByText('SuperGrok')).toBeInTheDocument();
   });
 
-  it('says the card spans instances and names which ones', async () => {
+  it('shows unified quota without source names or instance counts', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [fleetCard] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 
-    const pill = await screen.findByText('2 instances');
-    expect(pill.closest('[title]').getAttribute('title')).toContain('Example Box');
-    expect(screen.getByText(fleetCard.note)).toBeInTheDocument();
+    expect(await screen.findByText('65% used')).toBeInTheDocument();
+    expect(screen.queryByText('2 instances')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Example Box/)).not.toBeInTheDocument();
+    expect(screen.queryByText(fleetCard.note)).not.toBeInTheDocument();
   });
 
   it('shows no fleet pill on a single-machine install', async () => {
@@ -734,7 +761,39 @@ describe('UsagePage federated quota readings', () => {
     expect(screen.queryByText(/^\d+ instances$/)).not.toBeInTheDocument();
   });
 
-  it('keeps image blocks and counts from each source in one observations card', async () => {
+  it('uses a current quota without displaying a superseded expired peer', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-11-02T00:00:00.000Z',
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }], origin: { self: true, name: 'Local Box' } },
+      { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-10-20T00:00:00.000Z', limits: [],
+        quotaStatus: 'expired', error: 'Every window in this reading has since reset — refresh for a current one.',
+        origin: { self: false, instanceId: 'old', name: 'synthetic-offline-peer' } },
+    ] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    const grid = screen.getByLabelText('Subscription provider usage');
+    expect(grid).not.toHaveTextContent('synthetic-offline-peer');
+    expect(grid).not.toHaveTextContent('Local Box');
+    expect(grid).not.toHaveTextContent('since reset');
+    expect(within(grid).queryByText(/^\d+ instances$/)).not.toBeInTheDocument();
+  });
+
+  it('shows one provider-level expired state when only activity and expired windows remain', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-11-02T00:00:00.000Z', limits: [],
+        activity: [{ period: 'week', requests: 8, sessions: 2 }], origin: { self: true, name: 'Local Box' } },
+      { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-10-20T00:00:00.000Z', limits: [],
+        quotaStatus: 'expired', error: 'Window reset', origin: { self: false, instanceId: 'old', name: 'synthetic-offline-peer' } },
+    ] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('The last available quota reading has expired. Refresh for a current reading.')).toBeInTheDocument();
+    const grid = screen.getByLabelText('Subscription provider usage');
+    expect(grid).not.toHaveTextContent('synthetic-offline-peer');
+    expect(grid).not.toHaveTextContent('Local Box');
+    expect(within(grid).queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('keeps an observed image refusal without per-source counts or names', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [
       { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
         metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }],
@@ -742,18 +801,23 @@ describe('UsagePage federated quota readings', () => {
       { family: 'imagegen', label: 'Image Gen', supported: true,
         limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100, percentRemaining: 0 }],
         fetchedAt: '2026-01-02T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } },
+      { family: 'imagegen', label: 'Image Gen', supported: true,
+        limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100, percentRemaining: 0 }],
+        fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: false, instanceId: 'peer-two', name: 'Other Peer' } },
     ] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    expect(await screen.findByText('100% used')).toBeInTheDocument();
-    expect(screen.getByText('No renders')).toBeInTheDocument();
+    expect(await screen.findByText(/Grok images: refusal observed/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Grok images: refusal observed/)).toHaveLength(1);
+    expect(screen.getByText(/Grok images: refusal observed/)).toHaveTextContent(/reported .* ago/);
+    expect(screen.queryByText('No renders')).not.toBeInTheDocument();
     expect(screen.getAllByRole('heading', { name: 'Image Gen' })).toHaveLength(1);
-    expect(screen.getByText(/not account-wide quotas or totals/)).toBeInTheDocument();
-    expect(screen.getByText(/^Peer · reported/)).toBeInTheDocument();
+    expect(screen.getByText('Image providers do not report a quota meter.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Peer/)).not.toBeInTheDocument();
   });
 
   it('shows a newer diagnostic alongside an older meter', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [
-      { family: 'codex', label: 'Codex', supported: true, limits: [], error: 'Weekly limit reached',
+      { family: 'codex', label: 'Codex', supported: true, limits: [], error: 'Weekly limit reached', quotaStatus: 'limit_reached',
         fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: true, name: 'This instance' } },
       { family: 'codex', label: 'Codex', supported: true,
         limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }],
@@ -761,12 +825,13 @@ describe('UsagePage federated quota readings', () => {
     ] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText('20% used')).toBeInTheDocument();
-    expect(screen.getByText(/Weekly limit reached/)).toHaveTextContent('Earlier readings may be out of date.');
+    expect(screen.getByText('Weekly limit reached')).toBeInTheDocument();
+    expect(screen.queryByText(/^This instance/)).not.toBeInTheDocument();
   });
 
   it('retains local advisories when a peer supplies the newest quota', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [
-      { family: 'codex', label: 'Codex', supported: true, note: 'Local runs use a routing override.',
+      { family: 'codex', label: 'Codex', supported: true, routingOverridden: true,
         limits: [{ key: 'week', label: 'Weekly', percentUsed: 10, percentRemaining: 90 }],
         fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'This instance' } },
       { family: 'codex', label: 'Codex', supported: true,
@@ -775,7 +840,7 @@ describe('UsagePage federated quota readings', () => {
     ] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText('20% used')).toBeInTheDocument();
-    expect(screen.getByText('This instance: Local runs use a routing override.')).toBeInTheDocument();
+    expect(screen.getByText('Model routing may bypass this quota.')).toBeInTheDocument();
   });
 
   // A federated card can be filled by a peer while this machine's own scrape is
@@ -790,10 +855,10 @@ describe('UsagePage federated quota readings', () => {
     // the spinner is what says a better one is coming (and what the page's
     // pending poll keys on, so the local reading actually swaps in).
     expect(await screen.findByText('65% used')).toBeInTheDocument();
-    expect(screen.getByText("Reading this machine's usage…")).toBeInTheDocument();
+    expect(screen.getByText('Reading quota…')).toBeInTheDocument();
   });
 
-  it("attributes a meter standing on another machine's older reading", async () => {
+  it('shows an older reading age without a machine attribution', async () => {
     const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
     // `stale` is now a server-computed verdict (period-relative, see
     // server/lib/quotaWindows.js) — this fixture stands in for what the API
@@ -810,7 +875,8 @@ describe('UsagePage federated quota readings', () => {
 
     // The stand-in says whose reading it is and how old — a 12% weekly figure
     // read two days ago must not read as this moment's.
-    expect(await screen.findByText(/read 2d ago on Example Box/)).toBeInTheDocument();
+    expect(await screen.findByText(/read 2d ago/)).toBeInTheDocument();
+    expect(screen.queryByText(/on Example Box/)).not.toBeInTheDocument();
     // This machine's own reading carries no such caption.
     expect(screen.getByText('30% used')).toBeInTheDocument();
   });
@@ -818,7 +884,7 @@ describe('UsagePage federated quota readings', () => {
 
 describe('UsagePage mobile provider-card layout', () => {
   const metricsCard = {
-    family: 'image_gen',
+    family: 'imagegen',
     label: 'Image Gen',
     supported: true,
     plan: 'pro',
@@ -837,30 +903,20 @@ describe('UsagePage mobile provider-card layout', () => {
     },
   };
 
-  // Two cards share the row at phone width, so the header badges are
-  // desktop-only and the observed-count tiles stack. Both were regressions the
-  // class strings alone did not deliver: `Pill` used to re-assert its own
-  // `inline-flex` over the caller's `hidden` (see OWN_DISPLAY in Pill.jsx), and
-  // two columns of tiles inside a half-width card wrapped every label onto four
-  // lines.
-  it('hides the header badges and stacks the count tiles at phone width', async () => {
+  it('hides the plan badge at phone width and omits instance details', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [metricsCard] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 
     await screen.findByRole('heading', { name: 'Image Gen' });
-    for (const badge of [screen.getByText('pro'), screen.getByText('2 instances')]) {
-      const tokens = badge.className.split(/\s+/);
-      expect(tokens).toContain('hidden');
-      expect(tokens).not.toContain('inline-flex');
-    }
-
-    const tileGrid = screen.getByText('Codex · image_gen').closest('.grid');
-    expect(tileGrid.className.split(/\s+/)).toEqual(
-      expect.arrayContaining(['grid-cols-1', 'sm:grid-cols-2'])
-    );
+    const tokens = screen.getByText('pro').className.split(/\s+/);
+    expect(tokens).toContain('hidden');
+    expect(tokens).not.toContain('inline-flex');
+    expect(screen.queryByText('2 instances')).not.toBeInTheDocument();
+    expect(screen.queryByText('No renders · 24h')).not.toBeInTheDocument();
+    expect(screen.getByText('Image providers do not report a quota meter.')).toBeInTheDocument();
   });
 
-  it('supports toggling imagegen render periods between 24h, week, and month', async () => {
+  it('does not present per-source image render counts as account quota', async () => {
     const cardWithPeriods = {
       family: 'imagegen',
       label: 'Image Gen',
@@ -888,13 +944,9 @@ describe('UsagePage mobile provider-card layout', () => {
     await act(async () => { render(<MemoryRouter><UsagePage /></MemoryRouter>); });
 
     await screen.findByRole('heading', { name: 'Image Gen' });
-    expect(screen.getByText('2 renders · 24h')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Week' }));
-    expect(screen.getByText('7 renders · week')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Month' }));
-    expect(screen.getByText('25 renders · month')).toBeInTheDocument();
+    expect(screen.queryByText('2 renders · 24h')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Usage period' })).not.toBeInTheDocument();
+    expect(screen.getByText('Image providers do not report a quota meter.')).toBeInTheDocument();
   });
 });
 

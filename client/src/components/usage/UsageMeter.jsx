@@ -63,21 +63,25 @@ export function meterTone(percentUsed) {
 // federated card's meter can be another instance's stand-in reading
 // (`readBy` set); a purely local reading ages the same way, just without the
 // "on <machine>" attribution.
-export function readingAttribution(limit) {
-  if (!limit?.stale && !limit?.showAttribution) return null;
+export function readingAttribution(limit, { showSource = true } = {}) {
   // `?? ''` because an undated reading carries `readAt: null`, and
   // `new Date(null)` is the epoch — a date, and a very stale one.
   const readMs = new Date(limit.readAt ?? '').getTime();
   const dated = Number.isFinite(readMs);
+  if (!showSource) {
+    if (!dated) return 'reading time unavailable';
+    return limit?.stale ? `read ${timeAgo(readMs)}` : null;
+  }
+  if (!limit?.stale && !limit?.showAttribution) return null;
   if (!limit.readBy) return dated ? `read ${timeAgo(readMs)}` : null;
   const who = limit.readByName || 'another instance';
   return dated ? `read ${timeAgo(readMs)} on ${who}` : `read on ${who}`;
 }
 
-export default function UsageMeter({ limit }) {
+export default function UsageMeter({ limit, showSource = true }) {
   const used = limit.percentUsed ?? 0;
   const remaining = limit.percentRemaining;
-  const attribution = readingAttribution(limit);
+  const attribution = readingAttribution(limit, { showSource });
   return (
     <div className="py-1 sm:py-2 border-b border-port-border last:border-0">
       <div className="flex items-baseline justify-between gap-2 mb-0.5 sm:mb-1">

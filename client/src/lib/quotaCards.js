@@ -16,8 +16,8 @@ function chooseReading(cards) {
   });
 }
 
-// Different CLI snapshots can expose different windows. Keep the newest
-// valid observation of each window, with its own age and source intact.
+// Different snapshots can expose different windows. Keep the newest valid
+// observation of each window and its age; source identity is not displayed.
 function combineLimits(cards) {
   const windows = new Map();
   for (const card of cards.filter(hasReading)) {
@@ -47,25 +47,40 @@ export function groupQuotaCards(quotas) {
     const selected = chooseReading(cards);
     const hasLocal = cards.some((card) => card.origin?.self !== false);
     const localPending = cards.some((card) => card.origin?.self !== false && card.pending);
-    const sources = cards.map((card) => ({ ...card.origin, self: card.origin?.self !== false, fetchedAt: card.fetchedAt }));
     const windows = selected.family === 'imagegen' ? [] : combineLimits(cards);
+    const oldestWindow = windows.reduce((oldest, entry) => Math.min(oldest, readTime(entry.card)), Infinity);
+    const issues = cards.filter((card) => {
+      if (!card.error || card.quotaStatus === 'expired') return false;
+      const matching = card.quotaScope && windows.find(({ limit }) => limit.key === card.quotaScope);
+      if (card.quotaStatus === 'limit_reached' && !matching) return true;
+      const reference = matching ? readTime(matching.card) : oldestWindow;
+      return !windows.length || readTime(card) > reference || readTime(card) === -Infinity;
+    });
+    const issue = issues.length ? chooseReading(issues) : null;
+    const expired = !windows.length && cards.some((card) => card.quotaStatus === 'expired');
+    const unavailable = issue?.error || (expired ? 'The last available quota reading has expired. Refresh for a current reading.' : undefined);
+    const refusals = new Map();
+    if (selected.family === 'imagegen') {
+      for (const card of cards) for (const limit of card.limits || []) {
+        const previous = refusals.get(limit.key);
+        if (!previous || readTime(card) > readTime(previous)) refusals.set(limit.key, { label: limit.label, fetchedAt: card.fetchedAt });
+      }
+    }
     const plans = cards.filter((card) => typeof card.plan === 'string' && card.plan.trim() && card.plan !== 'unknown');
     const plan = plans.reduce((best, card) => !best || readTime(card) > readTime(best) ? card : best, null)?.plan;
     return {
       ...selected,
       groupKey,
       ...(plan ? { plan } : {}),
-      ...(windows.length ? { limits: windows.map(({ card, limit }) => ({ ...limit, showAttribution: card !== selected,
-        ...(card !== selected && card.origin?.self !== false ? { readBy: 'self', readByName: 'this instance' } : {}) })) } : {}),
+      ...(windows.length ? { limits: windows.map(({ limit }) => limit) } : {}),
+      ...(selected.family !== 'imagegen' ? { error: !windows.length && !localPending ? unavailable : undefined } : {}),
       canRefresh: hasLocal,
       pending: selected.pending || localPending,
-      diagnostics: cards.filter((card) => card !== selected && card.error),
-      localAdvisories: cards.filter((card) => card !== selected && card.origin?.self !== false && card.note).map((card) => card.note),
-      mixedReadings: windows.some(({ card }) => card !== selected),
-      fleet: selected.fleet || (sources.length > 1 ? { count: sources.length, instances: sources } : undefined),
-      // Image-gen values are machine-local observations, not account quotas.
-      // Keep each source visible inside one card; never add the observations.
-      ...(selected.family === 'imagegen' ? { observations: cards } : {}),
+      providerIssue: issue,
+      routingOverridden: cards.some((card) => card.origin?.self !== false && card.routingOverridden),
+      // Image backends expose observations, not queryable quota. Never sum
+      // render counts or let a later empty ledger erase an observed refusal.
+      ...(selected.family === 'imagegen' ? { imageRefusals: [...refusals.entries()] } : {}),
     };
   });
 }
@@ -104,7 +119,7 @@ export function mergeRefreshedFamily(previous, refreshed, family, { fullReadAppl
         return [limit];
       });
       if (changed) {
-        return [{ ...card, limits, ...(!limits.length && incoming.error ? { error: incoming.error } : {}) }];
+        return [{ ...card, limits, ...(!limits.length && incoming.error ? { error: incoming.error, quotaStatus: incoming.quotaStatus } : {}) }];
       }
     }
     return [newer ? incoming : card];

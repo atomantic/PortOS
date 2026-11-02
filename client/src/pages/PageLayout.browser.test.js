@@ -48,7 +48,10 @@ const responses = {
     limits: [{ key: 'week', label: 'Weekly usage', percentUsed: 60, percentRemaining: 40 }] },
   { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2026-01-01T12:00:00.000Z',
     origin: { self: false, instanceId: 'synthetic-peer-two', name: 'anotherunbrokenpeername'.repeat(6) },
-    limits: [{ key: 'session', label: 'Session usage', percentUsed: 30, percentRemaining: 70 }] }] },
+    limits: [{ key: 'session', label: 'Session usage', percentUsed: 30, percentRemaining: 70 }] },
+  { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2025-12-20T00:00:00.000Z',
+    origin: { self: false, instanceId: 'synthetic-offline-peer', name: 'synthetic-offline-peer' }, quotaStatus: 'expired',
+    limits: [], error: 'Every window in this reading has since reset — refresh for a current one.' }] },
 };
 
 // Real route components and Tailwind, synthetic API only. Layout's classification
@@ -166,7 +169,9 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         if (path === '/devtools/usage') {
           expect(await page.getByRole('heading', { name: 'Example codex', exact: true }).count()).toBe(1);
           expect(await page.getByText('60% used', { exact: true }).count()).toBe(1);
-          expect(await page.getByText(/Account identity is unavailable/).count()).toBe(1);
+          expect(await page.getByText(/readings from the same provider are assumed to share an account/i).count()).toBe(1);
+          expect(await page.getByText(/syntheticpeername|anotherunbrokenpeername/).count()).toBe(0);
+          expect(await page.getByText(/Every window in this reading has since reset/).count()).toBe(0);
           const edges = await page.evaluate(() => {
             const body = document.querySelector('main').firstElementChild.lastElementChild;
             const style = getComputedStyle(body);

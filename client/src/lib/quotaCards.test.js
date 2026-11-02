@@ -21,7 +21,6 @@ describe('groupQuotaCards', () => {
     expect(card.limits).toMatchObject(peer.limits);
     expect(card.activity).toEqual(peer.activity);
     expect(card.canRefresh).toBe(true);
-    expect(card.fleet.count).toBe(2);
   });
 
   it('keeps an older valid reading when a newer scrape failed or is pending', () => {
@@ -29,7 +28,7 @@ describe('groupQuotaCards', () => {
     const failed = reading({ fetchedAt: '2026-01-03T00:00:00.000Z', limits: [], error: 'Expired' });
     const [card] = groupQuotaCards([failed, peer]);
     expect(card.limits).toMatchObject(peer.limits);
-    expect(card.diagnostics).toEqual([failed]);
+    expect(card.providerIssue).toEqual(failed);
     const [pending] = groupQuotaCards([{ ...failed, error: undefined, pending: true }, peer]);
     expect(pending.limits).toMatchObject(peer.limits);
     expect(pending.pending).toBe(true);
@@ -44,7 +43,6 @@ describe('groupQuotaCards', () => {
       { key: 'week', percentUsed: 20, stale: true, readAt: older.fetchedAt, readBy: 'peer', readByName: 'Peer' },
       { key: 'session', percentUsed: 30, stale: false, readAt: newer.fetchedAt, readBy: null },
     ]);
-    expect(card.mixedReadings).toBe(true);
   });
 
   it('keeps peer-only providers and does not let an undated reading beat a dated one', () => {
@@ -58,11 +56,12 @@ describe('groupQuotaCards', () => {
     expect(groupQuotaCards([])).toEqual([]);
   });
 
-  it('retains separate image observations so a newer empty report cannot erase a peer block', () => {
+  it('retains one observed image refusal when a newer report is empty', () => {
     const blocked = reading({ family: 'imagegen', origin: { self: false, instanceId: 'peer' }, limits: [{ key: 'imagegen-grok', percentUsed: 100 }] });
+    const laterBlocked = { ...blocked, fetchedAt: '2026-01-01T12:00:00.000Z', origin: { self: false, instanceId: 'peer-two' } };
     const empty = reading({ family: 'imagegen', fetchedAt: '2026-01-02T00:00:00.000Z', limits: [], metrics: [{ key: 'imagegen-grok', value: 'No renders' }] });
-    const [card] = groupQuotaCards([blocked, empty]);
-    expect(card.observations).toEqual([blocked, empty]);
+    const [card] = groupQuotaCards([laterBlocked, empty, blocked]);
+    expect(card.imageRefusals).toEqual([['imagegen-grok', { label: undefined, fetchedAt: laterBlocked.fetchedAt }]]);
   });
 
   it('does not treat a billing preference as a verified account identity', () => {
@@ -71,7 +70,7 @@ describe('groupQuotaCards', () => {
     const other = reading({ fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: false, instanceId: 'other', usesSubscriptions: false } });
     const cards = groupQuotaCards([local, shared, other]);
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ plan: 'Pro', fleet: { count: 3 }, origin: { instanceId: 'other' } });
+    expect(cards[0]).toMatchObject({ plan: 'Pro', origin: { instanceId: 'other' } });
   });
 
   it('keeps activity-only readings while another source has an error', () => {
@@ -79,7 +78,34 @@ describe('groupQuotaCards', () => {
     const peer = reading({ limits: [], origin: { self: false, instanceId: 'peer' } });
     const [card] = groupQuotaCards([local, peer]);
     expect(card.activity).toEqual(peer.activity);
-    expect(card.diagnostics).toEqual([local]);
+    expect(card.providerIssue).toEqual(local);
+  });
+
+  it('suppresses a superseded expired reading and retains a provider-level expired state', () => {
+    const current = reading({ fetchedAt: '2026-01-03T00:00:00.000Z' });
+    const expired = reading({ limits: [], activity: [], quotaStatus: 'expired', error: 'Old window reset',
+      origin: { self: false, instanceId: 'old', name: 'synthetic-offline-peer' } });
+    const [live] = groupQuotaCards([current, expired]);
+    expect(live.limits).toHaveLength(1);
+    expect(live.providerIssue).toBeNull();
+    expect(live.error).toBeUndefined();
+    const [empty] = groupQuotaCards([{ ...current, limits: [] }, expired]);
+    expect(empty.error).toMatch(/expired/i);
+  });
+
+  it('keeps a newer provider failure but drops an older one', () => {
+    const current = reading({ fetchedAt: '2026-01-02T00:00:00.000Z' });
+    const failure = reading({ limits: [], activity: [], error: 'Weekly limit reached', quotaStatus: 'limit_reached', quotaScope: 'week', fetchedAt: '2026-01-03T00:00:00.000Z' });
+    expect(groupQuotaCards([current, failure])[0].providerIssue).toEqual(failure);
+    expect(groupQuotaCards([current, { ...failure, fetchedAt: '2026-01-01T00:00:00.000Z' }])[0].providerIssue).toBeNull();
+  });
+
+  it('does not let a newer session window hide a weekly limit condition', () => {
+    const weekly = reading({ fetchedAt: '2026-01-01T09:00:00.000Z' });
+    const session = reading({ fetchedAt: '2026-01-01T11:00:00.000Z', limits: [{ key: 'session', percentUsed: 10 }] });
+    const reached = reading({ fetchedAt: '2026-01-01T10:00:00.000Z', limits: [], activity: [],
+      error: 'Weekly limit reached', quotaStatus: 'limit_reached', quotaScope: 'week' });
+    expect(groupQuotaCards([weekly, session, reached])[0].providerIssue).toEqual(reached);
   });
 });
 
@@ -103,8 +129,8 @@ describe('mergeRefreshedFamily', () => {
   });
 
   it('keeps equal-version expiry monotonic across an intervening full read', () => {
-    const expired = { ...peer, limits: [], error: 'Expired' };
-    expect(mergeRefreshedFamily([local, peer], [local, expired], 'grok', { fullReadApplied: true })[1]).toMatchObject({ limits: [], error: 'Expired' });
+    const expired = { ...peer, limits: [], error: 'Expired', quotaStatus: 'expired' };
+    expect(mergeRefreshedFamily([local, peer], [local, expired], 'grok', { fullReadApplied: true })[1]).toMatchObject({ limits: [], error: 'Expired', quotaStatus: 'expired' });
     expect(mergeRefreshedFamily([local, expired], [local, peer], 'grok', { fullReadApplied: true })[1]).toMatchObject({ limits: [], error: 'Expired' });
     const twoWindows = { ...peer, limits: [{ key: 'week' }, { key: 'session' }] };
     const weeklyOnly = { ...peer, limits: [{ key: 'week' }] };

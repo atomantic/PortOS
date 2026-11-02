@@ -210,6 +210,9 @@ export function mapCodexQuota(rateLimits, timestamp, {
   routingOverridden = readCodexRoutingOverride()?.overridden === true,
 } = {}) {
   const limits = codexUsableWindows(rateLimits, now);
+  const expired = !rateLimits?.rate_limit_reached_type
+    && [rateLimits?.primary, rateLimits?.secondary].some((window) => codexWindowExpired(window, now));
+  const reachedScope = { weekly: 'week', week: 'week', session: 'session' }[String(rateLimits?.rate_limit_reached_type || '').toLowerCase()];
   return {
     family: 'codex',
     label: 'Codex',
@@ -218,6 +221,7 @@ export function mapCodexQuota(rateLimits, timestamp, {
     limits,
     activity: [],
     approximate: true,
+    ...(routingOverridden ? { routingOverridden: true } : {}),
     // Wording is "telemetry", not "session activity": the reading can come from
     // an older session than the newest one when that session reported no window.
     note: [
@@ -228,7 +232,8 @@ export function mapCodexQuota(rateLimits, timestamp, {
       // stops them being presented as if they described PortOS's own work.
       routingOverridden ? CODEX_ROUTING_CAVEAT : null,
     ].filter(Boolean).join(' '),
-    ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now) }),
+    ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now),
+      ...(rateLimits?.rate_limit_reached_type ? { quotaStatus: 'limit_reached', ...(reachedScope ? { quotaScope: reachedScope } : {}) } : expired ? { quotaStatus: 'expired' } : {}) }),
     // The TELEMETRY's own timestamp, not the clock we read it at: Codex emits
     // `rate_limits` only while a turn runs, so this reading can be days old and
     // `fetchedAt` is the card contract every consumer ranks by (see the card
@@ -365,7 +370,8 @@ const pruneExpiredWindows = (card, now) => {
   return {
     ...card,
     limits,
-    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE }),
+    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE,
+      ...(!card.error ? { quotaStatus: 'expired' } : {}) }),
   };
 };
 
@@ -414,7 +420,7 @@ async function fetchCurrentCodexQuota({ wait = WAIT.CACHED } = {}) {
     const live = await codexLiveFlight.run('codex:account', readLiveCodexQuota).catch(() => null);
     if (live) return live;
     const quota = await fetchCodexQuota();
-    return { ...quota, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
+    return { ...quota, refreshUnavailable: true, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
   }
   const now = Date.now();
   const quota = await fetchCodexQuota({ now });
