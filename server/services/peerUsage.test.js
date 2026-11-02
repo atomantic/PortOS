@@ -680,6 +680,8 @@ describe('selected-period hourly and image observations', () => {
     localUsage.dailyActivity['2026-08-30'] = { byProvider: { example: { sessions: 1 } } };
     const legacy = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
     expect(legacy.coverage.hourlyIncomplete).toBe(true);
+    localUsage.totalSessions = 0;
+    expect((await getFleetUsage()).coverage.hourlyIncomplete).toBe(true);
   });
 
   it('deduplicates projected image outputs, filters output dates, and reports missing peers', async () => {

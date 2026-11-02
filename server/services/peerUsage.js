@@ -573,23 +573,24 @@ function sumFleetTotals(rows) {
 function fleetHourlyActivity(sources, { from, to }) {
   const hourly = Array(24).fill(0);
   let incomplete = false;
+  const representedSessions = (bucket) => Math.max(bucket.sessions || 0, Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
   for (const { activity } of sources) {
     if (!from && !to) {
       const values = Array.isArray(activity.hourlyActivity) ? activity.hourlyActivity : [];
       for (let hour = 0; hour < 24; hour++) hourly[hour] += values[hour] || 0;
-      if (values.reduce((sum, n) => sum + (n || 0), 0) < (activity.totalSessions || 0)) incomplete = true;
+      const bucketSessions = [...Object.values(activity.dailyActivity || {}), ...Object.values(activity.monthlyActivity || {})]
+        .reduce((sum, bucket) => sum + representedSessions(bucket), 0);
+      if (values.reduce((sum, n) => sum + (n || 0), 0) < Math.max(activity.totalSessions || 0, bucketSessions)) incomplete = true;
       continue;
     }
     for (const [day, bucket] of Object.entries(activity.dailyActivity || {})) {
       if ((from && day < from) || (to && day > to)) continue;
       const values = Array.isArray(bucket.hourlyActivity) ? bucket.hourlyActivity : [];
       for (let hour = 0; hour < 24; hour++) hourly[hour] += values[hour] || 0;
-      const representedSessions = Math.max(bucket.sessions || 0, Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
-      if (values.reduce((sum, n) => sum + (n || 0), 0) < representedSessions) incomplete = true;
+      if (values.reduce((sum, n) => sum + (n || 0), 0) < representedSessions(bucket)) incomplete = true;
     }
     for (const [month, bucket] of Object.entries(activity.monthlyActivity || {})) {
-      const representedSessions = Math.max(bucket.sessions || 0, Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
-      if ((!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)) && representedSessions > 0) incomplete = true;
+      if ((!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)) && representedSessions(bucket) > 0) incomplete = true;
     }
   }
   return { hourly, incomplete };

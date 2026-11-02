@@ -160,15 +160,27 @@ function ProviderQuotaSection() {
   const [coverage, setCoverage] = useState(null);
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
   const quotaRequest = useRef(0);
+  const familyRevisions = useRef(new Map());
+  const activeFamilies = useRef(new Set());
 
   const load = useCallback(async (refresh = false) => {
     const token = ++quotaRequest.current;
+    const startingFamilies = new Map(familyRevisions.current);
     setLoading(true);
     setError(false);
     const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
     if (token !== quotaRequest.current) return;
     if (result?.providers) {
-      setQuotas(result.providers);
+      // A family refresh can finish while this full read is in flight. Retain
+      // its newer local card while still taking the full read's peer cards.
+      const preserve = new Set(activeFamilies.current);
+      for (const [family, revision] of familyRevisions.current) {
+        if (revision !== (startingFamilies.get(family) || 0)) preserve.add(family);
+      }
+      setQuotas((previous) => !previous || !preserve.size ? result.providers : [
+        ...result.providers.filter((card) => card.origin?.self === false || !preserve.has(card.family)),
+        ...previous.filter((card) => card.origin?.self !== false && preserve.has(card.family)),
+      ]);
       setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
@@ -185,10 +197,17 @@ function ProviderQuotaSection() {
   // reading — and its age — untouched. A failure toasts through the request
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
-    const token = ++quotaRequest.current;
+    const revision = (familyRevisions.current.get(family) || 0) + 1;
+    familyRevisions.current.set(family, revision);
+    activeFamilies.current.add(family);
     setRefreshingFamilies((prev) => new Set(prev).add(family));
     const result = await api.getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
-    if (token === quotaRequest.current && result?.providers) {
+    if (familyRevisions.current.get(family) !== revision) return;
+    activeFamilies.current.delete(family);
+    // A full read may have started after this refresh began; advancing again
+    // records that its response predates the refresh completion.
+    familyRevisions.current.set(family, revision + 1);
+    if (result?.providers) {
       const card = result.providers.find((q) => q.family === family && q.origin?.self !== false);
       // No card back for a family we asked for means it is no longer enabled
       // (its provider was turned off) — drop it rather than leave a reading
@@ -197,13 +216,17 @@ function ProviderQuotaSection() {
       setQuotas((prev) => (card
         ? prev.map((q) => (q.family === family && q.origin?.self !== false ? card : q))
         : prev.filter((q) => q.family !== family || q.origin?.self === false)));
+    } else {
+      // A full read may have preserved the old card while this refresh was
+      // pending. Reconcile after a failure so its newer result is not lost.
+      void load();
     }
     setRefreshingFamilies((prev) => {
       const next = new Set(prev);
       next.delete(family);
       return next;
     });
-  }, []);
+  }, [load]);
 
   // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
   useQuotaUpdates(load);

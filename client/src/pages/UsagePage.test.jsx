@@ -341,6 +341,52 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.queryByText('20% used')).not.toBeInTheDocument();
   });
 
+  it('applies concurrent family refreshes even when a fleet read overlaps', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let finishGrok, finishClaude;
+    api.getProviderUsage.mockImplementation(({ family }) => {
+      if (family === 'grok') return new Promise((resolve) => { finishGrok = resolve; });
+      if (family === 'claude') return new Promise((resolve) => { finishClaude = resolve; });
+      return Promise.resolve({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Claude Code usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishClaude({ providers: [card('claude', 'Claude Code', 55)] }));
+    await act(async () => finishGrok({ providers: [card('grok', 'Grok', 77)] }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.getByText('77% used')).toBeInTheDocument();
+  });
+
+  it('retains a completed family refresh when an older fleet read arrives afterward', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let finishFamily, finishFleet;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : new Promise((resolve) => { finishFleet = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishFamily({ providers: [card('grok', 'Grok', 77)] }));
+    await act(async () => finishFleet({ providers: [card('grok', 'Grok', 20), card('claude', 'Claude Code', 10)] }));
+    expect(await screen.findByText('77% used')).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('reconciles a full reading after a concurrent family refresh fails', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Grok');
+    let failFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((_, reject) => { failFamily = reject; })
+      : Promise.resolve({ providers: [card('grok', 'Grok', 55), card('claude', 'Claude Code', 10)] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => failFamily(new Error('synthetic failure')));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+  });
+
   it('re-reads only the clicked provider and swaps that card in', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
 
