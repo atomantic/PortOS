@@ -90,12 +90,12 @@ describe('deferred update admission', () => {
     await release.finish();
   });
 
-  it('lets another maintenance request supersede a waiting update without deadlocking its drain', async () => {
+  it.each([false, true])('lets maintenance supersede a waiting update without deadlocking its drain (legacy work: %s)', async legacyPending => {
     const { admission } = fixture();
     const release = admission.admit('agent', 'release-example');
     let hold;
     const launch = vi.fn();
-    await expect(runDeferredUpdate({ admission, launch, emit: vi.fn(), wait: async () => {
+    await expect(runDeferredUpdate({ admission, launch, emit: vi.fn(), legacyRunning: async () => legacyPending, wait: async () => {
       hold = admission.begin({ reason: 'Peer maintenance', owner: 'operator-example' }).hold;
       await release.finish();
     } })).rejects.toThrow('superseded');

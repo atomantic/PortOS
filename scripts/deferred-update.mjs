@@ -40,7 +40,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let childStarted = false;
   try {
     emit('STEP:waiting:running:Waiting for admitted work to finish saving and cleanup');
-    while (await legacyRunning() || !admission.deferredUpdate.acquire(operation.id)) {
+    while (!admission.deferredUpdate.acquire(operation.id, { externalWorkPending: await legacyRunning() })) {
       signal?.throwIfAborted();
       await wait();
     }

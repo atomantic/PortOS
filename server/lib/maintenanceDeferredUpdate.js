@@ -87,11 +87,11 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     save(state, operation);
     return { ...operation };
   });
-  const acquire = id => transaction(state => {
+  const acquire = (id, { externalWorkPending = false } = {}) => transaction(state => {
     const operation = current(state, id);
     if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
     if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
-    if (state.operations.some(op => op.id !== id) || state.exclusive) return false;
+    if (externalWorkPending || state.operations.some(op => op.id !== id) || state.exclusive) return false;
     operation.phase = 'starting';
     operation.holdId = makeId();
     state.hold = { id: operation.holdId, revision: state.revision + 1, reason: 'Applying a deferred PortOS update', owner: 'deferred-update', requestedAt: new Date(now()).toISOString() };
