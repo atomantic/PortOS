@@ -454,6 +454,7 @@ export const registerVoiceHandlers = (socket) => {
     const generation = ++hostRequestGeneration;
     const isCurrent = () => generation === hostRequestGeneration && socket.connected !== false;
     try {
+      if (capture.stopping) await capture.stopping;
       const config = await getVoiceConfig();
       if (!isCurrent()) return;
       if (!config.enabled) {
@@ -670,7 +671,7 @@ export const registerVoiceHandlers = (socket) => {
   // plays anything back. Stopping finalizes whatever is still buffered in the
   // endpointer, then writes the transcript to the journal and the inbox.
   // ---------------------------------------------------------------------------
-  const capture = { endpointer: null, queue: Promise.resolve() };
+  const capture = { endpointer: null, queue: Promise.resolve(), stopping: null };
 
   const emitCaptureState = (snapshot) => socket.emit('voice:capture:state', snapshot);
 
@@ -720,16 +721,20 @@ export const registerVoiceHandlers = (socket) => {
   socket.on('voice:capture:stop', async () => {
     try {
       hostRequestGeneration += 1;
+      if (capture.stopping) { await capture.stopping; return; }
       if (getCaptureHost() !== socket) return;
-      // Finalize whatever speech is still buffered rather than dropping the
-      // last few seconds of the meeting on the floor.
-      const pending = capture.endpointer?.flush();
-      if (pending) enqueueCaptureUtterance(pending);
-      await capture.queue.catch(() => {});
-      capture.endpointer = null;
-      const ended = await endCapture('stopped');
-      emitCaptureState(ended);
-      emitCaptureState(await detachCaptureHost(socket));
+      capture.stopping = (async () => {
+        // Finalize whatever speech is still buffered rather than dropping the
+        // last few seconds of the meeting on the floor.
+        const pending = capture.endpointer?.flush();
+        if (pending) enqueueCaptureUtterance(pending);
+        await capture.queue.catch(() => {});
+        capture.endpointer = null;
+        const ended = await endCapture('stopped');
+        emitCaptureState(ended);
+        emitCaptureState(await detachCaptureHost(socket));
+      })().finally(() => { capture.stopping = null; });
+      await capture.stopping;
     } catch (err) {
       console.error(`❌ voice:capture:stop failed: ${err.message}`);
       socket.emit('voice:error', { stage: 'capture', message: err.message });

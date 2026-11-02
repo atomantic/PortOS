@@ -725,6 +725,36 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     expect(createInboxLog).toHaveBeenCalledWith(expect.not.objectContaining({ ai: expect.anything() }));
   });
 
+  it('waits for outgoing capture transcription and filing before attaching a call', async () => {
+    let finishTranscription;
+    let finishFiling;
+    transcribe.mockImplementationOnce(() => new Promise(resolve => { finishTranscription = resolve; }));
+    appendJournal.mockImplementationOnce(() => new Promise(resolve => { finishFiling = resolve; }));
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(transcribe).toHaveBeenCalledTimes(1);
+
+    const stopping = socket.fire('voice:capture:stop');
+    const attaching = socket.fire('voice:call:attach');
+    await flushMicrotasks();
+    expect(getCallState().hostAttached).toBe(false);
+    finishTranscription({ text: 'Keep this final utterance.', latencyMs: 1 });
+    await flushMicrotasks();
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(getCallState().hostAttached).toBe(false);
+    finishFiling({});
+    await Promise.all([stopping, attaching]);
+
+    expect(getCaptureState()).toMatchObject({ active: false, hostAttached: false });
+    expect(getCallState().hostAttached).toBe(true);
+    expect(createInboxLog).toHaveBeenCalledWith(expect.objectContaining({ capturedText: expect.stringContaining('Keep this final utterance.') }));
+    expect(socket.emitted.filter(frame => frame.event === 'voice:call:state').some(frame => frame.payload.error)).toBe(false);
+  });
+
   it('ignores voice:call:audio on a tab that never attached either host', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
