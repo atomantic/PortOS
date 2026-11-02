@@ -1,23 +1,39 @@
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertUpdateImageSafety } from '../server/lib/updateImageGuard.js';
-import { maintenance } from '../server/lib/maintenanceAdmission.js';
-import { processAbsent } from '../server/lib/maintenanceDeferredUpdate.js';
+import { createMaintenanceJournal, maintenanceError, syncMaintenanceDirectory } from '../server/lib/maintenanceJournal.js';
+import { createDeferredUpdateAdmission, processAbsent } from '../server/lib/maintenanceDeferredUpdate.js';
+import * as fs from 'node:fs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const journal = createMaintenanceJournal();
+const maintenance = { directory: journal.directory, deferredUpdate: createDeferredUpdateAdmission({
+  transaction: journal.transaction, read: journal.readForStatus, makeId: randomUUID, error: maintenanceError,
+  now: Date.now, directory: journal.directory, io: fs, syncDirectory: syncMaintenanceDirectory,
+}) };
+const readControl = async path => {
+  try { return await readFile(path, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return ''; throw err; }
+};
 
 /** Both launch paths arrive here before the script touches logs, git or PM2. */
 export async function runDeferredUpdate({ admission = maintenance, launch = spawn, cwd = root,
   platform = process.platform, wait = () => delay(1000), absent = processAbsent,
   signal, emit = message => console.log(message), legacyRunning = async () => {
-    const { isDetachedRunning } = await import('../server/lib/detachedSpawn.js');
-    const windows = platform === 'win32';
-    return isDetachedRunning(join(admission.directory, '..', 'update-detached'), {
-      executable: windows ? 'powershell' : 'bash',
-      args: windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(cwd, 'update.ps1')] : [join(cwd, 'update.sh')],
-    });
+    const control = join(admission.directory, '..', 'update-detached');
+    const raw = (await readControl(join(control, 'pid'))).trim();
+    if (!raw) return false;
+    const pid = Number(raw);
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid prior updater process identity');
+    // Our service launcher publishes this supervisor's PID in the same directory.
+    // A different live/unknown PID is retained conservatively, without importing
+    // application dependencies that npm may currently be replacing.
+    // A dead legacy shell without its supervisor's exit record may have left
+    // descendants. Absence of that PID alone does not prove settlement.
+    return pid !== process.pid && !(await readControl(join(control, 'exit'))).trim();
   } } = {}) {
   admission.deferredUpdate.reconcile();
   const operation = admission.deferredUpdate.request();
@@ -70,7 +86,8 @@ export function enterUpdate(id, childPid, admission = maintenance) {
   admission.deferredUpdate.enter(id, childPid);
 }
 
-function enterPeerUpdate(id) {
+async function enterPeerUpdate(id) {
+  const { maintenance } = await import('../server/lib/maintenanceAdmission.js');
   assertUpdateImageSafety({ acknowledged: process.env.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED === '1' });
   const claim = maintenance.getExclusive();
   if (claim?.operation.operationId !== id || claim.phase !== 'in-flight'

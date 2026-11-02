@@ -1,16 +1,25 @@
-import { z } from 'zod';
 import { join } from 'node:path';
 
-const deferredUpdateSchema = z.object({
-  id: z.string().uuid(), ownerPid: z.number().int().positive(),
-  phase: z.enum(['waiting', 'starting', 'running']),
-  childPid: z.number().int().positive().nullable(), holdId: z.string().uuid().nullable(),
-  requestedAt: z.string().datetime(), terminal: z.object({ success: z.boolean() }).strict().optional(),
-}).strict();
-const deferredUpdateResultSchema = z.object({
-  id: z.string().uuid(), success: z.boolean(), completedAt: z.string().datetime(),
-  interrupted: z.boolean(),
-}).strict();
+const record = value => value && typeof value === 'object' && !Array.isArray(value);
+const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const pid = value => Number.isSafeInteger(value) && value > 0;
+const date = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const parseOperation = value => {
+  if (!record(value) || Object.keys(value).some(key => !['id', 'ownerPid', 'phase', 'childPid', 'holdId', 'requestedAt', 'terminal'].includes(key))
+    || !uuid(value.id) || !pid(value.ownerPid) || !['waiting', 'starting', 'running'].includes(value.phase)
+    || (value.childPid !== null && !pid(value.childPid)) || (value.holdId !== null && !uuid(value.holdId)) || !date(value.requestedAt)
+    || (value.terminal !== undefined && (!record(value.terminal) || Object.keys(value.terminal).length !== 1 || typeof value.terminal.success !== 'boolean'))) {
+    throw new Error('Invalid deferred update owner');
+  }
+  return value;
+};
+const parseResult = value => {
+  if (!record(value) || Object.keys(value).length !== 4 || !uuid(value.id)
+    || typeof value.success !== 'boolean' || typeof value.interrupted !== 'boolean' || !date(value.completedAt)) {
+    throw new Error('Invalid deferred update result');
+  }
+  return value;
+};
 
 // Only ESRCH proves absence. Permission failures, reused PIDs and unavailable
 // process-group probes must never reopen work while an update may still run.
@@ -26,7 +35,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     const rows = state.operations.filter(op => op.kind === kind);
     if (rows.length > 1) throw error('MAINTENANCE_UNAVAILABLE', 'Multiple deferred update owners need recovery.');
     const row = rows[0];
-    return row ? deferredUpdateSchema.parse({ ...JSON.parse(row.resource), id: row.id, ownerPid: row.pid, requestedAt: row.startedAt }) : null;
+    return row ? parseOperation({ ...JSON.parse(row.resource), id: row.id, ownerPid: row.pid, requestedAt: row.startedAt }) : null;
   };
   const save = (state, operation) => {
     const { id, ownerPid, requestedAt, ...details } = operation;
@@ -36,7 +45,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     else state.operations[index] = row;
   };
   const readResult = () => {
-    try { return deferredUpdateResultSchema.parse(JSON.parse(io.readFileSync(resultPath, 'utf8'))); }
+    try { return parseResult(JSON.parse(io.readFileSync(resultPath, 'utf8'))); }
     catch (err) { if (err.code === 'ENOENT') return null; throw err; }
   };
   const writeResult = result => {

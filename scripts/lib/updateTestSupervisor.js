@@ -1,10 +1,27 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { join, dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Run the real admission supervisor against a synthetic script and private data. */
-export function installUpdateTestSupervisor(repo) {
+export function installUpdateTestSupervisor(repo, { standalone = false } = {}) {
   writeFileSync(join(repo, '.portos-disposable-root'), '');
   mkdirSync(join(repo, 'scripts'), { recursive: true });
+  if (standalone) {
+    const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
+    const copied = new Set();
+    const copyModule = source => {
+      if (copied.has(source)) return;
+      copied.add(source);
+      const text = readFileSync(source, 'utf8');
+      const target = join(repo, relative(sourceRoot, source));
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, text);
+      for (const match of text.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) copyModule(resolve(dirname(source), match[1]));
+    };
+    copyModule(join(sourceRoot, 'scripts/deferred-update.mjs'));
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ type: 'module' }));
+    return;
+  }
   const supervisor = new URL('../deferred-update.mjs', import.meta.url).href;
   const admission = new URL('../../server/lib/maintenanceAdmission.js', import.meta.url).href;
   writeFileSync(join(repo, 'scripts/deferred-update.mjs'), `

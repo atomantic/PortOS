@@ -468,7 +468,7 @@ export async function processUpdateMarker() {
   }
 
   const updateResult = maintenance.deferredUpdate.get().result;
-  if (updateResult && !updateResult.success && updateResult.completedAt >= marker.completedAt) {
+  if (updateResult && Date.parse(updateResult.completedAt) >= Date.parse(marker.completedAt)) {
     await clearStaleUpdateInProgress();
     return removeMarker();
   }

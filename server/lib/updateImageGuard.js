@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PATHS } from './paths.js';
-import { persistentMindImageWorkGuard } from './persistentMind.js';
 
 /** Disk-only preflight also works while the API is offline. Never default corrupt state. */
 export function assertUpdateImageSafety({ dataDir = PATHS.data, acknowledged = false } = {}) {
@@ -14,4 +13,40 @@ export function assertUpdateImageSafety({ dataDir = PATHS.data, acknowledged = f
   const guard = persistentMindImageWorkGuard(state?.persistentMind);
   if (!guard.trusted) throw new Error('Persistent Mind state could not be validated before updating');
   if (!guard.safe && !acknowledged) throw Object.assign(new Error('Persistent Mind image work must drain or have its backup acknowledged before updating'), { code: 'UPDATE_IMAGE_WORK' });
+}
+
+/**
+ * Report whether a source transition can safely cross a reader that predates
+ * image-bearing Persistent Mind messages. Counts only durable queued/active
+ * work; completed historical assets do not make rollback unsafe.
+ */
+export function persistentMindImageWorkGuard(raw) {
+  const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const hasValidImages = (value) => value.images === undefined || Array.isArray(value.images);
+  const source = raw == null ? {} : raw;
+  const queuedMessages = source?.queuedMessages;
+  const activeTurn = source?.activeTurn;
+  const activeMessage = activeTurn?.wake?.kind === 'message' ? activeTurn.wake.message : null;
+  const trusted = isRecord(source)
+    && (queuedMessages === undefined || (
+      Array.isArray(queuedMessages)
+      && queuedMessages.every((message) => isRecord(message) && hasValidImages(message))
+    ))
+    && (activeTurn == null || isRecord(activeTurn))
+    && (activeMessage == null || (isRecord(activeMessage) && hasValidImages(activeMessage)));
+  if (!trusted) {
+    return { safe: false, trusted: false, queuedImageMessages: 0, activeImageMessage: false };
+  }
+  const queuedImageMessages = (Array.isArray(queuedMessages) ? queuedMessages : [])
+    .filter((message) => Array.isArray(message?.images) && message.images.length > 0)
+    .length;
+  const activeImageMessage = Boolean(
+    activeMessage && Array.isArray(activeMessage.images) && activeMessage.images.length > 0,
+  );
+  return {
+    safe: queuedImageMessages === 0 && !activeImageMessage,
+    trusted: true,
+    queuedImageMessages,
+    activeImageMessage,
+  };
 }

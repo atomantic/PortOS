@@ -62,6 +62,21 @@ describe('deferred update admission', () => {
     admission.deferredUpdate.finish(next.id, false);
   });
 
+  it('waits for legacy supervisor completion even when its recorded shell PID is gone', async () => {
+    const { root, admission } = fixture();
+    const control = join(root, 'data/update-detached');
+    mkdirSync(control, { recursive: true });
+    writeFileSync(join(control, 'pid'), '2147483647');
+    const launch = vi.fn(completedLaunch(admission));
+    const wait = vi.fn(async () => {
+      expect(launch).not.toHaveBeenCalled();
+      expect(admission.held()).toBe(false);
+      writeFileSync(join(control, 'exit'), '1');
+    });
+    await expect(runDeferredUpdate({ admission, launch, wait, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    expect(wait).toHaveBeenCalledOnce();
+  });
+
   it('releases an interrupted wait without taking a hold or launching an update', async () => {
     const { admission } = fixture();
     const release = admission.admit('agent', 'release-example');
@@ -128,12 +143,15 @@ describe('deferred update admission', () => {
 
 describe.skipIf(process.platform === 'win32')('direct update script offline boundary', () => {
   const start = root => {
-    installUpdateTestSupervisor(root);
+    installUpdateTestSupervisor(root, { standalone: true });
     const source = readFileSync(new URL('../update.sh', import.meta.url), 'utf8');
     const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
     writeFileSync(join(root, 'update.sh'), `${header}\ntouch applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
-    const child = spawn('bash', [join(root, 'update.sh')], { cwd: root,
-      env: { ...process.env, PORTOS_DATA_ROOT: root }, stdio: 'ignore' });
+    // This is a standalone process in a copied disposable install, not a Vitest
+    // worker writing the executing checkout's data tree (same as boot smoke).
+    const env = { ...process.env, PORTOS_DATA_ROOT: root };
+    delete env.VITEST;
+    const child = spawn('bash', [join(root, 'update.sh')], { cwd: root, env, stdio: 'ignore' });
     return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   };
 
@@ -141,6 +159,8 @@ describe.skipIf(process.platform === 'win32')('direct update script offline boun
     const { root, admission } = fixture();
     const release = admission.admit('agent', 'release-example');
     const done = start(root);
+    expect(existsSync(join(root, 'node_modules'))).toBe(false);
+    expect(existsSync(join(root, 'server/node_modules'))).toBe(false);
     await vi.waitFor(() => expect(admission.deferredUpdate.get().operation?.phase).toBe('waiting'), { timeout: 10000 });
     const child = admission.admit('agent', 'release-child-example');
     await release.finish();
@@ -155,6 +175,8 @@ describe.skipIf(process.platform === 'win32')('direct update script offline boun
     const { root, admission } = fixture();
     const release = admission.admit('agent', 'release-example');
     const done = start(root);
+    expect(existsSync(join(root, 'node_modules'))).toBe(false);
+    expect(existsSync(join(root, 'server/node_modules'))).toBe(false);
     await vi.waitFor(() => expect(admission.deferredUpdate.get().operation?.phase).toBe('waiting'), { timeout: 10000 });
     mkdirSync(join(root, 'data/cos'), { recursive: true });
     writeFileSync(join(root, 'data/cos/state.json'), kind === 'corrupt' ? '{' : JSON.stringify({ persistentMind: { queuedMessages: [{ images: ['example.png'] }] } }));

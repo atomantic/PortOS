@@ -987,6 +987,20 @@ describe('processUpdateMarker', () => {
     expect(unlink).toHaveBeenCalledTimes(1);
   });
 
+  it('consumes a deferred update marker left across restart without replaying over a newer outcome', async () => {
+    const outcome = { id: 'old-update', success: true, completedAt: '2026-07-01T00:00:00Z' };
+    const get = vi.spyOn(maintenance.deferredUpdate, 'get').mockReturnValue({ operation: null, result: outcome });
+    const reconcile = vi.spyOn(maintenance.deferredUpdate, 'reconcile').mockReturnValue({ operation: null, result: outcome });
+    const newer = { success: false, completedAt: '2026-07-02T00:00:00Z', log: 'Later update refused' };
+    readJSONFile.mockResolvedValue({ lastDeferredUpdateId: outcome.id, lastUpdateResult: newer, updateInProgress: false });
+    readFile.mockResolvedValueOnce(JSON.stringify({ version: '1.2.3', completedAt: '2026-06-30T00:00:00Z' }));
+    try {
+      await processUpdateMarker();
+      expect(atomicWrite).not.toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalledTimes(1);
+    } finally { get.mockRestore(); reconcile.mockRestore(); }
+  });
+
   it('records failure when the marker version mismatches the running version', async () => {
     readFile.mockResolvedValueOnce(JSON.stringify({ version: '9.9.9', completedAt: '2026-06-30T00:00:00Z' }));
     await processUpdateMarker();

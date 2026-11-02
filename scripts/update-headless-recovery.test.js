@@ -3,6 +3,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, spawnSync, execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
 import { fileURLToPath } from 'url';
 import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from '../server/lib/gitTestRepo.js';
 
@@ -401,17 +404,31 @@ describe('update.ps1 headless-install guard', () => {
     expect([...new Set(recoveryExits.map(e => e.line))].sort()).toEqual([...SANCTIONED_EXITS].sort());
   });
 
-  it.runIf(process.platform === 'win32')('publishes a failed terminal outcome after recovery on a controlled Windows exit', () => {
-    const stop = ps1.slice(lineOf('function Stop-UpdateScript'), lineOf('# Backstop for a synchronous')).join('\n');
-    const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `
-      function Restore-Pm2Apps { Write-Output 'recovery-settled' }
-      function node { Write-Output ($args -join ' '); $global:LASTEXITCODE = 0 }
-      $env:PORTOS_DEFERRED_UPDATE_ID = 'controlled-failure'
-      ${stop}
-      Stop-UpdateScript 23
-    `], { encoding: 'utf8' });
-    expect(result.status).toBe(23);
-    expect(result.stdout).toMatch(/recovery-settled[\s\S]*--terminal controlled-failure \d+ 23/);
+  it.runIf(process.platform === 'win32')('publishes failed terminal evidence after recovery with application dependencies absent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'update-no-deps-'));
+    try {
+      installUpdateTestSupervisor(root, { standalone: true });
+      const admission = createMaintenanceAdmission(join(root, 'data'));
+      const operation = admission.deferredUpdate.request();
+      admission.deferredUpdate.acquire(operation.id);
+      const stop = ps1.slice(lineOf('function Stop-UpdateScript'), lineOf('# Backstop for a synchronous')).join('\n');
+      const env = { ...process.env, PORTOS_DATA_ROOT: root, PORTOS_DEFERRED_UPDATE_ID: operation.id };
+      // Run the copied disposable install as a standalone process, like boot smoke.
+      delete env.VITEST;
+      const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `
+        function Restore-Pm2Apps { Write-Output 'recovery-settled' }
+        & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ${stop}
+        Stop-UpdateScript 23
+      `], { cwd: root, encoding: 'utf8', env });
+      expect(result.status, result.stderr).toBe(23);
+      expect(result.stdout).toContain('recovery-settled');
+      expect(admission.deferredUpdate.get().operation.terminal).toEqual({ success: false });
+      admission.deferredUpdate.reconcile({ absent: () => true, platform: 'win32' });
+      expect(admission.held()).toBe(false);
+      expect(admission.deferredUpdate.get().result.success).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it('keeps every Resolve-Pm2Command branch a plain array collected by @()', () => {
