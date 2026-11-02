@@ -2650,6 +2650,15 @@ describe('release attempt membership', () => {
     expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: false, attempts: [peer] });
   });
 
+  it('marks complete local membership incomplete when a peer copy shows unrecorded dispatches', async () => {
+    const task = await addTask({ id: 'sys-release-older-peer', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    const local = await dispatch(task.id, 'agent-first', 'first-start', 1);
+    const { releaseAttempts: _omitted, ...olderPeerMetadata } = local.metadata;
+    await mergePeerTasks('internal', [{ ...local, taskType: 'internal', metadata: { ...olderPeerMetadata, lastAgentId: 'agent-peer' } }], { now: NOW });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: false,
+      attempts: [attempt('agent-first', 'first-start')] });
+  });
+
   it('keeps every entry through a peer merge and never lets a peer certify or reset membership', async () => {
     const task = await addTask({ id: 'sys-release-peer', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
     const local = await dispatch(task.id, 'agent-first', 'first-start', 1);

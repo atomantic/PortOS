@@ -32,15 +32,19 @@ export function appendReleaseAttempt(current, attempt, { pristine }) {
 
 /** Peer/local union. Neither side can drop the other's entries or certify them
  * complete; malformed input collapses to an incomplete record that holds.
- * `localHistory` marks an existing local task that dispatched before it kept a
- * record: a peer's record cannot prove those unrecorded local attempts. */
-export function mergeReleaseAttempts(local, remote, { localHistory = false } = {}) {
-  if (local === undefined) {
-    if (remote === undefined) return undefined;
-    const adopted = parseReleaseAttempts(remote) || { version: 1, complete: false, attempts: [] };
-    return localHistory ? { ...adopted, complete: false } : adopted;
+ * `localHistory`/`remoteHistory` mark a side whose copy shows dispatch history
+ * but carries no record (it predates membership or an older peer dispatched
+ * it): the other side's record cannot prove those unrecorded attempts. */
+export function mergeReleaseAttempts(local, remote, { localHistory = false, remoteHistory = false } = {}) {
+  if (local === undefined || remote === undefined) {
+    const present = local ?? remote;
+    if (present === undefined) return undefined;
+    const adopted = parseReleaseAttempts(present) || { version: 1, complete: false, attempts: [] };
+    const unrecorded = local === undefined ? localHistory : remoteHistory;
+    if (unrecorded && adopted.complete) return { ...adopted, complete: false };
+    return local === undefined ? adopted : local;
   }
-  if (remote === undefined || isDeepStrictEqual(local, remote)) return local;
+  if (isDeepStrictEqual(local, remote)) return local;
   const left = parseReleaseAttempts(local);
   const right = parseReleaseAttempts(remote);
   const attempts = [...(left?.attempts || [])];

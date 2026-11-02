@@ -1296,7 +1296,7 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
       const remoteProof = remote.metadata?.spawnBudgetProof;
       const differentProof = local && !isDeepStrictEqual(localProof, remoteProof);
       const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY],
-        { localHistory: !!local && hasSpawnHistory(local.metadata) });
+        { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
       if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
       else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
       if ((!local || localEpoch === remoteEpoch) && (local?.metadata?.spawnBudgetReconciledHold === 'true'

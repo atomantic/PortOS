@@ -201,7 +201,8 @@ tracked in #14005.
 **Attempt membership:** every dispatch of a release task appends its agent,
 start time and instance to the task's service-owned `releaseAttempts` record.
 Retry resets, revives, ordinary task edits and archival never clear it; callers
-cannot write it, and a peer merge only unions entries. Recovery requires a
+cannot write it, and a peer merge only unions entries. A peer copy that shows
+dispatch history but no record (an older peer) leaves the record incomplete. Recovery requires a
 complete record listing the predecessor and successor. Every other member must
 be this instance's, completed (in the live registry or the service archive) and
 process-settled. A missing or incomplete record holds with
