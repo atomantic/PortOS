@@ -433,15 +433,29 @@ export async function stripParticipantsForAccount(accountId, source, aliasEmails
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
 // pointers. `accountId` scopes to one source account (#2820). Newest first,
 // capped by `limit` (default 500, max 2000).
-// WhatsApp exports historically stored only scope/title. Use one identity for
-// management reads and deletes; fallback fields apply only to WhatsApp and only
-// when a stronger identifier is absent, so a title cannot erase another scope.
-const CONVERSATION_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), CASE WHEN source = 'whatsapp' THEN COALESCE(NULLIF(metadata->>'chatScope', ''), NULLIF(metadata->>'chatTitle', '')) END, '')";
+// Historical WhatsApp scopes and filename titles occupy different namespaces.
+// Encode each management selector as a JSON tuple, so even delimiter-like user
+// labels remain distinct. New and historical records of the same type converge.
+const WHATSAPP_RAW_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'chatScope', ''), NULLIF(metadata->>'chatTitle', ''), '')";
+const WHATSAPP_ID_TYPE_SQL = `CASE
+  WHEN NULLIF(metadata->>'chatGuid', '') IS NOT NULL THEN 'guid'
+  WHEN NULLIF(metadata->>'conversationId', '') IS NOT NULL THEN
+    CASE WHEN metadata->>'conversationId' = metadata->>'chatScope' THEN 'scope'
+         WHEN metadata->>'conversationId' = metadata->>'chatTitle' THEN 'title' ELSE 'id' END
+  WHEN NULLIF(metadata->>'chatScope', '') IS NOT NULL THEN 'scope'
+  ELSE 'title' END`;
+const WHATSAPP_CONVERSATION_SQL = `jsonb_build_array(${WHATSAPP_ID_TYPE_SQL}, ${WHATSAPP_RAW_ID_SQL})::text`;
+const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVERSATION_SQL}
+  ELSE COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') END`;
 
 function conversationFilter(field, source, parameter) {
-  return source === 'whatsapp'
-    ? `${CONVERSATION_ID_SQL} = $${parameter}`
-    : `metadata->>'${field}' = $${parameter}`;
+  if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
+  if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
+  // Raw conversationId remains supported. An ambiguous scope/title label must
+  // be selected using the typed chatGuid returned by listConversations instead.
+  return `${WHATSAPP_RAW_ID_SQL} = $${parameter} AND
+    (SELECT COUNT(DISTINCT ${WHATSAPP_ID_TYPE_SQL}) FROM human_activity_events
+     WHERE source = 'whatsapp' AND ${WHATSAPP_RAW_ID_SQL} = $${parameter}) = 1`;
 }
 
 export async function listEvents({ from, to, source, accountId, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
