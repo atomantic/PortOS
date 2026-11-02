@@ -97,7 +97,7 @@ export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photograp
 // sentences. Pure — caller decides which fields to weave into its prompt.
 // Exported for reuse by the LoRA training dataset prompt builder
 // (server/lib/loraDataset.js), which needs the same canon field extraction.
-export function extractCharacterPromptCommon(character, { maxExpressions = 7 } = {}) {
+export function extractCharacterPromptCommon(character) {
   return {
     name: trim(character.name) || 'Unnamed',
     aliases: Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '',
@@ -118,7 +118,7 @@ export function extractCharacterPromptCommon(character, { maxExpressions = 7 } =
     paletteLine: flattenPalette(character.colorPalette),
     wardrobeLine: flattenWardrobes(character.wardrobes),
     propsLine: flattenProps(character.props),
-    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS, { maxEntries: maxExpressions }),
+    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS),
     gesturesLine: flattenNamedList(character.handGestures, DEFAULT_HAND_GESTURES),
   };
 }
@@ -175,13 +175,13 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     special ? `Special traits panel: ${special}` : '',
     visualIdentity ? `Visual identity panel: ${visualIdentity}` : '',
     paletteLine ? `Color palette zone (top right): a row of color swatch chips, each labeled, in order — ${paletteLine}.` : '',
-    `Expression progression (right side): a row of seven head-and-shoulders portraits of ${name} showing — ${expressionsLine}.`,
+    `Expression progression (right side): exactly seven head-and-shoulders portraits of ${name}. Choose from this complete expression list: ${expressionsLine}. If fewer than seven are supplied, show each supplied expression and add variations to fill the row; if more, choose seven without adding frames.`,
     `Micro-expressions row (below expression progression): a row of five subtle headshot variants of ${name} demonstrating restrained facial nuance.`,
     `Head detail sheet (right side, lower): five small portraits of ${name} from different angles — 3/4 headshot, side headshot, top angle, low angle, three-quarter "elegant angle".`,
     `Neutral baseline + posture variation + close-up pose (lower right): one neutral standing pose, one variant posture (leaning or shifted weight), one close-up dramatic pose.`,
     wardrobeLine ? `Wardrobe / accessories details panel (lower left): labeled close-up cards of distinctive wardrobe pieces — ${wardrobeLine}.` : `Wardrobe / accessories details panel (lower left): labeled close-up cards of the character's signature garments and accessories.`,
     propsLine ? `Prop showcase panel (lower middle): a small still-life of the character's signature props — ${propsLine}.` : '',
-    `Hand gestures panel (lower right): a row of five labeled hand close-ups showing the character's habitual gestures — ${gesturesLine}.`,
+    `Hand gestures panel (lower right): exactly five labeled hand close-ups. Choose from this complete list of the character's habitual gestures: ${gesturesLine}. If fewer than five are supplied, show each supplied gesture and add variations to fill the row; if more, choose five without adding frames.`,
     'Layout: thin black panel borders on off-white paper. Light grey labels under each zone. Consistent character proportions across every view. Render in the same illustrated style throughout the page — do NOT mix art styles between panels.',
   ].filter(Boolean);
 
@@ -332,7 +332,7 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     headerBits,
     physical ? `Physical description: ${physical}` : '',
     `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.`,
-    `Expression row (bottom half): seven head-and-shoulders portrait photographs of the same person facing the camera, showing — ${expressionsLine}.`,
+    `Expression row (bottom half): exactly seven head-and-shoulders portrait photographs of the same person facing the camera. Choose from this complete expression list: ${expressionsLine}. If fewer than seven are supplied, show each supplied expression and add variations to fill the row; if more, choose seven without adding frames.`,
     silhouette ? `Silhouette: ${silhouette}` : '',
     posture ? `Posture: ${posture}` : '',
     special ? `Distinctive traits: ${special}` : '',
@@ -367,7 +367,7 @@ function buildCharacterFaceSheetPrompt(universe, character) {
     });
   }
   const styleBits = universeAestheticLine(universe);
-  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character, { maxExpressions: null });
+  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character);
   const promptParts = [
     `PHOTOGRAPHIC FACE REFERENCE SHEET — ten head-and-shoulders photographs of ONE real person, ${name}, against a plain seamless dark grey studio backdrop, in two rows of five with thin dark gutters and a small plain caption under each frame.`,
     styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
