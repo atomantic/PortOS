@@ -3422,8 +3422,11 @@ Capture the epic's number as \`EPIC\`. This phase writes ONLY to the issue track
    \`\`\`bash
    gh issue view "\${EPIC}" --json body -q .body
    gh issue list --state all --search "in:body \\"Part of #\${EPIC}\\"" --json number,title,state,labels,assignees --limit 200
+   ${GITHUB_HOST_SETUP}
+   REPO="\${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+   gh api --hostname "$GH_HOST" --paginate "repos/\${REPO}/issues/\${EPIC}/sub_issues" --jq '.[] | "\\(.number)\\t\\(.state)"'
    \`\`\`
-   Union that with every \`#<num>\` the epic's own body checklist references.
+   Union all three: the \`Part of\` back-references, every \`#<num>\` the epic's own body checklist references, and its native GitHub sub-issues (a human may have linked children only in the GitHub UI). A \`404\`/\`410\` from the sub-issues call means none are linked natively; any other failure leaves the child set unknown, so file nothing this run.
 3. **If children already exist, do NOT file more.**
    - **Some child still OPEN** → the epic is already decomposed. Make sure it carries the \`${EPIC_DECOMPOSED_LABEL}\` label and that its body checklist lists every child (step 6), then set \`NUM\` to the FIRST open child that passes the preparation eligibility and current-need checks (oldest-first) and continue at **Phase 2** with that child. If every open child is in flight, assigned elsewhere, or blocked, exit cleanly — that queue is busy, not empty.
    - **Every child CLOSED** → the epic's work is done. ${leaveOpen ? "Report the completed children for the human handoff and leave the epic open." : 'Post a comment naming the children that delivered it, close it (`gh issue close "${EPIC}" --reason completed`), then follow the selection exit.'}
@@ -3445,6 +3448,14 @@ Capture the epic's number as \`EPIC\`. This phase writes ONLY to the issue track
 
 Part of #\${EPIC}"
    \`\`\`
+   Then link each new slice to the epic as a native GitHub sub-issue, so the hierarchy and progress show on GitHub. The API takes the slice's REST \`id\`, not its number; take \`<num>\` from the URL \`gh issue create\` printed:
+   \`\`\`bash
+   ${GITHUB_HOST_SETUP}
+   REPO="\${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+   CHILD_ID="$(gh api --hostname "$GH_HOST" "repos/\${REPO}/issues/<num>" --jq .id)" &&
+     gh api --hostname "$GH_HOST" -X POST "repos/\${REPO}/issues/\${EPIC}/sub_issues" -F sub_issue_id="$CHILD_ID" >/dev/null
+   \`\`\`
+   Linking is best effort: a failure (\`404\`/\`410\` where sub-issues are unavailable, \`422\` when the slice already has a parent or the epic is at GitHub's sub-issue limit) goes in the run summary and does not stop the split — the \`Part of\` line and the checklist still link the slice. Never pass \`replace_parent\`, which would move a child out of another epic.
    Use \`Part of #\${EPIC}\` — NEVER \`Closes #\${EPIC}\`, which would close the whole epic on the first slice that merges. **Give every slice body the epic-closure instruction too** — a line telling the agent that ships it to check its box in #\${EPIC} and, when it was the LAST open child, close #\${EPIC} with a summarizing comment. That is what closes the epic: once it carries the marker, Phase 1 and the work detector both skip it, so no later claim run will revisit the parent on its own. Carry over the epic's \`area:*\` labels, and follow the shared Issue Filing Labels contract above for dispatch and contributor labels.
 6. **Write the checklist back to the epic** so the next run can follow it — keep the original body and append a \`## Decomposed into\` list naming every child:
    \`\`\`bash
