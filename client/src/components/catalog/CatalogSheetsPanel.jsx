@@ -258,10 +258,11 @@ export default function CatalogSheetsPanel({
 
   const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId) => {
     const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
-    if (!renderVariant || renderBlocked || starting || jobs.some((job) => job.role === renderRole)) return;
+    const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
+    if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole)) return;
     setStarting(true);
     const form = forms.find((f) => f.id === renderFormId) || null;
-    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(form ? { formId: form.id } : {}) }, { silent: true })
+    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}) }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Sheet render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -415,7 +416,8 @@ export default function CatalogSheetsPanel({
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
                     extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
                       {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '')}
-                        disabled={starting || !!renderBlocked || jobs.some((job) => job.role === m.role)}
+                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
+                          || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
                         className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
                     </div> : null} />
                 );
