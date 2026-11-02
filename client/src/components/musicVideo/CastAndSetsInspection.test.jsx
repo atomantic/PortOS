@@ -19,6 +19,14 @@ describe('Cast & Sets inspection card', () => {
     expect(onAcknowledgeImage).toHaveBeenCalledWith({ inputs, inspectionId: 'inspection-1' });
   });
 
+  it('names a failed render-quality check as a rendering defect', () => {
+    const defect = { ...stage, images: { 'set:lab': { ...image, inspection: { id: 'inspection-3', inputs, verdict: 'mismatch',
+      discrepancy: 'Rendering defect: Chairs are molded into the table rim.', checks: [{ id: 'render-quality', status: 'fail', note: 'Chairs are molded into the table rim.' }] } } } };
+    render(<CastAndSetsReferenceProgress stage={defect} onAcknowledgeImage={vi.fn()} />);
+    expect(screen.getByText('Vision: rendering defect')).toBeTruthy();
+    expect(screen.queryByText('Vision: prompt mismatch')).toBeNull();
+  });
+
   it('shows stale or unavailable vision as unreviewed and keeps acknowledgement distinct from a pass', () => {
     const unreviewed = { ...stage, images: { 'set:lab': { ...image, inspection: { id: 'inspection-2', inputs, verdict: 'unreviewed', discrepancy: 'Vision unavailable.' },
       inspectionAcknowledgement: { inputs, inspectionId: 'inspection-2' } } } };
