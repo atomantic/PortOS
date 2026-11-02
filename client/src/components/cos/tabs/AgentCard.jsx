@@ -804,6 +804,15 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {isSystemAgent && (
               <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded shrink-0">SYS</span>
             )}
+            {agent.metadata?.taskQuotaBurnMaintenanceRunId ? (
+              <span className="px-1.5 py-0.5 text-xs bg-blue-500/20 text-blue-300 rounded" title={`Maintenance run ${agent.metadata.taskQuotaBurnMaintenanceRunId}`}>
+                Maintenance run
+              </span>
+            ) : agent.metadata?.taskQuotaBurnFamily ? (
+              <span className="px-1.5 py-0.5 text-xs bg-orange-500/20 text-orange-300 rounded" title={`Quota burn: ${agent.metadata.taskQuotaBurnFamily}`}>
+                Quota burn
+              </span>
+            ) : null}
             {/* This run took over a paused/relaunched one. The predecessor's card
                 says it handed off; this is the other half of that pair. */}
             {agent.metadata?.resumedFromAgentId && (
