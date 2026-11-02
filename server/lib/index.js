@@ -1047,3 +1047,5 @@ export * from './peerSyncEventSchema.js';
 export * from './musicVideoCastSetsImageEdit.js';
 
 export * from './imageRenderQuality.js';
+
+export * from './greyboxSequence.js';
