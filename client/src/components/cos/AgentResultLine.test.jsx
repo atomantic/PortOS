@@ -383,3 +383,15 @@ it('does not claim publication from synchronization metadata without a verified 
   expect(screen.getByText('Published — synchronization running')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'v1.2.3' })).toHaveAttribute('href', sync.releaseUrl);
 });
+
+it('shows independent delivery while retaining the historical blocked verdict', () => {
+  const publication = { status: 'verified', tag: 'v2.109.0', releaseUrl: 'https://github.com/example/repo/releases/tag/v2.109.0' };
+  const synchronization = { status: 'blocked', blocker: 'synchronization-pr-pending',
+    delivery: { status: 'verified', prUrl: 'https://github.com/example/repo/pull/42', headSha: 'a'.repeat(40) } };
+  render(<ReleasePublicationLine publication={publication} synchronization={synchronization} />);
+  expect(screen.getByText('Published — delivery observed')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Delivery PR (aaaaaaa)' })).toHaveAttribute('href', synchronization.delivery.prUrl);
+  expect(screen.getByText('Historical synchronization: blocked')).toBeInTheDocument();
+  expect(screen.getByText('Historical blocker: synchronization-pr-pending')).toBeInTheDocument();
+  expect(screen.queryByText('Published — synchronization verified')).not.toBeInTheDocument();
+});

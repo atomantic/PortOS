@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition }));
+const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
@@ -109,6 +110,23 @@ describe('dispatchAgentRun ownership window', () => {
     expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('review policy') }));
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+  it('passes delivery observations into the final ownership fence before spawning a release', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'do-release', app: 'example-app' } };
+    const observations = new Map([['prior-release', { number: 42 }]]);
+    releaseObservations.mockResolvedValueOnce(observations);
+    releaseDisposition.mockResolvedValueOnce(null);
+    await dispatchAgentRun(context);
+    expect(releaseObservations).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId });
+    expect(releaseDisposition).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId, deliveryObservations: observations });
+    expect(spawnDirectly).toHaveBeenCalled();
+
+    const blocked = newContext();
+    blocked.task = context.task;
+    releaseDisposition.mockResolvedValueOnce('wait-for-synchronization');
+    await dispatchAgentRun(blocked);
+    expect(blocked.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('unfinished') }));
   });
   it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
     const context = newContext();

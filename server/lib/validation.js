@@ -3047,6 +3047,8 @@ export const releaseSynchronizationResetBodySchema = z.object({ identity: z.stri
   reason: z.string().trim().min(1).max(1000),
   checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
 }).strict();
+export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
+  prNumber: z.number().int().positive().safe() }).strict();
 
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({

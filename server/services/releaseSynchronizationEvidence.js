@@ -66,10 +66,43 @@ async function developmentVersionEvidence(ctx, publication) {
   return { publishedVersion: publication.version, developmentVersion: current, manifestBlob: manifest.blob, lockBlob };
 }
 
-async function readSynchronizationForge(origin, forgeExec, path, paginate = false) {
+async function readSynchronizationForge(origin, forgeExec, path, paginate = false, timeoutMs = undefined) {
   const args = ['api', '--hostname', origin.host, ...(paginate ? ['--paginate', '--slurp'] : []),
     `repos/${origin.fullName}${path ? `/${path}` : ''}`];
-  return JSON.parse(await execGh(args, undefined, forgeExec));
+  return JSON.parse(await execGh(args, timeoutMs, forgeExec));
+}
+
+/** Verify delivery without requiring the original checkout or rewriting its run verdict. */
+export async function inspectReleaseDelivery(entry, number) {
+  if (!Number.isSafeInteger(number) || number < 1) hold('delivery-pr-unverified');
+  const app = await getAppById(entry.task.metadata.app);
+  const cwd = app?.repoPath;
+  if (!cwd) hold('synchronization-repository-unavailable');
+  const origin = await getOriginInfo(cwd);
+  if (origin.host !== 'github.com' || origin.fullName !== entry.publication.repository) hold('synchronization-repository-changed');
+  const forgeExec = await resolveForgeExecOptions(cwd, { forgeAccount: app.forgeAccount });
+  const api = path => readSynchronizationForge(origin, forgeExec, path, false, 10_000);
+  const repository = await api('');
+  if (repository.full_name !== origin.fullName || typeof repository.default_branch !== 'string') hold('synchronization-default-unreadable');
+  const [development, pr] = await Promise.all([api(`git/ref/heads/${encodeURIComponent(repository.default_branch)}`), api(`pulls/${number}`)]);
+  const developmentHead = development.object?.sha;
+  if (development.object?.type !== 'commit' || !sha(developmentHead)) hold('synchronization-default-unreadable');
+  if (pr.number !== number || pr.merged !== true || !time(pr.merged_at) || !sha(pr.merge_commit_sha)
+    || pr.base?.ref !== repository.default_branch || pr.base?.repo?.full_name !== origin.fullName
+    || pr.head?.repo?.full_name !== origin.fullName || !sha(pr.head?.sha)) hold('delivery-pr-unverified');
+  const { candidateHead, promotionMerge } = entry.publication;
+  if (!sha(candidateHead) || !sha(promotionMerge)) hold('published-ancestry-unverified');
+  const pairs = [[candidateHead, pr.head.sha], [promotionMerge, pr.head.sha], [pr.head.sha, developmentHead],
+    [pr.merge_commit_sha, developmentHead], [candidateHead, developmentHead], [promotionMerge, developmentHead]];
+  const comparisons = await Promise.all(pairs.map(([base, head]) => api(`compare/${base}...${head}`)));
+  if (comparisons.some((value, index) => !['ahead', 'identical'].includes(value.status)
+    || value.merge_base_commit?.sha !== pairs[index][0])) hold('delivery-ancestry-unverified');
+  const version = await developmentVersionEvidence({ api, target: { developmentHead } }, entry.publication);
+  const latest = await api(`git/ref/heads/${encodeURIComponent(repository.default_branch)}`);
+  if (latest.object?.type !== 'commit' || latest.object.sha !== developmentHead) hold('delivery-development-head-changed');
+  return { status: 'verified', number, prUrl: `https://github.com/${origin.fullName}/pull/${number}`,
+    headSha: pr.head.sha, mergeSha: pr.merge_commit_sha, base: repository.default_branch,
+    developmentHead, ...version, checkedAt: new Date().toISOString() };
 }
 
 async function checkoutTargets(entry, agents, liveAgents) {

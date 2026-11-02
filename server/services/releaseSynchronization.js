@@ -25,6 +25,10 @@ const ownerSchema = z.object({ agentId: z.string().min(1), taskId: z.string().mi
 const obligationSchema = z.object({ status: z.enum(['pending', 'blocked', 'verified']),
   verifiedAt: z.string().datetime().optional(), blocker: z.string().optional(), evidence: z.record(z.string(), z.unknown()).optional() }).strict()
   .refine(value => value.status !== 'verified' || (value.verifiedAt && value.evidence && Object.keys(value.evidence).length > 0));
+const deliverySchema = z.object({ status: z.literal('verified'), number: z.number().int().positive().safe(), prUrl: z.string().url(),
+  headSha: z.string().regex(/^[a-f0-9]{40}$/), mergeSha: z.string().regex(/^[a-f0-9]{40}$/), base: z.string().min(1),
+  developmentHead: z.string().regex(/^[a-f0-9]{40}$/), publishedVersion: z.string(), developmentVersion: z.string(),
+  manifestBlob: z.string().regex(/^[a-f0-9]{40}$/), lockBlob: z.string().regex(/^[a-f0-9]{40}$/).nullable(), checkedAt: z.string().datetime() }).strict();
 const entrySchema = z.object({
   version: z.union([z.literal(1), z.literal(2)]), identity: identitySchema, owner: ownerSchema,
   publication: z.object({ identity: identitySchema, status: z.literal('verified') }).passthrough(),
@@ -32,7 +36,7 @@ const entrySchema = z.object({
   obligations: z.object(Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(key => [key, obligationSchema]))).strict(),
   synchronization: z.object({ status: z.enum(['pending', 'running', 'blocked', 'verified']),
     attempts: z.number().int().nonnegative(), checkedAt: z.string().datetime(), retryAt: z.string().datetime().nullable(),
-    verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable() }).strict().optional(),
+    verifiedAt: z.string().datetime().nullable(), blocker: z.string().nullable(), delivery: deliverySchema.optional() }).strict().optional(),
   // Accepted pre-#14345 archive recoveries stay readable; they no longer bind a checkout.
   legacyRecovery: z.record(z.string(), z.unknown()).optional(),
   operatorReset: releaseSynchronizationResetSchema.optional(),
@@ -63,25 +67,215 @@ async function readOutbox() {
  * that generates new releases. Keep the existing immutable task binding, and
  * serialize a subsequent release behind unfinished synchronization for its app.
  */
-export async function releaseTaskDispatchDisposition(task) {
+export async function releaseTaskDispatchDisposition(task, { ignoreAgentId = null, deliveryObservations = null } = {}) {
   const type = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
   if (!['release-sync', 'do-release'].includes(type)) return null;
   const outbox = await readOutbox();
   if (type === 'do-release') {
-    const pending = Object.values(outbox.publications).filter(entry => entry.task.metadata.app === task.metadata?.app
+    const candidates = Object.values(outbox.publications).filter(entry => entry.task.metadata.app === task.metadata?.app
       && !releaseSynchronizationReset(entry) && effectiveReleaseSynchronization(entry)?.status !== 'verified');
+    const pending = [];
+    for (const entry of candidates) {
+      if (isInlineReleaseSynchronization(entry) && entry.owner.taskId === task.id) { pending.push(entry); continue; }
+      if (!await releaseDeliveredAndIdle(entry, ignoreAgentId, deliveryObservations)) pending.push(entry);
+    }
     if (pending.some(entry => !isInlineReleaseSynchronization(entry) || entry.owner.taskId !== task.id)) return 'wait-for-synchronization';
     return pending.length ? 'registered-release-owner' : null;
   }
   const entry = outbox.publications[task.metadata?.releaseSynchronization?.identity];
   if (!entry || task.id !== entry.task.id) return null;
   if (releaseSynchronizationReset(entry)) return 'retired-continuation';
+  if (entry.synchronization?.delivery) return 'delivered-continuation';
   if (!hasFrozenPrDisposition(entry.task.metadata)) return 'review-policy-unverified';
   if (!entry.registeredAt) return null;
   const expected = { ...entry.task.metadata,
     idempotencyKey: createHash('sha256').update(JSON.stringify([entry.identity, entry.owner])).digest('hex') };
   return RELEASE_SYNC_FROZEN_METADATA_KEYS.every(key => isDeepStrictEqual(task.metadata?.[key], expected[key]))
     ? 'registered-continuation' : null;
+}
+
+function deliveryPrNumber(entry) {
+  const original = entry.obligations.synchronizationPr;
+  if (!isInlineReleaseSynchronization(entry) && entry.synchronization?.delivery) return entry.synchronization.delivery.number;
+  const required = RELEASE_SYNC_OBLIGATIONS.filter(name => !['processSettlement', 'retirement'].includes(name));
+  return required.every(name => entry.obligations[name]?.status === 'verified'
+    && entry.obligations[name].evidence?.prUrl === original?.evidence?.prUrl
+    && entry.obligations[name].evidence?.headSha === original?.evidence?.headSha)
+    && Number.isSafeInteger(original?.evidence?.number) ? original.evidence.number : null;
+}
+
+function deliveryMatchesQuality(entry, proof) {
+  return Boolean(entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))
+    || entry.obligations.qualitySnapshot?.evidence?.developmentHead === proof?.developmentHead;
+}
+
+/** Observe the forge before entering the short spawn ownership fence. */
+export async function observeReleaseDeliveries(task, { ignoreAgentId = null } = {}) {
+  if (currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType) !== 'do-release') return new Map();
+  const outbox = await readOutbox();
+  const { inspectReleaseDelivery } = await import('./releaseSynchronizationEvidence.js');
+  const observations = new Map();
+  for (const entry of Object.values(outbox.publications).filter(value => value.task.metadata.app === task.metadata?.app
+    && !releaseSynchronizationReset(value) && effectiveReleaseSynchronization(value)?.status !== 'verified'
+    && !(isInlineReleaseSynchronization(value) && value.owner.taskId === task.id))) {
+    const number = deliveryPrNumber(entry);
+    if (!number) continue;
+    const ownerState = await releaseOwnersIdle(entry, ignoreAgentId);
+    if (!ownerState) continue;
+    const proof = await inspectReleaseDelivery(entry, number).catch(() => null);
+    if (proof && deliveryMatchesQuality(entry, proof)) observations.set(entry.identity, { ...proof, ownerState });
+  }
+  return observations;
+}
+
+async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
+  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const agents = await readClaimOwnershipAgents();
+  if (!agents) return false;
+  const { getActiveAgentIds } = await import('./agentState.js');
+  const related = agent => agent.id === entry.owner.agentId || agent.taskId === entry.owner.taskId || agent.taskId === entry.task.id;
+  const history = observed?.owners || await (await import('./branchCompletionPolicy.js')).readBranchCompletionPolicies({ repairIndex: false }).catch(() => null);
+  if (!history) return false;
+  const owners = [...new Map([...history.filter(related), ...agents.filter(related)].map(agent => [agent.id, agent])).values()];
+  const binding = owner => [owner.id, owner.taskId, owner.startedAt, owner.completedAt, owner.pid,
+    owner.metadata?.useRunner, owner.metadata?.executionMode];
+  if (observed && !isDeepStrictEqual(owners.map(binding).sort(), observed.owners.map(binding).sort())) return false;
+  let runnerAgents = observed?.runnerAgents || [];
+  const runnerBacked = agent => agent.metadata?.useRunner === true || agent.metadata?.useRunner === 'true'
+    || ['runner', 'runner-tui'].includes(agent.metadata?.executionMode);
+  const known = [...new Map([...history, ...agents].map(agent => [agent.id, agent])).values()];
+  const releaseAgents = known.filter(agent => runnerBacked(agent) && ['do-release', 'release-sync'].includes(currentTaskTypeName(
+    agent.metadata?.taskAnalysisType || agent.metadata?.analysisType || agent.metadata?.selfImprovementType)));
+  const relevantRunners = [];
+  if (!observed) for (const agent of releaseAgents) {
+    if (related(agent)) { relevantRunners.push(agent); continue; }
+    const scope = await sameReleaseScope(entry, agent);
+    if (scope !== false) relevantRunners.push(agent);
+  }
+  if (!observed && [...relevantRunners, ...owners].some(runnerBacked)) {
+    const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
+    const running = await getActiveAgentsFromRunner().catch(() => null);
+    if (!Array.isArray(running) || running.some(agent => !agent || typeof agent.id !== 'string')) return false;
+    const { runnerEntryShieldsRunningRecord } = await import('../lib/runnerAgentLiveness.js');
+    const live = await Promise.all(running.map(agent => runnerEntryShieldsRunningRecord(agent)));
+    const ids = running.filter((_, index) => live[index]).map(agent => agent.id);
+    if (ids.some(id => !known.some(agent => agent.id === id))) return false;
+    runnerAgents = known.filter(agent => ids.includes(agent.id));
+  }
+  const active = new Set([...getActiveAgentIds(), ...runnerAgents.map(agent => agent.id)].filter(id => id !== ignoreAgentId));
+  if ([...active].some(id => !agents.some(agent => agent.id === id) && !runnerAgents.some(agent => agent.id === id))) return false;
+  if (!owners.some(agent => agent.id === entry.owner.agentId && agent.startedAt === entry.owner.startedAt)
+    || owners.some(agent => agent.status !== 'completed' || active.has(agent.id) || !Number.isFinite(Date.parse(agent.completedAt))
+      || Date.parse(agent.completedAt) < Date.parse(agent.startedAt) || Date.parse(agent.completedAt) > Date.now())) return false;
+  const safeOthers = new Map();
+  const runningAgents = [...new Map([...runnerAgents, ...agents].map(agent => [agent.id, agent])).values()];
+  for (const agent of runningAgents.filter(value => value.status !== 'completed' || active.has(value.id))) {
+    let type = currentTaskTypeName(agent.metadata?.taskAnalysisType || agent.metadata?.analysisType || agent.metadata?.selfImprovementType);
+    let task;
+    if (!type) {
+      if (!agent.taskId) return false;
+      const { getTaskById } = await import('./cosTaskStore.js');
+      task = await getTaskById(agent.taskId);
+      type = currentTaskTypeName(task?.metadata?.analysisType || task?.metadata?.selfImprovementType);
+      if (!type && task?.taskType !== 'user') return false;
+    }
+    if (!['do-release', 'release-sync'].includes(type)) continue;
+    const workspace = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
+    const scopeBinding = [agent.id, agent.taskId, agent.startedAt, type, agent.metadata?.taskApp || agent.metadata?.app || task?.metadata?.app, workspace];
+    if (observed) {
+      if (!observed.safeOthers.has(agent.id) || !isDeepStrictEqual(observed.safeOthers.get(agent.id), scopeBinding)) return false;
+      continue;
+    }
+    if (await sameReleaseScope(entry, agent, task) !== false) return false;
+    safeOthers.set(agent.id, scopeBinding);
+  }
+  const { listAllSessions } = await import('./shell.js');
+  if (listAllSessions().some(session => owners.some(owner => owner.id === session.agentId))) return false;
+  if (!observed && process.platform === 'win32') {
+    const { readWindowsAgentSettlement } = await import('../lib/windowsAgentProcess.js');
+    for (const owner of owners) if (!await readWindowsAgentSettlement(owner).catch(() => null)) return false;
+  } else if (process.platform !== 'win32') {
+    for (const owner of owners.filter(value => Number.isSafeInteger(value.pid) && value.pid > 0)) {
+      try { process.kill(owner.pid, 0); return false; } catch (error) { if (error.code !== 'ESRCH') return false; }
+    }
+  }
+  return { owners, runnerAgents, safeOthers: observed?.safeOthers || safeOthers };
+}
+
+async function sameReleaseScope(entry, agent, task = null) {
+  const app = agent.metadata?.taskApp || agent.metadata?.app || task?.metadata?.app;
+  if (app && app === entry.task.metadata.app) return true;
+  const workspace = agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
+  const [repo, other] = await Promise.all([realpath(entry.owner.workspace).catch(() => null), workspace && realpath(workspace).catch(() => null)]);
+  if (!repo || !other) return null;
+  if (samePath(repo, other)) return true;
+  const { execGit } = await import('../lib/execGit.js');
+  const common = async path => {
+    const result = await execGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], path, { ignoreExitCode: true }).catch(() => null);
+    return result?.exitCode === 0 ? realpath(result.stdout.trim()).catch(() => null) : null;
+  };
+  const [left, right] = await Promise.all([common(repo), common(other)]);
+  return left && right ? samePath(left, right) : null;
+}
+
+async function releaseDeliveredAndIdle(entry, ignoreAgentId = null, observations = null) {
+  const number = deliveryPrNumber(entry);
+  if (!number) return false;
+  if (observations) {
+    const proof = observations.get(entry.identity);
+    const expected = entry.synchronization?.delivery || entry.obligations.synchronizationPr?.evidence;
+    if (proof?.number !== number || proof.headSha !== expected?.headSha || proof.mergeSha !== expected?.mergeSha
+      || !proof.ownerState || !deliveryMatchesQuality(entry, proof)) return false;
+  }
+  if (!await releaseOwnersIdle(entry, ignoreAgentId, observations?.get(entry.identity)?.ownerState)) return false;
+  if (observations) return true;
+  const { inspectReleaseDelivery } = await import('./releaseSynchronizationEvidence.js');
+  const proof = await inspectReleaseDelivery(entry, number).catch(() => null);
+  return Boolean(proof && deliveryMatchesQuality(entry, proof));
+}
+
+/** Exclude only delivered, inactive release tasks from scheduler deduplication. */
+export async function deliveredReleaseTaskIds(tasks, { deliveryObservations = null, revalidate = true } = {}) {
+  const relevant = tasks.filter(task => ['blocked', 'in_progress'].includes(task.status)
+    && ['do-release', 'release-sync'].includes(currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType)));
+  if (!relevant.length) return new Set();
+  const outbox = await readOutbox();
+  const delivered = new Set();
+  for (const task of relevant) {
+    const entry = Object.values(outbox.publications).find(value => value.task.id === task.id);
+    if (entry && (revalidate ? await releaseDeliveredAndIdle(entry, null, deliveryObservations)
+      : deliveryPrNumber(entry) && await releaseOwnersIdle(entry))) delivered.add(task.id);
+  }
+  return delivered;
+}
+
+/** Observe a replacement delivery without changing the historical task verdict. */
+export async function verifyIndependentReleaseDelivery(identity, number) {
+  const initial = (await readOutbox()).publications[identity];
+  if (!initial || !initial.registeredAt || !initial.synchronization || releaseSynchronizationReset(initial)) refuse('Release synchronization was not found or is retired');
+  if (isInlineReleaseSynchronization(initial)) refuse('Independent repair verification is only available for historical continuations');
+  const { inspectReleaseDelivery } = await import('./releaseSynchronizationEvidence.js');
+  const observation = await inspectReleaseDelivery(initial, number).catch(error => refuse(`Release delivery could not be verified: ${error.code || 'evidence-unavailable'}`));
+  const delivery = deliverySchema.parse(observation);
+  const ownerState = await releaseOwnersIdle(initial);
+  if (!ownerState) refuse('A release or synchronization is still active or ownership is unavailable');
+  const updated = await queue(async () => {
+    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    return withClaimOwnershipLock(async () => {
+      const entry = (await readOutbox()).publications[identity];
+      if (!entry || !entry.registeredAt || !entry.synchronization || releaseSynchronizationReset(entry)
+        || !isDeepStrictEqual(entry.publication, initial.publication) || !isDeepStrictEqual(entry.owner, initial.owner)
+        || entry.task.id !== initial.task.id || entry.task.metadata.app !== initial.task.metadata.app) refuse('Release synchronization changed during verification');
+      if (!await releaseOwnersIdle(entry, null, ownerState)) refuse('A release or synchronization is still active or ownership is unavailable');
+      entry.synchronization = { ...entry.synchronization, delivery };
+      await saveReleaseSynchronization(entry);
+      return entry;
+    });
+  });
+  await emitReleaseSynchronization(updated, ownerState.owners, { suppressCompletionWake: true }).catch(error => {
+    console.log(`🚫 Release delivery update could not be broadcast: ${error.code || 'notification-unavailable'}`);
+  });
+  return delivery;
 }
 
 /** Retire one stale checkpoint; retain its original verdict and publication. */
@@ -346,6 +540,7 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
     }
     return Object.values(outbox.publications).filter(entry => entry.registeredAt && !releaseSynchronizationReset(entry)
       && effectiveReleaseSynchronization(entry)?.status !== 'verified'
+      && !(entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))
       && (!effectiveReleaseSynchronization(entry)?.retryAt || Date.parse(effectiveReleaseSynchronization(entry).retryAt) <= Date.now()))
       .sort((left, right) => (left.synchronization?.checkedAt || '').localeCompare(right.synchronization?.checkedAt || ''))
       .slice(0, 3).map(entry => entry.task.id);
@@ -376,7 +571,7 @@ async function verifyEntry(entry, agents) {
   const attempts = (entry.synchronization?.attempts || 0) + 1;
   const checkedAt = new Date().toISOString();
   entry.obligations = result.obligations;
-  entry.synchronization = { status: result.status, attempts, checkedAt,
+  entry.synchronization = { ...(entry.synchronization?.delivery && { delivery: entry.synchronization.delivery }), status: result.status, attempts, checkedAt,
     blocker: result.blocker, verifiedAt: result.status === 'verified' ? checkedAt : null,
     retryAt: result.status === 'verified' ? null : new Date(Date.now() + Math.min(30 * 60_000, 60_000 * 2 ** Math.min(attempts - 1, 5))).toISOString() };
   // Receipt persistence precedes change events and checkout retirement.
@@ -385,18 +580,19 @@ async function verifyEntry(entry, agents) {
   return entry.synchronization;
 }
 
-async function emitReleaseSynchronization(entry, agents) {
+async function emitReleaseSynchronization(entry, agents, { suppressCompletionWake = false } = {}) {
   const { projectTaskReleaseMilestones, projectAgentReleaseMilestones } = await import('./releaseSynchronizationProjection.js');
   const { getTaskById } = await import('./cosTaskStore.js');
 
   const continuationTask = await getTaskById(entry.task.id).catch(() => null);
   const projectedContinuation = continuationTask ? projectTaskReleaseMilestones(continuationTask, entry) : null;
-  cosEvents.emit('tasks:changed', { action: 'release-synchronization', taskId: entry.task.id, task: projectedContinuation });
+  const suppress = suppressCompletionWake ? { suppressCompletionWake: true, suppressDequeue: true } : {};
+  cosEvents.emit('tasks:changed', { action: 'release-synchronization', taskId: entry.task.id, task: projectedContinuation, ...suppress });
 
   if (entry.owner.taskId && entry.owner.taskId !== entry.task.id) {
     const publisherTask = await getTaskById(entry.owner.taskId).catch(() => null);
     if (publisherTask) {
-      cosEvents.emit('tasks:changed', { action: 'release-synchronization-parent', taskId: entry.owner.taskId, task: projectTaskReleaseMilestones(publisherTask, entry) });
+      cosEvents.emit('tasks:changed', { action: 'release-synchronization-parent', taskId: entry.owner.taskId, task: projectTaskReleaseMilestones(publisherTask, entry), ...suppress });
     }
   }
 
@@ -416,7 +612,8 @@ export function verifyReleaseSynchronizationTask(taskId, { agents = null, respec
   return queue(async () => {
     const outbox = await readOutbox();
     const entry = Object.values(outbox.publications).find(value => value.task.id === taskId && value.registeredAt);
-    if (!entry || releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified') return effectiveReleaseSynchronization(entry) || null;
+    if (!entry || releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified'
+      || (entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))) return effectiveReleaseSynchronization(entry) || null;
     if (respectRetryAt && effectiveReleaseSynchronization(entry)?.retryAt && Date.parse(effectiveReleaseSynchronization(entry).retryAt) > Date.now()) return effectiveReleaseSynchronization(entry);
     const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
     return verifyEntry(entry, agents || await readBranchCompletionPolicies({ repairIndex: false }));
@@ -465,7 +662,7 @@ export function retainReleaseSynchronizationReview(release) {
         seed.branch === release.branch && seed.path === release.path
         && retirementCheckoutIdentityFromPointer(seed.incarnation?.pointer) === release.checkoutIdentity));
       if (!owns) continue;
-      await verifyEntry(entry, agents);
+      if (!(entry.synchronization?.delivery && !isInlineReleaseSynchronization(entry))) await verifyEntry(entry, agents);
       const review = entry.obligations.localReview;
       const retained = entry.obligations.retirement.evidence;
       if (review.status !== 'verified' || review.evidence?.prUrl !== retained?.prUrl

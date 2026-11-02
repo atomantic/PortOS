@@ -301,8 +301,9 @@ synchronization to the same release task and returns its frozen
 `synchronizationPolicy`. The same coordinator follows it through the synchronization
 PR, reviews, CI and merge. The server independently verifies those obligations,
 and after the process exits it verifies settlement and eligible checkout retirement.
-Another release for the app waits until the earlier synchronization is verified;
-an interrupted run resumes the same task, subject to the existing ownership and
+Another release for the app waits for verified delivery and an inactive release owner;
+checkout retirement may remain outstanding without holding the next release.
+An interrupted run resumes the same task, subject to the existing ownership and
 process-settlement checks. Do not create a follow-up task or republish the release.
 
 Requests from older running coordinators that omit `synchronizationMode` retain
@@ -329,6 +330,15 @@ provider-confirmed merge can still be observed by the existing synchronization
 verifier; this dispatch hold does not invalidate completed delivery evidence.
 If the historical policy cannot be established, keep the checkpoint held and use
 the existing operator reset below only after an explicit decision to abandon it.
+
+If a separate merged PR delivered a historical release, an operator can POST
+`{ "identity": "<identity>", "prNumber": 123 }` to
+`/api/cos/schedule/release-synchronization/verify-delivery`. The server checks the
+merged PR and current default branch, candidate and published ancestry, and the
+development version and lockfile. It records that independent delivery separately;
+the original task and review verdicts remain historical. Future release dispatch
+rechecks the delivery and active owners. This operation does not retire checkouts,
+start a release, or release the checkout-review retention gate.
 
 The outbox keeps the original reviewer policy, publication ancestry and retained
 physical checkout seeds. It never transfers checkout authority. The owner

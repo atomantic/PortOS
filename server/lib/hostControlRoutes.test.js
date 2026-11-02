@@ -11,6 +11,11 @@ it('requires host control to retire a release checkpoint', () => {
     .toBe('POST /api/cos/schedule/release-synchronization/operator-reset');
 });
 
+it('requires host control to verify an independent release delivery', () => {
+  expect(hostControlRouteFor('POST', '/api/cos/schedule/release-synchronization/verify-delivery'))
+    .toBe('POST /api/cos/schedule/release-synchronization/verify-delivery');
+});
+
 it('requires host control for a manual cleanup recheck', () => {
   expect(isHostControlRoute('POST', '/api/cos/agents/agent-1/recheck-cleanup')).toBe(true);
 });

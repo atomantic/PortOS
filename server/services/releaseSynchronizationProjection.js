@@ -25,8 +25,9 @@ function buildReleaseSynchronizationPayload(entry) {
     prUrl: syncPr,
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
+    ...(synchronization?.delivery && { delivery: synchronization.delivery }),
     ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
-    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && {
+    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && !synchronization.delivery && {
       nextAction: 'No server-captured seed identifies the publisher checkout, so this synchronization cannot be verified. Confirm the release reached development, then retire this checkpoint with the operator reset.',
     }),
     verifiedAt: synchronization?.verifiedAt || null,

@@ -514,7 +514,7 @@ export async function addTask(taskData, taskType = 'user', options = {}) {
   }
 }
 
-async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null }) {
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [] }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
@@ -546,6 +546,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     ? await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(tasks,
       { allowSourceAgentId: taskData.metadata?.cleanupRefillSource }).catch(() => new Set())
     : new Set();
+  // Only the release scheduler supplies IDs it has already checked for delivery.
+  if (raw && taskData.metadata?.analysisType === 'do-release') {
+    for (const id of deliveredReleaseTaskIds) cleanupOnlyIds.add(id);
+  }
 
   // One state lock covers BOTH queues: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
