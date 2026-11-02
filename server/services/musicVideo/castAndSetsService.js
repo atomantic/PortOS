@@ -564,6 +564,14 @@ async function dispatchKey(projectId, key) {
       return settled;
     });
     console.warn(`⚠️ Music Video Cast & Sets ${short(projectId)} ${key} refused: ${reason}`);
+    // A refusal has no later job-completion event to wake the retry. Request
+    // another pass only for the same pending revision, without awaiting the
+    // current coalesced advance (which would wait on itself).
+    if (out.changed && out.stage?.status === 'imaging' && out.stage.revision === reserved.stage.revision
+      && out.stage.processId === PROCESS_ID && out.stage.images?.[key]?.status === 'pending') {
+      const live = advancing.get(projectId);
+      if (live) live.again = true;
+    }
     publish(projectId, out.project);
     return;
   }

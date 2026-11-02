@@ -260,14 +260,15 @@ describe('Cast & Sets production accounting', () => {
     expect((await current(project.id)).productionRuns[0].usage).toEqual(saved.productionRuns[0].usage);
   });
 
-  it('refunds a refused submission and charges a new attempt when resumed', async () => {
+  it('refunds a refused submission and charges the automatically queued retry', async () => {
     enqueue.mockRejectedValueOnce(new Error('Example queue refusal'));
     const { project } = await productionCheckin({ maxGenerations: 20 });
-    await until(async () => jobs.length === 3, 'the other initial images');
+    await until(async () => (await current(project.id)).productionRuns[0].steps
+      .some((step) => step.sceneId === 'character' && step.status === 'queued'), 'the automatically queued retry');
     const before = await current(project.id);
     const count = Object.keys(before.castAndSets.plan).length;
-    expect(before.productionRuns[0].usage.generations).toBe(count - 1);
-    expect(before.productionRuns[0].steps.find((s) => s.sceneId === 'character')).toMatchObject({ status: 'refused' });
+    expect(before.productionRuns[0].usage.generations).toBe(count);
+    expect(before.productionRuns[0].steps.filter((s) => s.sceneId === 'character').map((s) => s.status)).toEqual(['refused', 'queued']);
     await land(project.id);
     await runTo(project.id, 'review');
     const after = await current(project.id);
@@ -297,6 +298,39 @@ describe('Cast & Sets production accounting', () => {
     ]);
     expect(saved.productionRuns[0].steps.filter((step) => step.status === 'reserved')).toHaveLength(0);
     expect(jobs).toHaveLength(previousJobs);
+  });
+
+  it.each([1, 2])('settles the final pending image after %i transient queue refusal(s)', async (refusals) => {
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await runTo(project.id, 'review');
+    const before = await current(project.id);
+    const previousJobs = jobs.length;
+    enqueue.mockClear();
+    for (let i = 0; i < refusals; i += 1) enqueue.mockRejectedValueOnce(new Error('Temporary queue refusal'));
+
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions'] })).status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    const steps = saved.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions' && step.revisionId === '2');
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(saved.productionRuns[0].steps.filter((step) => step.status === 'reserved')).toHaveLength(0);
+    if (refusals === 1) {
+      expect(saved.castAndSets).toMatchObject({ status: 'imaging', images: { expressions: { status: 'queued', failures: 1 } } });
+      expect(steps.map((step) => step.status)).toEqual(['refused', 'queued']);
+      expect(saved.productionRuns[0].usage.generations).toBe(before.productionRuns[0].usage.generations + 1);
+      expect(saved.productionRuns[0].usage.spentUsd).toBe(before.productionRuns[0].usage.spentUsd + 0.25);
+      expect(jobs).toHaveLength(previousJobs + 1);
+      await runTo(project.id, 'review');
+      const completed = await current(project.id);
+      expect(completed.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions' && step.revisionId === '2')
+        .map((step) => step.status)).toEqual(['refused', 'completed']);
+    } else {
+      expect(saved.castAndSets).toMatchObject({ status: 'failed', images: { expressions: { status: 'failed', failures: 2 } } });
+      expect(saved.castAndSets.stopReason).toMatch(/failed twice: Temporary queue refusal/);
+      expect(steps.map((step) => step.status)).toEqual(['refused', 'refused']);
+      expect(saved.productionRuns[0].usage).toEqual(before.productionRuns[0].usage);
+      expect(jobs).toHaveLength(previousJobs);
+    }
   });
 
   it('charges failed queued jobs and their retry, and refunds images skipped before submission', async () => {
