@@ -749,6 +749,7 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
     // Diagnostics are also embedded in the agent-facing context markdown.
     expect(taskArg.context).toContain('## Fallback Tier');
     expect(taskArg.context).toContain('Tier:** 1 (config/env)');
+    expect(taskArg.context).toContain('does not establish that a fallback was attempted');
   });
 
   it('emits the tier inline on the "AI provider error detected" log line', async () => {
