@@ -3061,6 +3061,19 @@ describe('videoGen routes', () => {
       expect(r.body.activeJob.params.prompt).toBe('P running');
     });
 
+    it('restores only gallery-backed reference images into the editable picker', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
+        id: 'running-refs', kind: 'video', status: 'running', params: {
+          referenceImagePaths: ['/mock/images/cast.png', '/mock/image-refs/guide.png', '/mock/image-refs/cast.png'],
+        },
+      }]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.params.referenceImageFiles).toEqual(['cast.png']);
+      expect(r.body.activeJob.params.unavailableReferenceImageNames).toEqual(['guide.png', 'cast.png']);
+      expect(JSON.stringify(r.body)).not.toContain('/mock/');
+    });
+
     it('resumes a federated render from its marker, not the blanked local fields', async () => {
       // The routed job's top-level prompt/model are blanked so a downgraded
       // build fails closed (#4683). Without reading through to the wire
