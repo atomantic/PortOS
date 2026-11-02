@@ -9,8 +9,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { homedir } from 'os';
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'fs';
-import { join } from 'path';
+import { join, isAbsolute } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // obsidian.js captures PATHS.brain at module load for its vaults file, so the
@@ -23,7 +24,16 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-const { addVault, upsertNote, getNote, createNote, updateNote, deleteNote } = await import('./obsidian.js');
+const {
+  addVault,
+  upsertNote,
+  getNote,
+  createNote,
+  updateNote,
+  deleteNote,
+  detectVaults,
+  DEFAULT_ICLOUD_OBSIDIAN,
+} = await import('./obsidian.js');
 
 const VAULT_DIR = join(tempRoot, 'vault');
 let vaultId;
@@ -114,5 +124,35 @@ describe('obsidian note CRUD extension enforcement (#9007)', () => {
     // the symlink — this is the directory-creation-through-a-mid-path-symlink
     // case a single recursive `ensureDir(fullDirString)` cannot see (#9007).
     expect(existsSync(join(outsideDir, 'newdir'))).toBe(false);
+  });
+});
+
+describe('DEFAULT_ICLOUD_OBSIDIAN & detectVaults', () => {
+  it('DEFAULT_ICLOUD_OBSIDIAN resolves using os.homedir() as an absolute path', () => {
+    expect(DEFAULT_ICLOUD_OBSIDIAN).toBe(
+      join(homedir(), 'Library/Mobile Documents/iCloud~md~obsidian/Documents')
+    );
+    expect(isAbsolute(DEFAULT_ICLOUD_OBSIDIAN)).toBe(true);
+  });
+
+  it('detectVaults returns empty array when directory does not exist', async () => {
+    const missing = join(tempRoot, 'non-existent-dir');
+    expect(await detectVaults(missing)).toEqual([]);
+  });
+
+  it('detectVaults discovers directories containing .obsidian', async () => {
+    const base = join(tempRoot, 'mock-icloud');
+    const validVault = join(base, 'VaultOne');
+    const notAVault = join(base, 'PlainFolder');
+    const dotFolder = join(base, '.hidden');
+
+    mkdirSync(join(validVault, '.obsidian'), { recursive: true });
+    mkdirSync(notAVault, { recursive: true });
+    mkdirSync(join(dotFolder, '.obsidian'), { recursive: true });
+
+    const detected = await detectVaults(base);
+    expect(detected).toEqual([
+      { name: 'VaultOne', path: validVault },
+    ]);
   });
 });
