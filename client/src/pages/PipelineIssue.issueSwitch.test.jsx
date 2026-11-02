@@ -24,7 +24,7 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 vi.mock('../components/pipeline/stages/IdeaStage', () => ({
   default: (props) => {
     ideaProps.push(props);
-    return <div data-testid="idea-stage">{props.issue.id}:{props.issue.stages?.idea?.status}</div>;
+    return <div data-testid="idea-stage">{props.issue.id}:{props.issue.stages?.idea?.status}:{props.series?.id}</div>;
   },
 }));
 vi.mock('../components/pipeline/stages/ProseStage', () => ({ default: () => null }));
@@ -48,9 +48,12 @@ import PipelineIssue from './PipelineIssue';
 const issue = (id, title, ideaStatus = 'ready') => ({
   id, seriesId: 'series-example', number: 1, title, stages: { idea: { status: ideaStatus } },
 });
-const ISSUES = { 'issue-a': issue('issue-a', 'Issue A'), 'issue-b': issue('issue-b', 'Issue B') };
+const ISSUES = {
+  'issue-a': issue('issue-a', 'Issue A'),
+  'issue-b': { ...issue('issue-b', 'Issue B'), seriesId: 'series-b' },
+};
 
-async function renderAndSwitch(beforeSwitch) {
+async function renderAndSwitch(beforeSwitch, afterNavigate) {
   const router = createMemoryRouter(
     [{ path: '/pipeline/issues/:issueId/:stage', element: <PipelineIssue /> }],
     { initialEntries: ['/pipeline/issues/issue-a/idea'] },
@@ -59,6 +62,7 @@ async function renderAndSwitch(beforeSwitch) {
   await screen.findByRole('heading', { name: /Issue A/ });
   await beforeSwitch?.();
   await act(() => router.navigate('/pipeline/issues/issue-b/idea'));
+  await afterNavigate?.();
   await screen.findByRole('heading', { name: /Issue B/ });
 }
 
@@ -86,5 +90,50 @@ describe('PipelineIssue across an issue switch', () => {
 
     act(() => { lateUpdate('idea', { status: 'needs-review' }); });
     expect(screen.getByTestId('idea-stage')).toHaveTextContent('issue-b:ready');
+  });
+
+  it('keeps an issue available when its series lookup fails', async () => {
+    api.getPipelineSeries.mockRejectedValueOnce(new Error('series offline'));
+
+    await renderAndSwitch();
+
+    expect(ideaProps[0].issue.id).toBe('issue-a');
+    expect(ideaProps[0].series).toBeNull();
+  });
+
+  it('leaves the loading state when the requested issue no longer exists', async () => {
+    api.getPipelineIssue.mockResolvedValueOnce(null);
+    const router = createMemoryRouter(
+      [
+        { path: '/pipeline/issues/:issueId/:stage', element: <PipelineIssue /> },
+        { path: '/pipeline', element: <div>Pipeline home</div> },
+      ],
+      { initialEntries: ['/pipeline/issues/missing/idea'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    await screen.findByText('Pipeline home');
+    expect(router.state.location.pathname).toBe('/pipeline');
+    expect(screen.queryByRole('status', { name: 'Loading pipeline issue' })).not.toBeInTheDocument();
+  });
+
+  it('hides the previous issue and waits for the new series before mounting its stage', async () => {
+    let resolveSeries;
+    api.getPipelineSeries.mockImplementation((id) => id === 'series-b'
+      ? new Promise((resolve) => { resolveSeries = resolve; })
+      : Promise.resolve({ id: 'series-a', name: 'Series A', targetFormat: 'video' }));
+
+    await renderAndSwitch(null, async () => {
+      await vi.waitFor(() => expect(api.getPipelineSeries).toHaveBeenCalledWith('series-b', { silent: true }));
+      expect(screen.queryByRole('heading', { name: /Issue A/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Issue B/ })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('idea-stage')).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveSeries({ id: 'series-b', name: 'Series B', targetFormat: 'comic' });
+      });
+    });
+
+    expect(screen.getByTestId('idea-stage')).toHaveTextContent('issue-b:ready:series-b');
   });
 });
