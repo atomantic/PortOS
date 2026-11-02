@@ -185,18 +185,19 @@ milestones in their service-owned lifecycle. A `registered` milestone says only
 that the service observed no reservation; it does not prove a candidate was not
 created through Git. It cannot authorize a resumed run to reserve another one.
 
-**Current recovery limits:** whole-process settlement uses the existing native
-Windows supervision receipt. macOS/Linux have no equivalent durable receipt yet
-and remain held with `candidate-process-proof-unavailable`, including when the
-original PID is absent or no process currently has the checkout as its cwd.
+**Current recovery limits:** whole-process settlement uses the native Windows
+Job receipt or the Linux subreaper receipt (both described under the release
+coordinator's supervision below). macOS has no equivalent durable receipt yet
+and remains held with `candidate-process-proof-unavailable`, including when the
+original PID is absent or no process currently has the checkout as its cwd; so
+does a Linux run launched without the supervisor.
 Historical runs missing from the trusted registry, unseeded candidates without
 contemporaneous physical evidence, and unknown private review receipt versions
 also remain held. V1 review evidence retains unknown inspection provenance; V2
 keeps its actual inspection separate from later completion. Both are validated
 with the shared receipt contract and preserved byte-for-byte, never re-certified
-as a new review. POSIX settlement support is tracked in #14771 (Linux) and
-#14772 (macOS); first reservation after a pre-reservation interruption is
-tracked in #14005.
+as a new review. macOS settlement support is tracked in #14772; first
+reservation after a pre-reservation interruption is tracked in #14005.
 
 **Attempt membership:** every dispatch of a release task appends its agent,
 start time and instance to the task's service-owned `releaseAttempts` record.
@@ -445,6 +446,26 @@ Legacy unsupervised runs, lost supervisors, failed native inspection and missing
 or conflicting receipts remain blocked. API-only agents without a supervised
 process root also retain the explicit hold. An empty Windows cwd listing is never
 a substitute for this proof.
+
+On Linux, the same release agents launch under a small supervisor
+(`server/lib/linuxAgentSupervisor.py`, run with `python3 -I`). It marks itself a
+child subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`), so a `setsid` or double-fork
+descendant is reparented to it rather than escaping, and it reaps until
+`wait()` reports no children left. Only then does it write the settled receipt,
+carrying the owner nonce, root PID and `/proc/<pid>/stat` start time, through
+the same reservation, launch and started records as Windows. Every stop request,
+including a forced kill, reaches the supervisor as a cancellation: it sends the
+tracked tree SIGTERM, escalates to SIGKILL after five seconds (signalling each
+process through a pidfd checked against its scanned start time), and waits for
+the same empty-tree proof. Candidate recovery accepts the receipt only when it
+matches the registered agent, task, start time and reservation nonce. The
+supervisor needs `python3` (3.9 or later) with `ctypes` and pidfd support (Linux
+5.3 or later); when the startup probe fails, the agent runs unsupervised and its
+recovery stays held. Legacy, unsupervised, lost-supervisor and mismatched records
+stay held, and an absent PID is never treated as settlement. Processes started
+outside the tree through IPC (`systemd-run`, `at`, a session manager or another
+daemon) are out of scope, as with the Windows Job. Synchronization retirement on
+Linux still uses its existing PID and cwd checks.
 
 #### 6. Synchronize back without changing the published release
 

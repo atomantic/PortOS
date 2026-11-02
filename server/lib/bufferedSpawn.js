@@ -148,7 +148,9 @@ export const MAX_OUTPUT_BYTES = 64 * 1024;
  * @param {boolean} [isWin32] - platform override, injected so the Windows branches are testable off Windows (same shape as `resolveWindowsExecutable`)
  */
 export function killProcessTree(child, signal = 'SIGTERM', { processGroup = false } = {}, isWin32 = IS_WIN32) {
-  if (isWin32 && typeof child.requestWindowsAgentStop === 'function') return child.requestWindowsAgentStop();
+  // A supervised release agent (Windows Job or Linux subreaper) is stopped only
+  // through its supervisor, never by a group or PID signal that could kill it.
+  if (typeof child.requestWindowsAgentStop === 'function') return child.requestWindowsAgentStop();
   const isChildProcess = child instanceof ChildProcess;
   // A target with no `.kill()` of its own is addressable only by pid — nothing
   // to prefer over the platform's own tree/group kill below.

@@ -29,7 +29,7 @@ vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => fixture.task && (
     attempts: ['agent-original', 'agent-successor'].map(id => fixture.state.agents[id]).filter(Boolean)
       .map(agent => ({ agentId: agent.id, startedAt: agent.startedAt, instanceId: 'example-instance' })) } } }) }));
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.state.agents[id] || fixture.archive[id] }));
-// The supervised native receipt is tested by windowsAgentProcess.test.js.
+// The supervised native receipts are tested by windowsAgentProcess(.linux).test.js.
 // Git, filesystem identity and durable retirement admission remain real here.
 vi.mock('./releaseCandidateSettlement.js', async original => {
   const actual = await original();
@@ -331,7 +331,7 @@ for (const [name, reason, change] of [
   expect(await readFile(join(checkout, 'retained.txt'), 'utf8')).toContain('survives');
 });
 
-describe.skipIf(process.platform === 'win32')('POSIX recovery proof', () => {
+describe.skipIf(process.platform === 'win32')('unsupervised POSIX recovery proof', () => {
   test('holds at the service boundary despite terminal registry state and an absent parent PID', async () => {
     fixture.nativeProof = true;
     fixture.state.agents['agent-original'].result = { success: false, executionSuccess: false, orphaned: true, taskOutcome: null };
@@ -341,7 +341,8 @@ describe.skipIf(process.platform === 'win32')('POSIX recovery proof', () => {
   });
 });
 
-describe.skipIf(process.platform !== 'win32')('native Windows release recovery', () => {
+// The Linux subreaper writes the same receipt shape as the Windows Job.
+describe.skipIf(process.platform !== 'win32' && process.platform !== 'linux')('supervised native release recovery', () => {
   test('transfers through the service after the registered supervisor proves process-tree settlement', async () => {
     const { reserveWindowsAgentProcess, prepareWindowsAgentLaunch, watchWindowsAgentProcess } = await import('../lib/windowsAgentProcess.js');
     const { spawn } = await import('../lib/childProcess.js');
