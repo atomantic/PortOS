@@ -1064,3 +1064,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `universeVisualProfile.js` | Shared profile normalization, original photography default, photoreal detection, labeled additions, explicit overrides and separate color/texture strength. |
 | `universeVisualProfileValidation.js` | Strict API validation for optional universe photography and finishing profiles. |
 | `musicVideoPublishExports.js` | `publishExportLabel`: measured export presentation with explicit unknown dimensions for legacy kits. Shared with the publishing UI. |
+
+| `musicVideoCastSetsImageEdit.js` | Shared exact-instruction Cast & Sets image-edit prompt and visible preservation addition. |

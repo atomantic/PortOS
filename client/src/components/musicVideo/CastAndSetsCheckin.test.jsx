@@ -8,7 +8,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
+  api: { previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
   greyboxData: { places: {} },
 }));
@@ -763,4 +763,40 @@ describe('Cast & Sets stage before any check-in exists', () => {
     render(<CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
     expect(screen.getByText(/No visual style yet · Song style set · 3 references · 15 style images/)).toBeInTheDocument();
   });
+});
+
+
+it('previews an image edit beside the source and requires accept before replacing the card', async () => {
+  const source = done('example-source.png', 'Source portrait');
+  const original = project({ character: source }, { status: 'approved', direction: {}, plan: { character: plan.character } });
+  const queued = structuredClone(original);
+  queued.castAndSets.images.character.edit = { requestId: 'example-request', revision: 1, inputs: { imageId: source.imageId }, status: 'queued', instruction: 'Remove only the hat', prompt: 'Edit only the hat', promptAdditions: [] };
+  api.previewMusicVideoCastAndSetsImageEdit.mockResolvedValue({ sentPrompt: 'Edit the attached image. Remove only the hat', promptAdditions: [{ id: 'preserve', label: 'Preserve image', text: 'Keep everything else' }] });
+  api.editMusicVideoCastAndSetsImage.mockResolvedValue({ project: queued });
+  render(<Harness initial={original} locked={false} />);
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Edit this image: Keeper' }));
+  const field = card('Keeper').getByLabelText('Change only this');
+  fireEvent.change(field, { target: { value: 'Remove only the hat' } });
+  await waitFor(() => expect(card('Keeper').getByRole('button', { name: 'Render image edit' })).not.toBeDisabled());
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Show full prompt' }));
+  expect(card('Keeper').getByText(/Edit the attached image./)).toBeTruthy();
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Render image edit' }));
+  await waitFor(() => expect(api.editMusicVideoCastAndSetsImage).toHaveBeenCalledWith('example-project', {
+    key: 'character', imageId: source.imageId, revision: 1, instruction: 'Remove only the hat',
+  }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByText(/Rendering image edit/)).toBeTruthy());
+  expect(card('Keeper').queryByRole('button', { name: 'Accept image edit' })).toBeNull();
+  const completed = structuredClone(queued);
+  completed.castAndSets.images.character.edit = { ...queued.castAndSets.images.character.edit, status: 'done', imageId: 'example-candidate.png' };
+  await stage(completed);
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — before image edit' }).getAttribute('src')).toContain('example-source.png');
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — after image edit' }).getAttribute('src')).toContain('example-candidate.png');
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('example-source.png');
+  const accepted = structuredClone(completed);
+  accepted.castAndSets = { ...accepted.castAndSets, status: 'review', revision: 2 };
+  accepted.castAndSets.images.character = { ...source, imageId: 'example-candidate.png', edit: null };
+  api.acceptMusicVideoCastAndSetsImageEdit.mockResolvedValue({ project: accepted });
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Accept image edit' }));
+  await waitFor(() => expect(api.acceptMusicVideoCastAndSetsImageEdit).toHaveBeenCalledWith('example-project', { key: 'character', requestId: 'example-request' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('example-candidate.png'));
 });

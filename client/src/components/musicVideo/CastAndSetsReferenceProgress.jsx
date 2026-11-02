@@ -158,7 +158,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
         )}
       </details>
       {castingId && <ReviseLookLink ingredientId={castingId} />}
-      {actions && <CastAndSetsItemActions key={actions.projectId} item={item} direction={stage.direction} revision={stage.revision} {...actions} />}
+      {actions && <CastAndSetsItemActions key={actions.projectId} item={item} image={image} direction={stage.direction} revision={stage.revision} {...actions} />}
     </article>
   );
 }

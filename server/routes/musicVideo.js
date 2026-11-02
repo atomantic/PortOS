@@ -1,3 +1,4 @@
+import { musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
@@ -229,6 +230,10 @@ import {
   editCastAndSetsDirection,
   applyCastAndSetsFeedback,
   removeCastAndSetsFeedbackEntry,
+  editCastAndSetsImage,
+  previewCastAndSetsImageEdit,
+  acceptCastAndSetsImageEdit,
+  discardCastAndSetsImageEdit,
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
@@ -1635,6 +1640,30 @@ router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsRegenerateSchema, req.body || {});
   res.status(202).json(await regenerateCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/edit-image-preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditSchema, req.body || {});
+  res.json(await previewCastAndSetsImageEdit(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/edit-image', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await editCastAndSetsImage(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/accept-image-edit', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditDecisionSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await acceptCastAndSetsImageEdit(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/discard-image-edit', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditDecisionSchema, req.body || {});
+  res.json(await discardCastAndSetsImageEdit(req.params.id, input));
 }));
 
 router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {

@@ -49,7 +49,8 @@ export const CAST_SETS_WORKING = Object.freeze(['directing', 'imaging', 'assembl
 export const CAST_SETS_SETTLED = Object.freeze(['approved', 'skipped']);
 // A key whose render failed this many times in a row stops the stage.
 const MAX_IMAGE_FAILURES = 2;
-const MAX_HISTORY = 20;
+export const CAST_SETS_MAX_KEY_NOTES = 8;
+export const CAST_SETS_MAX_IMAGE_HISTORY = 20;
 const MAX_REASON = 500;
 
 const stageError = (status, code, message) => new ServerError(message, { status, code });
@@ -131,6 +132,7 @@ export function reviseCastAndSetsOnProject(project, { processId, notesApplied = 
     stopReason: null,
     error: null,
     processId,
+    manualImageEditReview: false,
     notesApplied: notesApplied.map((n) => ({ id: n.id || null, target: n.target || null, text: trimTo(n.text, 2000) })),
     approvedAt: null,
     approvedInputs: null,
@@ -248,7 +250,7 @@ export function settleCastAndSetsImage(project, key, { jobId = null, filename = 
   if (!img || img.status !== 'queued' || (revision != null && revision !== stage.revision)
     || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
   if (filename) {
-    const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-MAX_HISTORY) : (img.history || []);
+    const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-CAST_SETS_MAX_IMAGE_HISTORY) : (img.history || []);
     const next = { ...img, inspection: null, inspectionAcknowledgement: null, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };
     return { ...write(project, { ...stage, images: { ...stage.images, [key]: next } }, now), changed: true };
   }

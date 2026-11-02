@@ -1,3 +1,4 @@
+import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
@@ -1401,6 +1402,16 @@ export const musicVideoCastAndSetsStartSchema = z.object({
   providerId: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(200).optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
+export const musicVideoCastSetsImageEditSchema = z.object({
+  key: z.string().min(1).max(80),
+  imageId: z.string().min(1).max(500),
+  revision: z.number().int().min(1),
+  instruction: z.string().min(1).max(CAST_SETS_IMAGE_EDIT_MAX).refine((text) => !!text.trim(), 'Write an image edit instruction'),
+}).strict();
+export const musicVideoCastSetsImageEditDecisionSchema = z.object({
+  key: z.string().min(1).max(80), requestId: z.string().uuid(),
 }).strict();
 
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A

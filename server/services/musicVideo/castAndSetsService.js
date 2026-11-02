@@ -1,3 +1,4 @@
+import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
@@ -47,6 +48,7 @@ import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
   CAST_SETS_WORKING,
+  CAST_SETS_MAX_KEY_NOTES,
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
   castAndSetsCheckinMode,
@@ -97,12 +99,12 @@ import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserv
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const short = (id) => String(id || '').slice(3, 11);
-const MAX_KEY_NOTES = 8;
 const MAX_SUBMITTED_PROMPT = 20_000;
 const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
+  previewPrompt: async (opts) => (await import('../imageGen/promptPreview.js')).previewQuickImageEdit(opts),
   resolveReviewer: async (opts) => (await import('./plateReview.js')).resolvePlateReviewer(opts),
   reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
   resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
@@ -674,7 +676,7 @@ async function assemble(projectId) {
   const project = marked.project;
   const stage = marked.stage;
   const mode = castAndSetsCheckinMode(project);
-  const autoApprove = mode === 'auto' && !castSetsInspectionBlockers(stage).length;
+  const autoApprove = mode === 'auto' && !stage.manualImageEditReview && !castSetsInspectionBlockers(stage).length;
   const html = renderCastAndSetsSheet({
     title: project.name,
     project,
@@ -837,6 +839,17 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
+/** Render an isolated candidate; the approved stage remains unchanged until acceptance. */
+export const previewCastAndSetsImageEdit = (projectId, input) => previewCastSetsImageEdit(projectId, input, deps);
+export const editCastAndSetsImage = (projectId, input) => requestCastSetsImageEdit(projectId, input, { ...deps, processId: PROCESS_ID, publish });
+export const discardCastAndSetsImageEdit = (projectId, input) => discardCastSetsImageEdit(projectId, input, publish);
+export async function acceptCastAndSetsImageEdit(projectId, input) {
+  const out = await acceptCastSetsImageEdit(projectId, input, PROCESS_ID);
+  publish(projectId, out.project);
+  inBackground('The accepted image edit', projectId, () => advance(projectId));
+  return { project: out.project };
+}
+
 /**
  * Regenerate, with notes or without. `notes` default to the open notes on the stage's
  * sheet. A note aimed at an image (`character`, `looks`, `set:<id>`,
@@ -868,7 +881,7 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
   const out = await mutateProjectRecord(projectId, (current) => {
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied: source, redirect });
     const keyNotes = { ...(revised.stage.keyNotes || {}) };
-    for (const [k, list] of Object.entries(imageNotes)) keyNotes[k] = [...(keyNotes[k] || []), ...list].slice(-MAX_KEY_NOTES);
+    for (const [k, list] of Object.entries(imageNotes)) keyNotes[k] = [...(keyNotes[k] || []), ...list].slice(-CAST_SETS_MAX_KEY_NOTES);
     let next = { ...revised.project, castAndSets: { ...revised.stage, keyNotes } };
     if (artifact && consumed.size) next = resolveDevArtifactNotes(next, artifact.id, (n) => consumed.has(n.id)).project;
     return { project: next, stage: next.castAndSets };
@@ -1075,8 +1088,12 @@ export async function getCastAndSets(projectId) {
  * Settles its key (idempotent) and, when the stage is dispatching in this
  * process, continues. Returns true when the record changed.
  */
-export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
+export async function onCastAndSetsImageSettled({ projectId, key, editRequestId = null, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
+  if (editRequestId) {
+    if (!project) return false;
+    return settleCastSetsImageEdit({ projectId, key, editRequestId, jobId, filename, error, status, productionRunId, productionStepKey }, publish);
+  }
   if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
     if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };
