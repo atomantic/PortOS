@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reviewPlate, reviewPlateStrip, resolvePlateReviewer } from './plateReview.js';
 import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
-const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn(), resolveProviderAndModel: vi.fn() }));
+const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn(), resolveProviderAndModel: vi.fn(),
+  resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
+const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));
+vi.mock('../providers.js', () => providers);
 vi.mock('../promptRunner.js', () => runner);
 vi.mock('sharp', () => ({ default: () => ({ resize: () => ({ png: () => ({ toBuffer: async () => Buffer.alloc(1) }) }), composite: () => ({ png: () => ({ toFile: async () => {} }) }) }) }));
 vi.mock('./compositionRender.js', () => ({ COMPOSITION_SCRATCH_DIR: 'music-video-compositions' }));
@@ -46,8 +49,18 @@ describe('plate evidence admission', () => {
     expect(call.prompt).toContain('Compare each frame only with the frame immediately before it');
     expect(call.prompt).toContain('screen side, wardrobe, or a named set piece');
   });
-  it('refuses a tool-using or non-API reviewer', async () => {
-    runner.resolveProviderAndModel = vi.fn(async () => ({ provider: { id: 'cli', type: 'cli', enabled: true }, selectedModel: 'm' }));
-    await expect(resolvePlateReviewer({})).rejects.toThrow(/vision API reviewer/);
+  it('uses the configured API default when the active provider is a CLI, but never replaces an explicit reviewer', async () => {
+    const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, api] });
+    runner.resolveProviderAndModel.mockClear();
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api, model: 'vision-example' });
+    expect(runner.resolveProviderAndModel).not.toHaveBeenCalled();
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: api, selectedModel: 'pinned-model' });
+    expect(await resolvePlateReviewer({ providerId: api.id, model: 'pinned-model' })).toMatchObject({ model: 'pinned-model' });
+    await expect(resolvePlateReviewer({ providerId: 'missing', model: 'pinned-model' })).rejects.toThrow('selected plate reviewer is unavailable');
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'cli', type: 'cli', enabled: true }, selectedModel: 'm' });
+    await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/vision API reviewer/);
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, { ...api, enabled: false }] });
+    await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision API reviewer is configured');
   });
 });

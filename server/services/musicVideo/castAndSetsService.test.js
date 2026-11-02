@@ -1860,6 +1860,34 @@ it('names the Casting changes since the sheet was built, and an image update cle
 
 // These regressions uniquely pin image-content review at the generation/approval boundary.
 describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
+  it('inspects a re-render without a production run using the API default even when a CLI is active (#14653)', async () => {
+    const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
+    const providers = await import('../providers.js');
+    const runner = await import('../promptRunner.js');
+    const { resolvePlateReviewer } = await import('./plateReview.js');
+    const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');
+    const configured = vi.spyOn(providers, 'getAllProviders').mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, api] });
+    const vision = vi.spyOn(runner, 'runPromptThroughProvider').mockImplementation(async (args) => {
+      await args.beforeExecute({ provider: args.provider, model: args.model });
+      return { provider: api, model: api.defaultModel, runId: 'vision-run', text: JSON.stringify({ checks:
+        ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'A stool is fused into the bench.' : 'Matches the saved prompt.' })) }) };
+    });
+    onTestFinished(() => { configured.mockRestore(); vision.mockRestore(); });
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: resolvePlateReviewer, reviewImage: reviewCastSetsImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const original = (await current(project.id)).castAndSets.images['set:lab'].imageId;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['set:lab'] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.productionRunId).toBeFalsy();
+    expect(stage.images['set:lab'].imageId).not.toBe(original);
+    expect(stage.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', providerId: api.id, model: api.defaultModel,
+      discrepancy: 'Rendering defect: A stool is fused into the bench.' });
+    expect(vision).toHaveBeenLastCalledWith(expect.objectContaining({ provider: api, model: api.defaultModel, toolFree: true, allowFallback: false }));
+  });
+
   it('flags the wrong location and populated empty plate, then accepts only an explicit exact-image acknowledgement', async () => {
     const reviewed = [];
     service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
@@ -1903,19 +1931,41 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
   });
 
   it('records unavailable vision distinctly after one retry, with no silent pass or unbounded provider work', async () => {
-    const reviewImage = vi.fn(async ({ beforeExecute }) => { await beforeExecute(); throw new Error('Example vision unavailable'); });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const reviewImage = vi.fn(async ({ beforeExecute }) => { await beforeExecute(); throw new Error('Example vision timeout'); });
     service.__setCastAndSetsDepsForTests(testDeps({ reviewImage }));
     const project = await seed({ automation: { checkins: { castAndSets: 'auto' } } });
     await service.startCastAndSets(project.id);
     await runTo(project.id, 'review');
     const stage = (await current(project.id)).castAndSets;
     expect(reviewImage).toHaveBeenCalledTimes(Object.keys(stage.plan).length * 2);
-    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'unreviewed' && image.inspection.attempts === 2)).toBe(true);
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'unreviewed' && image.inspection.attempts === 2
+      && image.inspection.discrepancy === 'Vision unavailable: Example vision timeout'
+      && image.inspection.providerId === 'vision-example' && image.inspection.model === 'vision-example')).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('provider: vision-example, model: vision-example): Example vision timeout'));
+    const html = readFileSync(join(ROOT(), (await current(project.id)).devArtifacts[0].file), 'utf8');
+    expect(html).toContain('Vision unavailable: Example vision timeout');
     expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
     const before = reviewImage.mock.calls.length;
     await service.getCastAndSets(project.id);
     await service.getCastAndSets(project.id);
     expect(reviewImage).toHaveBeenCalledTimes(before);
+  });
+
+  it('shows a missing reviewer configuration on every unreviewed image (#14653)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const reviewImage = vi.fn();
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: async () => { throw new Error('No enabled vision API reviewer is configured'); }, reviewImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'unreviewed'
+      && image.inspection.discrepancy === 'Vision unavailable: No enabled vision API reviewer is configured')).toBe(true);
+    expect(reviewImage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('provider: unresolved, model: default): No enabled vision API reviewer is configured'));
   });
 
   it('rejects an in-flight result after the saved prompt changes and preserves unrelated image evidence', async () => {

@@ -29,10 +29,11 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
       });
       if (!pending.changed) return;
       publish(projectId, pending.project);
+      const runId = project.castAndSets.productionRunId;
+      const run = runId ? findProductionRun(project, runId) : null;
+      let reviewer;
       const outcome = await (async () => {
-        const runId = project.castAndSets.productionRunId;
-        const run = runId ? findProductionRun(project, runId) : null;
-        const reviewer = await resolveReviewer(run?.reviewer || {});
+        reviewer = await resolveReviewer(run?.reviewer || {});
         let charged = false;
         const beforeExecute = async (execution) => {
           if (execution?.provider && (execution.provider.id !== reviewer.provider.id || (reviewer.model && execution.model !== reviewer.model))) throw new Error('The selected vision reviewer changed');
@@ -48,7 +49,17 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
           });
         };
         return reviewImage({ inputs, reviewer, beforeExecute });
-      })().catch(() => ({ verdict: 'unreviewed', discrepancy: 'Vision inspection unavailable or incomplete. Regenerate or explicitly acknowledge this unreviewed image.' }));
+      })().catch((error) => {
+        const providerId = reviewer?.provider?.id || run?.reviewer?.providerId || null;
+        const model = reviewer?.model || run?.reviewer?.model || null;
+        const message = String(error?.message || error || 'Unknown inspection failure');
+        const reason = (reviewer?.provider?.apiKey ? message.split(reviewer.provider.apiKey).join('[redacted]') : message)
+          .replace(/\s+/g, ' ').slice(0, 300);
+        const refused = error?.status >= 400 && error.status < 500;
+        const log = refused ? console.log : console.error;
+        log(`${refused ? '🚫' : '❌'} Cast & Sets vision inspection failed (provider: ${providerId || 'unresolved'}, model: ${model || 'default'}): ${reason}`);
+        return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId, model };
+      });
       const settled = await mutateProjectRecord(projectId, (current) => {
         const image = current.castAndSets?.images?.[key];
         if (!owned(current) || image?.inspection?.id !== id || !sameCastSetsInspectionInputs(inputs, castSetsInspectionInputs(current.castAndSets, key))) return { project: current, changed: false };

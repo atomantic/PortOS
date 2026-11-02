@@ -9,11 +9,19 @@ import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../../lib/musicVideoPlateEvidence.js';
 
-export async function resolvePlateReviewer(reviewer) {
-  const { resolveProviderAndModel } = await import('../promptRunner.js');
-  const { provider, selectedModel } = await resolveProviderAndModel(reviewer);
+export async function resolvePlateReviewer(reviewer = {}) {
+  const { resolveProviderAndModel, resolveEffectiveModel } = await import('../promptRunner.js');
+  let provider;
+  let selectedModel;
+  if (reviewer.providerId) {
+    ({ provider, selectedModel } = await resolveProviderAndModel(reviewer));
+  } else {
+    const { resolveAPIProvider } = await import('../aiProvider.js');
+    provider = await resolveAPIProvider();
+    selectedModel = provider ? resolveEffectiveModel(provider, reviewer.model) : null;
+  }
   // The vision runner must never use a host-tool CLI to interpret image text.
-  if (!provider || provider.enabled === false || provider.type !== 'api' || !isToolFreeOneShotProvider(provider)) throw new Error('Plate preflight needs an enabled vision API reviewer');
+  if (!provider || provider.enabled === false || provider.type !== 'api' || !isToolFreeOneShotProvider(provider)) throw new Error('No enabled vision API reviewer is configured. Configure an API provider for image inspection.');
   if ((reviewer?.providerId && provider.id !== reviewer.providerId) || (reviewer?.model && selectedModel !== reviewer.model)) throw new Error('The selected plate reviewer is unavailable');
   return { provider, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };
 }
