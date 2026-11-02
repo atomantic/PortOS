@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
 import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProcessTypes.js';
@@ -11,8 +11,13 @@ import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProce
 // `listProcessesStrict`'s real return type); an array (incl. []) = a
 // successful read. Default to a successful empty read.
 const pm2Mock = vi.hoisted(() => ({ processes: [] }));
+const osMock = vi.hoisted(() => ({ username: 'synthetic-user' }));
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn(async () => pm2Mock.processes) }));
 vi.mock('./appIconDetect.js', () => ({ detectAppIcon: vi.fn(async () => null) }));
+vi.mock('os', async (importOriginal) => ({
+  ...(await importOriginal()),
+  userInfo: () => ({ username: osMock.username }),
+}));
 
 describe('detectGodotNativeLaunch', () => {
   let dir;
@@ -46,6 +51,22 @@ describe('detectGodotNativeLaunch', () => {
 });
 
 describe('parseEcosystemConfig', () => {
+  it('resolves PM2_HOME usernames from os.userInfo when USER is unset', () => {
+    const previousUser = process.env.USER;
+    const previousUsername = process.env.USERNAME;
+    delete process.env.USER;
+    process.env.USERNAME = 'fallback-user';
+    try {
+      const content = 'const PM2_HOME = `${require("os").homedir()}/.pm2-${require("os").userInfo().username}`;\nmodule.exports = { apps: [] };';
+      expect(parseEcosystemConfig(content).pm2Home).toBe(`${homedir()}/.pm2-synthetic-user`);
+    } finally {
+      if (previousUser === undefined) delete process.env.USER;
+      else process.env.USER = previousUser;
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
   it('parses quoted keys in inline ports and nested PORTS objects', () => {
     const content = `const PORTS = {
   "server": { "api": 6000 },
