@@ -7,7 +7,37 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
+import { effectiveModelAccess, scopeModelsByAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
+import { isSameOllamaDaemon } from '../../lib/ollamaContext.js';
+import { isVisionModel } from '../../lib/localModelHeuristics.js';
 import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../../lib/musicVideoPlateEvidence.js';
+
+// The managed daemon's metadata says whether its actual model can see an image.
+// Do not use that inventory for a different Ollama server, or guess when the
+// daemon cannot report capabilities. A caller-pinned model is never replaced.
+async function resolveOllamaVisionModel(provider, selectedModel, pinned) {
+  if (!selectedModel || !isOllamaBackedProvider(provider)) return selectedModel;
+  const ollama = await import('../ollamaManager.js');
+  if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), ollama.getBaseUrl())) return selectedModel;
+  const capabilities = await ollama.getModelCapabilities(selectedModel).catch(() => null);
+  if (!Array.isArray(capabilities) || capabilities.length === 0 || isVisionModel({ id: selectedModel, capabilities })) return selectedModel;
+
+  if (!pinned) {
+    const installed = await ollama.getInstalledModels().catch(() => []);
+    const permitted = scopeModelsByAccess(installed.map((item) => item.id), effectiveModelAccess(provider));
+    for (const id of permitted) {
+      if (id === selectedModel) continue;
+      const candidate = await ollama.getModelCapabilities(id).catch(() => null);
+      if (Array.isArray(candidate) && candidate.length > 0 && isVisionModel({ id, capabilities: candidate })) return id;
+    }
+  }
+  throw new ServerError(
+    `Ollama model "${selectedModel}" cannot inspect images. Choose an installed vision-capable model for the reviewer.`,
+    { status: 422, code: 'VISION_MODEL_UNSUPPORTED' },
+  );
+}
 
 export async function resolvePlateReviewer(reviewer = {}) {
   const { resolveProviderAndModel, resolveEffectiveModel } = await import('../promptRunner.js');
@@ -23,6 +53,7 @@ export async function resolvePlateReviewer(reviewer = {}) {
   // The vision runner must never use a host-tool CLI to interpret image text.
   if (!provider || provider.enabled === false || provider.type !== 'api' || !isToolFreeOneShotProvider(provider)) throw new Error('No enabled vision API reviewer is configured. Configure an API provider for image inspection.');
   if ((reviewer?.providerId && provider.id !== reviewer.providerId) || (reviewer?.model && selectedModel !== reviewer.model)) throw new Error('The selected plate reviewer is unavailable');
+  selectedModel = await resolveOllamaVisionModel(provider, selectedModel, Boolean(reviewer.model));
   return { provider, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };
 }
 

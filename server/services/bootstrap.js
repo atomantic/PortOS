@@ -233,13 +233,16 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // and provider fallback are disabled.
       const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
+      const isImageUnsupported = metadata.errorAnalysis?.category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED;
       errorEvents.emit('error', {
-        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : (isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED'),
+        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED'
+          : isImageUnsupported ? 'AI_PROVIDER_IMAGE_UNSUPPORTED' : 'AI_PROVIDER_EXECUTION_FAILED',
         message: isBudget ? errorMessage : isRefusal
           ? `${metadata.providerName} declined this prompt on content/safety grounds — stopped without automatic retry or provider fallback.`
+          : isImageUnsupported ? errorMessage
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-        severity: isBudget || isRefusal ? 'warning' : 'error',
-        canAutoFix: !isBudget && !isRefusal,
+        severity: isBudget || isRefusal || isImageUnsupported ? 'warning' : 'error',
+        canAutoFix: !isBudget && !isRefusal && !isImageUnsupported,
         timestamp: Date.now(),
         context: {
           runId: metadata.id,

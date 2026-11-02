@@ -4,8 +4,10 @@ import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../
 const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn(), resolveProviderAndModel: vi.fn(),
   resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
 const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));
+const ollama = vi.hoisted(() => ({ getBaseUrl: vi.fn(() => 'http://localhost:11434'), getModelCapabilities: vi.fn(), getInstalledModels: vi.fn() }));
 vi.mock('../providers.js', () => providers);
 vi.mock('../promptRunner.js', () => runner);
+vi.mock('../ollamaManager.js', () => ollama);
 vi.mock('sharp', () => ({ default: () => ({ resize: () => ({ png: () => ({ toBuffer: async () => Buffer.alloc(1) }) }), composite: () => ({ png: () => ({ toFile: async () => {} }) }) }) }));
 vi.mock('./compositionRender.js', () => ({ COMPOSITION_SCRATCH_DIR: 'music-video-compositions' }));
 vi.mock('../../lib/pathSafety.js', () => ({ resolveGalleryImage: (assetId) => `/synthetic/${assetId}` }));
@@ -62,5 +64,32 @@ describe('plate evidence admission', () => {
     await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/vision API reviewer/);
     providers.getAllProviders.mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, { ...api, enabled: false }] });
     await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision API reviewer is configured');
+  });
+
+  it('uses a verified local vision model for an unpinned text-only default and refuses a pinned text-only reviewer', async () => {
+    const api = { id: 'ollama', type: 'api', enabled: true, endpoint: 'http://localhost:11434/v1', defaultModel: 'text-model' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [api] });
+    ollama.getInstalledModels.mockResolvedValue([{ id: 'text-model' }, { id: 'text-with-vision-name' }, { id: 'vision-model' }]);
+    ollama.getModelCapabilities.mockImplementation(async (id) => id === 'vision-model' ? ['completion', 'vision'] : ['completion', 'tools']);
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api, model: 'vision-model' });
+
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: api, selectedModel: 'text-model' });
+    await expect(resolvePlateReviewer({ providerId: 'ollama', model: 'text-model' }))
+      .rejects.toMatchObject({ status: 422, code: 'VISION_MODEL_UNSUPPORTED', message: expect.stringContaining('text-model') });
+
+    const restricted = { ...api, modelAccess: { mode: 'allow', patterns: ['text-*'] } };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [restricted] });
+    await expect(resolvePlateReviewer({})).rejects.toMatchObject({ code: 'VISION_MODEL_UNSUPPORTED' });
+  });
+
+  it('keeps unknown capability and a different Ollama daemon unchanged', async () => {
+    const api = { id: 'ollama', type: 'api', enabled: true, endpoint: 'http://localhost:11434/v1', defaultModel: 'text-model' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [api] });
+    ollama.getModelCapabilities.mockResolvedValue(null);
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'text-model' });
+    ollama.getModelCapabilities.mockClear();
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [{ ...api, endpoint: 'http://remote.example:11434/v1' }] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'text-model' });
+    expect(ollama.getModelCapabilities).not.toHaveBeenCalled();
   });
 });

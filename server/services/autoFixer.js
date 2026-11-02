@@ -325,7 +325,7 @@ export function noteFallbackFailed({ provider, model }) {
 export async function escalateProviderFailure(error) {
   const ctx = error?.context || {};
   // Before dedupe: a later real fault on this route must still investigate.
-  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED) return;
+  if ([ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, ERROR_CATEGORIES.IMAGE_UNSUPPORTED].includes(ctx.errorAnalysis?.category)) return;
 
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
   const now = Date.now();
@@ -461,6 +461,11 @@ async function handleAIProviderError(error) {
   // normally isn't even reached; this guard covers any other emitter.)
   if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL) {
     console.warn(`🛟 AI model refused prompt on content/safety grounds: ${ctx.provider} (${ctx.model}) — no investigation task or automatic fallback`);
+    return;
+  }
+
+  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED) {
+    console.log(`🚫 AI model cannot accept images: ${ctx.provider} (${ctx.model}) — choose a vision-capable model`);
     return;
   }
 
