@@ -262,6 +262,7 @@ export * from './layeredIntelligenceSources.js';
 export * from './tribe.js';
 export * from './quotaBurnPatch.js';
 export * from './quotaBurnTasks.js';
+export * from './quotaCards.js';
 export * from './tribeCadence.js';
 export * from './universeBuilderExpand.js';
 export * from './videoTimelineModel.js';

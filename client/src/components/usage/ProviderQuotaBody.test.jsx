@@ -57,6 +57,18 @@ describe('ProviderQuotaBody', () => {
     expect(screen.getByText('Reading quota…')).toBeInTheDocument();
   });
 
+  it('shows activity while pending and still says no quota meter was reported', () => {
+    render(<ProviderQuotaBody quota={{ supported: true, pending: true, limits: [], activity: [{ period: 'Day', requests: 15, sessions: 2 }] }} />);
+    expect(screen.getByText("Reading this machine's usage…")).toBeInTheDocument();
+    expect(screen.getByText(/15 requests/)).toBeInTheDocument();
+    expect(screen.getByText('No rate-limit data reported')).toBeInTheDocument();
+  });
+
+  it('shows pending rather than blank content when activity is hidden', () => {
+    render(<ProviderQuotaBody showActivity={false} quota={{ supported: true, pending: true, limits: [], activity: [{ period: 'Day', requests: 15, sessions: 2 }] }} />);
+    expect(screen.getByText('Reading quota…')).toBeInTheDocument();
+  });
+
   it('renders error state when error is present', () => {
     render(<ProviderQuotaBody quota={{ supported: true, error: 'Network error', limits: [], metrics: [] }} />);
     expect(screen.getByRole('status')).toHaveTextContent('Network error');

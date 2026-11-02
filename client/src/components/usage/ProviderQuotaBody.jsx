@@ -63,7 +63,8 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
 
   // Whether this card has anything to put on screen — the pending branch and the
   // empty state ask the same question from opposite sides, so they ask it once.
-  const hasReadings = Boolean(quota.limits?.length || quota.metrics?.length);
+  const hasQuotaReading = Boolean(quota.limits?.length || quota.metrics?.length);
+  const hasReadings = hasQuotaReading || Boolean(showActivity && quota.activity?.length);
   if (!quota.supported) {
     return (
       <p className="text-xs sm:text-sm text-gray-500">
@@ -124,7 +125,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
         </div>
       )}
 
-      {!hasReadings && (
+      {!hasQuotaReading && (
         <div className="text-xs sm:text-sm text-gray-500">No rate-limit data reported</div>
       )}
 

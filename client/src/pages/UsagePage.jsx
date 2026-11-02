@@ -20,12 +20,14 @@ import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
+import { groupQuotaCards, mergeRefreshedFamily } from '../lib/quotaCards';
 
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
 const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 const FLEET_SYNC_EVENTS = ['sync:progress'];
 const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
+const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -53,14 +55,11 @@ function agyRepairLine(agy) {
   return agy.note ? `${added} ${agy.note}` : added;
 }
 
-// A subscription is one account across every federated instance, but each
-// instance can only read its own CLI's panel. When peers have contributed a
-// reading, say so on the card and name them — the meters are the freshest
-// reading across the fleet and the activity counts are summed, which is a
-// different claim than "what this box saw".
+// Name the instances that supplied readings without presenting their quota
+// observations as separate allowances or summing them.
 function FleetSourcesPill({ fleet }) {
   if (!fleet || fleet.count < 2) return null;
-  const describe = (i) => `${i.self ? 'this machine' : (i.name || i.instanceId)}${i.self || !i.fetchedAt ? '' : ` (read ${timeAgo(i.fetchedAt)})`}`;
+  const describe = (i) => `${i.self ? 'this machine' : (i.name || i.instanceId)}${i.self || !i.fetchedAt ? '' : ` (read ${timeAgo(i.fetchedAt, 'time unavailable')})`}`;
   return (
     <Pill tone="context" size="xs" icon={Network} className="hidden sm:inline-flex shrink-0" title={fleet.instances.map(describe).join(' · ')}>
       {fleet.count} instances
@@ -71,7 +70,13 @@ function FleetSourcesPill({ fleet }) {
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
-function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
+function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshError, imageReadError }) {
+  const diagnostics = quota.observations ? [] : [...(quota.diagnostics || [])];
+  for (const error of [refreshError, imageReadError].filter(Boolean)) {
+    const sameLocalError = (card) => card.origin?.self !== false && card.error === error.error;
+    if (!sameLocalError(quota) && !diagnostics.some(sameLocalError)
+      && !quota.observations?.some(sameLocalError)) diagnostics.push(error);
+  }
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
       <div className="flex items-center justify-between gap-1 sm:gap-2 mb-1 sm:mb-2">
@@ -88,7 +93,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
               of them. The button is a 44px touch target around the small
               icon; its negative margins let it overhang the header's line box
               and the card padding, so the compact phone card doesn't grow. */}
-          {quota.origin?.self !== false && <button
+          {quota.canRefresh && <button
             type="button"
             onClick={() => onRefresh(quota.family)}
             disabled={refreshing || disabled}
@@ -103,9 +108,29 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
         </div>
       </div>
 
-      {quota.origin && <p className="text-xs text-gray-400 mb-2 break-words">{quota.origin.name}{!quota.origin.self && quota.fetchedAt ? ` · read ${timeAgo(quota.fetchedAt)}` : ''}</p>}
-      <ProviderQuotaBody quota={quota} />
-      {quota.metrics?.length > 0 && <p className="mt-2 text-xs text-gray-500">Observed on this instance; readings may overlap with other instances.</p>}
+      {quota.observations ? (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">Image limits and counts are observations from each instance, not account-wide quotas or totals.</p>
+          {quota.observations.map((observation, index) => (
+            <div key={observation.origin?.instanceId || `self-${index}`}>
+              <p className="text-xs text-gray-400 mb-1 break-words">{observation.origin?.name || 'This instance'}{observation.fetchedAt ? ` · reported ${timeAgo(observation.fetchedAt, 'time unavailable')}` : ' · report time unavailable'}</p>
+              <ProviderQuotaBody quota={observation} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          {quota.origin && <p className="text-xs text-gray-400 mb-2 break-words">{quota.origin.name || 'This instance'}{quota.fetchedAt ? ` · read ${timeAgo(quota.fetchedAt, 'time unavailable')}` : ' · reading time unavailable'}{quota.mixedReadings ? ' · some windows use earlier reports' : ''}</p>}
+          <ProviderQuotaBody quota={quota} />
+          {quota.activity?.length > 0 && <p className="mt-2 text-xs text-gray-500">Activity is observed on the selected instance and is not a fleet total.</p>}
+          {quota.localAdvisories?.map((note, index) => <p key={index} className="mt-2 text-xs text-gray-500 break-words">This instance: {note}</p>)}
+        </>
+      )}
+      {diagnostics.map((diagnostic, index) => (
+        <p key={diagnostic.origin?.instanceId || `self-${index}`} className="mt-2 text-xs text-port-warning break-words">
+          {diagnostic.refreshAttemptAt ? 'Last refresh on this instance' : (diagnostic.origin?.name || 'This instance')}{diagnostic.refreshAttemptAt || diagnostic.fetchedAt ? ` · ${timeAgo(diagnostic.refreshAttemptAt || diagnostic.fetchedAt, 'time unavailable')}` : ' · time unavailable'}: {diagnostic.error} Earlier readings may be out of date.
+        </p>
+      ))}
     </div>
   );
 }
@@ -128,18 +153,8 @@ const GROUPED_FAMILIES = new Set(CELL_GROUPS.flat());
 // CELL_GROUPS (Image Gen, or one added later) still gets its own cell in server
 // order — this is a display preference, never a filter.
 export function arrangeQuotaCells(quotas) {
-  const groups = new Map();
-  for (const quota of quotas) {
-    const id = quota.origin?.instanceId || 'self';
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(quota);
-  }
-  return [...groups.entries()].flatMap(([id, cards]) => arrangeOriginQuotaCells(cards).map((cell) => ({ ...cell, key: `${id}:${cell.key}` })));
-}
-
-function arrangeOriginQuotaCells(quotas) {
   const byFamily = new Map(quotas.map((q) => [q.family, q]));
-  const toCell = (cards) => ({ key: cards.map((q) => q.family).join('+'), cards });
+  const toCell = (cards) => ({ key: cards.map((q) => q.groupKey || q.family).join('+'), cards });
 
   const grouped = CELL_GROUPS
     .map((families) => families.map((f) => byFamily.get(f)).filter(Boolean))
@@ -157,39 +172,95 @@ function ProviderQuotaSection() {
   const [quotas, setQuotas] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [refreshAllError, setRefreshAllError] = useState(false);
   const [coverage, setCoverage] = useState(null);
+  const [imageQuotaComplete, setImageQuotaComplete] = useState(null);
+  const [imageReadError, setImageReadError] = useState(null);
+  const [refreshErrors, setRefreshErrors] = useState({});
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
   const quotaRequest = useRef(0);
+  const fullInFlight = useRef(null);
+  const mounted = useRef(false);
+  const explicitRequest = useRef(0);
+  const fullRevision = useRef(0);
+  const coverageRequest = useRef(0);
+  const imageStatusRequest = useRef(0);
+  const imageStatusApplied = useRef(0);
   const familyRevisions = useRef(new Map());
   const activeFamilies = useRef(new Set());
 
+  const applyImageStatus = useCallback((result, token) => {
+    if (!mounted.current || token === null || token <= imageStatusApplied.current || result?.imageQuotaComplete == null) return;
+    imageStatusApplied.current = token;
+    setImageQuotaComplete(result.imageQuotaComplete);
+    const local = result.providers?.find((card) => card.family === 'imagegen' && card.origin?.self !== false);
+    setImageReadError((previous) => result.imageQuotaComplete ? null : local?.error ? local : previous);
+  }, []);
+
   const load = useCallback(async (refresh = false) => {
     const token = ++quotaRequest.current;
+    const explicitToken = refresh ? ++explicitRequest.current : null;
+    fullInFlight.current = token;
+    const coverageToken = ++coverageRequest.current;
+    const imageToken = ++imageStatusRequest.current;
     const startingFamilies = new Map(familyRevisions.current);
     setLoading(true);
     setError(false);
+    if (refresh) setRefreshAllError(false);
     const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
+    applyImageStatus(result, imageToken);
+    // Even if a socket-driven cached read overtook Refresh all, its forced
+    // scrape outcomes still matter. A newer family refresh owns that family's
+    // status, so do not overwrite it with an older full request's result.
+    if (refresh && mounted.current && explicitToken === explicitRequest.current) {
+      setRefreshAllError(!result?.providers);
+      const changedFamilies = new Set(activeFamilies.current);
+      for (const [family, revision] of familyRevisions.current) {
+        if (revision !== (startingFamilies.get(family) || 0)) changedFamilies.add(family);
+      }
+      if (result?.providers) setRefreshErrors((previous) => {
+        const next = { ...previous };
+        const localCards = result.providers.filter((item) => item.origin?.self !== false);
+        const localFamilies = new Set(localCards.map((card) => card.family));
+        for (const family of Object.keys(next)) {
+          if (!changedFamilies.has(family) && !localFamilies.has(family) && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+        }
+        for (const card of localCards.filter((item) => !changedFamilies.has(item.family))) {
+          if (card.error) next[card.family] = { ...card, refreshAttemptAt: new Date().toISOString() };
+          else if (resolvesQuotaRefresh(card)) delete next[card.family];
+        }
+        return next;
+      });
+    }
     if (token !== quotaRequest.current) return;
+    fullInFlight.current = null;
     if (result?.providers) {
+      if (!result.federationUnavailable) fullRevision.current += 1;
       // A family refresh can finish while this full read is in flight. Retain
       // its newer local card while still taking the full read's peer cards.
       const preserve = new Set(activeFamilies.current);
       for (const [family, revision] of familyRevisions.current) {
         if (revision !== (startingFamilies.get(family) || 0)) preserve.add(family);
       }
-      setQuotas((previous) => !previous || !preserve.size ? result.providers : [
-        ...result.providers.filter((card) => card.origin?.self === false || !preserve.has(card.family)),
-        ...previous.filter((card) => card.origin?.self !== false && preserve.has(card.family)),
-      ]);
-      setCoverage(result);
+      if (result.imageQuotaComplete === false) preserve.add('imagegen');
+      setQuotas((previous) => {
+        if (!previous) return result.providers;
+        const priorFamilies = new Set(previous.filter((card) => card.origin?.self !== false).map((card) => card.family));
+        return [
+          ...(result.federationUnavailable ? previous : result.providers).filter((card) => card.origin?.self === false),
+          ...result.providers.filter((card) => card.origin?.self !== false && (!preserve.has(card.family) || !priorFamilies.has(card.family))),
+          ...previous.filter((card) => card.origin?.self !== false && preserve.has(card.family)),
+        ];
+      });
+      if (coverageToken === coverageRequest.current) setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
       setError(true);
     }
     setLoading(false);
-  }, []);
+  }, [applyImageStatus]);
 
-  useEffect(() => { load(); return () => { quotaRequest.current += 1; }; }, [load]);
+  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; quotaRequest.current += 1; fullInFlight.current = null; }; }, [load]);
 
   // Refresh ONE provider card. The whole-section Refresh spawns every family's
   // scrape at once (10-20s each); this asks for the single card the user
@@ -197,25 +268,39 @@ function ProviderQuotaSection() {
   // reading — and its age — untouched. A failure toasts through the request
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
+    const startingFullRevision = fullRevision.current;
+    const coverageToken = ++coverageRequest.current;
+    const imageToken = family === 'imagegen' ? ++imageStatusRequest.current : null;
     const revision = (familyRevisions.current.get(family) || 0) + 1;
     familyRevisions.current.set(family, revision);
     activeFamilies.current.add(family);
     setRefreshingFamilies((prev) => new Set(prev).add(family));
     const result = await api.getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
     if (familyRevisions.current.get(family) !== revision) return;
+    applyImageStatus(result, imageToken);
     activeFamilies.current.delete(family);
     // A full read may have started after this refresh began; advancing again
     // records that its response predates the refresh completion.
     familyRevisions.current.set(family, revision + 1);
     if (result?.providers) {
-      const card = result.providers.find((q) => q.family === family && q.origin?.self !== false);
       // No card back for a family we asked for means it is no longer enabled
       // (its provider was turned off) — drop it rather than leave a reading
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
-      setQuotas((prev) => (card
-        ? prev.map((q) => (q.family === family && q.origin?.self !== false ? card : q))
-        : prev.filter((q) => q.family !== family || q.origin?.self === false)));
+      const fullReadApplied = startingFullRevision !== fullRevision.current;
+      const local = result.providers.find((card) => card.family === family && card.origin?.self !== false);
+      const localUnavailable = family === 'imagegen' && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
+      setQuotas((prev) => mergeRefreshedFamily(prev, result.providers, family, { fullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable }));
+      setRefreshErrors((previous) => {
+        const next = { ...previous };
+        if (local?.error) next[family] = { ...local, refreshAttemptAt: new Date().toISOString() };
+        else if ((!local && !localUnavailable) || resolvesQuotaRefresh(local)) delete next[family];
+        return next;
+      });
+      if (coverageToken === coverageRequest.current) setCoverage(result);
+      // The older full response may contain an older peer slot even when it
+      // preserves this local refresh. Supersede it with a fresh cached read.
+      if (fullInFlight.current !== null) void load();
     } else {
       // A full read may have preserved the old card while this refresh was
       // pending. Reconcile after a failure so its newer result is not lost.
@@ -226,7 +311,7 @@ function ProviderQuotaSection() {
       next.delete(family);
       return next;
     });
-  }, [load]);
+  }, [load, applyImageStatus]);
 
   // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
   useQuotaUpdates(load);
@@ -251,9 +336,12 @@ function ProviderQuotaSection() {
         </button>
       </div>
 
-      <p className="text-xs text-gray-500">Last reported readings are shown per instance; accounts may be shared, so allowances are not added together. Refresh reads this instance only.</p>
+      <p className="text-xs text-gray-500">Account identity is unavailable, so readings from the same provider are assumed to share an account, including on API-billed instances. The latest available reading for each quota window is shown; allowances are not added. Refresh reads this instance only.</p>
       {coverage?.federationUnavailable && <p className="text-xs text-port-warning">Peer quota readings are unavailable.</p>}
       {coverage?.unreportedInstances?.length > 0 && <p className="text-xs text-port-warning">Quota reporting is unavailable from {coverage.unreportedInstances.join(', ')}.</p>}
+      {imageQuotaComplete === false && <p className="text-xs text-port-warning">Image quota status on this instance is unavailable.</p>}
+      {error && quotas && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh quota readings; retained readings may be stale.</p>}
+      {refreshAllError && !error && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh all provider quotas; retained readings may be stale.</p>}
 
       {loading && !quotas && (
         // Reserve the quota-card grid below rather than a centered spinner
@@ -280,15 +368,17 @@ function ProviderQuotaSection() {
         // grid, so each provider gets its own compact cell without duplicating
         // the card tree (which would confuse screen readers and text queries).
         <div className="grid grid-cols-2 sm:grid-cols-1 lg:grid-cols-2 gap-2 sm:gap-3 lg:gap-4 items-start" aria-label="Subscription provider usage">
-          {arrangeQuotaCells(quotas).map((cell) => (
+          {arrangeQuotaCells(groupQuotaCards(quotas)).map((cell) => (
             <div key={cell.key} className="contents sm:block sm:space-y-4">
               {cell.cards.map((quota) => (
                 <ProviderQuotaCard
-                  key={`${quota.origin?.instanceId || 'self'}:${quota.family}`}
+                  key={quota.groupKey}
                   quota={quota}
                   onRefresh={refreshFamily}
                   refreshing={refreshingFamilies.has(quota.family)}
                   disabled={loading}
+                  refreshError={refreshErrors[quota.family]}
+                  imageReadError={quota.family === 'imagegen' ? imageReadError : null}
                 />
               ))}
             </div>

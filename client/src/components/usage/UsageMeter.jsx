@@ -64,7 +64,7 @@ export function meterTone(percentUsed) {
 // (`readBy` set); a purely local reading ages the same way, just without the
 // "on <machine>" attribution.
 export function readingAttribution(limit) {
-  if (!limit?.stale) return null;
+  if (!limit?.stale && !limit?.showAttribution) return null;
   // `?? ''` because an undated reading carries `readAt: null`, and
   // `new Date(null)` is the epoch — a date, and a very stale one.
   const readMs = new Date(limit.readAt ?? '').getTime();
@@ -91,7 +91,7 @@ export default function UsageMeter({ limit }) {
         {/* An unread percentage reads '—', never '0% used' — the same rule the
             remainder beside it and meterTone already keep. A plan that may be
             fully spent must not render as untouched. */}
-        <span className="text-[9px] sm:text-xs text-gray-500">
+        <span className="min-w-0 break-words text-[9px] sm:text-xs text-gray-500">
           {limit.percentUsed == null ? '—' : `${used}% used`}
           {attribution && <span className="text-gray-600"> · {attribution}</span>}
         </span>
