@@ -1,3 +1,4 @@
+import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 /**
  * Catalog image-attach hook (issue #1359).
@@ -46,7 +47,7 @@ const portraitGuard = createNewestWinsGuard();
 // 'duplicate' when the client already filed it without a metadata change,
 // 'gone' when the target ingredient no longer exists, or throws on a real DB
 // error (caught by the factory).
-async function attachGeneratedImage({ ingredientId, kind, role, library, filename, queuedAt }) {
+async function attachGeneratedImage({ ingredientId, kind, role, library, filename, queuedAt, job, inspect }) {
   await assertCatalogIdentityWritable(ingredientId);
   // The ingredient can be deleted between enqueue and completion (a render
   // outlives its editor by minutes). `getIngredient` filters `deleted = false`,
@@ -64,6 +65,16 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
   // A stale would-be-portrait must not demote a newer portrait. Keep the image
   // as a reference rather than dropping it (references are additive).
   if (target !== 'reference' && portraitGuard.isStale(ingredientId, queuedAt)) target = 'reference';
+  let inspectionLibrary = null;
+  if (inspect === true) {
+    const inspection = await import('./imageRenderInspection.js').then(async ({ reviewRenderedImage }) => {
+      const { resolvePlateReviewer } = await import('./musicVideo/plateReview.js');
+      return reviewRenderedImage({ inputs: { imageId: filename, planPrompt: effectiveJobPrompt(job) },
+        reviewer: await resolvePlateReviewer({}), source: 'catalog-sheet-inspection' });
+    }).catch(() => ({ verdict: 'unreviewed', discrepancy: 'Vision inspection unavailable or incomplete. Review this sheet before using it.' }));
+    inspectionLibrary = { review: { status: inspection.verdict === 'pass' ? 'good' : inspection.verdict === 'mismatch' ? 'bad' : 'unreviewed',
+      feedback: inspection.discrepancy || 'Vision: matches the saved prompt; no rendering defect found.' } };
+  }
   const metadata = await readImageGenerationMetadata(filename);
   // attachGeneratedMedia re-reads the live kinds under the ingredient lock and
   // leaves an existing row (the client won, under any kind) untouched. With a
@@ -73,15 +84,17 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
     ...(queuedAt ? { queuedAt } : {}),
     ...(mediaRole ? { role: mediaRole } : {}),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-    ...(library ? { library, preserveExistingOnConflict: true } : {}),
+    ...((library || inspectionLibrary) ? { library: { ...library, ...inspectionLibrary }, preserveExistingOnConflict: true } : {}),
   });
   // The client's optimistic attach is not seen by the guard. Record a portrait
   // either path filed so a later OLDER portrait render is treated as stale.
   if (result.kind === 'portrait') portraitGuard.mark(ingredientId, queuedAt);
   const needsMetadata = library && !result.media?.library?.derivedFrom;
   if (needsMetadata) await updateMediaLibrary(ingredientId, filename, result.kind, library, { preserveExisting: true });
+  // Preserve a director's rating if the mounted editor already reviewed this file.
+  if (inspectionLibrary && !result.attached) await updateMediaLibrary(ingredientId, filename, result.kind, inspectionLibrary, { preserveExisting: true });
   if (result.attached) return result.kind;
-  return needsMetadata ? 'metadata-updated' : 'duplicate';
+  return needsMetadata || inspectionLibrary ? 'metadata-updated' : 'duplicate';
 }
 
 const hook = createMediaJobImageHook({
@@ -95,8 +108,8 @@ const hook = createMediaJobImageHook({
   // database lock in attachGeneratedMedia also covers the client's attach.
   serializeKey: ({ ingredientId }) => ingredientId,
   describe: ({ ingredientId }) => ingredientId,
-  attach: ({ ingredientId, tag, filename, queuedAt }) => attachGeneratedImage({
-    ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt,
+  attach: ({ ingredientId, tag, filename, queuedAt, job }) => attachGeneratedImage({
+    ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt, job, inspect: tag.inspect,
   }),
   onAttached: ({ ingredientId, filename }, status) => {
     if (status === 'portrait' || status === 'reference' || status === 'metadata-updated') {

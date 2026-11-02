@@ -145,6 +145,7 @@ export const OPERATIONAL_STAGE_PREFIXES = Object.freeze([
  * unstamped just because nobody remembered this file.
  */
 export const OPERATIONAL_RUN_SOURCES = Object.freeze([
+  'catalog-sheet-inspection',
   'sandbox-delegation-worker',
   'sandbox-delegation-evaluator',
   'activity-digest',

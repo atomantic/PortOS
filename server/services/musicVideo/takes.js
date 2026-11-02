@@ -1,3 +1,4 @@
+import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
@@ -63,7 +64,7 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     source,
     provider: clip(provider, 40),
     jobId: clip(jobId, 128),
-    prompt: clip(prompt, 2000),
+    prompt: typeof prompt === 'string' ? prompt : null,
     sourceImageId: clip(sourceImageId, 256),
     originalName: takeOriginalName(originalName),
     status: 'candidate',
@@ -300,10 +301,18 @@ export function swapSceneFrames(project, sceneId) {
   return { project: replaceScene(project, idx, next), scene: next };
 }
 
-export function reviewSceneTake(project, sceneId, takeId, { status, note }) {
+export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  if (acknowledgeRenderQuality) {
+    const evidence = currentPlateEvidence(scene, take);
+    const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
+    if (!reviewer || !defect || acknowledgeRenderQuality.basis !== evidence.basis || acknowledgeRenderQuality.note !== defect.note) {
+      throw new ServerError('The image or rendering defect changed. Inspect it again before acknowledging.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    }
+  }
   const updated = {
     ...take,
+    ...(acknowledgeRenderQuality ? { renderQualityAcknowledgement: { ...acknowledgeRenderQuality, reviewer, at: new Date().toISOString() } } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(note !== undefined ? { note: note && note.trim() ? note.trim().slice(0, 1000) : null } : {}),
   };

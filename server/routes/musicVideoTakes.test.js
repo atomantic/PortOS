@@ -121,6 +121,30 @@ describe('scene takes routes', () => {
     ]);
   });
 
+  it('records server-derived acknowledgement only for the current image and visible rendering defect', async () => {
+    seedImage('defect.png');
+    const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'defect.png' });
+    const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, scenes: current.scenes.map((scene) => scene.sceneId === sceneA.sceneId
+      ? { ...scene, takes: scene.takes.map((take) => ({ ...take, plateEvidence: plateReviewEvidence(scene, take.assetId, 'synthetic-run', JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
+        id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'The clock is fused into the wall.' : 'Matches',
+      })) })) })) } : scene) } }));
+    const scene = (await reload()).scenes[0];
+    const body = { acknowledgeRenderQuality: { basis: scene.takes[0].plateEvidence.basis, note: 'The clock is fused into the wall.' } };
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}`;
+    race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
+    expect((await request(app).patch(url).send({ ...body, reviewer: { kind: 'human' } })).status).toBe(400);
+    const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
+    const response = await request(app).patch(url).send(body);
+    expect(response.status).toBe(200);
+    expect(response.body.takes[0].renderQualityAcknowledgement).toMatchObject({ ...body.acknowledgeRenderQuality, reviewer: { kind: 'local' } });
+    // The defect refusal is gone; the independent art approval gate remains.
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
+    expect((await request(app).patch(url).send(body)).status).toBe(409);
+  });
+
   it('rejecting the selected take clears the slot so the next take fills it', async () => {
     seedImage('a.png');
     seedImage('b.png');

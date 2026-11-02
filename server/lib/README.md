@@ -1066,3 +1066,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `musicVideoPublishExports.js` | `publishExportLabel`: measured export presentation with explicit unknown dimensions for legacy kits. Shared with the publishing UI. |
 
 | `musicVideoCastSetsImageEdit.js` | Shared exact-instruction Cast & Sets image-edit prompt and visible preservation addition. |
+
+| `imageRenderQuality.js` | Shared visible rendering-defect criteria for catalog sheets, Cast & Sets and shot stills. |

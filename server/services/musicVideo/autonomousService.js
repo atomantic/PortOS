@@ -1319,7 +1319,7 @@ async function reviewStills(projectId, run, productionRunId) {
     if (!listed.length) continue;
     const review = await askReview(run, 'stills', buildStillsReviewPrompt({ ...ideaOf(run), concept: project.concept,
       cast: project.productionReview?.draft?.cast || '',
-      shots: listed.map((scene, n) => ({ image: n + 1, sceneId: scene.sceneId, label: scene.label || '', still: trimTo(scene.framePrompt || scene.prompt, 400) })) }), images);
+      shots: listed.map((scene, n) => ({ image: n + 1, sceneId: scene.sceneId, label: scene.label || '', still: scene.framePrompt || scene.prompt || '' })) }), images);
     reviews.push(review);
     if (review.visual) shown += listed.length;
     // A review that could not see the stills cannot judge them.

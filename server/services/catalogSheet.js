@@ -323,7 +323,7 @@ export async function renderCatalogSheet(id, options = {}) {
   }
   if (target.delegate) {
     const { universeId, entryId } = target.delegate;
-    const result = await renderCharacterReferenceSheet(universeId, entryId, { ...options, variant: target.variant.id });
+    const result = await renderCharacterReferenceSheet(universeId, entryId, { ...options, variant: target.variant.id, catalogAttach: { ingredientId: id, kind: 'reference', role: `sheet:${target.variant.id}`, inspect: true } });
     return { ...result, delegatedTo: 'universe', universeId, entryId };
   }
   const { params, modelId, activeMode, visualDirection, referenceImages, editBase } = await buildCatalogSheet(target, options);
@@ -332,7 +332,7 @@ export async function renderCatalogSheet(id, options = {}) {
     throw new ServerError(`Define the look’s visual direction before rendering: ${visualDirection.missing.join(', ')}`, { status: 400, code: 'LOOK_VISUAL_DIRECTION_REQUIRED' });
   }
   const role = target.variant.role || `sheet:${target.variant.id}`;
-  params.catalogAttach = { ingredientId: id, kind: 'reference', role };
+  params.catalogAttach = { ingredientId: id, kind: 'reference', role, inspect: true };
   const queued = await enqueueJob({ kind: 'image', params });
   const base = editBase?.status === 'included' ? 'portrait-edit' : editBase?.status === 'fallback' ? 'portrait-reference-fallback' : 'generate';
   console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId} source=${base}`);

@@ -256,11 +256,13 @@ export default function CatalogSheetsPanel({
   const selectedRole = variant ? `${SHEET_ROLE_PREFIX}${variant.id}${activeFormId ? `@${activeFormId}` : ''}` : null;
   const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole);
 
-  const handleGenerate = async () => {
-    if (!variant || renderBlocked || starting || selectedRendering) return;
+  const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId) => {
+    const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
+    const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
+    if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole)) return;
     setStarting(true);
-    const form = forms.find((f) => f.id === activeFormId) || null;
-    const queued = await renderCatalogSheet(ingredientId, { variant: variant.id, ...(form ? { formId: form.id } : {}) }, { silent: true })
+    const form = forms.find((f) => f.id === renderFormId) || null;
+    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}) }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Sheet render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -268,10 +270,10 @@ export default function CatalogSheetsPanel({
       if (queued) toast.error('Sheet render returned no job');
       return;
     }
-    const what = form ? `${variant.label} · ${form.label}` : variant.label;
+    const what = form ? `${renderVariant.label} · ${form.label}` : renderVariant.label;
     setJobs((cur) => [...cur.filter((j) => j.jobId !== queued.jobId), {
       jobId: queued.jobId,
-      role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || variant.id}${form ? `@${form.id}` : ''}`,
+      role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || renderVariant.id}${form ? `@${form.id}` : ''}`,
       delegated: queued.delegatedTo === 'universe',
       label: what,
     }]);
@@ -364,7 +366,7 @@ export default function CatalogSheetsPanel({
                 {variants.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
             </div>
-            <button type="button" onClick={handleGenerate} disabled={starting || selectedRendering || !!renderBlocked || !variant}
+            <button type="button" onClick={() => handleGenerate()} disabled={starting || selectedRendering || !!renderBlocked || !variant}
               title={renderBlocked || (selectedRendering ? 'This sheet is already rendering' : undefined)}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
               {starting || selectedRendering ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Sparkles size={14} aria-hidden="true" />}
@@ -403,12 +405,21 @@ export default function CatalogSheetsPanel({
                   } : null} />
               ))}
               {group.items.map((m) => {
-                const bad = ratedBad(mediaRatingKey(m.mediaKey));
+                const bad = ratedBad(mediaRatingKey(m.mediaKey)) || m.library?.review?.status === 'bad';
+                const inspectionNote = m.library?.review?.feedback;
+                const role = splitSheetRole(m.role, SHEET_ROLE_PREFIX);
+                const sheetVariant = variants?.find((v) => v.id === role.variant);
                 return (
                   <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
                     missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
                     armedDetach={armedDetach} onArmDetach={setArmedDetach}
-                    badge={bad ? <BadFlag /> : null} pinActions={bad} />
+                    badge={bad ? <BadFlag /> : null} pinActions={bad}
+                    extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
+                      {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '')}
+                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
+                          || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
+                        className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
+                    </div> : null} />
                 );
               })}
             </div>

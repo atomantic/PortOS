@@ -1044,3 +1044,5 @@ export * from './mediaOriginClaim.js';
 
 export * from './peerSyncEventSchema.js';
 export * from './musicVideoCastSetsImageEdit.js';
+
+export * from './imageRenderQuality.js';

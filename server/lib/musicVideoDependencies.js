@@ -232,7 +232,7 @@ export function presentMusicVideoDependencies(project) {
       ...(take.dependencies ? { dependencyState: state(take.dependencies) } : {}),
     })) })),
     ...(project.excerpts ? { excerpts: project.excerpts.map((excerpt) => ({ ...excerpt, dependencyState: state(excerpt.dependencies) })) } : {}),
-    ...(project.treatment ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
+    ...(Array.isArray(project.treatment?.proofs) ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
       ...(proof.evidence ? { evidence: { ...proof.evidence, dependencyState: state(proof.evidence.dependencies) } } : {}),
     })) } } : {}),
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,

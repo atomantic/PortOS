@@ -1,16 +1,20 @@
+import { RENDER_DEFECTS } from './imageRenderQuality.js';
 /** Asset-bound still-image admission for authored shots. Shared with the comparison UI. */
 import { extractJson } from './jsonExtract.js';
 import { canonicalStringify } from './objects.js';
 
 export function plateRequirementBasis(scene) {
-  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || '', startSec: scene.startSec, endSec: scene.endSec });
+  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec });
 }
 
 /** Still evidence proves starting-state support, never completion of timed actions. */
 export function plateRequirements(scene) {
   const direction = scene.direction || {};
   const contract = direction.actionContract;
-  if (!contract) return [];
+  if (!contract) return [
+    { id: 'plate-prompt', requirement: `Matches the saved still prompt: ${scene.framePrompt || scene.prompt || ''}` },
+    { id: 'render-quality', requirement: `Rendering defect check: no ${RENDER_DEFECTS}` },
+  ];
   const subjects = [...new Set([contract.activeSpeaker, ...(contract.actions || []).map((event) => event.subject), ...(contract.reactions || []).map((event) => event.subject)].filter(Boolean))];
   const requirements = [
     ...subjects.map((subject) => `Subject visible: ${subject}`),
@@ -23,7 +27,8 @@ export function plateRequirements(scene) {
     ...(contract.startEmotion ? [`Starting emotion: ${contract.startEmotion}`] : []),
     `Composition can support shot purpose: ${contract.purpose}`,
   ];
-  return requirements.map((requirement, index) => ({ id: `plate-${index + 1}`, requirement }));
+  return [...requirements.map((requirement, index) => ({ id: `plate-${index + 1}`, requirement })),
+    { id: 'render-quality', requirement: `Rendering defect check: no ${RENDER_DEFECTS}` }];
 }
 
 /** A selection or shot edit cannot borrow evidence from a different image or intent. */
@@ -72,11 +77,19 @@ export function plateStripFindings(strip, text) {
 }
 
 export function selectedPlatePasses(scene, runId) {
-  if (!scene.direction?.actionContract) return true;
   const take = scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
   const evidence = currentPlateEvidence(scene, take);
   const requirements = plateRequirements(scene);
-  return evidence?.runId === runId && evidence.verdict === 'pass' && !plateAdjacencyFailed(evidence, runId) && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id && check.status === 'pass'));
+  return evidence?.runId === runId && !plateAdjacencyFailed(evidence, runId) && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id
+    && (check.status === 'pass' || (id === 'render-quality' && renderQualityAcknowledged(scene, take)))));
+}
+
+/** Explicit acknowledgement is bound to one image, exact shot intent and visible defect. */
+export function renderQualityAcknowledged(scene, take) {
+  const evidence = currentPlateEvidence(scene, take);
+  const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
+  const ack = take?.renderQualityAcknowledgement;
+  return !!defect && ack?.basis === evidence.basis && ack?.note === defect.note && !!ack?.reviewer;
 }
 
 /** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */

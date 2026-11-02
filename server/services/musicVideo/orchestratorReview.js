@@ -1,3 +1,4 @@
+import { RENDER_DEFECTS } from '../../lib/imageRenderQuality.js';
 /**
  * Orchestrated autonomous music video — the orchestrator's review prompts, the
  * verdict parser, and the one provider call every checkpoint shares.
@@ -115,7 +116,7 @@ ${block('VISUAL CONCEPT', [concept?.prompt, concept?.style].filter(Boolean).join
 ${block('CAST', cast)}
 ${block('SHOTS', JSON.stringify(shots, null, 2))}
 
-Judge each still: correct anatomy (hands, limbs, faces), the same recognizable person wherever a cast member appears (face, hair, wardrobe as the cast describes them, and consistent across these stills), no stray or garbled text in frame, the shot it was asked for, and one consistent look that fits the concept. ${RULES}
+Judge each still for render-quality: ${RENDER_DEFECTS}. Report any visible defect as "Rendering defect: …" in its issue text. Then check correct anatomy (hands, limbs, faces), the same recognizable person wherever a cast member appears (face, hair, wardrobe as the cast describes them, and consistent across these stills), no stray or garbled text in frame, the shot it was asked for, and one consistent look that fits the concept. ${RULES}
 Return JSON only:
 {"verdict":"approve|revise","score":1-10,"notes":"why","issues":[{"sceneId":"a shot id","text":"the visible problem and what the regenerated still must show instead"}]}
 List issues only when verdict is revise, one per still that must be regenerated.`;

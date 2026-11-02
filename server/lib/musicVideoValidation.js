@@ -428,9 +428,10 @@ export const musicVideoPoolUseSchema = z.object({
 
 // Review a take: reject/restore it and/or leave a note for regeneration.
 export const musicVideoTakeReviewSchema = z.object({
+  acknowledgeRenderQuality: z.object({ basis: z.string().min(1), note: z.string().min(1).max(1000) }).strict().optional(),
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
-}).strict().refine((r) => r.status !== undefined || r.note !== undefined, { message: 'status or note is required' });
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
 
 // Import externally generated assets (e.g. a Midjourney handoff). Each item is
 // an asset the client already stored through the existing gallery upload

@@ -672,7 +672,7 @@ export function reserveProductionStep(project, runId, {
       ...(costUsd !== null && isNonBlankStr(costModelId) ? { costModelId: trimTo(costModelId, 200) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
-      ...(kind === 'clip' && scene?.direction?.actionContract ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
+      ...(kind === 'clip' && scene?.referenceImageId ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
       ...(plateRepairBasis ? { plateRepairBasis } : {}),
       ...(stillRepair ? { stillRepair } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),
