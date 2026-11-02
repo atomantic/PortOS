@@ -166,11 +166,11 @@ describe('music-video scene completion hooks → takes', () => {
   it('animates a Clip from storyboard still once it is the selection, and records a refused clip on the video lane', async () => {
     dispatchStoryboardStillClip.mockClear();
     const job = imageJob(project.id, scene.sceneId, 'first.png');
-    job.params.musicVideo.thenClip = { backend: 'grok' };
+    job.params.musicVideo.thenClip = { backend: 'grok', songAudio: false };
     mediaJobEvents.emit('completed', job);
     await waitFor(() => dispatchStoryboardStillClip.mock.calls.length === 1);
-    const [{ scene: animated, backend }] = dispatchStoryboardStillClip.mock.calls[0];
-    expect({ still: animated.referenceImageId, backend }).toEqual({ still: 'first.png', backend: 'grok' });
+    const [{ scene: animated, backend, songAudio }] = dispatchStoryboardStillClip.mock.calls[0];
+    expect({ still: animated.referenceImageId, backend, songAudio }).toEqual({ still: 'first.png', backend: 'grok', songAudio: false });
 
     // A still that lands beside a selection is only a take: nothing animates it.
     const second = imageJob(project.id, scene.sceneId, 'second.png');

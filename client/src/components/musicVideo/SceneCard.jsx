@@ -194,6 +194,13 @@ export default function SceneCard({
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
   const cardRequest = shotCardRenderRequest({ project, scene, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
+  // Hosted cutaways cannot use the Local project's supplied-audio default. Preserve
+  // an unknown Local model and required performance/audio-reactive inputs for the server to validate.
+  const songAudioState = cardRequest.songAudio.state;
+  const silentHostedCutaway = !performance && songAudioState === 'unavailable'
+    && ['grok', 'fal', 'runway'].includes(renderSettings?.backend);
+  const songAudioField = songAudioState === 'on' || songAudioState === 'off' || silentHostedCutaway
+    ? { songAudio: songAudioState === 'on' } : {};
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;
   const refusalInputs = {
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
@@ -203,12 +210,12 @@ export default function SceneCard({
   const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
   const videoRefusal = greyboxRefusal || otherRefusal;
   const sendRender = () => {
-    const { songAudio, endFrame, wholeLine } = cardRequest;
+    const { endFrame, wholeLine } = cardRequest;
     const card = {
       prompt: cardRequest.authored,
       ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
       ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
-      ...(songAudio.state === 'on' || songAudio.state === 'off' ? { songAudio: songAudio.state === 'on' } : {}),
+      ...songAudioField,
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
@@ -224,7 +231,7 @@ export default function SceneCard({
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
     const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
-    onGenerateFrame?.(scene, { thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}) } });
+    onGenerateFrame?.(scene, { thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}), ...songAudioField } });
   };
   const renderCost = performance ? performanceCost : timing.falCost;
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
@@ -627,7 +634,7 @@ export default function SceneCard({
               grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
-                musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, promptAsTyped: true },
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, promptAsTyped: true, ...songAudioField },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}

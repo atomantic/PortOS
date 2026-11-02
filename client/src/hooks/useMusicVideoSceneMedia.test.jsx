@@ -170,8 +170,8 @@ describe('useMusicVideoSceneMedia clip from the storyboard panel', () => {
   it('tags the still render with the lane its clip renders on', async () => {
     const boardProject = { id: 'p5', scenes: [{ sceneId: 's1', order: 0, prompt: 'she laces her skates', panelId: 'pn-1', panelArt: 'panel.png', takes: [], startSec: 0, endSec: 4 }] };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: boardProject, videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
-    await act(async () => { await result.current.generateFrame(boardProject.scenes[0], { thenClip: { backend: 'grok' } }); });
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ projectId: 'p5', sceneId: 's1', thenClip: { backend: 'grok' } });
+    await act(async () => { await result.current.generateFrame(boardProject.scenes[0], { thenClip: { backend: 'grok', songAudio: false } }); });
+    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ projectId: 'p5', sceneId: 's1', thenClip: { backend: 'grok', songAudio: false } });
   });
 });
 

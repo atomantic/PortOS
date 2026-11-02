@@ -317,7 +317,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, trimVideoStart } from '../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideoStart } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
@@ -1079,7 +1079,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
     await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true });
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true, expectedShot: 'cutaway' });
     const panel = screen.getByLabelText('Section revision');
     expect(within(panel).getByText('Kept')).toBeInTheDocument();
   });
@@ -1319,6 +1319,24 @@ describe('MusicVideo project video renderer', () => {
     expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
   });
 
+  // A hosted cutaway cannot hear the song, even when the Local project default supplies it.
+  it('previews and renders a Grok override without inheriting Local song audio', async () => {
+    localStorage.removeItem('portos.musicVideo.lastRenderOn');
+    generateVideo.mockResolvedValue({ jobId: 'grok-pick-job' });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'local', generationMode: 'suppliedAudio' } }, 'produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'grok' } });
+    expect(render.getByLabelText('Song audio')).toBeDisabled();
+    expect(render.getByLabelText('Song audio')).not.toBeChecked();
+    await waitFor(() => expect(previewVideoPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'grok', musicVideo: expect.objectContaining({ songAudio: false }),
+    }), { silent: true }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'grok', mode: 'image' })));
+    expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'cutaway' });
+    expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
+  });
+
   // Uniquely catches "Local LTX" falling through to the install's default model, and a picked length being dropped.
   it('renders a Local LTX pick on the model and length its card shows, LTX-2.5 before the install default', async () => {
     getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
@@ -1425,6 +1443,20 @@ describe('MusicVideo project video renderer', () => {
       })));
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falDuration');
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falModelId');
+    });
+
+    it('keeps the fal performance song window when overriding a Local supplied-audio project', async () => {
+      getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+        models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }] });
+      generateVideo.mockResolvedValue({ jobId: 'fal-performance-job' });
+      await openProject(performanceProject({ backend: 'local', generationMode: 'suppliedAudio' }), 'produce');
+      const render = within(await screen.findByRole('region', { name: 'Render' }));
+      fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'fal' } });
+      expect(render.getByLabelText('Song audio')).toBeChecked();
+      expect(render.getByLabelText('Song audio')).toBeDisabled();
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+      await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'fal', mode: 'image' })));
+      expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'lipsync' });
     });
 
     it('persists a scene switched to a performance shot', async () => {

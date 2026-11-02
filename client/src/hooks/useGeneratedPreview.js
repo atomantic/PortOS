@@ -116,11 +116,13 @@ export default function useGeneratedPreview({ active, request, controls = null }
     current.responses.clear();
   }, [cancelPresentation]);
 
-  const failPresentation = useCallback((message) => {
+  const failPresentation = useCallback((message, cause, entry) => {
     const current = pending.current;
     if (!mounted.current || !current || current.terminalError) return;
     current.terminalError = true;
     current.hasError = true;
+    const elapsed = entry ? Math.min(60000, Math.max(0, Math.round(performance.now() - entry.received))) : null;
+    console.error(`❌ Generated preview ${cause} (pending=${presentation.current.queue.length}${elapsed === null ? '' : `, ageMs=${elapsed}`})`);
     cancelPlayback(current);
     setState((prev) => ({ ...prev, status: 'error', ready: false, reason: message }));
     if (socket.connected) socket.emit('generated-preview:close', { requestId: current.requestId, sessionId: current.sessionId });
@@ -136,7 +138,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
 
   const checkFrameAge = useCallback((entry) => {
     if (performance.now() - entry.received < PRESENTATION_MAX_AGE_MS) return true;
-    failPresentation('Preview presentation fell behind. Retry the preview.');
+    failPresentation('Preview presentation fell behind. Retry the preview.', 'presentation-deadline', entry);
     return false;
   }, [failPresentation]);
 
@@ -149,7 +151,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
     const watch = () => {
       if (!liveFrame(oldest)) return;
       const remaining = PRESENTATION_MAX_AGE_MS - (performance.now() - oldest.received);
-      if (remaining <= 0) { failPresentation('Preview presentation fell behind. Retry the preview.'); return; }
+      if (remaining <= 0) { failPresentation('Preview presentation fell behind. Retry the preview.', 'presentation-deadline', oldest); return; }
       viewer.deadline = setTimeout(watch, remaining);
     };
     watch();
@@ -206,7 +208,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       });
     }).catch(() => {
       entry.decoding = false;
-      if (entry.native && liveFrame(entry)) failPresentation('Preview image could not be decoded. Retry the preview.');
+      if (entry.native && liveFrame(entry)) failPresentation('Preview image could not be decoded. Retry the preview.', 'image-decode', entry);
       else retireUrls();
     });
   }, [checkFrameAge, failPresentation, liveFrame, mounted, promoteFrame, retireUrls, watchPresentation]);
@@ -436,7 +438,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
         else if (viewer.queue.length < PRESENTATION_MAX_PENDING) viewer.queue.push(entry);
         else {
           entry.retired = true;
-          failPresentation('Preview presentation queue is full. Retry the preview.');
+          failPresentation('Preview presentation queue is full. Retry the preview.', 'presentation-queue-full', entry);
           return;
         }
         promoteFrame();

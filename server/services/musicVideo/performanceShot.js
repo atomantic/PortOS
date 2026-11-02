@@ -47,10 +47,11 @@ import {
   performanceBlockedReason,
   performanceCapability,
   planPerformanceWindow,
+  sceneRenderShot,
   selectedPerformanceInstruction,
   SOURCE_AUDIO_MUSIC,
 } from '../../lib/musicVideoShotTiming.js';
-import { clipOffsetSec, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
 import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
@@ -304,6 +305,13 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (!musicVideo?.projectId || !musicVideo?.sceneId) return null;
   const project = await getProject(musicVideo.projectId);
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
+  if (musicVideo.expectedShot && sceneRenderShot(scene) !== musicVideo.expectedShot) {
+    throw refuse('The shot type changed or has not saved yet — save it and submit again', 'MUSIC_VIDEO_SHOT_TYPE_CHANGED', 409);
+  }
+  if (musicVideo.storyboardStill && (scene?.referenceImageId !== musicVideo.storyboardStill
+    || sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) !== 'footage')) {
+    throw refuse('The storyboard still or shot layer changed — submit the clip again', 'MUSIC_VIDEO_STORYBOARD_STALE', 409);
+  }
   // An unknown project/scene is not a performance shot; the render proceeds as
   // before and the completion hook refuses to attach it to a deleted scene.
   assertShotActionContract(scene);

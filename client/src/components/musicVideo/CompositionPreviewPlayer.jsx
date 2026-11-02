@@ -63,6 +63,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
+  const reportedAudioError = useRef(false);
   const mounted = useMounted();
   const intent = useRef(0);
   const wantsPlay = useRef(false);
@@ -73,6 +74,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const resyncs = useRef([]);
   const [preparing, setPreparing] = useState(false);
   const [audioError, setAudioError] = useState('');
+  useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
@@ -109,6 +111,15 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setT(next);
   }, [duration, fps, preview.pausePlayback, cancelAudioStart]);
 
+  const handleAudioError = (event) => {
+    if (reportedAudioError.current || event.currentTarget !== audioRef.current) return;
+    reportedAudioError.current = true;
+    const kind = { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'unsupported' }[event.currentTarget.error?.code] || 'unknown';
+    console.error(`❌ Generated preview audio failed (${kind})`);
+    stopPlayback();
+    setAudioError('The song audio could not be played. Check the file or connection, then retry the preview.');
+  };
+
   const playFrom = useCallback((time) => {
     const audio = audioRef.current;
     if (!audio || !preview.ready) return;
@@ -117,8 +128,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const live = () => mounted.current && generation === intent.current && wantsPlay.current;
     wantsPlay.current = true;
     setAudioError('');
-    const failed = (error) => {
+    const failed = (error, stage) => {
       if (!live()) return;
+      console.error(`❌ Generated preview failed during ${stage}`);
       stopPlayback(audio.currentTime || time);
       setAudioError(error?.message || 'Audio playback could not start. Retry the preview.');
     };
@@ -131,7 +143,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         waiting.timer = setTimeout(() => {
           if (audioStartWait.current !== waiting) return;
           cancelAudioStart();
-          failed(new Error('The audio clock did not start. Retry the preview.'));
+          failed(new Error('The audio clock did not start. Retry the preview.'), 'audio-clock');
         }, 3000);
       }
       const started = audio.play?.();
@@ -174,14 +186,14 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           waiting.frame = requestAnimationFrame(observe);
         };
         observe();
-      }).catch(failed);
+      }).catch((error) => failed(error, 'audio-start'));
     };
     if (preview.playback) {
       audio.pause?.();
       nativePlaying.current = false;
       setPlaying(false);
       setPreparing(true);
-      preview.preparePlayback(time).then((native) => { if (live() && native !== null) startAudio(native); }).catch(failed);
+      preview.preparePlayback(time).then((native) => { if (live() && native !== null) startAudio(native); }).catch((error) => failed(error, 'native-prepare'));
     } else startAudio(false);
   }, [mounted, preview.ready, preview.playback, preview.preparePlayback, preview.startPlayback, stopPlayback, cancelAudioStart]);
   playFromRef.current = playFrom;
@@ -251,6 +263,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       const now = performance.now();
       resyncs.current = resyncs.current.filter((at) => now - at < 10000);
       if (resyncs.current.length >= 3) {
+        console.error('❌ Generated preview repeatedly lost audio synchronization');
         stopPlayback();
         setAudioError('Native preview repeatedly lost synchronization. Retry the preview.');
         return;
@@ -277,6 +290,21 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     else playFrom(audioRef.current?.currentTime || 0);
   };
 
+  const retryPreview = () => {
+    stopPlayback();
+    const audio = audioRef.current;
+    const reloadAudio = reportedAudioError.current && audio;
+    reportedAudioError.current = false;
+    setAudioError('');
+    if (reloadAudio) {
+      const position = audio.currentTime;
+      audio.load();
+      // Setting currentTime before metadata arrives preserves the requested start position.
+      audio.currentTime = position;
+    }
+    preview.resume();
+  };
+
   if (!doc) return null;
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
@@ -301,7 +329,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={() => { stopPlayback(); setAudioError(''); preview.resume(); }}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
+        {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={retryPreview}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview.ready || !audioUrl || (failed && !playing)}>
           {playing || preparing ? <Pause size={14} /> : <Play size={14} />} {playing || preparing ? 'Pause' : 'Play'}
         </button>
@@ -325,7 +353,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         />
       )}
       {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => stopPlayback()} />}
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
     </div>
   );
 }

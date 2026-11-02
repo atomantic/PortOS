@@ -283,6 +283,7 @@ const generateSchema = z.object({
     thenClip: z.object({
       backend: z.string().min(1).max(40).optional(),
       model: z.string().min(1).max(300).optional(),
+      songAudio: z.boolean().optional(),
     }).optional(),
   }).optional(),
   // File the render into this music video's media collection even when no shot

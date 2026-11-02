@@ -33,6 +33,7 @@ export {
   planPerformanceRepair,
   runwaySceneTake,
   runwayTakeRequestFields,
+  sceneRenderShot,
   selectedPerformanceInstruction,
   shotSplitLimit,
 } from '../../../server/lib/musicVideoShotTiming.js';
