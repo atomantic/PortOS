@@ -469,11 +469,32 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
   return { jobId, generationId: jobId, filename: `${jobId}.mp4`, model: prepared.effectiveModelId, mode: 'local', status, position };
 };
 
+// A Music Video shot rendered on a local reference-to-video model (FastH3 Omni) carries the
+// shot's cast sheets beside its still, as a Grok clip does, unless the request already names references.
+const withLocalCastReferences = async (body) => {
+  // Only a request already routed to this Mac: an inherited hosted backend stays hosted, and
+  // peer transport does not carry extra references yet.
+  if (body.backend !== 'local' || body.mediaProviderPeerId) return body;
+  if (body.referenceImageFiles?.length || !body.musicVideo?.sceneId) return body;
+  const { listVideoModels, defaultVideoModelId } = await import('./local.js');
+  const [{ getSettings }, { captureSystemCapabilities }] = await Promise.all([import('../settings.js'), import('../../lib/systemCapabilities.js')]);
+  // 'Local default' omits modelId; resolve it the way preparation will.
+  const modelId = body.modelId || defaultVideoModelId(captureSystemCapabilities(), (await getSettings())?.videoGen?.defaultModelId);
+  const model = listVideoModels().find((m) => m.id === modelId);
+  const total = Number(model?.maxReferenceTotal) || Infinity;
+  const limit = Math.min((Number(model?.maxReferenceImages) || 0) - 1, total - 1);
+  if (!(limit > 0)) return body;
+  const { musicVideoLocalReferenceFiles } = await import('../musicVideo/clipCastReferences.js');
+  const files = await musicVideoLocalReferenceFiles(body.musicVideo, limit);
+  return files.length ? { ...body, referenceImageFiles: files } : body;
+};
+
 const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
   const fableLoomRenderSettings = await loadFableLoomRenderSettings(body);
   if (body.musicVideo) {
     const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
     body = await applyProjectRenderPool(body);
+    body = await withLocalCastReferences(body);
   }
   let prepared;
   ({ body, prepared } = await prepareVideoSubmissionInputs(body, uploads, inputs));

@@ -8,7 +8,7 @@ vi.mock('../../lib/pathSafety.js', () => ({
   resolveImageInputPath: (file) => `/inputs/${file}`,
 }));
 
-const { musicVideoClipCastReferences } = await import('./clipCastReferences.js');
+const { musicVideoClipCastReferences, musicVideoLocalReferenceFiles } = await import('./clipCastReferences.js');
 
 const project = (scene, references) => ({
   id: 'mv-1',
@@ -45,5 +45,18 @@ describe('musicVideoClipCastReferences', () => {
     expect(await musicVideoClipCastReferences({})).toEqual([]);
     getProject.mockResolvedValue(project({ sceneId: 'other' }, REFS));
     expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 'shot-example' })).toEqual([]);
+  });
+});
+
+// Uniquely catches a local reference-to-video clip (FastH3 Omni) losing the shot's cast sheets, or sending more than the model takes.
+describe('musicVideoLocalReferenceFiles', () => {
+  beforeEach(() => getProject.mockReset());
+
+  it('names the cast sheets as gallery files, never the set plate, within the limit', async () => {
+    const scene = { sceneId: 'shot-example', sectionIndex: 0, prompt: 'Guest steps into view' };
+    getProject.mockResolvedValue(project(scene, REFS));
+    expect(await musicVideoLocalReferenceFiles({ projectId: 'mv-1', sceneId: 'shot-example' }, 8)).toEqual(['lead.png', 'guest.png']);
+    expect(await musicVideoLocalReferenceFiles({ projectId: 'mv-1', sceneId: 'shot-example' }, 1)).toEqual(['lead.png']);
+    expect(await musicVideoLocalReferenceFiles({ projectId: 'mv-1', sceneId: 'shot-example' }, 0)).toEqual([]);
   });
 });
