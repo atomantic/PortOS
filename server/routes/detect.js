@@ -4,6 +4,7 @@ import { readFile, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
+import { getListeningPorts, platform } from '../lib/platform.js';
 import { listProcessesStrict } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { requestHasHostControl } from '../services/authGate.js';
@@ -195,25 +196,54 @@ router.post('/port', asyncHandler(async (req, res) => {
     process: null
   };
 
-  // Use lsof on macOS/Linux to find process
-  const command = process.platform === 'darwin'
-    ? `lsof -i :${safePort} -P -n | grep LISTEN`
-    : `ss -lntp | grep :${safePort}`;
+  const targetPlatform = platform;
+  const command = targetPlatform === 'darwin'
+    ? `lsof -iTCP:${safePort} -sTCP:LISTEN -n -P`
+    : targetPlatform === 'linux'
+      ? 'ss -lntp'
+      : 'netstat -ano -p tcp';
+  let stdout;
+  try {
+    ({ stdout } = await execAsync(command));
+  } catch (error) {
+    // lsof reports exit code 1 when no matching listener exists. Other probe
+    // errors are surfaced by getListeningPorts rather than mistaken for free.
+    if (targetPlatform === 'darwin' && error.code === 1 && !String(error.stdout || '').trim()) {
+      stdout = '';
+    } else {
+      throw new ServerError('Port listener discovery failed', { status: 503, code: 'PORT_DISCOVERY_FAILED', cause: error });
+    }
+  }
+  const listeners = await getListeningPorts({
+    platform: targetPlatform,
+    exec: async () => ({ stdout: stdout || '' })
+  });
+  result.inUse = listeners.includes(safePort);
 
-  const { stdout } = await execAsync(command).catch(() => ({ stdout: '' }));
-
-  if (stdout.trim()) {
-    result.inUse = true;
-
-    // Parse lsof output: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
-    const lines = stdout.trim().split('\n');
-    if (lines.length > 0) {
-      const parts = lines[0].split(/\s+/);
-      if (process.platform === 'darwin' && parts.length >= 2) {
-        result.process = {
-          command: parts[0],
-          pid: parseInt(parts[1], 10)
-        };
+  if (result.inUse) {
+    for (const line of stdout.split('\n')) {
+      if (targetPlatform === 'darwin') {
+        const parts = line.trim().split(/\s+/);
+        const portMatch = line.match(new RegExp(`:${safePort}\\s+\\(LISTEN\\)`));
+        const pid = Number(parts[1]);
+        if (portMatch && parts.length >= 2 && Number.isInteger(pid)) {
+          result.process = { command: parts[0], pid };
+          break;
+        }
+      } else if (targetPlatform === 'linux') {
+        const localAddress = line.trim().split(/\s+/)[3] || '';
+        const portMatch = new RegExp(`(?:\\*|\\[[^\\]]+\\]|[^\\s:]+):${safePort}$`).test(localAddress);
+        const processMatch = line.match(/users:\(\(\"([^\"]+)\",pid=(\d+)/);
+        if (/^LISTEN\b/.test(line.trim()) && portMatch && processMatch) {
+          result.process = { command: processMatch[1], pid: Number(processMatch[2]) };
+          break;
+        }
+      } else {
+        const match = line.match(new RegExp(`^\\s*TCP\\s+\\S+:${safePort}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i'));
+        if (match) {
+          result.process = { pid: Number(match[1]) };
+          break;
+        }
       }
     }
   }

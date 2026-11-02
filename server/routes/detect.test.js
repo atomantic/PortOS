@@ -77,6 +77,90 @@ describe('Detect Routes', () => {
   });
 });
 
+describe('POST /api/detect/port listener discovery', () => {
+  afterEach(() => {
+    vi.doUnmock('../lib/platform.js');
+    vi.doUnmock('../lib/childProcess.js');
+    vi.resetModules();
+  });
+
+  async function loadApp(targetPlatform, stdout) {
+    vi.resetModules();
+    vi.doMock('../lib/platform.js', () => ({
+      platform: targetPlatform,
+      getListeningPorts: async () => {
+        const ports = stdout.split('\n').flatMap(line => {
+          if (targetPlatform === 'darwin') return [...line.matchAll(/:(\d+)\s+\(LISTEN\)/g)].map(match => Number(match[1]));
+          if (targetPlatform === 'linux' && /^\s*LISTEN\b/.test(line)) return [...line.matchAll(/:(\d+)\s/g)].map(match => Number(match[1]));
+          if (targetPlatform === 'win32' && /\bLISTENING\b/i.test(line)) return [...line.matchAll(/:(\d+)\s/g)].map(match => Number(match[1]));
+          return [];
+        });
+        return [...new Set(ports)];
+      }
+    }));
+    vi.doMock('../lib/childProcess.js', async (importOriginal) => {
+      const exec = vi.fn();
+      exec[Symbol.for('nodejs.util.promisify.custom')] = vi.fn(async () => ({ stdout, stderr: '' }));
+      return { ...await importOriginal(), exec };
+    });
+    const routes = await import('./detect.js');
+    const errors = await import('../lib/errorHandler.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/detect', routes.default);
+    app.use(errors.errorMiddleware);
+    return app;
+  }
+
+  it.each([
+    ['darwin', 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\nnode 321 user 12u IPv4 0x0 0t0 TCP *:8123 (LISTEN)', 'lsof -iTCP:8123 -sTCP:LISTEN -n -P', { command: 'node', pid: 321 }],
+    ['linux', 'State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\nLISTEN 0 128 *:8123 *:* users:(("node",pid=654,fd=4))\nLISTEN 0 128 *:18123 *:* users:(("other",pid=999,fd=4))', 'ss -lntp', { command: 'node', pid: 654 }],
+    ['win32', '  TCP    0.0.0.0:8123       0.0.0.0:0       LISTENING       9876\r\n', 'netstat -ano -p tcp', { pid: 9876 }]
+  ])('detects the requested port and process on %s', async (targetPlatform, stdout, expectedCommand, processInfo) => {
+    const app = await loadApp(targetPlatform, stdout);
+    const response = await request(app).post('/api/detect/port').send({ port: 8123 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ port: 8123, inUse: true, process: processInfo });
+    const { exec } = await import('../lib/childProcess.js');
+    expect(exec[Symbol.for('nodejs.util.promisify.custom')]).toHaveBeenCalledWith(expectedCommand);
+  });
+
+  it('does not treat a larger Linux port containing the requested digits as occupied', async () => {
+    const app = await loadApp('linux', 'LISTEN 0 128 *:15550 *:* users:(("node",pid=654,fd=4))');
+    const response = await request(app).post('/api/detect/port').send({ port: 55 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ port: 55, inUse: false, process: null });
+  });
+
+  it('reports a free macOS port when lsof exits with its no-match status', async () => {
+    vi.resetModules();
+    vi.doMock('../lib/platform.js', () => ({ platform: 'darwin', getListeningPorts: async () => [] }));
+    vi.doMock('../lib/childProcess.js', async (importOriginal) => {
+      const exec = vi.fn();
+      exec[Symbol.for('nodejs.util.promisify.custom')] = vi.fn(async () => {
+        const error = new Error('no matching processes');
+        error.code = 1;
+        error.stdout = '';
+        throw error;
+      });
+      return { ...await importOriginal(), exec };
+    });
+    const routes = await import('./detect.js');
+    const errors = await import('../lib/errorHandler.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/detect', routes.default);
+    app.use(errors.errorMiddleware);
+
+    const response = await request(app).post('/api/detect/port').send({ port: 8123 });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ port: 8123, inUse: false, process: null });
+  });
+});
+
 describe('POST /api/detect/pm2', () => {
   let app;
 
