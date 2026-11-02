@@ -145,6 +145,23 @@ describe('useBeeperOutbox', () => {
     expect(result.current.entries[0].state).toBe('sent');
   });
 
+  it('refreshes again when a newer read finished before the delivery check', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishCheck;
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve; }));
+    let checking;
+    act(() => { checking = result.current.reconcile(pending); });
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] })
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    await act(async () => result.current.refresh());
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+    await act(async () => { finishCheck({ ...pending, state: 'sent' }); await checking; });
+    expect(result.current.entries[0].state).toBe('sent');
+  });
+
   it('creates the durable row first, then sends it exactly once', async () => {
     const onSent = vi.fn();
     const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID, { onSent }));
