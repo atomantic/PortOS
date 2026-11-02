@@ -299,9 +299,12 @@ describe('search service', () => {
       getHistory.mockRejectedValue(new Error('History error'))
 
       // Should not throw, should return health results at minimum
-      const results = await fanOutSearch('test')
+      const results = await fanOutSearch('heart')
       // Only health (synchronous) should have results, others fall back
-      expect(Array.isArray(results)).toBe(true)
+      expect(results).toHaveLength(1)
+      expect(results[0].id).toBe('health')
+      expect(results[0].results.length).toBeGreaterThan(0)
+      expect(results[0].results[0].id).toBe('heart_rate')
     })
 
     it('should limit brain results to 8', async () => {

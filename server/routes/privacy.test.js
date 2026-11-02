@@ -154,7 +154,9 @@ describe('GET /api/privacy/* pagination', () => {
 
   it('vault stays a plain array when no pagination param is passed', async () => {
     const res = await request(makeApp()).get('/api/privacy/vault');
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'r1', type: 'email', maskedValue: 'a•••@b.com' }]);
+    expect(service.listVaultRecords).toHaveBeenCalledWith({ type: undefined, subjectId: undefined });
   });
 
   it('orgs strips pagination params before filtering the service', async () => {

@@ -61,7 +61,8 @@ describe('GET /api/story-builder', () => {
   it('returns the full sessions array by default', async () => {
     const res = await request(makeApp()).get('/api/story-builder');
     expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toEqual([{ id: 'stb-1' }]);
+    expect(svc.listStorySessions).toHaveBeenCalled();
   });
 
   it('returns a bounded envelope when pagination is requested', async () => {
