@@ -1106,7 +1106,7 @@ function VideoSuggestionCard({ card, installedHfKeys, installingVideoKey, instal
         <button
           type="button"
           onClick={() => setShowPreview(true)}
-          className="w-full h-64 bg-port-bg flex items-center justify-center text-gray-600 hover:text-gray-400"
+          className="min-h-11 min-w-11 w-full h-64 bg-port-bg flex items-center justify-center text-gray-600 hover:text-gray-400"
           aria-label="Play example clip"
           title="Play example clip"
         >
