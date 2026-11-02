@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 
@@ -162,6 +162,44 @@ beforeEach(() => {
 });
 
 describe('FableLoomStory navigation and series backlink', () => {
+  it('keeps a target episode route while the newly selected loom is loading', async () => {
+    let resolveTargetLoom;
+    api.getLoom
+      .mockResolvedValueOnce(loom({ id: 'loom-a', episodes: [episode({ id: 'ep-a' })] }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveTargetLoom = resolve; }));
+
+    function RouteControls() {
+      const navigate = useNavigate();
+      const location = useLocation();
+      return (
+        <>
+          <button type="button" onClick={() => navigate('/fableloom/loom-b/ep-b')}>Open target episode</button>
+          <output data-testid="current-route">{location.pathname}</output>
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/fableloom/loom-a/ep-a']}>
+        <RouteControls />
+        <Routes>
+          <Route path="/fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('tab', { name: '1. The First Door' })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Open target episode' }));
+
+    expect(screen.getByTestId('current-route')).toHaveTextContent('/fableloom/loom-b/ep-b');
+    expect(await screen.findByRole('status', { name: 'Loading loom' })).toBeInTheDocument();
+    expect(screen.getByTestId('current-route')).toHaveTextContent('/fableloom/loom-b/ep-b');
+
+    resolveTargetLoom(loom({ id: 'loom-b', episodes: [episode({ id: 'ep-b', title: 'The Target Door' })] }));
+    expect(await screen.findByRole('tab', { name: '1. The Target Door' })).toBeInTheDocument();
+    expect(screen.getByTestId('current-route')).toHaveTextContent('/fableloom/loom-b/ep-b');
+  });
+
   it('opens Play as a viewport-filling movie player', async () => {
     const user = userEvent.setup();
     api.getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
