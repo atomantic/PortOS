@@ -35,6 +35,7 @@
  * The pure mappers (instant conversion, candidate mapping) are exported and
  * unit-tested with fixtures — no real Signal DB required.
  */
+import { readBlocklist, filterBlockedMessages, withSignalPrivacyLock } from './signalPrivacy.js';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
@@ -441,7 +442,7 @@ export async function runSync() {
   }
 
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  syncInFlight = withSignalPrivacyLock(doRunSync).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 
@@ -482,8 +483,10 @@ async function doRunSync() {
   const { recordEvents } = await import('./humanActivity.js');
   const tribe = await import('./tribe.js');
 
-  const activityCandidates = signalActivityCandidates(batch.messages);
-  const touchpointCandidates = signalTouchpointCandidates(batch.messages, timezone);
+  const blocklist = await readBlocklist();
+  const allowedMessages = filterBlockedMessages(batch.messages, blocklist);
+  const activityCandidates = signalActivityCandidates(allowedMessages);
+  const touchpointCandidates = signalTouchpointCandidates(allowedMessages, timezone);
 
   // Persistence failures must NOT advance the cursor: the dedupe keys make
   // re-processing the batch a harmless no-op, but skipping past unpersisted
