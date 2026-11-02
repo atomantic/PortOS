@@ -71,3 +71,27 @@ it('uses the Discord channel fallback consistently for listing, viewing and purg
   await listEvents({ source: 'signal', conversationId: 'channel-a' });
   expect(query.mock.lastCall[0]).not.toContain("metadata->>'channelId'");
 });
+
+// The selector returned to the management UI must target the same records when
+// viewing or purging a Gmail thread, including imports predating conversationId.
+it('uses the Gmail thread fallback consistently for listing, viewing and purging', async () => {
+  query.mockResolvedValueOnce({ rows: [{ chat_guid: 'thread-a' }, { chat_guid: 'thread-b' }] });
+  const conversations = await listConversations({ source: 'gmail', q: 'invoice' });
+  expect(conversations.map(({ chatGuid }) => chatGuid)).toEqual(['thread-a', 'thread-b']);
+  const listing = query.mock.calls[0][0];
+  const selector = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+  const grouping = listing.split('GROUP BY ')[1].split('\n     ORDER BY')[0];
+  expect(grouping).toContain(`WHEN source = 'gmail' THEN ${selector}`);
+  expect(listing).toContain(`LOWER(${grouping})`);
+  await sourceStats('gmail');
+  expect(query.mock.calls[1][0]).toContain(`COUNT(DISTINCT ${grouping})`);
+  for (const field of ['chatGuid', 'conversationId']) {
+    await listEvents({ source: 'gmail', [field]: conversations[0].chatGuid });
+    expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), ['gmail', 'thread-a', 500]]);
+    query.mockResolvedValueOnce({ rowCount: 2 });
+    expect(await deleteEvents({ source: 'gmail', [field]: conversations[0].chatGuid })).toEqual({ deleted: 2 });
+    expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), ['gmail', 'thread-a']]);
+  }
+  await listEvents({ source: 'signal', conversationId: 'thread-a' });
+  expect(query.mock.lastCall[0]).not.toContain("metadata->>'threadId'");
+});

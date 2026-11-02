@@ -234,6 +234,7 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
     metadata: {
       messageId: messageId || null,
       threadId,
+      conversationId: threadId || null,
       labels,
       direction,
     },

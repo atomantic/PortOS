@@ -138,7 +138,12 @@ describe('gmailMboxImport — mboxMessageToCandidate', () => {
       title: 'Weekend plans',
       dedupeKey: 'gmail:abc@mail.gmail.com',
     });
-    expect(c.metadata).toMatchObject({ messageId: 'abc@mail.gmail.com', threadId: '99887766', direction: 'received' });
+    expect(c.metadata).toMatchObject({
+      messageId: 'abc@mail.gmail.com',
+      threadId: '99887766',
+      conversationId: '99887766',
+      direction: 'received',
+    });
     expect(c.metadata.labels).toEqual(['Inbox', 'Important']);
   });
 
