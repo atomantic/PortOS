@@ -83,6 +83,13 @@ afterEach(() => {
 });
 
 describe('owned server browser fixture lifecycle', () => {
+  it('rejects sandbox-disabling flags before launching a browser', async () => {
+    const fixture = owned();
+    await expect(startOwnedBrowserFixture({ chromium: fixture.chromium, launchOptions: { args: ['--no-sandbox'] } }))
+      .rejects.toThrow('Chromium sandbox cannot be disabled');
+    expect(fixture.chromium.launchServer).not.toHaveBeenCalled();
+  });
+
   it('reaps only its owned server after hung graceful close, confirms profile removal, and caches close', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const fixture = owned();
@@ -94,7 +101,7 @@ describe('owned server browser fixture lifecycle', () => {
     const started = await fixture.start();
     const temp = recordRoot(fixture);
     expect(fixture.chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({
-      executablePath: 'example-chrome', headless: true, args: ['--mute-audio'], timeout: 100, artifactsDir: temp,
+      executablePath: 'example-chrome', headless: true, chromiumSandbox: true, args: ['--mute-audio'], timeout: 100, artifactsDir: temp,
       env: expect.objectContaining({ TMPDIR: temp, TMP: temp, TEMP: temp, MAC_CHROMIUM_TMPDIR: temp }),
     }));
     const closing = started.close();

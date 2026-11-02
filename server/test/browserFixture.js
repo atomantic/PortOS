@@ -3,6 +3,7 @@ import { lstat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { browserCleanupDeadline, reapOwnedBrowser } from '../../scripts/lib/ownedBrowserCleanup.js';
+import { sandboxedChromiumOptions } from '../../scripts/lib/playwrightSandbox.js';
 
 // The capability is the retained BrowserServer's exact ChildProcess, not a
 // process search or a prefix match. Playwright has no public launchServer
@@ -35,6 +36,7 @@ const captureProfile = (child, parentTemp) => {
 export async function startOwnedBrowserFixture({
   chromium, launchOptions = {}, startupMs = 20000, cleanupMs = 5000,
 }) {
+  const sandboxedOptions = sandboxedChromiumOptions(launchOptions);
   if (typeof chromium.launchServer !== 'function' || typeof chromium.connect !== 'function') {
     throw new Error('Owned browser fixture requires launchServer/connect');
   }
@@ -89,7 +91,7 @@ export async function startOwnedBrowserFixture({
   }, cleanupMs, 'Owned browser cleanup');
   const disconnect = () => disconnecting ??= bounded(() => browser.close(), cleanupMs, 'Browser client disconnect');
   const launching = Promise.resolve().then(() => chromium.launchServer({
-    ...launchOptions, timeout: startupMs, artifactsDir: temp,
+    ...sandboxedOptions, timeout: startupMs, artifactsDir: temp,
     env: { ...process.env, ...launchOptions.env,
       TMPDIR: temp, TMP: temp, TEMP: temp, MAC_CHROMIUM_TMPDIR: temp },
   })).then(value => {

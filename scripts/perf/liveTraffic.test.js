@@ -87,6 +87,18 @@ describe('live audit transport', () => {
   });
   afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise(resolve => server.close(resolve)))); });
 
+  it.each([
+    [{}, { channel: 'chrome' }],
+    [{ LIVE_AUDIT_BROWSER: '/example/chrome' }, { executablePath: '/example/chrome' }],
+  ])('requires a sandbox on the live audit browser and does not retry without one', async (extraEnv, selected) => {
+    const chromium = { launch: vi.fn().mockRejectedValue(new Error('sandbox unavailable')) };
+    const request = vi.fn().mockResolvedValue({ status: 200, text: JSON.stringify({ required: false }) });
+    const report = await runLiveAudit({ args: parseLiveAuditArgs([]), chromium, request,
+      env: { PORTOS_URL: ORIGIN, PORTOS_AGENT_KEY_FILE: '/nonexistent/agent-key.json', ...extraEnv } });
+    expect(chromium.launch).toHaveBeenCalledExactlyOnceWith({ headless: true, chromiumSandbox: true, ...selected });
+    expect(report).toMatchObject({ status: 'unverified', unverified: { reason: 'browser-unavailable' } });
+  });
+
   it('accepts only an exact plain-HTTP loopback origin', () => {
     expect(resolveLiveOrigin('http://127.0.0.1:5553/')).toBe(ORIGIN);
     expect(resolveLiveOrigin('http://[::1]:5553')).toBe('http://[::1]:5553');

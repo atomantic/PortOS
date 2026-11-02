@@ -60,7 +60,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
   let fixture;
   beforeAll(async () => {
     fixture = await startBrowserFixture({ name: 'page-layout', createServer, chromium,
-      launchOptions: { executablePath: chrome, args: ['--mute-audio', '--no-sandbox'] },
+      launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
       // Cold compilation belongs to the fixture's bounded warmup phase, not
       // a geometry assertion's interaction timeout.
       warmup: async (page, origin) => {

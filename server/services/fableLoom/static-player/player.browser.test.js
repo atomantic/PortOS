@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveTestChrome } from '../../../lib/browserSuiteGate.js';
+import { startOwnedBrowserFixture } from '../../../test/browserFixture.js';
 import { FABLELOOM_STATIC_PLAYER_FILES } from '../staticPlayerFiles.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -95,7 +96,10 @@ function startPackageServer(root) {
     server.listen(0, '127.0.0.1', () => resolve({
       port: server.address().port,
       origin: `http://127.0.0.1:${server.address().port}`,
-      close: () => new Promise((done) => server.close(done)),
+      close: () => new Promise((done, reject) => {
+        server.close(error => error ? reject(error) : done());
+        server.closeAllConnections();
+      }),
     }));
   });
 }
@@ -124,6 +128,7 @@ async function ended(page) {
 
 describe.skipIf(!canRun)('static reference player in a generic file server', () => {
   let browser;
+  let browserFixture;
   let server;
   let origin;
   let root;
@@ -146,13 +151,15 @@ describe.skipIf(!canRun)('static reference player in a generic file server', () 
       request.end();
     });
     expect(escaped).not.toBe(200);
-    browser = await chromium.launch({ executablePath: chrome, headless: true });
+    browserFixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } });
+    browser = browserFixture.browser;
   });
 
   afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+    const results = await Promise.allSettled([browserFixture?.close(), server?.close()]);
     if (root) await rm(root, { recursive: true, force: true });
+    const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, 'Static player fixture cleanup failed');
   });
 
   async function open(path, init) {
