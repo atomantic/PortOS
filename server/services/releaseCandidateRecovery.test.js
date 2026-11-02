@@ -22,7 +22,8 @@ vi.mock('./cosState.js', () => ({
   saveState: async state => { fixture.saves++; fixture.disk = structuredClone(state); fixture.state = structuredClone(state); },
 }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => ({ id: 'release-task', metadata: { resumedFromAgentId: 'agent-original' } }) }));
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => fixture.task }));
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.state.agents[id] }));
 // The supervised native receipt is tested by windowsAgentProcess.test.js.
 // Git, filesystem identity and durable retirement admission remain real here.
 vi.mock('./releaseCandidateSettlement.js', async original => {
@@ -48,7 +49,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 } }));
 
 import { updateReleaseCandidateOwnership } from './cosClaimOwnership.js';
-import { recoverReleaseCandidate } from './releaseCandidateRecovery.js';
+import { recoverReleaseCandidate, releaseCandidateResumePointer } from './releaseCandidateRecovery.js';
 import { captureCheckoutSeeds, captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { isInlineReleaseOwner } from '../lib/releaseSynchronization.js';
 import { readClaimOwnershipAgents, withClaimOwnershipLock, reserveCheckoutRetirementFence } from './cosClaimOwnershipState.js';
@@ -62,6 +63,7 @@ let scratch, checkout, cutoff, head, reviewPath, original;
 const recover = () => recoverReleaseCandidate('agent-successor', 'agent-original');
 
 beforeEach(async () => {
+  fixture.task = { id: 'release-task', metadata: { resumedFromAgentId: 'agent-original' } };
   fixture.queue = createFileWriteQueue();
   fixture.unreadable = false;
   fixture.nativeProof = false;
@@ -144,6 +146,32 @@ test('transfers the seeded generation once across interruption/restart, retainin
   expect(await updateReleaseCandidateOwnership('agent-successor', 'reserve')).toMatchObject({ reserved: false, reason: 'candidate-recovery-required' });
   expect(await readFile(reviewPath, 'utf8')).toBe(review);
   expect(await readFile(join(checkout, 'retained.txt'), 'utf8')).toBe('Uncommitted work survives recovery.');
+});
+
+for (const taskOutcome of [null, { status: 'incomplete', reason: 'Delivery checks did not pass.' }]) test(`recovers the exact unpublished orphan candidate with outcome ${taskOutcome?.status || 'absent'}`, async () => {
+  const source = fixture.state.agents['agent-original'];
+  source.result = { success: false, executionSuccess: false, orphaned: true, taskOutcome };
+  fixture.task.metadata = { orphanRetryCount: 1, totalSpawnCount: 2 };
+  const patch = await releaseCandidateResumePointer(fixture.task, source.id);
+  expect(patch).toEqual({ resumedFromAgentId: source.id });
+  Object.assign(fixture.task.metadata, patch);
+  fixture.state.agents['agent-successor'].metadata.resumedFromAgentId = patch.resumedFromAgentId;
+  const review = await readFile(reviewPath, 'utf8');
+  const recovered = await recover();
+  expect(recovered).toMatchObject({ recovered: true, branch, path: checkout,
+    transfer: { lineage: { receipt: { head } }, candidate: { cutoff, releaseBase: cutoff }, publication: null } });
+  expect(fixture.task.metadata).toEqual({ orphanRetryCount: 1, totalSpawnCount: 2, ...patch });
+  expect(fixture.state.agents['agent-successor'].metadata.releaseCandidate).toBeUndefined();
+  expect(await updateReleaseCandidateOwnership('agent-successor', 'reserve')).toMatchObject({ reserved: false, reason: 'candidate-recovery-required' });
+  expect(await git(['rev-parse', 'HEAD'], checkout)).toBe(head);
+  expect(await readFile(reviewPath, 'utf8')).toBe(review);
+});
+
+test('refuses to requeue a captured predecessor without its terminal evidence', async () => {
+  delete fixture.state.agents['agent-original'].metadata.checkoutCapture;
+  await expect(releaseCandidateResumePointer(fixture.task, 'agent-original'))
+    .rejects.toThrow('candidate-terminal-receipt-unverified');
+  expect(fixture.state.agents['agent-original'].metadata.releaseCandidateSuccessor).toBeUndefined();
 });
 
 test('retains legacy unknown inspection and current unavailable inspection without upgrading either receipt', async () => {
@@ -263,7 +291,11 @@ for (const state of ['uncreated', 'detached']) test(`holds an unseeded synchroni
 });
 
 for (const [name, reason, change] of [
+  ['stale task lineage', 'candidate-task-lineage-unverified', () => { fixture.task.metadata.resumedFromAgentId = 'agent-other'; }],
+  ['explicit human hold', 'candidate-successor-lineage-unverified', source => { source.result.taskOutcome = { status: 'blocked', recovery: { mode: 'approval' } }; }],
+  ['provider refusal', 'candidate-successor-lineage-unverified', source => { source.result.executionInterruption = { category: 'content-refusal' }; }],
   ['active original', 'candidate-successor-lineage-unverified', source => { source.status = 'running'; }],
+  ['changed terminal head', 'candidate-terminal-receipt-unverified', async () => { await git(['commit', '--allow-empty', '-m', 'changed candidate'], checkout); }],
   ['missing terminal head receipt', 'candidate-terminal-receipt-unverified', source => { delete source.metadata.checkoutCapture; }],
   ['unseeded without contemporaneous proof', 'candidate-contemporaneous-lineage-missing', source => { delete source.metadata.checkoutSeeds; delete source.metadata.completedCheckouts; }],
   ['unseeded conflicting generation', 'candidate-generation-changed', source => { delete source.metadata.checkoutSeeds; source.metadata.completedCheckouts[0].incarnation.pointer.ino = '999999'; }],
@@ -281,18 +313,21 @@ for (const [name, reason, change] of [
       metadata: { ...fixture.state.agents['agent-successor'].metadata, resumedFromAgentId: undefined } };
   }],
 ]) test(`holds ${name} without transferring, deleting or recutting`, async () => {
+  fixture.state.agents['agent-original'].result = { success: false, executionSuccess: false, orphaned: true, taskOutcome: null };
   await change(fixture.state.agents['agent-original']);
   const source = structuredClone(fixture.state.agents['agent-original']);
+  const heldHead = await git(['rev-parse', 'HEAD'], checkout);
   expect(await recover()).toMatchObject({ recovered: false, reason });
   expect(fixture.state.agents['agent-original']).toEqual(source);
   expect(fixture.state.agents['agent-successor'].metadata.checkoutSeeds).toBeUndefined();
-  expect(await git(['rev-parse', 'HEAD'], checkout)).toBe(head);
+  expect(await git(['rev-parse', 'HEAD'], checkout)).toBe(heldHead);
   expect(await readFile(join(checkout, 'retained.txt'), 'utf8')).toContain('survives');
 });
 
 describe.skipIf(process.platform === 'win32')('POSIX recovery proof', () => {
   test('holds at the service boundary despite terminal registry state and an absent parent PID', async () => {
     fixture.nativeProof = true;
+    fixture.state.agents['agent-original'].result = { success: false, executionSuccess: false, orphaned: true, taskOutcome: null };
     fixture.state.agents['agent-original'].pid = 999999;
     expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-process-proof-unavailable' });
     expect(fixture.state.agents['agent-successor'].metadata.releaseCandidateRecovery).toMatchObject({ status: 'held', nextStep: expect.stringContaining('Preserve') });

@@ -157,6 +157,14 @@ publication instead of opening another PR. An inline publication retains the
 same task and transfers both its candidate and synchronization checkout through
 this recovery; a legacy continuation keeps its existing recovery path.
 
+A restart before publication retains the predecessor on the same task only
+when its registered candidate and terminal checkout evidence still match. The
+successor recovers that candidate through the same endpoint; lineage does not
+prove process settlement. Missing or ambiguous evidence blocks the task with
+`release-candidate-recovery` instead of dispatching an unbound coordinator.
+Preserve the candidate and private review files, repair the recorded evidence,
+then explicitly retry the held task. Existing orphan/spawn budgets still apply.
+
 An unseeded candidate requires an independently captured service receipt from
 the original run with the exact Git pointer and administration identities. A
 creation log, matching branch/path, current inode or absent PID is insufficient.

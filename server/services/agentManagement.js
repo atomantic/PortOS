@@ -1741,23 +1741,32 @@ function logOrphanDecision(taskId, decision) {
 
 /** Persist the retry decision: requeue, orphan-cooldown block, or max-retries block + investigation. */
 async function applyOrphanDecision({ taskId, agentId, task, agentMetadata, agentStartedAt }, decision) {
-  logOrphanDecision(taskId, decision);
   const requeue = decision.outcome === 'requeue';
   // Point the retry at whatever the dead run left behind — its branch, or the
   // whole worktree when the process died mid-edit and the uncommitted work is
   // still sitting in it. Folded into THIS write rather than stamped separately
   // beforehand: the flip to `pending` emits `tasks:changed`, which can spawn the
   // retry immediately, so a pointer written afterwards could land too late.
-  // Fails open to "start clean": requeueing the task matters far more than
-  // resuming it, and a throw here would strand it in_progress until the next sweep.
+  // Ordinary work may start clean when its pointer is unavailable. A release
+  // must retain its original candidate: missing lineage is a durable hold.
   const resumePatch = requeue
     ? await resolveTaskResumePatch({ task, agentId, agentMetadata }).catch(err => {
-      emitLog('warn', `Resume pointer for task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
+      emitLog(err.recoveryReason ? 'info' : 'warn', `Resume pointer for task ${taskId} could not be resolved: ${err.message}`, { taskId, agentId });
       return {};
     })
     : {};
   const outcome = buildOrphanOutcome({ decision, task, agentId, now: Date.now(), resumePatch });
-  const taskUpdate = requeue ? outcome : await stampLiExecutionVerdict(outcome, task, { success: false });
+  const releaseHeld = requeue && (agentMetadata?.taskAnalysisType === 'do-release'
+    || currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType) === 'do-release')
+    && resumePatch.resumedFromAgentId !== agentId;
+  if (releaseHeld) {
+    outcome.status = 'blocked';
+    Object.assign(outcome.metadata, { blockedCategory: 'release-candidate-recovery', blockedAt: new Date().toISOString(),
+      blockedReason: 'Release predecessor checkout lineage could not be verified. Preserve the original candidate and review files; resolve its evidence before retrying. Do not reserve another candidate.' });
+  }
+  if (releaseHeld) emitLog('info', `🚫 Release task ${taskId} held for predecessor checkout evidence`, { taskId, agentId });
+  else logOrphanDecision(taskId, decision);
+  const taskUpdate = requeue && !releaseHeld ? outcome : await stampLiExecutionVerdict(outcome, task, { success: false });
   const saved = await updateTask(taskId, taskUpdate, task.taskType || 'user', {
     expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
     recoveryOwner: { id: agentId, startedAt: agentStartedAt },
