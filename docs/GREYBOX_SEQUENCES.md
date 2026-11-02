@@ -15,10 +15,12 @@ by the existing OS-isolated composition renderer, and ffmpeg with libx264.
 Plan-only needs neither. Failed/canceled exports retain partial files and a
 status other than `complete`; choose another new directory for another export.
 
-Each shot directory contains numbered PNGs, `reference.mp4`, `start.png` and
+Each numbered `clip-0001-<id>` directory contains numbered PNGs, `reference.mp4`, `start.png` and
 `end.png`. The last is the last encoded frame, not an extra exclusive-end sample.
 Clips have no audio. `manifest.json` records fps, source hash and every frame's
-absolute master time; `source.json` preserves the original input bytes.
+absolute master time, plus the clip-to-directory mapping; `source.json` preserves
+the original input bytes. MP4s pad odd image dimensions by one pixel on the
+right or bottom for H.264 compatibility; the PNGs keep their capture dimensions.
 
 ## Input contract
 

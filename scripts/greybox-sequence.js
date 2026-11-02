@@ -8,7 +8,7 @@ import { greyboxSequenceSchema, greyboxSequenceFrames, evaluateGreyboxSequence }
 
 async function main() {
   const { values } = parseArgs({ options: { input: { type: 'string' }, output: { type: 'string' }, shot: { type: 'string' }, 'plan-only': { type: 'boolean' } } });
-  if (!values.input || !values.output) throw new Error('Usage: node scripts/greybox-sequence.js --input plan.json --output NEW_DIRECTORY [--shot camera-id] [--plan-only]');
+  if (!values.input || !values.output) throw new Error('Usage: node scripts/greybox-sequence.js --input plan.json --output NEW_DIRECTORY [--shot clip-id] [--plan-only]');
   const source = await readFile(resolve(values.input), 'utf8');
   const plan = greyboxSequenceSchema.parse(JSON.parse(source));
   const frames = greyboxSequenceFrames(plan).filter((frame) => !values.shot || frame.clipId === values.shot);
@@ -23,6 +23,7 @@ async function main() {
     status: values['plan-only'] ? 'planned' : 'capturing',
     limitations: ['Position/facing proxies only, not skeletal skating or foot-contact reference.', 'Layout pass only; no depth, normals, masks, GLB animation or generative-model submission.'],
     frames,
+    clips: [...new Set(frames.map((frame) => frame.clipId))].map((id, index) => ({ id, directory: `clip-${String(index + 1).padStart(4, '0')}-${id}` })),
   };
   const saveManifest = () => writeFile(join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await saveManifest();
@@ -32,10 +33,10 @@ async function main() {
   const bin = await findFfmpeg({ requiredEncoder: 'libx264' });
   if (!bin) throw new Error('An installed ffmpeg with libx264 is required; nothing will be downloaded');
   const paths = new Map();
-  for (const shotId of new Set(frames.map((f) => f.clipId))) {
-    const directory = join(output, shotId);
+  for (const clip of manifest.clips) {
+    const directory = join(output, clip.directory);
     await mkdir(directory);
-    paths.set(shotId, directory);
+    paths.set(clip.id, directory);
   }
   function* samples() {
     for (const frame of frames) yield evaluateGreyboxSequence(plan, frame.clipId, frame.timeSec);
@@ -56,7 +57,7 @@ async function main() {
       const count = frames.filter((frame) => frame.clipId === shotId).length;
       await copyFile(join(directory, 'frame-000000.png'), join(directory, 'start.png'));
       await copyFile(join(directory, `frame-${String(count - 1).padStart(6, '0')}.png`), join(directory, 'end.png'));
-      const result = await runFfmpegProcess({ bin, signal: controller.signal, args: ['-n', '-framerate', String(plan.fps), '-i', join(directory, 'frame-%06d.png'), ...(colorFilter ? ['-vf', colorFilter] : []), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS, '-an', join(directory, 'reference.mp4')] });
+      const result = await runFfmpegProcess({ bin, signal: controller.signal, args: ['-n', '-framerate', String(plan.fps), '-i', join(directory, 'frame-%06d.png'), '-vf', ['pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0', colorFilter].filter(Boolean).join(','), ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS, '-an', join(directory, 'reference.mp4')] });
       if (!result.ok) throw new Error(`Could not encode ${shotId}: ${result.reason}`);
     }
     manifest.status = 'complete';

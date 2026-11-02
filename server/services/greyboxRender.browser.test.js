@@ -3,6 +3,9 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
@@ -27,6 +30,8 @@ const isolatedHost = process.platform === 'darwin' && existsSync('/usr/bin/sandb
 const { getGreyboxCapturePage } = await import('./greyboxCapturePage.js');
 const { renderGreyboxPng } = await import('./greyboxRender.js');
 const { renderGreyboxFrames } = await import('./greyboxRender.js');
+const { findFfmpeg, probeVideoGeometry } = await import('../lib/ffmpeg.js');
+const canEncode = browserSuiteCanRun('Greybox sequence encoding', { ffmpeg: await findFfmpeg({ requiredEncoder: 'libx264' }) });
 // GreyboxCapture.jsx mounts GreyboxViewer.jsx through Vite's staged bundle;
 // these source references keep both client entry points in CI's selection contract.
 const scene = greyboxSceneSchema.parse({
@@ -137,5 +142,31 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
     expect(captures).toHaveLength(3);
     expect(captures[0]).toEqual(captures[2]);
     expect(captures[1]).not.toEqual(captures[0]);
+  });
+
+  it.skipIf(!isolatedHost || !canEncode)('exports ultrawide clips with portable directories through the real CLI', async () => {
+    const install = join(lazyTempDataRoot('portos-greybox-render-'), 'cli-install');
+    await mkdir(join(install, 'data'), { recursive: true });
+    await writeFile(join(install, 'data/browser-config.json'), JSON.stringify({ chromePath: chrome }));
+    const input = join(install, 'sequence.json');
+    const output = join(install, 'export');
+    const plan = {
+      version: 1, durationSec: 3 / 24, fps: 24,
+      scene: { ...scene, shots: [{ ...scene.shots[0], aspect: '21:9' }] },
+      shots: ['Take', 'take', 'CON'].map((id, index) => ({ id, shotId: 'wide', startSec: index / 24, endSec: (index + 1) / 24 })),
+    };
+    await writeFile(input, JSON.stringify(plan));
+    await promisify(execFile)(process.execPath, [join(root, 'scripts/greybox-sequence.js'), '--input', input, '--output', output], {
+      cwd: root, env: { ...process.env, PORTOS_DATA_ROOT: install }, timeout: 20000,
+    });
+    const manifest = JSON.parse(await readFile(join(output, 'manifest.json'), 'utf8'));
+    expect(manifest.status).toBe('complete');
+    expect(manifest.clips.map((clip) => clip.directory)).toEqual(['clip-0001-Take', 'clip-0002-take', 'clip-0003-CON']);
+    for (const clip of manifest.clips) {
+      const directory = join(output, clip.directory);
+      const png = await sharp(join(directory, 'start.png')).metadata();
+      expect({ width: png.width, height: png.height }).toEqual({ width: 1280, height: 549 });
+      expect(await probeVideoGeometry(join(directory, 'reference.mp4'))).toMatchObject({ width: 1280, height: 550, fps: 24, numFrames: 1 });
+    }
   });
 });
