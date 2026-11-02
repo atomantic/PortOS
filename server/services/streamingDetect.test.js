@@ -475,9 +475,9 @@ module.exports = { apps: [
     expect(result.content).toContain('name: ALIAS');
   });
 
-  it('resolves semicolonless bindings before ordinary statements without executing them', () => {
-    const content = "const NAME = 'example-api'\nconsole.log('not executed')\n" +
-      "const apps = [{ name: NAME, env: { PORT: 6100 } }]\nconsole.log('not executed')\n" +
+  it.each(["console.log('not executed')", '{}', "'unused directive'"])('resolves semicolonless bindings before %s without executing them', (statement) => {
+    const content = "const NAME = 'example-api'\n" + statement + "\n" +
+      "const apps = [{ name: NAME, env: { PORT: 6100 } }]\n" + statement + "\n" +
       "module.exports = { apps };";
     expect(parseEcosystemConfig(content).processes.map(p => p.name)).toEqual(['example-api']);
     const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
@@ -487,7 +487,7 @@ module.exports = { apps: [
   });
 
   it('leaves dynamic, empty, unresolved and cyclic process names undiscovered and untouched', () => {
-    const content = "const COMPUTED = 'example-api' + suffix;\n" +
+    const content = "const COMPUTED = 'example-api'\n + suffix;\n" +
       "const FIRST = SECOND; const SECOND = FIRST; const EMPTY = '';\n" +
       "module.exports = { apps: [\n" +
       "{ name: COMPUTED, env: { PORT: 6100 } },\n" +

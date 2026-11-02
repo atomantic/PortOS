@@ -224,9 +224,12 @@ function ecosystemAppBlocks(content) {
       const end = (matching.get(start) ?? start) + 1;
       const next = tokens[end];
       // Resolve only a whole initializer, never the literal prefix of an expression.
-      const terminated = !next || [';', ','].includes(punctuation(end)) ||
-        (next.t === 'id' && !['in', 'instanceof'].includes(next.v) &&
-          /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
+      const continuesExpression = next?.t === 'tpl' ||
+        (next?.t === 'id' && ['in', 'instanceof'].includes(next.v)) ||
+        ['.', '?.', '[', '(', '+', '-', '*', '/', '%', '<', '>', '=', '&', '|', '^', '?'].includes(punctuation(end)) ||
+        (punctuation(end) === '!' && punctuation(end + 1) === '=');
+      const terminated = !next || [';', ',', '}'].includes(punctuation(end)) ||
+        (!continuesExpression && /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
       if (terminated) bindings.set(tokens[i + 1].v, start);
     }
     if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
