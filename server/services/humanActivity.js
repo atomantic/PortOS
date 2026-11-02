@@ -447,15 +447,15 @@ const WHATSAPP_ID_TYPE_SQL = `CASE
   ELSE 'title' END`;
 const WHATSAPP_CONVERSATION_SQL = `jsonb_build_array(${WHATSAPP_ID_TYPE_SQL}, ${WHATSAPP_RAW_ID_SQL})::text`;
 const DISCORD_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'channelId', ''), '')";
-const GMAIL_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+const MESSAGE_THREAD_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
 const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVERSATION_SQL}
   WHEN source = 'discord' THEN ${DISCORD_CONVERSATION_SQL}
-  WHEN source = 'gmail' THEN ${GMAIL_CONVERSATION_SQL}
+  WHEN source IN ('gmail', 'outlook', 'teams') THEN ${MESSAGE_THREAD_CONVERSATION_SQL}
   ELSE COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') END`;
 
 function conversationFilter(field, source, parameter) {
   if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
-  if (source === 'gmail') return `${GMAIL_CONVERSATION_SQL} = $${parameter}`;
+  if (['gmail', 'outlook', 'teams'].includes(source)) return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
   if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
   if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
   // Raw conversationId remains supported. An ambiguous scope/title label must
