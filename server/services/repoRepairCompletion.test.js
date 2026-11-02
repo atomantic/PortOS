@@ -10,7 +10,7 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('repair-completion-data-'), extraOverrides: { get root() { return facts.repo; } },
 }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, completeAgent: vi.fn(async () => facts.owner), getAgentRecord: vi.fn(async () => facts.owner), getAgents: vi.fn(async () => facts.agents),
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, completeAgent: vi.fn(async () => { facts.owner.status = 'completed'; return facts.owner; }), getAgentRecord: vi.fn(async () => facts.owner), getAgents: vi.fn(async () => facts.agents),
   updateAgent: async (id, patch) => { Object.assign(facts.owner.metadata, patch.metadata); return facts.owner; },
 }));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async (id, patch) => { Object.assign(facts.task, patch); return facts.task; }), getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }), getTaskById: vi.fn(async () => facts.task), addTask: vi.fn(async (data, type, options) => ({ data, type, options })) }));
@@ -101,7 +101,8 @@ describe('checkout repair public completion boundary', () => {
     expect(await evaluate()).toBe(true);
     expect(git(facts.repo, 'rev-parse', 'HEAD')).toBe(parked);
     expect(committedDuringRun).not.toHaveBeenCalled();
-    expect(await checkUpdateRepoReadiness({ repoPath: facts.repo, finishingRepairAgentId: 'agent-repair' })).toMatchObject({ needsAgent: false });
+    facts.owner.status = 'completed';
+    expect(await checkUpdateRepoReadiness({ repoPath: facts.repo })).toMatchObject({ ready: true, needsAgent: false });
   });
 
   it('requires publication evidence and preserves separately staged and unstaged file versions', async () => {
@@ -152,7 +153,10 @@ describe('checkout repair public completion boundary', () => {
     repo();
     const blob = git(facts.repo, 'rev-parse', 'HEAD:README.md');
     execFileSync('git', ['update-index', '--index-info'], { cwd: facts.repo, input: `0 ${'0'.repeat(40)}\tREADME.md\n100644 ${blob} 1\tREADME.md\n100644 ${blob} 2\tREADME.md\n100644 ${blob} 3\tREADME.md\n` });
+    writeFileSync(join(facts.repo, 'README.md'), 'local conflict resolution\n');
     const queued = await queueRepoRepairTask(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
+    expect(queued.options.repoRepairContract.files).toHaveLength(4);
+    expect(queued.options.repoRepairContract.files[0].blob).toBe(git(facts.repo, 'hash-object', 'README.md'));
     expect(queued.options.repoRepairContract.files).toContainEqual({ path: 'README.md', mode: '100644', blob });
     git(facts.repo, 'reset', '--hard', 'HEAD');
     git(facts.repo, 'config', 'core.autocrlf', 'true');
@@ -160,6 +164,24 @@ describe('checkout repair public completion boundary', () => {
     const contract = await captureRepoRepairContract(await checkUpdateRepoReadiness({ repoPath: facts.repo }));
     git(facts.repo, 'add', '.');
     expect(contract.files[0].blob).toBe(git(facts.repo, 'rev-parse', ':README.md'));
+  });
+
+
+  it('requires a preserved path/blob/mode tree, including an index-only executable change', async () => {
+    repo(); git(facts.repo, 'update-index', '--chmod=+x', 'README.md'); await dispatch();
+    git(facts.repo, 'reset', '--hard', 'origin/main');
+    expect(await evaluate()).toBe(false);
+    git(facts.repo, 'update-index', '--chmod=+x', 'README.md'); git(facts.repo, 'commit', '-m', 'preserve executable');
+    publish(); expect(await evaluate()).toBe(true);
+  });
+
+  it('refuses lost working-tree conflict edits even if all index stages remain in origin', async () => {
+    repo(); const blob = git(facts.repo, 'rev-parse', 'HEAD:README.md');
+    execFileSync('git', ['update-index', '--index-info'], { cwd: facts.repo, input: `0 ${'0'.repeat(40)}\tREADME.md\n100644 ${blob} 1\tREADME.md\n100644 ${blob} 2\tREADME.md\n100644 ${blob} 3\tREADME.md\n` });
+    writeFileSync(join(facts.repo, 'README.md'), 'local resolution work\n'); await dispatch();
+    git(facts.repo, 'reset', '--hard', 'origin/main'); expect(await evaluate()).toBe(false);
+    writeFileSync(join(facts.repo, 'README.md'), 'local resolution work\n'); git(facts.repo, 'commit', '-am', 'preserve resolution');
+    publish(); expect(await evaluate()).toBe(true);
   });
 
   it('queues the server-owned contract without inferring it from task prose', async () => {

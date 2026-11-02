@@ -34,9 +34,8 @@ export async function captureRepoRepairContract(verdict) {
     paths(['diff', '--cached', '--name-only', '-z', 'HEAD']),
   ]);
   const ignored = new Set(verdict.lockfilePaths || []);
-  const conflicted = new Set(await paths(['diff', '--name-only', '--diff-filter=U', '-z']));
   const files = [];
-  for (const path of [...new Set([...changed, ...untracked])].filter(path => !ignored.has(path) && !conflicted.has(path))) {
+  for (const path of [...new Set([...changed, ...untracked])].filter(path => !ignored.has(path))) {
     const info = await lstat(join(dir, path)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (info && !info.isFile() && !info.isSymbolicLink()) throw new Error('Repair baseline contains unsupported local work');
     const link = info?.isSymbolicLink() ? Buffer.from(await readlink(join(dir, path))) : null;
@@ -62,9 +61,14 @@ async function preservesFiles(dir, head, files) {
     const row = await git(dir, ['ls-tree', head, '--', file.path]);
     if (file.blob === null) { if (row !== '') return false; }
     else if (!row.startsWith(`${file.mode} blob ${file.blob}\t`)) {
-      // A separately staged version may live in an earlier preservation commit.
-      const objects = await git(dir, ['rev-list', '--objects', head, '--', file.path]);
-      if (!objects.split('\n').some(line => line.split(' ')[0] === file.blob)) return false;
+      // Separately staged content/modes may live in an earlier preservation tree.
+      const history = await git(dir, ['rev-list', '--full-history', head, '--', file.path]);
+      let preserved = false;
+      for (const commit of history.split('\n').filter(Boolean)) {
+        const prior = await git(dir, ['ls-tree', commit, '--', file.path]);
+        if (prior.startsWith(`${file.mode} blob ${file.blob}\t`)) { preserved = true; break; }
+      }
+      if (!preserved) return false;
     }
   }
   return true;
