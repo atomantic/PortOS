@@ -1398,6 +1398,11 @@ export const musicVideoCastAndSetsStartSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+export const musicVideoCastSetsUseImageSchema = z.object({
+  key: z.string().min(1).max(80),
+  imageId: z.string().min(1).max(500),
+}).strict();
+
 export const musicVideoCastSetsImageEditSchema = z.object({
   key: z.string().min(1).max(80),
   imageId: z.string().min(1).max(500),

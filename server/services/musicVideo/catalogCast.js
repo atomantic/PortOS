@@ -35,9 +35,9 @@ function checkinImageKeys(stage) {
   return out;
 }
 
-function checkinImages(project) {
+function checkinImages(project, selectedKey = null) {
   const stage = project?.castAndSets;
-  if (stage?.status !== 'approved') return new Map();
+  if (!stage || (!selectedKey && stage.status !== 'approved')) return new Map();
   return new Map([...checkinImageKeys(stage)].map(([subjectId, key]) => {
     const image = stage.images?.[key];
     return [subjectId, image?.status === 'done' ? image.imageId || null : null];
@@ -337,11 +337,12 @@ async function defaultDeps() {
   return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }
 
-async function refreshCheckinRecords(project, catalogDB) {
-  if (project?.castAndSets?.status !== 'approved') return;
-  const sheets = checkinImages(project);
+async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
+  if (!project?.castAndSets || (!selectedKey && project.castAndSets.status !== 'approved')) return;
+  const sheets = checkinImages(project, selectedKey);
   const keys = checkinImageKeys(project.castAndSets);
   for (const subject of project.concept?.subjects || []) {
+    if (selectedKey && keys.get(subject.id) !== selectedKey) continue;
     if (!subject.id?.startsWith(CAST_SETS_SUBJECT_PREFIX) || subject.localOnly || !TYPE_PREFIX[subject.kind]
       || subject.ingredientId !== musicVideoCastIngredientId(project.id, subject)) continue;
     const record = await catalogDB.getIngredient(subject.ingredientId);
@@ -398,6 +399,17 @@ export async function saveCheckinCastToCatalog(projectId, deps = null) {
     const result = await commitCatalogCast(projectId, plan.map(({ subjectId, action, ingredientId }) => ({ subjectId, action, ingredientId })), d);
     await refreshCheckinRecords(result.project, d.catalogDB);
     return result;
+  });
+}
+
+/** Refresh only an adopted slot's already-owned catalog record, even before re-approval. */
+export async function syncCheckinImageToCatalog(projectId, key, deps = null) {
+  if (isFileBackend()) return;
+  return queueCheckinSave(projectId, async () => {
+    const d = deps || await defaultDeps();
+    const project = await d.getProject(projectId);
+    if (!project || project.deleted) return;
+    await refreshCheckinRecords(project, d.catalogDB, key);
   });
 }
 

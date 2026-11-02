@@ -78,6 +78,7 @@ export default function CastSetsStage({ board }) {
           onRegenerate={() => castSets.regenerate()}
           onRegenerateImages={castSets.regenerateImages}
           onEditDirection={castSets.editDirection}
+          onUseImage={castSets.useImage}
           onEditImage={castSets.editImage}
           onAcceptImageEdit={castSets.acceptImageEdit}
           onDiscardImageEdit={castSets.discardImageEdit}

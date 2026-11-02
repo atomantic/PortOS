@@ -50,6 +50,7 @@ import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
   CAST_SETS_WORKING,
   CAST_SETS_MAX_KEY_NOTES,
+  CAST_SETS_MAX_IMAGE_HISTORY,
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
   castAndSetsCheckinMode,
@@ -105,6 +106,7 @@ const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
+  syncCatalogImage: async (projectId, key) => (await import('./catalogCast.js')).syncCheckinImageToCatalog(projectId, key),
   previewPrompt: async (opts) => (await import('../imageGen/promptPreview.js')).previewQuickImageEdit(opts),
   resolveReviewer: async (opts) => (await import('./plateReview.js')).resolvePlateReviewer(opts),
   reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
@@ -605,6 +607,7 @@ async function retryInspectedImage(projectId, { key, inputs, inspectionId, note 
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   const eligible = (current) => current.castAndSets?.status === 'imaging'
+    && !current.castAndSets.manualImageEditReview
     && current.castAndSets.processId === PROCESS_ID && current.castAndSets.revision === stage.revision
     && current.castAndSets.productionRunId === stage.productionRunId && stage.productionRunId
     && current.castAndSets.images[key]?.renderQualityRetry?.revision !== stage.revision
@@ -814,6 +817,40 @@ export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
       [input.inputs.key]: { ...image, inspectionAcknowledgement: { inputs, inspectionId: input.inspectionId, reviewer, at: new Date().toISOString() } } } } } };
   });
   publish(projectId, out.project);
+  return { project: out.project };
+}
+
+/** Adopt a gallery take without re-rendering it or approving uninspected pixels. */
+export async function useCastAndSetsImage(projectId, { key, imageId }) {
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (!stage || !['review', 'approved'].includes(stage.status)) throw new ServerError('Wait for the check-in to finish before choosing an image', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+    if (!Object.hasOwn(stage.plan || {}, key) || !Object.hasOwn(stage.images || {}, key)) throw new ServerError('This image slot no longer exists', { status: 404, code: 'NOT_FOUND' });
+    if (!resolveGalleryImage(imageId)) throw new ServerError('The selected gallery image is missing', { status: 404, code: 'NOT_FOUND' });
+    const old = stage.images[key];
+    const revision = stage.revision + 1;
+    const image = { ...old, imageId, status: 'done', jobId: null, error: null, edit: null,
+      inspection: null, inspectionAcknowledgement: null, submittedRevision: revision,
+      submittedPrompt: null, promptAdditions: [], submittedPromptTruncated: false,
+      submittedReferences: [], submittedReferencesTruncated: false,
+      history: [...new Set([...(old.history || []), old.imageId].filter((id) => id && id !== imageId))].slice(-CAST_SETS_MAX_IMAGE_HISTORY) };
+    const next = { ...stage, revision, processId: PROCESS_ID, status: 'imaging', manualImageEditReview: true,
+      approvedAt: null, approvedInputs: null, approvedValues: null,
+      images: { ...stage.images, [key]: image } };
+    // Only this slot changes now; other hand-picked project references remain intact.
+    const refId = `${CAST_SETS_REF_PREFIX}${key.replace(':', '-')}`.slice(0, 64);
+    const reference = castAndSetsReferences(current, next).find((ref) => ref.id === refId);
+    const references = current.visualSpec?.references || [];
+    const updated = references.some((ref) => ref.id === refId)
+      ? references.map((ref) => ref.id === refId ? { ...ref, imageId } : ref)
+      : reference ? [...references, reference] : references;
+    return { project: { ...current, castAndSets: next, visualSpec: { ...current.visualSpec, references: updated } } };
+  });
+  publish(projectId, out.project);
+  inBackground('The chosen image', projectId, async () => {
+    await deps.syncCatalogImage(projectId, key).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving chosen image to the catalog failed; approval will retry: ${err.message}`));
+    await advance(projectId);
+  });
   return { project: out.project };
 }
 

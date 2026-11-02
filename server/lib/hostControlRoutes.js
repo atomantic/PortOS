@@ -703,6 +703,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/cast-and-sets/regenerate',
   'POST /api/music-video/:id/cast-and-sets/edit-image',
   'POST /api/music-video/:id/cast-and-sets/accept-image-edit',
+  'POST /api/music-video/:id/cast-and-sets/use-image',
   'PATCH /api/music-video/:id/cast-and-sets/direction',
   'POST /api/music-video/:id/cast-and-sets/feedback',
   'POST /api/music-video/:id/cast-and-sets/resume',
