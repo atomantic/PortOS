@@ -14,7 +14,7 @@ import {
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import {
   MAX_CHUNKS, supportsContextWindow,
-  videoModelMemoryGb, isModelAllowedForMode,
+  videoModelMemoryGb, isModelAllowedForMode, videoModelModeOptions,
   normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   icLoraSpecForMode,
   textEncoderOptionsForModel, normalizeTextEncoderForModel,
@@ -388,11 +388,13 @@ export function useVideoGenForm({
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
   }, [availableLoras, models]);
 
-  // Models filtered to the current mode's compatibility. Drives the
-  // <ModelSelect> options and the auto-select fallback so the user can't
-  // land on a model the server will reject.
+  // Keep compatibility fallbacks separate from discoverable models in other modes.
   const visibleModels = useMemo(
     () => models.filter((m) => isModelAllowedForMode(m, mode)),
+    [models, mode],
+  );
+  const otherModeModels = useMemo(
+    () => models.filter((model) => !isModelAllowedForMode(model, mode)),
     [models, mode],
   );
 
@@ -730,6 +732,12 @@ export function useVideoGenForm({
   // per-model defaults, and carrying one model's numbers onto another is
   // usually wrong.
   const handleModelChange = (nextId) => {
+    const nextModel = models.find((model) => model.id === nextId);
+    if (!isModelAllowedForMode(nextModel, mode)) {
+      const nextMode = videoModelModeOptions(nextModel)[0]?.value;
+      if (!nextMode) return;
+      handleModeChange(nextMode);
+    }
     setRemixSourceModel(null);
     setRemixModelFallback(null);
     applyModelSelection(nextId);
@@ -1431,7 +1439,7 @@ export function useVideoGenForm({
     selectedUniverse, setSelectedUniverse,
     remixModelFallback,
     // Model
-    modelId, handleModelChange, currentModel, visibleModels,
+    modelId, handleModelChange, currentModel, visibleModels, otherModeModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     a2vLoraStageStrengths, setA2vLoraStageStrengths,

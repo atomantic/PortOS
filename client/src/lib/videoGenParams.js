@@ -461,3 +461,12 @@ export const isModelAllowedForMode = (model, mode) => {
   if (isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
   return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };
+
+export const videoModelModeOptions = (model) => [
+  { value: 'text', label: 'Text → video' },
+  { value: 'image', label: 'Image → video' },
+  { value: 'fflf', label: 'First + last frame' },
+  { value: 'extend', label: 'Extend' },
+  { value: 'a2v', label: 'Audio → video' },
+  ...IC_LORA_MODES.map((spec) => ({ value: spec.mode, label: spec.label })),
+].filter(({ value }) => isModelAllowedForMode(model, value));

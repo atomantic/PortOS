@@ -125,7 +125,7 @@ import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
 import { formatCount, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
-import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
+import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES, isModelAllowedForMode, videoModelModeOptions } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { refreshMediaUsages } from '../hooks/useMediaUsages';
@@ -289,7 +289,7 @@ export default function VideoGen() {
     mode, handleModeChange,
     prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
     selectedUniverse, setSelectedUniverse, remixModelFallback,
-    modelId, handleModelChange, currentModel, visibleModels,
+    modelId, handleModelChange, currentModel, visibleModels, otherModeModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     a2vLoraStageStrengths, setA2vLoraStageStrengths,
@@ -1786,6 +1786,10 @@ export default function VideoGen() {
               <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <ModelSelect
                   models={visibleModels}
+                  optionGroups={[{ label: 'Other modes (select to switch)', models: otherModeModels }]}
+                  getLabel={(model) => isModelAllowedForMode(model, mode)
+                    ? model.name
+                    : `${model.name}${model.deprecated ? ' (Legacy)' : ''} — ${videoModelModeOptions(model).map((option) => option.label).join(' / ')} only`}
                   value={modelId}
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}

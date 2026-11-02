@@ -10,6 +10,7 @@
 // ProviderModelSelector's `emptyModelOption`). `ariaLabel` / `title` let an
 // inline picker with no visible <label> stay accessible.
 //
+// `optionGroups` appends caller-labelled groups after the active/legacy models.
 // `loading` swaps the options for a disabled "Loading models…" placeholder, so
 // a caller whose list arrives from a slow probe can keep the field (and its
 // label) in the form instead of letting it pop in late.
@@ -26,6 +27,7 @@ export default function ModelSelect({
   ariaLabel,
   title,
   loading = false,
+  optionGroups = [],
 }) {
   const active = models.filter((m) => !m.deprecated);
   const legacy = models.filter((m) => m.deprecated);
@@ -49,6 +51,11 @@ export default function ModelSelect({
               {legacy.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
             </optgroup>
           )}
+          {optionGroups.filter((group) => group.models.length > 0).map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.models.map((m) => <option key={m.id} value={m.id}>{getLabel(m)}</option>)}
+            </optgroup>
+          ))}
         </>
       )}
     </select>
