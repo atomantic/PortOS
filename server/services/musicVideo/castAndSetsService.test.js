@@ -276,6 +276,29 @@ describe('Cast & Sets production accounting', () => {
       .toEqual(['refused', 'completed']);
   });
 
+  it('refunds an ineligible face-sheet submission and releases the remaining reservations', async () => {
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await runTo(project.id, 'review');
+    const before = await current(project.id);
+    const previousJobs = jobs.length;
+    service.__setCastAndSetsDepsForTests(testDeps({
+      imageParams: async (_settings, route, common) => ({ ...common, mode: route.mode,
+        ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(0, 1) } : {}) }),
+    }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions', 'looks'] })).status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('failed');
+    expect(saved.productionRuns[0].usage).toEqual(before.productionRuns[0].usage);
+    expect(saved.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions').map((step) => step.status)).toEqual(['completed', 'refused']);
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin' && step.revisionId === '2')
+      .map((step) => [step.sceneId, step.status])).toEqual([
+      ['expressions', 'refused'], ['looks', 'refused'], ['test:1', 'refused'], ['test:2', 'refused'],
+    ]);
+    expect(saved.productionRuns[0].steps.filter((step) => step.status === 'reserved')).toHaveLength(0);
+    expect(jobs).toHaveLength(previousJobs);
+  });
+
   it('charges failed queued jobs and their retry, and refunds images skipped before submission', async () => {
     const { project, run } = await productionCheckin({ maxGenerations: 20 });
     await until(async () => jobs.length === 4, 'the initial images');
@@ -1263,22 +1286,36 @@ it.each([
   }
 });
 
-it('does not submit a face sheet when the renderer can send only its angle guide', async () => {
+it.each([
+  ['only its angle guide', 0],
+  ['only its identity reference', 1],
+])('stops when a last pending face sheet can send %s and resumes after repair', async (_description, selected) => {
+  const project = await seed();
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({})).status).toBe(202);
+  await runTo(project.id, 'review');
+  const previousJobs = jobs.length;
   service.__setCastAndSetsDepsForTests(testDeps({
     imageParams: async (_settings, route, common) => ({
       mode: route.mode,
       ...common,
-      ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(0, 1) } : {}),
+      ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(selected, selected + 1) } : {}),
     }),
   }));
-  const project = await seed();
-  await service.startCastAndSets(project.id);
-  await until(async () => jobs.some((job) => keyOf(job) === 'character'), 'the character sheet');
-  await land(project.id, ['character']);
-  await until(async () => (await current(project.id)).castAndSets?.images?.expressions?.failures === 1, 'the ineligible face sheet');
-  const stage = (await current(project.id)).castAndSets;
-  expect(stage.images.expressions.error).toMatch(/both the angle guide and the character reference/);
-  expect(jobs.some((job) => keyOf(job) === 'expressions')).toBe(false);
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions'] })).status).toBe(202);
+  await service.__settleCastAndSetsForTests();
+  const stage = (await request(app).get(`/api/music-video/${project.id}/cast-and-sets`)).body.stage;
+  expect(stage.status).toBe('failed');
+  expect(stage.images.expressions).toMatchObject({ status: 'failed', failures: 1,
+    error: expect.stringMatching(/both the angle guide and the character reference/) });
+  expect(stage.stopReason).toMatch(/both the angle guide and the character reference/);
+  expect(Object.entries(stage.images).filter(([key]) => key !== 'expressions').every(([, image]) => image.status === 'done')).toBe(true);
+  expect(jobs).toHaveLength(previousJobs);
+
+  service.__setCastAndSetsDepsForTests(testDeps());
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(previousJobs).map(keyOf)).toEqual(['expressions']);
+  expect(jobs.at(-1).params.referenceImagePaths).toHaveLength(2);
 });
 
 it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {

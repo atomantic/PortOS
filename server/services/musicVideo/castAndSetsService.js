@@ -556,7 +556,10 @@ async function dispatchKey(projectId, key) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
-      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision });
+      // This route cannot carry the required inputs, so retrying it cannot
+      // succeed and may otherwise leave the final pending key without a wakeup.
+      const retryable = sent?.error?.code !== 'CAST_SETS_ROUTE_INELIGIBLE';
+      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision, retryable });
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
