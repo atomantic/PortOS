@@ -72,7 +72,8 @@ const sentence = (s) => {
 const join = (...parts) => parts.map(sentence).filter(Boolean).join(' ');
 
 function identity(p) {
-  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');
+  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`,
+    p.signature && `signature: ${p.signature} (keep physical and worn details; carried objects belong on the prop sheet)`].filter(Boolean).join('; ');
 }
 
 /**

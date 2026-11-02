@@ -14,7 +14,7 @@ const DIRECTION = {
 };
 
 describe('Cast & Sets prop sheet', () => {
-  it('keeps people and wardrobe sheets empty-handed while their signature object belongs to the prop sheet', () => {
+  it('preserves the signature while keeping carried objects on the prop sheet', () => {
     const signature = 'matte black plastic 35mm snapshot camera on a wrist strap';
     const direction = { ...DIRECTION,
       protagonist: { ...DIRECTION.protagonist, signature,
@@ -26,7 +26,10 @@ describe('Cast & Sets prop sheet', () => {
       for (const key of ['character', 'looks', 'form:age-7', 'cast:kevin']) {
         expect(plan[key].prompt).toContain('Hands empty and relaxed, no camera, device or carried object');
         expect(plan[key].prompt).toContain('Carried props are drawn on the prop sheet');
-        expect(plan[key].prompt).not.toContain(signature);
+      }
+      for (const key of ['character', 'looks']) {
+        expect(plan[key].prompt).toContain(signature);
+        expect(plan[key].prompt).toContain('keep physical and worn details; carried objects belong on the prop sheet');
       }
       expect(plan.character.prompt).toContain('lavender tee and cutoffs');
       expect(plan['form:age-7'].prompt).toContain('a plaid dress and a silver watch');
@@ -35,6 +38,14 @@ describe('Cast & Sets prop sheet', () => {
     }
     // The plan chooses fields for each sheet; it never edits the director's source text.
     expect(direction.protagonist.signature).toBe(signature);
+  });
+
+  it('keeps a physical signature in the character and wardrobe prompts without a prop sheet', () => {
+    const signature = 'a silver eyebrow scar and a red scarf';
+    const direction = { ...DIRECTION, protagonist: { ...DIRECTION.protagonist, signature }, props: [] };
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, direction);
+    expect(plan.character.prompt).toContain(signature);
+    expect(plan.looks.prompt).toContain(signature);
   });
 
   it('plans one prop sheet naming every prop exactly, and none without props', () => {
