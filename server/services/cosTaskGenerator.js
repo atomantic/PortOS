@@ -1466,7 +1466,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       // metadata.prompt (#4153). On-demand path: emits unpersisted task on
       // task:ready, renders full description via getTaskPrompt.
       const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
-        ...(nextType === 'do-release' && { deliveredReleaseTaskIds: [...deliveredReleaseIds] }),
+        ...(nextType === 'do-release' && deliveredReleaseIds.size > 0 && { deliveredReleaseTaskIds: [...deliveredReleaseIds] }),
         ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
       if (newTask?.duplicate) {
         if (continuationSourceAgentId && newTask.id === task.id) continuationSatisfied = true;
