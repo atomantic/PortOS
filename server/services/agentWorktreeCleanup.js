@@ -1037,6 +1037,10 @@ export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
     && agentMetadata?.releasePublication?.synchronizationHandoffVersion === 2) {
     return { resumedFromAgentId: agentId };
   }
+  if (agentMetadata?.taskAnalysisType === 'do-release' && agentMetadata.isWorktree === false) {
+    const { releaseCandidateResumePointer } = await import('./releaseCandidateRecovery.js');
+    return releaseCandidateResumePointer(task, agentId);
+  }
   const claimContinuation = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
   if (claimContinuation) return claimContinuation;
   // Persistent feature-agent worktrees are never torn down, and throwaway

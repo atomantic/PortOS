@@ -12,7 +12,7 @@ import { releaseCandidateTransferSchema } from '../lib/releasePublication.js';
 import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { ownershipTransaction, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity,
-  releaseCandidateBranch } from './completedCheckoutEvidence.js';
+  releaseCandidateBranch, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { readReleaseCandidateSettlement } from './releaseCandidateSettlement.js';
 
@@ -44,6 +44,19 @@ async function sourceCheckout(source) {
   if (!current || !equal(current, { repoPath: receipt.repoPath, branch: receipt.branch,
     path: receipt.path, head: receipt.head, incarnation: receipt.incarnation })) refuse('candidate-generation-changed');
   return { kind: 'contemporaneous-receipt', receipt };
+}
+
+/** Retain same-task lineage before requeueing an unpublished coordinator.
+ * This proves only the registered checkout binding, never process settlement.
+ * Recovery rechecks that binding and all publication/review/process fences. */
+export async function releaseCandidateResumePointer(task, agentId) {
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const source = await getAgentRecord(agentId);
+  if (!releaseRun(source) || source.id !== agentId || source.status !== 'completed' || source.taskId !== task.id
+    || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
+    || !hasReleaseCandidateBinding(source.metadata)) refuse('candidate-registration-unverified');
+  await sourceCheckout(source);
+  return { resumedFromAgentId: agentId };
 }
 
 async function reviewSnapshot(checkout, pr, origin) {
@@ -156,13 +169,14 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       const orphanOutcome = source?.result?.taskOutcome;
       const unclaimedOrphanOutcome = orphanOutcome == null
         || equal(orphanOutcome, { status: 'incomplete', reason: 'Delivery checks did not pass.' });
-      const orphanedInline = source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+      const orphanedRelease = (source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+        || hasReleaseCandidateBinding(source?.metadata))
         && source.result?.orphaned === true && source.result?.success === false && source.result?.executionSuccess === false
         && unclaimedOrphanOutcome && !source.result?.executionInterruption && !source.metadata?.executionInterruption;
       if (!releaseRun(source) || source.status !== 'completed'
         || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
         || !(Date.parse(successor.startedAt) >= Date.parse(source.completedAt)) || !source.taskId
-        || source.taskId !== successor.taskId || (!resumed && !retriedInline && !orphanedInline)
+        || source.taskId !== successor.taskId || (!resumed && !retriedInline && !orphanedRelease)
         || successor.metadata.resumedFromAgentId !== source.id || !source.metadata.instanceId
         || source.metadata.instanceId === 'unknown' || source.metadata.instanceId !== successor.metadata.instanceId) refuse('candidate-successor-lineage-unverified');
       const { getTaskById } = await import('./cosTaskStore.js');
