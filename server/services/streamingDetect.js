@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { homedir } from 'os';
+import { tokenize } from '../../scripts/lib/sourceTokens.js';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { parseEnvContents } from '../lib/portosEnv.js';
@@ -186,6 +187,97 @@ function findMatchingBrace(content, openBraceIdx) {
 }
 
 /**
+ * Literal entries of apps arrays, shared by discovery and targeted writes.
+ * The dependency-free source lexer keeps regexes and nested templates opaque.
+ */
+function ecosystemAppBlocks(content) {
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    return [];
+  }
+  const punctuation = index => tokens[index]?.t === 'p' ? tokens[index].v : null;
+  const isWord = (index, word) => tokens[index]?.t === 'id' && tokens[index].v === word;
+  const isKey = (index, key) => ['id', 's'].includes(tokens[index]?.t) && tokens[index].v === key;
+  const stack = [];
+  const matching = new Map();
+  const closes = { '}': '{', ']': '[', ')': '(' };
+  for (let i = 0; i < tokens.length; i++) {
+    const symbol = punctuation(i);
+    if (['{', '[', '('].includes(symbol)) stack.push(i);
+    else if (Object.hasOwn(closes, symbol)) {
+      const open = stack.pop();
+      if (punctuation(open) !== closes[symbol]) return [];
+      matching.set(open, i);
+    }
+  }
+  if (stack.length) return [];
+
+  // Only module-scope bindings can supply the exported literal configuration.
+  // Reading unrelated objects as apps would let an example shadow the real app.
+  const bindings = new Map();
+  let exported = null;
+  for (let i = 0; i < tokens.length; i++) {
+    if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
+      bindings.set(tokens[i + 1].v, i + 3);
+    }
+    if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
+      exported = i + 4;
+    } else if (isWord(i, 'export') && isWord(i + 1, 'default')) {
+      exported = i + 2;
+    }
+    i = matching.get(i) ?? i;
+  }
+  const resolve = (index, seen = new Set()) => {
+    const token = tokens[index];
+    if (token?.t !== 'id') return index;
+    if (seen.has(token.v) || !bindings.has(token.v)) return null;
+    seen.add(token.v);
+    return resolve(bindings.get(token.v), seen);
+  };
+  const expressionEnd = (start, limit) => {
+    let end = start;
+    while (end < limit && punctuation(end) !== ',') end = (matching.get(end) ?? end) + 1;
+    return end;
+  };
+  const property = (object, key) => {
+    let found = null;
+    const limit = matching.get(object);
+    for (let i = object + 1; i < limit;) {
+      if (punctuation(i) === ',') { i++; continue; }
+      const end = expressionEnd(i, limit);
+      if (isKey(i, key)) {
+        if (punctuation(i + 1) === ':') found = { start: i + 2, end };
+        else if (tokens[i].t === 'id' && end === i + 1) found = { start: i, end };
+      }
+      i = end;
+    }
+    return found;
+  };
+
+  const config = resolve(exported);
+  if (config === null) return [];
+  const appsProperty = punctuation(config) === '{' ? property(config, 'apps') : null;
+  const apps = appsProperty ? resolve(appsProperty.start) : config;
+  if (punctuation(apps) !== '[') return [];
+  const blocks = [];
+  const limit = matching.get(apps);
+  for (let i = apps + 1; i < limit;) {
+    if (punctuation(i) === ',') { i++; continue; }
+    const object = resolve(i);
+    if (punctuation(object) === '{') {
+      const name = property(object, 'name');
+      if (name && name.end === name.start + 1 && tokens[name.start]?.t === 's' && tokens[name.start].v) {
+        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: tokens[name.start].v });
+      }
+    }
+    i = expressionEnd(i, limit);
+  }
+  return blocks;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
  * Uses regex parsing since we can't safely execute arbitrary JS
  * @returns {{ processes: Array, pm2Home: string|null }}
@@ -275,78 +367,8 @@ export function parseEcosystemConfig(content) {
     }
   }
 
-  // Match each app block: { name: '...', ... }
-  // This regex captures app objects including nested braces
-  const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let match;
-  let _lastIndex = 0;
-
-  while ((match = appBlockRegex.exec(content)) !== null) {
-    const processName = match[1];
-    const startPos = match.index;
-
-    // Find the end of this app block by counting braces
-    let braceCount = 0;
-    let endPos = startPos;
-    let inString = false;
-    let stringChar = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let i = startPos; i < content.length; i++) {
-      const char = content[i];
-      const nextChar = i < content.length - 1 ? content[i + 1] : '';
-
-      // Handle line comments (// ...)
-      if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
-        inLineComment = true;
-        continue;
-      }
-      if (inLineComment && char === '\n') {
-        inLineComment = false;
-        continue;
-      }
-
-      // Handle block comments (/* ... */)
-      if (!inString && !inLineComment && char === '/' && nextChar === '*') {
-        inBlockComment = true;
-        continue;
-      }
-      if (inBlockComment && char === '*' && nextChar === '/') {
-        inBlockComment = false;
-        i++; // Skip the closing /
-        continue;
-      }
-
-      // Skip if in any comment
-      if (inLineComment || inBlockComment) continue;
-
-      // Backticks count as string delimiters so `${...}` braces don't perturb
-      // the count. Use isEscaped() so an even-length backslash run before a
-      // quote (e.g. `\\"`) correctly reads as not-escaped.
-      if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
-        if (!inString) {
-          inString = true;
-          stringChar = char;
-        } else if (char === stringChar) {
-          inString = false;
-          stringChar = null;
-        }
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') {
-          braceCount--;
-          if (braceCount === 0) {
-            endPos = i;
-            break;
-          }
-        }
-      }
-    }
-
-    const appBlock = content.substring(startPos, endPos + 1);
+  for (const { start, end, name: processName } of ecosystemAppBlocks(content)) {
+    const appBlock = content.substring(start, end + 1);
 
     // Extract ports - first try the PortOS standard 'ports' object
     let ports = {};
@@ -488,7 +510,6 @@ export function parseEcosystemConfig(content) {
     const usesVite = /\bvite\b/i.test(appBlock) || /VITE_PORT/i.test(appBlock);
 
     processes.push({ name: processName, port, ports, cwd, usesVite });
-    _lastIndex = endPos;
   }
 
   // Post-process: when an app has both an API process and Vite dev processes,
@@ -667,14 +688,7 @@ function replaceOutsideComments(str, re, replacement) {
  * that process's ports from. Returns the first match (parser semantics) or null.
  */
 function findAppBlock(content, processName) {
-  const re = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    if (m[1] !== processName) continue;
-    const end = findMatchingBrace(content, m.index);
-    if (end >= 0) return { start: m.index, end };
-  }
-  return null;
+  return ecosystemAppBlocks(content).find(block => block.name === processName) ?? null;
 }
 
 /**
