@@ -27,4 +27,3 @@ export async function reviewRenderedImage({ inputs, reviewer, beforeExecute, sou
     discrepancy: checks.filter((c) => c.status !== 'pass').map((c) => (c.id === 'render-quality' && c.status === 'fail' ? `Rendering defect: ${c.note}` : c.note)).join(' ').slice(0, 1500), checks,
     advisory: isAdvisoryVisionReviewer(reviewer.provider), providerId: reviewer.provider.id, model: result.model || reviewer.model, providerRunId: result.runId || null };
 }
-
