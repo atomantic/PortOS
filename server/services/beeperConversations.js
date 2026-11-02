@@ -27,6 +27,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { resolveLinkedPersonId } from '../lib/tribeMatch.js';
 import { markRead, updateChat } from './beeperClient.js';
 import { getSettings } from './settings.js';
+import { deleteAutoTouchpoints } from './tribe.js';
 import {
   getConversationAttachmentBytes,
   purgeConversationAttachments,
@@ -619,7 +620,8 @@ export async function purgeConversation(conversationId) {
     'SELECT COUNT(*)::int AS count FROM beeper_messages WHERE conversation_id = $1',
     [conversationId],
   );
-  // The conversation row and its SYNC CURSOR go together, in one transaction.
+  // The conversation, derived touchpoints/audit snapshots and SYNC CURSOR
+  // go together, in one transaction.
   //
   // `beeper_sync_cursors` is keyed on Beeper's own `(account_id, chat_id)` and
   // carries an FK onto `beeper_accounts` alone, so the conversation's cascade
@@ -631,6 +633,7 @@ export async function purgeConversation(conversationId) {
   // irreversible delete. Deleting the cursor is also the only thing that ever
   // removes one, so it stops orphan cursor rows accumulating.
   await withTransaction(async (client) => {
+    await deleteAutoTouchpoints({ beeperConversationId: conversationId, client });
     await client.query('DELETE FROM beeper_conversations WHERE id = $1', [conversationId]);
     await client.query(
       'DELETE FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2',
