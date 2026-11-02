@@ -185,6 +185,8 @@ describe('isReasoningModel', () => {
 
   it('exports the pattern list for introspection', () => {
     expect(Array.isArray(REASONING_PATTERNS)).toBe(true);
+    expect(REASONING_PATTERNS.length).toBeGreaterThan(0);
+    expect(REASONING_PATTERNS.every((p) => p instanceof RegExp)).toBe(true);
   });
 });
 

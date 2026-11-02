@@ -1854,6 +1854,11 @@ Forgets the budget and recommends lodging that exceeds it.
 
       const result = await getGapRecommendations();
       expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBeGreaterThan(0);
+      expect(result[0]).toHaveProperty('dimension');
+      const confidence = await getConfidence();
+      expect(confidence).toBeDefined();
+      expect(confidence.overall).toBeGreaterThanOrEqual(0);
     });
 
     it('should return existing gaps from meta', async () => {
