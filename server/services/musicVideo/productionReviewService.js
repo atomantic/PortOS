@@ -1,3 +1,4 @@
+import { currentPlateEvidence, selectedPlateTake, renderQualityAcknowledged } from '../../lib/musicVideoPlateEvidence.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { mutateProjectRecord } from './projects.js';
@@ -27,6 +28,10 @@ export const getProductionReview = async id => present(await requireProject(id))
 export async function assertMusicVideoSceneReview(tag, kind = null) {
   if (!tag?.projectId || !tag.sceneId) return;
   const project = await requireProject(tag.projectId);
+  const scene = project.scenes?.find((entry) => entry.sceneId === tag.sceneId);
+  const take = scene && selectedPlateTake(scene);
+  if (kind === 'video' && currentPlateEvidence(scene, take)?.checks.some((check) => check.id === 'render-quality' && check.status === 'fail')
+    && !renderQualityAcknowledged(scene, take)) throw new ServerError('Rendering defect: regenerate this still or explicitly acknowledge its defect before animation.', { status: 409, code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
   const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
   if (boardShot) assertProductionApproval(project, 'art');
   else assertProductionApproval(project, 'storyboard');

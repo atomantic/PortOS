@@ -1,0 +1,3 @@
+/** Visible rendering-defect criteria shared by reference and still reviewers. */
+// Generation defects every shot conditioned on this image would copy.
+export const RENDER_DEFECTS = 'objects fused, melted or merged into each other (chairs molded into a table, a hand merged with a prop), impossible or warped geometry, furniture or vehicles with missing, extra or floating legs, wheels or parts, extra, missing or fused fingers and limbs, distorted faces, eyes or teeth, duplicated or mirrored panels on a multi-view sheet that should show different angles, and garbled lettering where the prompt asks for readable text';

@@ -812,6 +812,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     } : entry) };
   });
   params.characterSheet = { universeId, entryId, variant, requestId };
+  if (options.catalogAttach) params.catalogAttach = options.catalogAttach;
   const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
   const latest = await getUniverse(universeId);

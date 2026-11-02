@@ -15,7 +15,7 @@ import CatalogImagePreview from './CatalogImagePreview';
 // without hover.
 export default function CatalogMediaTile({
   m, missing, isPortrait = false, onSetPortrait, onDetach, armedDetach, onArmDetach, extraActions = null, label = null, contain = false,
-  badge = null, pinActions = false,
+  badge = null, pinActions = false, extraContent = null,
 }) {
   const isImage = m.kind === 'portrait' || m.kind === 'reference';
   const isAudio = m.kind === 'audio';
@@ -47,6 +47,7 @@ export default function CatalogMediaTile({
       {label && (
         <div className="text-[10px] uppercase tracking-wider text-gray-500 px-2 py-1 border-t border-port-border truncate">{label}</div>
       )}
+      {extraContent}
       {badge}
       {missing && (
         <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/40"

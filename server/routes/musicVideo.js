@@ -1903,6 +1903,7 @@ router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) =>
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
+  if (review.acknowledgeRenderQuality) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
 }));
 

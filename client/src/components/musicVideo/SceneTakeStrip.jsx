@@ -1,3 +1,4 @@
+import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { useState } from 'react';
 import { Ban, Check, RotateCcw, X, MessageSquare } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
@@ -130,6 +131,17 @@ export default function SceneTakeStrip({
                   </button>
                 </div>
               )}
+              {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
+                <div key={check.id} className="space-y-1 text-xs text-port-warning">
+                  <p className="break-words">Rendering defect: {check.note}</p>
+                  {renderQualityAcknowledged(scene, take) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
+                    <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                      onClick={() => onReview(take, { acknowledgeRenderQuality: { basis: take.plateEvidence.basis, note: check.note } })}>
+                      Acknowledge rendering defect
+                    </button>
+                  )}
+                </div>
+              ))}
               {noteFor === take.takeId && (
                 <div>
                   <label htmlFor={noteInputId(take)} className="sr-only">Take note</label>
