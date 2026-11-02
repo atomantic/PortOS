@@ -898,6 +898,9 @@ function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata,
     && !!updatedMetadata.claimedBy && !!updatedMetadata.claimedAt && !!updatedMetadata.lastSpawnedAt;
 }
 
+const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
+  && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
+
 // Release attempt membership is store-owned like the spawn-budget proof, but no
 // reset clears it: only a verified release dispatch appends to it.
 async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata, spawnBudgetOperation }) {
@@ -912,10 +915,8 @@ async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata,
     || !agent.startedAt || agent.startedAt !== spawnBudgetOperation.startedAt) {
     return { error: 'Cannot record release attempt membership for this dispatch' };
   }
-  const pristine = SPAWN_HISTORY_METADATA_KEYS.every(key => current.metadata?.[key] == null
-    || (key === 'totalSpawnCount' && spawnBudgetCount(current.metadata[key]) === 0));
   updatedMetadata[RELEASE_ATTEMPTS_KEY] = appendReleaseAttempt(prior,
-    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine });
+    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(current.metadata) });
   return null;
 }
 
@@ -1292,7 +1293,8 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
       const localProof = local?.metadata?.spawnBudgetProof;
       const remoteProof = remote.metadata?.spawnBudgetProof;
       const differentProof = local && !isDeepStrictEqual(localProof, remoteProof);
-      const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY]);
+      const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY],
+        { localHistory: !!local && hasSpawnHistory(local.metadata) });
       if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
       else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
       if ((!local || localEpoch === remoteEpoch) && (local?.metadata?.spawnBudgetReconciledHold === 'true'
