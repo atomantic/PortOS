@@ -162,7 +162,11 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
     // changed PATH. It is not proof that a previous update was installed.
     if (harness.probeState === 'missing') {
       if (removalsBeforeRead.has(harness.id)) { removedHarnesses.delete(harness.id); rows.delete(id); }
-      else if (rows.has(id)) rows.set(id, { ...unknown(rows.get(id)), retrySoon: true });
+      else if (rows.has(id)) {
+        const previous = rows.get(id);
+        if (previous.unverified && !previous.unverifiedPrevious) rows.delete(id);
+        else rows.set(id, { ...unknown(previous), retrySoon: true });
+      }
       continue;
     }
     if (harness.probeState === 'unavailable' || harness.probeState === 'unprobed') {

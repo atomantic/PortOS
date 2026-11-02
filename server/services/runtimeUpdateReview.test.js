@@ -186,6 +186,19 @@ describe('runtime update review monitor', () => {
     expect(monitor.items().find((item) => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
   });
 
+  it('clears a missing harness diagnostic without hiding a later confirmed update', async () => {
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual', package: null, installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    expect(deps.save.mock.calls.at(-1)[0].some(item => item.id === 'harness:manual')).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual' })]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:manual')).toMatchObject({ revision: '1.0.0:1.1.0' });
+  });
+
   it('clears a harness after its explicit removal is rechecked', async () => {
     const { monitor, deps } = fixture();
     await monitor.start();
