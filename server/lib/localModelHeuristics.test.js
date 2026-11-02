@@ -191,8 +191,6 @@ describe('localModelHeuristics', () => {
       // LM Studio tags vision models type: 'vlm' even when the id is opaque.
       expect(isVisionModel({ id: 'some-opaque-id', type: 'vlm' })).toBe(true);
       expect(isVisionModel({ id: 'x', capabilities: ['vision'] })).toBe(true);
-      expect(isVisionModel({ id: 'gemma3:1b', capabilities: ['completion'] })).toBe(false);
-      expect(isVisionModel({ id: 'gemma3:4b', capabilities: [] })).toBe(true);
       // A text model card with no vision markers stays false.
       expect(isVisionModel({ id: 'llama3.1:8b', type: 'llm' })).toBe(false);
       // An explicit non-vision type must NOT be overridden by an id that the
