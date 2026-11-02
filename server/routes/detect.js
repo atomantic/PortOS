@@ -16,6 +16,29 @@ import { isWithinAllowedRoots, outsideAllowedRootsMessage, WORKSPACE_ROOTS_CONFI
 const execAsync = promisify(exec);
 const router = Router();
 
+async function readListeningPortOutput(port, targetPlatform) {
+  try {
+    if (targetPlatform === 'win32') {
+      const [ipv4, ipv6] = await Promise.all([
+        execAsync('netstat -ano -p tcp'),
+        execAsync('netstat -ano -p tcpv6')
+      ]);
+      return `${ipv4.stdout}\n${ipv6.stdout}`;
+    }
+
+    const command = targetPlatform === 'darwin'
+      ? `lsof -iTCP:${port} -sTCP:LISTEN -n -P`
+      : 'ss -lntp';
+    return (await execAsync(command)).stdout;
+  } catch (error) {
+    // lsof reports exit code 1 without diagnostics when it finds no match.
+    if (targetPlatform === 'darwin' && error.code === 1 && !String(error.stdout || '').trim() && !String(error.stderr || '').trim()) {
+      return '';
+    }
+    throw new ServerError('Port listener discovery failed', { status: 503, code: 'PORT_DISCOVERY_FAILED', cause: error });
+  }
+}
+
 // Optional confinement, shared by every handler here that takes a caller-supplied
 // path (POST /repo and POST /ai): enforced only when the operator has configured
 // PORTOS_WORKSPACE_ROOTS. realpath() first so a symlink can't smuggle a path past
@@ -197,29 +220,7 @@ router.post('/port', asyncHandler(async (req, res) => {
   };
 
   const targetPlatform = platform;
-  let stdout;
-  try {
-    if (targetPlatform === 'win32') {
-      const [ipv4, ipv6] = await Promise.all([
-        execAsync('netstat -ano -p tcp'),
-        execAsync('netstat -ano -p tcpv6')
-      ]);
-      stdout = `${ipv4.stdout}\n${ipv6.stdout}`;
-    } else {
-      const command = targetPlatform === 'darwin'
-        ? `lsof -iTCP:${safePort} -sTCP:LISTEN -n -P`
-        : 'ss -lntp';
-      ({ stdout } = await execAsync(command));
-    }
-  } catch (error) {
-    // lsof reports exit code 1 when no matching listener exists. Other probe
-    // errors are surfaced by getListeningPorts rather than mistaken for free.
-    if (targetPlatform === 'darwin' && error.code === 1 && !String(error.stdout || '').trim() && !String(error.stderr || '').trim()) {
-      stdout = '';
-    } else {
-      throw new ServerError('Port listener discovery failed', { status: 503, code: 'PORT_DISCOVERY_FAILED', cause: error });
-    }
-  }
+  const stdout = await readListeningPortOutput(safePort, targetPlatform);
   const listeners = await getListeningPorts({
     platform: targetPlatform,
     exec: async () => ({ stdout: stdout || '' })
