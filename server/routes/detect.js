@@ -208,7 +208,7 @@ router.post('/port', asyncHandler(async (req, res) => {
   } catch (error) {
     // lsof reports exit code 1 when no matching listener exists. Other probe
     // errors are surfaced by getListeningPorts rather than mistaken for free.
-    if (targetPlatform === 'darwin' && error.code === 1 && !String(error.stdout || '').trim()) {
+    if (targetPlatform === 'darwin' && error.code === 1 && !String(error.stdout || '').trim() && !String(error.stderr || '').trim()) {
       stdout = '';
     } else {
       throw new ServerError('Port listener discovery failed', { status: 503, code: 'PORT_DISCOVERY_FAILED', cause: error });

@@ -134,7 +134,10 @@ describe('POST /api/detect/port listener discovery', () => {
     expect(response.body).toEqual({ port: 55, inUse: false, process: null });
   });
 
-  it('reports a free macOS port when lsof exits with its no-match status', async () => {
+  it.each([
+    ['', 200, { port: 8123, inUse: false, process: null }],
+    ['lsof: permission denied', 503, undefined]
+  ])('handles lsof exit status 1 with stderr %j as status %i', async (stderr, expectedStatus, expectedBody) => {
     vi.resetModules();
     vi.doMock('../lib/platform.js', () => ({ platform: 'darwin', getListeningPorts: async () => [] }));
     vi.doMock('../lib/childProcess.js', async (importOriginal) => {
@@ -143,6 +146,7 @@ describe('POST /api/detect/port listener discovery', () => {
         const error = new Error('no matching processes');
         error.code = 1;
         error.stdout = '';
+        error.stderr = stderr;
         throw error;
       });
       return { ...await importOriginal(), exec };
@@ -156,8 +160,9 @@ describe('POST /api/detect/port listener discovery', () => {
 
     const response = await request(app).post('/api/detect/port').send({ port: 8123 });
 
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ port: 8123, inUse: false, process: null });
+    expect(response.status).toBe(expectedStatus);
+    if (expectedBody) expect(response.body).toEqual(expectedBody);
+    else expect(response.body).toMatchObject({ code: 'PORT_DISCOVERY_FAILED' });
   });
 });
 
