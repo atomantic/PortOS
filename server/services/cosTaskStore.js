@@ -491,6 +491,10 @@ async function uniqueTaskId(source, id, tasks) {
   }
 }
 
+const matchesInvestigationSource = (tasks, taskType, expected) => !expected || (taskType === 'internal'
+  && tasks.some(task => task.id === expected.id && task.status === 'blocked'
+    && ['description', 'priority', 'approvalRequired', 'metadata'].every(key => isDeepStrictEqual(task[key], expected[key]))));
+
 /**
  * Add a new task to the user or internal queue.
  *
@@ -514,7 +518,7 @@ export async function addTask(taskData, taskType = 'user', options = {}) {
   }
 }
 
-async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [], repoRepairContract = null }) {
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [], repoRepairContract = null, expectedSourceTask = null }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
@@ -530,6 +534,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     taskData = { ...taskData, metadata: { ...taskData.metadata, idempotencyKey } };
   }
   const tasks = await readTaskFile(taskType);
+  // An approval-held release may change while its investigation is being
+  // prepared. Check that episode under the same lock and queue version as the
+  // new task, so a cancellation cannot dispatch stale diagnostic work.
+  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { error: 'Investigation source changed before admission' };
 
   if (taskData.metadata?.cleanupRefillSource) {
     const valid = await (await import('./swarmCleanupDelivery.js')).validCleanupRefillSource(
@@ -723,10 +731,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, suppressCompletionWake, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, suppressCompletionWake, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation, expectedSourceTask });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -982,8 +990,9 @@ function isRuntimeVerificationRelease({ current, updates, expectedStatus, expect
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null }) {
   const tasks = await readTaskFile(taskType);
+  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { statusChanged: true };
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
   // A history item older than the working set can still be edited or reopened:

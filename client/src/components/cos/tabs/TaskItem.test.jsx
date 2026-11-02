@@ -275,6 +275,19 @@ describe('TaskItem blocked reason', () => {
     expect(screen.getByText('Original incomplete delivery')).toBeInTheDocument();
   });
 
+  it('keeps the release approval and its options visible while an investigation runs', () => {
+    const task = { id: 'release-approval', description: 'Release', status: 'blocked', metadata: {
+      blockedCategory: 'task-approval', blockedAt: '2026-01-01', blockedReason: 'The owner updated the recovery reason.',
+      taskOutcome: { status: 'blocked', reason: 'Recovery is blocked.', recovery: { mode: 'approval', options: ['Preserve the candidate', 'Abandon the candidate'] } },
+      blockedInvestigation: { phase: 'investigating', taskId: 'investigator', sourceCategory: 'task-approval', sourceBlockedAt: '2026-01-01' } } };
+    render(<MemoryRouter><TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} /></MemoryRouter>);
+    expect(screen.getByText('An agent is investigating the cause.')).toBeVisible();
+    expect(screen.getByText('Approval is still required.')).toBeVisible();
+    expect(screen.getByText('The owner updated the recovery reason.')).toBeVisible();
+    expect(screen.getByText('Preserve the candidate')).toBeVisible();
+    expect(screen.getByText('Abandon the candidate')).toBeVisible();
+  });
+
   it('renders blockedReason when a blocked task has no user-set blocker', () => {
     // Every server-side auto-block (max-spawns, retries, provider-config, …) writes
     // metadata.blockedReason, never `blocker`, so the display must fall back to it.
