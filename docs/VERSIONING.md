@@ -153,7 +153,13 @@ files under the ownership/retirement fence. It saves a separate transfer receipt
 and an honestly timestamped seed for the successor; it never edits the original
 seed, copies review files, advances a cutoff or changes a tag. A retry retains
 the original transfer. A merged promotion remains merged: verify its existing
-publication instead of opening another PR. An inline publication retains the
+publication instead of opening another PR. Recovery also holds while the forge
+shows publication activity the candidate's own PR cannot explain: another open
+promotion PR into `release` (`candidate-publication-ambiguous`), the version
+tag already present before promotion (`candidate-release-tag-present`), or an
+unfinished `release.yml` run on `release`, such as a re-run
+(`candidate-release-workflow-active`). Any of these may be a second publication
+in flight. An inline publication retains the
 same task and transfers both its candidate and synchronization checkout through
 this recovery; a legacy continuation keeps its existing recovery path.
 
@@ -186,18 +192,18 @@ that the service observed no reservation; it does not prove a candidate was not
 created through Git. It cannot authorize a resumed run to reserve another one.
 
 **Current recovery limits:** whole-process settlement uses the native Windows
-Job receipt or the Linux subreaper receipt (both described under the release
-coordinator's supervision below). macOS has no equivalent durable receipt yet
-and remains held with `candidate-process-proof-unavailable`, including when the
-original PID is absent or no process currently has the checkout as its cwd; so
-does a Linux run launched without the supervisor.
+Job receipt, the Linux subreaper receipt or the macOS launchd-coalition receipt
+(all described under the release coordinator's supervision below). A run
+launched without its supervisor remains held with
+`candidate-process-proof-unavailable`, including when the original PID is
+absent or no process currently has the checkout as its cwd.
 Historical runs missing from the trusted registry, unseeded candidates without
 contemporaneous physical evidence, and unknown private review receipt versions
 also remain held. V1 review evidence retains unknown inspection provenance; V2
 keeps its actual inspection separate from later completion. Both are validated
 with the shared receipt contract and preserved byte-for-byte, never re-certified
-as a new review. macOS settlement support is tracked in #14772; first
-reservation after a pre-reservation interruption is tracked in #14005.
+as a new review. First reservation after a pre-reservation interruption is
+tracked in #14005.
 
 **Attempt membership:** every dispatch of a release task appends its agent,
 start time and instance to the task's service-owned `releaseAttempts` record.
@@ -507,6 +513,44 @@ stay held, and an absent PID is never treated as settlement. Processes started
 outside the tree through IPC (`systemd-run`, `at`, a session manager or another
 daemon) are out of scope, as with the Windows Job. Synchronization retirement on
 Linux still uses its existing PID and cwd checks.
+
+On macOS, which offers an unprivileged process neither a child subreaper nor a
+Job, the same release agents launch through
+`server/lib/darwinAgentSupervisor.py` (run with `python3 -I`). It bootstraps a
+single-use launchd job (`gui/<uid>`, falling back to `user/<uid>`) whose body
+is the supervisor's own stub. launchd starts every job in a fresh resource
+coalition. Membership is inherited across fork and exec, survives `setsid` and
+double forks, and cannot be left without a privileged spawn, and the kernel
+counts the members that started and exited. The supervisor accepts the job only
+when the stub that connects back over its private socket is in a coalition
+other than the supervisor's own and is that coalition's only member. It then
+passes the agent's stdio to the stub (for a PTY agent, a fresh pseudo-terminal
+that it relays, so the agent keeps a controlling terminal, `/dev/tty`, raw input
+and resize signals). The stub starts the agent and reports its exit status.
+Once the job is unloaded and the coalition reports no live member (or the
+kernel has reaped it, which happens only when it is empty), the supervisor
+writes the settled receipt. That receipt carries an explicit, versioned proof,
+`{ "kind": "launchd-coalition", "version": 1, "coalition": "<id>" }`, which
+recovery requires on macOS and refuses elsewhere. Stops use the same durable
+`cancel` request: SIGTERM to every coalition member, then SIGKILL after five
+seconds. Each member's coalition and start time are rechecked just before it is
+signalled, and the supervisor waits for the same empty-coalition proof. The
+startup probe runs a real launchd round trip; when it fails (no `python3`, no
+launchd user domain), the agent runs unsupervised and its recovery stays held.
+Processes started outside the coalition through IPC (another launchd job,
+`open`, a session manager) are out of scope, as with the Windows Job.
+Synchronization retirement on macOS still uses its existing PID and cwd checks.
+
+A forge publication fence was evaluated for macOS and rejected as the
+settlement mechanism. Under that design, a successor would resume only the
+identical candidate PR, pin its merge with `--match-head-commit`, and refuse
+while another promotion or synchronization PR existed. A surviving predecessor
+still holds the same forge credentials, though. Between the successor's check
+and its merge, it can open or merge a different promotion. No forge rule makes
+"at most the identical, single publication" enforceable against it, so the
+fence could be stated honestly only as best-effort, never as settlement. The
+forge checks it would have used remain as additional recovery holds (above),
+alongside the kernel-backed coalition proof.
 
 #### 6. Synchronize back without changing the published release
 

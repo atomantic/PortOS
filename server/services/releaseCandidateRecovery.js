@@ -138,6 +138,23 @@ export async function readReleaseBaseTip({ api }) {
   return base.ref === 'refs/heads/release' && base.object?.type === 'commit' ? base.object.sha : null;
 }
 
+/** Publication activity this candidate's own PR cannot explain: another open
+ * promotion, the version tag before promotion, or an unfinished release
+ * workflow run (including a re-run of an earlier one). Any of these may be a
+ * second publication in flight, so recovery holds rather than transfers. */
+async function publicationFence({ origin, api }, checkout, candidate, published) {
+  const promotions = await api('pulls?state=open&base=release&per_page=100');
+  if (!Array.isArray(promotions) || promotions.length >= 100 || promotions.some(row => row?.head?.ref !== checkout.branch
+    || row.head.repo?.full_name !== origin.fullName)) refuse('candidate-publication-ambiguous');
+  if (!published) {
+    const tag = `refs/tags/v${candidate.version}`;
+    const tags = await api(`git/matching-refs/${tag.slice('refs/'.length)}`);
+    if (!Array.isArray(tags) || tags.some(row => row?.ref === tag)) refuse('candidate-release-tag-present');
+  }
+  const { workflow_runs: runs } = await api('actions/workflows/release.yml/runs?branch=release&per_page=100');
+  if (!Array.isArray(runs) || runs.some(run => run?.status !== 'completed')) refuse('candidate-release-workflow-active');
+}
+
 async function publicationSnapshot(checkout, candidate) {
   const forge = await openCandidateForge(checkout.repoPath);
   const { origin, api } = forge;
@@ -145,6 +162,7 @@ async function publicationSnapshot(checkout, candidate) {
   if (!Array.isArray(rows) || rows.length > 1) refuse('candidate-publication-ambiguous');
   if (!rows.length) {
     if (await readReleaseBaseTip(forge) !== candidate.releaseBase) refuse('candidate-release-base-changed');
+    await publicationFence(forge, checkout, candidate, false);
     return null;
   }
   const pr = rows[0];
@@ -163,6 +181,7 @@ async function publicationSnapshot(checkout, candidate) {
     if (promotion.tree?.sha !== candidate.tree || promotion.parents?.length !== 2
       || promotion.parents[0].sha !== candidate.releaseBase || promotion.parents[1].sha !== checkout.head) refuse('candidate-promotion-conflict');
   } else if (detail.state !== 'open' || detail.base?.sha !== candidate.releaseBase) refuse('candidate-release-base-changed');
+  await publicationFence(forge, checkout, candidate, detail.merged === true);
   return { number: pr.number, url: pr.html_url, head: checkout.head, merged: detail.merged === true,
     merge: detail.merged === true ? detail.merge_commit_sha : null };
 }

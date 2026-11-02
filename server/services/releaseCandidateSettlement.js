@@ -13,10 +13,10 @@ export async function readReleaseCandidateSettlement(agent) {
       throw new Error('candidate-runner-unsettled');
     }
   }
-  // Only the Windows Job and Linux subreaper supervisors write a durable
-  // whole-tree receipt; macOS has none yet (#14772). Neither lsof of the
+  // Only the Windows Job, Linux subreaper and macOS launchd-coalition
+  // supervisors write a durable whole-tree receipt. Neither lsof of the
   // checkout nor kill(pid, 0) can exclude detached descendants.
-  if (process.platform !== 'win32' && process.platform !== 'linux') throw new Error('candidate-process-proof-unavailable');
+  if (!['win32', 'linux', 'darwin'].includes(process.platform)) throw new Error('candidate-process-proof-unavailable');
   const { readWindowsAgentSettlement } = await import('../lib/windowsAgentProcess.js');
   return readWindowsAgentSettlement(agent).catch(() => { throw new Error('candidate-process-proof-unavailable'); });
 }
