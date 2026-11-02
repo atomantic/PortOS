@@ -279,3 +279,10 @@ describe('normalizeChatScope', () => {
     expect(normalizeChatScope(42)).toBe('');
   });
 });
+
+it('stores the scoped WhatsApp conversation identity with title fallback', () => {
+  const [msg] = parseWhatsappChat('[1/2/24, 10:00:00 AM] Alice: Hello');
+  expect(whatsappMessageToCandidate(msg, { timezone: UTC, chatScope: ' Family ', chatTitle: 'Export' }).metadata.conversationId).toBe('family');
+  expect(whatsappMessageToCandidate(msg, { timezone: UTC, chatTitle: 'Export' }).metadata.conversationId).toBe('Export');
+  expect(whatsappMessageToCandidate(msg, { timezone: UTC }).metadata.conversationId).toBeNull();
+});
