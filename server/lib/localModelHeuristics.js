@@ -154,9 +154,10 @@ export function isVisionModel(model) {
   // (Ollama's /api/tags), so a name-only guess never overrides a known type.
   const type = model.type ? String(model.type).toLowerCase() : null;
   if (type === 'vlm') return true;
-  if (Array.isArray(model.capabilities)
-    && model.capabilities.some((c) => String(c).toLowerCase() === 'vision')) return true;
-  if (type || (Array.isArray(model.capabilities) && model.capabilities.length > 0)) return false;
+  if (Array.isArray(model.capabilities) && model.capabilities.length > 0) {
+    return model.capabilities.some((c) => String(c).toLowerCase() === 'vision');
+  }
+  if (type) return false; // explicit non-vision type — don't regex-guess past it
   const id = model.id || model.name || '';
   return typeof id === 'string' && VISION_RE.test(id);
 }

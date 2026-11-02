@@ -810,8 +810,8 @@ const PRODUCERS = [
     source: 'updates',
     label: 'Software updates',
     async gather() {
-      const { getRuntimeUpdateReviewItems } = await import('./runtimeUpdateReview.js');
-      return getRuntimeUpdateReviewItems();
+      const { getRuntimeUpdateReviewSnapshot } = await import('./runtimeUpdateReview.js');
+      return getRuntimeUpdateReviewSnapshot();
     },
     map(entry) {
       return { ...entry, id: `updates:${entry.id}` };
@@ -1050,7 +1050,7 @@ export function applyQueueTriage(items, entries = [], now = new Date(), { includ
 
 /**
  * Gather one producer into normalized rows. A producer may return either an
- * array or `{ items, truncated }` when it filtered a bounded upstream read.
+ * array or `{ items, truncated, incomplete }` when its read is bounded or unverified.
  * Totals are nullable whenever the read filled its bound: the collected rows
  * are a lower bound, not evidence that the source is exhausted.
  */
@@ -1059,6 +1059,7 @@ async function gatherProducer(producer, ctx = {}) {
   const descriptor = Array.isArray(gathered) ? { items: gathered } : gathered;
   const rawItems = Array.isArray(descriptor?.items) ? descriptor.items : [];
   const truncated = descriptor?.truncated === true || rawItems.length > REVIEW_QUEUE_SOURCE_READ_LIMIT;
+  const incomplete = descriptor?.incomplete === true;
   const list = rawItems.slice(0, REVIEW_QUEUE_SOURCE_READ_LIMIT);
   const items = list.map((item, index) => {
     const mapped = {
@@ -1077,9 +1078,10 @@ async function gatherProducer(producer, ctx = {}) {
   });
   return {
     items,
-    total: truncated ? null : list.length,
+    total: truncated || incomplete ? null : list.length,
     lowerBound: list.length,
     truncation: truncated,
+    incomplete,
     preserveTriageActionKinds: Array.isArray(descriptor?.preserveTriageActionKinds)
       ? descriptor.preserveTriageActionKinds
       : (producer.preserveTriageActionKinds || []),
@@ -1531,6 +1533,7 @@ async function readQueueTriageForProjection({
   currentItems = [],
   pruneOrphans = false,
   preserveTriageActionKinds = [],
+  preserveTriageSources = [],
 } = {}) {
   const entries = await reviewQueueTriageStore.listReviewQueueTriage();
   if (!Array.isArray(entries)) return [];
@@ -1540,6 +1543,7 @@ async function readQueueTriageForProjection({
     if (!entry.dismissed) scheduleQueueClockInvalidation(Date.parse(entry.snoozedUntil));
   }
   const preservedKinds = new Set(preserveTriageActionKinds);
+  const preservedSources = new Set(preserveTriageSources);
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
     : null;
@@ -1558,7 +1562,7 @@ async function readQueueTriageForProjection({
       ? entry.actionKey.startsWith('delivery:') ? entry.actionKey.slice('delivery:'.length) : null
       : null;
     const orphaned = currentKeys && (
-      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId))
+      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId) && !preservedSources.has(deliveryId.split(':')[0]))
       || (!entry.delivery && !currentKeys.has(key) && !preservedKinds.has(actionKind))
     );
     if (unused || orphaned) removableKeys.add(key);
@@ -1613,12 +1617,17 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
   let items = deduplicateItems(results.flatMap((result) => result.items));
   if (applyTriageState) {
     const sourceReadComplete = results.every((result) => result.error === null && !result.truncation);
-    const preserveTriageActionKinds = results.flatMap((result) => result.preserveTriageActionKinds || []);
+    const preserveTriageActionKinds = results.flatMap((result) => [
+      ...(result.preserveTriageActionKinds || []),
+      ...(result.incomplete && ACTION_KINDS[result.source] ? [ACTION_KINDS[result.source]] : []),
+    ]);
+    const preserveTriageSources = results.filter((result) => result.incomplete).map((result) => result.source);
     const triageEntries = await readQueueTriageForProjection({
       now: clock,
       currentItems: items,
       pruneOrphans: sourceReadComplete && (view === null || view === 'all'),
       preserveTriageActionKinds,
+      preserveTriageSources,
     });
     items = applyQueueTriage(items, triageEntries, clock, { includeSnoozed: view === 'snoozed' });
   }
@@ -1629,7 +1638,7 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
 
   for (const result of results) {
     const shown = shownCounts[result.source] || 0;
-    const knownTotal = result.error === null && !result.truncation && Number.isSafeInteger(result.total)
+    const knownTotal = result.error === null && !result.truncation && !result.incomplete && Number.isSafeInteger(result.total)
       ? shown
       : null;
     totalsBySource[result.source] = knownTotal;
@@ -1638,14 +1647,15 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
       total: knownTotal,
       shown,
       error: result.error,
-      availability: result.error ? 'unavailable' : 'available',
+      availability: result.error ? 'unavailable' : result.incomplete ? 'partial' : 'available',
       available: !result.error,
       truncation: Boolean(result.truncation),
+      incomplete: Boolean(result.incomplete),
       lowerBound: result.error ? 0 : shown,
     };
   }
 
-  const partial = results.some((result) => result.error || result.truncation);
+  const partial = results.some((result) => result.error || result.truncation || result.incomplete);
   return {
     items,
     total: partial ? null : items.length,

@@ -199,10 +199,12 @@ describe('localModelHeuristics', () => {
       // regex would otherwise match — `gemma3:1b` is a text-only Gemma 3
       // (type:'llm'), not a vision model, even though `gemma-?3` matches.
       expect(isVisionModel({ id: 'gemma3:1b', type: 'llm' })).toBe(false);
+      expect(isVisionModel({ id: 'gemma3:1b', capabilities: ['completion'] })).toBe(false);
       expect(isVisionModel({ id: 'llava-phi3', type: 'embeddings' })).toBe(false);
       // …but a regex-matching id with NO type metadata (Ollama /api/tags) still
       // falls through to the heuristic.
       expect(isVisionModel({ id: 'gemma3:4b' })).toBe(true);
+      expect(isVisionModel({ id: 'gemma3:4b', capabilities: [] })).toBe(true);
     });
 
     it('handles non-values', () => {

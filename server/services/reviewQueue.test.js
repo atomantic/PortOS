@@ -29,7 +29,7 @@ const stackerNews = { listPendingReviewActions: vi.fn() };
 const x = { listPendingReviewActions: vi.fn() };
 const githubNotifications = { listActionableNotifications: vi.fn() };
 const userTimezone = { getUserTimezone: vi.fn() };
-const runtimeUpdateReview = { getRuntimeUpdateReviewItems: vi.fn() };
+const runtimeUpdateReview = { getRuntimeUpdateReviewSnapshot: vi.fn() };
 const reviewQueueTriageStore = {
   listReviewQueueTriage: vi.fn(),
   upsertReviewQueueTriage: vi.fn(),
@@ -110,7 +110,7 @@ function resetEmpty() {
   x.listPendingReviewActions.mockResolvedValue([]);
   githubNotifications.listActionableNotifications.mockResolvedValue([]);
   userTimezone.getUserTimezone.mockResolvedValue('UTC');
-  runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([]);
+  runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [], incomplete: false });
   reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([]);
   reviewQueueTriageStore.upsertReviewQueueTriage.mockResolvedValue(undefined);
   reviewQueueTriageStore.removeReviewQueueTriage.mockResolvedValue(undefined);
@@ -145,15 +145,37 @@ describe('reviewQueue.buildQueue', () => {
       revision: 'security:v26.12.1', severity: 'high', priority: 'HIGH', required: true,
       drillTo: '/apps/portos-default/update', operations: [],
     };
-    runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([alert]);
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [alert], incomplete: false });
     const first = (await buildQueue()).items.find((item) => item.source === 'updates');
     expect(first).toMatchObject({ id: 'updates:node', actionKind: 'software.update', sourceRef: 'node', required: true, severity: 'high', drillTo: alert.drillTo });
     const snooze = { ...queueActionIdentity(first), snoozedUntil: '2030-01-01T00:00:00Z' };
     expect(applyQueueTriage([first], [snooze], new Date('2026-10-31')).length).toBe(0);
-    runtimeUpdateReview.getRuntimeUpdateReviewItems.mockReturnValue([{ ...alert, revision: 'security:v26.14.0' }]);
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ ...alert, revision: 'security:v26.14.0' }], incomplete: false });
     const newer = (await buildQueue()).items.find((item) => item.source === 'updates');
     expect(applyQueueTriage([newer], [snooze], new Date('2026-10-31'))).toHaveLength(1);
     expect(newer.triageOperations.map((operation) => operation.id)).toEqual(['snooze']);
+  });
+
+  it('counts only actionable runtime updates when checks are unverified', async () => {
+    const { __testing: { createRuntimeUpdateReviewMonitor } } = await vi.importActual('./runtimeUpdateReview.js');
+    const monitor = createRuntimeUpdateReviewMonitor({
+      readRuntime: async () => null,
+      readHarnesses: async () => [
+        { id: 'unknown', label: 'Unknown CLI', installed: true, probeState: 'available', package: 'example', version: '1.0.0', latestVersion: null },
+        { id: 'outdated', label: 'Outdated CLI', installed: true, probeState: 'available', package: 'example', version: '1.0.0', latestVersion: '2.0.0' },
+      ],
+      notify: vi.fn(), save: vi.fn().mockResolvedValue(undefined),
+    });
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockImplementation(monitor.snapshot);
+    const pending = await buildQueue();
+    expect(pending.items).toEqual([]);
+    expect(pending.sources.updates).toMatchObject({ availability: 'partial', incomplete: true, total: null });
+    expect(pending.partial).toBe(true);
+    await monitor.refresh();
+    const queue = await buildQueue();
+    expect(queue.items.map((item) => item.id)).toEqual(['updates:harness:outdated']);
+    expect(queue.sources.updates).toMatchObject({ availability: 'partial', incomplete: true, total: null });
+    expect(queue.counts.total).toBe(1);
   });
 
   it('normalizes each producer into the common row shape', async () => {
@@ -856,6 +878,24 @@ describe('reviewQueue.buildQueue', () => {
     proactiveAlerts.generateNonProductAlerts.mockResolvedValue([alert]);
     const reappeared = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
     expect(reappeared.items.find((item) => item.id === 'health:system_resource:memory')).toBeTruthy();
+  });
+
+  it('prunes other sources while preserving markers for incomplete update checks', async () => {
+    const health = { actionKey: 'health.investigate:system_resource:memory', snoozedUntil: '2030-01-01T00:00:00.000Z' };
+    const update = { actionKey: 'software.update:harness:example', revision: '1.0.0:2.0.0', snoozedUntil: '2030-01-01T00:00:00.000Z' };
+    const delivery = { actionKey: 'delivery:updates:harness:example', delivery: { severity: 1, channels: { toast: 0 } } };
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([health, update, delivery]);
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [], incomplete: true });
+
+    await buildQueue({ query: { view: 'all' } });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(health);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(update);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(delivery);
+
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [], incomplete: false });
+    await buildQueue({ query: { view: 'all' } });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(update);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(delivery);
   });
 
   it('preserves condition identity through reorder, wording changes and severity escalation', async () => {

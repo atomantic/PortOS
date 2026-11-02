@@ -91,6 +91,7 @@ const TIMEOUT_BUDGET_RE = /timed out after +([0-9]+) *ms/i;
 export function isRequestSpecificCategory(category) {
   return category === ERROR_CATEGORIES.CONTENT_REFUSAL
     || category === ERROR_CATEGORIES.MODEL_NOT_FOUND
+    || category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED
     || isSchemaTypeCategory(category);
 }
 

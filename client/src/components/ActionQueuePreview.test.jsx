@@ -97,6 +97,18 @@ describe('canonical action previews', () => {
     expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
   });
 
+  it('shows incomplete update checks as information without a zero-action alert badge', async () => {
+    mock.getReviewQueue.mockResolvedValue({ ...envelope([], true), sources: {
+      updates: { label: 'Software updates', availability: 'partial', available: true, incomplete: true },
+    } });
+    show();
+    const bell = await screen.findByRole('button', { name: 'Notifications (at least 0 required actions)' });
+    expect(within(bell).queryByText('0+')).not.toBeInTheDocument();
+    const actions = screen.getByRole('region', { name: 'Actions' });
+    expect(within(actions).getByText('Some checks for Software updates are unverified; automatic checks will retry.')).toBeInTheDocument();
+    expect(within(actions).queryByText('All caught up!')).not.toBeInTheDocument();
+  });
+
   it('treats a source preview limit as context and keeps unrelated widgets healthy', async () => {
     mock.getReviewQueue.mockResolvedValue({ ...envelope([required], true), sources: {
       review: { label: 'Stored review obligations', availability: 'available', truncation: true },

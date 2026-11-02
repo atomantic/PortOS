@@ -28,7 +28,7 @@ afterEach(() => vi.useRealTimers());
 
 describe('runtime update review monitor', () => {
   it('projects the running versions, security priority, guarded actions, and distinct pm2 update paths', async () => {
-    const { monitor } = fixture();
+    const { monitor, deps } = fixture();
     await monitor.refresh();
     const byId = Object.fromEntries(monitor.items().map((item) => [item.id, item]));
     expect(byId.node).toMatchObject({ severity: 'high', revision: 'security:v26.12.1', drillTo: '/apps/portos-default/update' });
@@ -36,8 +36,8 @@ describe('runtime update review monitor', () => {
     expect(byId.node.summary).toContain('v26.13.0');
     expect(byId.node.summary).toContain('restart');
     expect(byId['pm2-sync'].summary).toContain('daemon 7.0.0 on Node 26.10.0');
-    expect(byId['pm2-upstream'].summary).toContain('sync action installs the bundled version');
-    expect(byId['pm2-upstream'].summary).toContain('npm has 7.2.0');
+    expect(byId['pm2-upstream']).toBeUndefined();
+    expect(deps.save.mock.calls.at(-1)[0].find((item) => item.id === 'pm2-upstream').summary).toContain('npm has 7.2.0');
     expect(byId['pm2-startup'].summary).toContain('after boot');
     expect(byId['harness:codex']).toMatchObject({ drillTo: '/ai/harnesses/codex', revision: '1.0.0:1.1.0' });
     expect(byId['harness:codex'].summary).toContain('Installed 1.0.0; latest 1.1.0');
@@ -54,7 +54,8 @@ describe('runtime update review monitor', () => {
     expect(byId.node).toMatchObject({ severity: 'high', revision: 'security:v26.12.1', unverified: true });
     expect(byId.node.summary).toContain('last known result');
     expect(byId['pm2-sync'].unverified).toBe(true);
-    expect(byId['pm2-upstream'].unverified).toBe(true);
+    expect(byId['pm2-upstream']).toBeUndefined();
+    expect(deps.save.mock.calls.at(-1)[0].find((item) => item.id === 'pm2-upstream').unverified).toBe(true);
     expect(byId['harness:codex']).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
 
     deps.readRuntime.mockResolvedValue(runtime({
@@ -69,14 +70,99 @@ describe('runtime update review monitor', () => {
     expect(byId).toEqual({});
   });
 
-  it('reports an unknown status on a cold failure and retains the known security floor offline', async () => {
-    const { monitor } = fixture({ node: runtime({ releases: null }), harnesses: [harness({ latestVersion: null })] });
+  it('retains a known security floor offline without making an unknown harness an action', async () => {
+    const { monitor, deps } = fixture({ node: runtime({ releases: null }), harnesses: [harness({ latestVersion: null })] });
     await monitor.refresh();
     const byId = Object.fromEntries(monitor.items().map((item) => [item.id, item]));
     expect(byId.node).toMatchObject({ severity: 'high', revision: 'security:v26.12.1', unverified: true });
     expect(byId.node.summary).toContain('v26.12.1');
-    expect(byId['harness:codex']).toMatchObject({ unverified: true });
-    expect(byId['harness:codex'].summary).toContain('could not be verified');
+    expect(byId['harness:codex']).toBeUndefined();
+    expect(deps.save.mock.calls.at(-1)[0].find((item) => item.id === 'harness:codex'))
+      .toMatchObject({ unverified: true, unverifiedPrevious: false, retrySoon: true, summary: expect.stringContaining('could not be verified') });
+  });
+
+  it('keeps unverified checks diagnostic, retries them, and raises a confirmed update', async () => {
+    vi.useFakeTimers();
+    const unknownHarness = harness({ id: 'unknown', latestVersion: null });
+    const manualHarness = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [unknownHarness, manualHarness, harness()] });
+    expect(monitor.items()).toEqual([]);
+    expect(monitor.snapshot().incomplete).toBe(true);
+    await monitor.start();
+    await vi.waitFor(() => expect(deps.save).toHaveBeenCalled());
+    expect(monitor.items().map((item) => item.id)).toEqual(['harness:codex']);
+    const saved = deps.save.mock.calls.at(-1)[0];
+    expect(monitor.snapshot().incomplete).toBe(true);
+    expect(saved.find((item) => item.id === 'harness:unknown')).toMatchObject({ unverified: true, unverifiedPrevious: false, retrySoon: true });
+    expect(saved.find((item) => item.id === 'harness:manual')).toMatchObject({ unverified: true, unverifiedPrevious: false, retrySoon: false });
+
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(deps.readHarnesses).toHaveBeenCalledTimes(2);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'unknown' }), manualHarness, harness()]);
+    await monitor.refresh();
+    expect(monitor.items().find((item) => item.id === 'harness:unknown')).toMatchObject({ revision: '1.0.0:1.1.0' });
+    expect(monitor.snapshot().incomplete).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'unknown', probeState: 'unavailable' }), manualHarness, harness()]);
+    await monitor.refresh();
+    expect(monitor.items().find((item) => item.id === 'harness:unknown')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true, unverifiedPrevious: true });
+    monitor.stop();
+  });
+
+  it('filters cached unknown-only rows after restart while keeping known actions', async () => {
+    const first = fixture({ node: status(), harnesses: [harness(), harness({ id: 'unknown', latestVersion: null })] });
+    await first.monitor.refresh();
+    const cached = first.deps.save.mock.calls.at(-1)[0];
+    const second = fixture({ cached });
+    second.deps.readRuntime.mockRejectedValue(new Error('offline'));
+    second.deps.readHarnesses.mockRejectedValue(new Error('offline'));
+    await second.monitor.start();
+    await vi.waitFor(() => expect(second.deps.save).toHaveBeenCalled());
+    expect(second.monitor.items().map((item) => item.id)).toEqual(['harness:codex']);
+    expect(second.monitor.items()[0]).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true, unverifiedPrevious: true });
+    expect(second.deps.save.mock.calls.at(-1)[0].find((item) => item.id === 'harness:unknown'))
+      .toMatchObject({ unverified: true, unverifiedPrevious: false });
+    second.monitor.stop();
+  });
+
+  it('reports and retries failed source reads even when the cached rows do not change', async () => {
+    vi.useFakeTimers();
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.start();
+    await vi.waitFor(() => expect(deps.save).toHaveBeenCalled());
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    deps.notify.mockClear();
+    deps.readHarnesses.mockRejectedValue(new Error('offline'));
+    runtimeUpdateEvents.emit('changed');
+    await vi.waitFor(() => expect(deps.notify).toHaveBeenCalled());
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+    const calls = deps.readHarnesses.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(deps.readHarnesses).toHaveBeenCalledTimes(calls + 1);
+    deps.readHarnesses.mockResolvedValue([manual]);
+    runtimeUpdateEvents.emit('changed');
+    await vi.waitFor(() => expect(monitor.snapshot().incomplete).toBe(false));
+    monitor.stop();
+  });
+
+  it('reports a failed runtime read when its only cached observation is an upstream pm2 release', async () => {
+    const { monitor, deps } = fixture({ node: status({ pm2: { latest: '7.2.0' } }), harnesses: [] });
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    deps.readRuntime.mockRejectedValue(new Error('offline'));
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+  });
+
+  it('retries a harness probe failure after an unsupported release comparison', async () => {
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual', package: null, probeState: 'unavailable', installed: false, version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(true);
+    expect(deps.save.mock.calls.at(-1)[0].find(item => item.id === 'harness:manual')).toMatchObject({ retrySoon: true, unverifiedPrevious: false });
   });
 
   it('keeps pm2 alerts when the terminal CLI or startup configuration cannot be read', async () => {
@@ -93,11 +179,79 @@ describe('runtime update review monitor', () => {
   });
 
   it('does not treat a vanished harness on PATH as a verified update', async () => {
+    vi.useFakeTimers();
     const { monitor, deps } = fixture();
     await monitor.refresh();
     deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
     await monitor.refresh();
     expect(monitor.items().find((item) => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.items().find((item) => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
+  });
+
+  it('clears a missing harness diagnostic without hiding a later confirmed update', async () => {
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual', package: null, installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    expect(deps.save.mock.calls.at(-1)[0].some(item => item.id === 'harness:manual')).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual' })]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:manual')).toMatchObject({ revision: '1.0.0:1.1.0' });
+  });
+
+  it('retries a missing npm diagnostic before treating sustained absence as a cold missing probe', async () => {
+    vi.useFakeTimers();
+    const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+    expect(deps.save.mock.calls.at(-1)[0].find(item => item.id === 'harness:codex')).toMatchObject({ retrySoon: true, unverifiedPrevious: false });
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(true);
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    deps.readHarnesses.mockResolvedValue([harness()]);
+    await monitor.refresh();
+    expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0' });
+  });
+
+  it('restarts the missing grace period after a different probe result', async () => {
+    vi.useFakeTimers();
+    const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    vi.advanceTimersByTime(20 * 60 * 1000);
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'unavailable', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+  });
+
+  it('finishes the missing diagnostic grace period after restart', async () => {
+    vi.useFakeTimers();
+    const missing = harness({ installed: false, probeState: 'missing', version: null, latestVersion: null });
+    const first = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await first.monitor.refresh();
+    first.deps.readHarnesses.mockResolvedValue([missing]);
+    await first.monitor.refresh();
+    const cached = first.deps.save.mock.calls.at(-1)[0];
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    const second = fixture({ node: status(), harnesses: [missing], cached });
+    await second.monitor.start();
+    await vi.waitFor(() => expect(second.deps.save).toHaveBeenCalled());
+    expect(second.monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    second.monitor.stop();
   });
 
   it('clears a harness after its explicit removal is rechecked', async () => {
@@ -202,6 +356,12 @@ async function observe(...statuses) {
   return Object.fromEntries(monitor.items().map((item) => [item.id, item]));
 }
 
+async function observeCache(next) {
+  const { monitor, deps } = fixture({ node: next, harnesses: [] });
+  await monitor.refresh();
+  return Object.fromEntries(deps.save.mock.calls.at(-1)[0].map((item) => [item.id, item]));
+}
+
 describe('runtime row reconciliation', () => {
   it('reports nothing for an aligned, current runtime', async () => {
     expect(await observe(status())).toEqual({});
@@ -211,7 +371,9 @@ describe('runtime row reconciliation', () => {
     const { monitor, deps } = fixture({ node: {} });
     await monitor.refresh();
     const byId = () => Object.fromEntries(monitor.items().map((item) => [item.id, item]));
-    expect(byId()['runtime-check']).toMatchObject({ title: 'Runtime update check unavailable', unverified: true });
+    expect(byId()['runtime-check']).toBeUndefined();
+    expect(deps.save.mock.calls.at(-1)[0].find((item) => item.id === 'runtime-check'))
+      .toMatchObject({ title: 'Runtime update check unavailable', unverified: true, unverifiedPrevious: false });
     deps.readRuntime.mockResolvedValue(runtime());
     await monitor.refresh();
     expect(byId()['runtime-check']).toBeUndefined();
@@ -255,7 +417,7 @@ describe('runtime row reconciliation', () => {
     ['an unknown security baseline', { baseline: { compliant: null } }, { title: 'Node.js update status unverified', revision: 'unverified' }],
     ['an unverified release index', { releases: { securityVerified: false } }, { title: 'Node.js update status unverified', revision: 'unverified' }],
   ])('marks the Node.js row unverified for %s', async (_label, overrides, expected) => {
-    const { node } = await observe(status(overrides));
+    const { node } = await observeCache(status(overrides));
     expect(node).toMatchObject({ ...expected, unverified: true });
   });
 
@@ -271,6 +433,14 @@ describe('runtime row reconciliation', () => {
       node: { inSupportedRange: false }, releases: { latestInLine: { version: 'v26.13.0' }, securityVerified: false },
     }));
     expect(unsupported.node).toMatchObject({ revision: 'update:v26.13.0', severity: 'high', unverified: true, summary: expect.stringContaining('Unsupported runtime') });
+  });
+
+  it('replaces an unknown-only Node observation when a newer release is found', async () => {
+    const byId = await observe(
+      status({ releases: { securityVerified: false } }),
+      status({ releases: { latestInLine: { version: 'v26.14.0' }, securityVerified: false } }),
+    );
+    expect(byId.node).toMatchObject({ title: 'Node.js update available', revision: 'update:v26.14.0', unverified: true });
   });
 
   it('holds a security Node.js row when the unverified index repeats or lacks its target, but escalates an unsupported row', async () => {
@@ -316,7 +486,7 @@ describe('runtime row reconciliation', () => {
     ['an unsupported terminal CLI', { pm2: { cliState: 'unsupported' } }, false],
     ['an unsupported terminal CLI and unreadable daemon', { pm2: { cliState: 'unsupported' }, daemon: { nodeVersion: null } }, true],
   ])('reports pm2 alignment unverified for %s', async (_label, overrides, retrySoon) => {
-    const { 'pm2-sync': sync } = await observe(status(overrides));
+    const { 'pm2-sync': sync } = await observeCache(status(overrides));
     expect(sync).toMatchObject({ title: 'pm2 runtime status unverified', revision: 'unverified', unverified: true, retrySoon });
   });
 
@@ -329,7 +499,7 @@ describe('runtime row reconciliation', () => {
     ['no bundled version', { pm2: { shipped: null } }, 'pm2 release status unverified', 'the npm release could not be checked'],
     ['an incomparable npm version', { pm2: { latest: 'next' } }, 'pm2 release status unverified', 'could not be compared'],
   ])('reports the pm2 release row unverified for %s', async (_label, overrides, title, summary) => {
-    const { 'pm2-upstream': upstream } = await observe(status(overrides));
+    const { 'pm2-upstream': upstream } = await observeCache(status(overrides));
     expect(upstream).toMatchObject({ title, unverified: true, summary: expect.stringContaining(summary) });
   });
 

@@ -12,6 +12,7 @@ export const ERROR_CATEGORIES = {
   AUTH_ERROR: 'auth-error',
   SPAWN_ERROR: 'spawn-error',
   MODEL_NOT_FOUND: 'model-not-found',
+  IMAGE_UNSUPPORTED: 'image-unsupported',
   NETWORK_ERROR: 'network-error',
   TIMEOUT: 'timeout',
   // An explicitly shortened caller spending cap, not provider health.
@@ -1198,6 +1199,24 @@ export function normalizeRateLimitHeaders(headers, { now = Date.now() } = {}) {
   };
 }
 
+// Ollama can encode an error object as a JSON string inside another error
+// object. Follow only error/message fields, not echoed prompts or other body
+// fields, and require the actual error message to match.
+function isUnsupportedImageError(body) {
+  let value = body;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (/^multimodal data provided, but model does not support multimodal requests\.?$/i.test(text)) return true;
+      if (text.length > 65536) return false;
+      try { value = JSON.parse(text); } catch { return false; }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      value = value.error ?? value.message;
+    } else return false;
+  }
+  return false;
+}
+
 export function analyzeHttpError(response) {
   const { status, statusText, body, headers } = response;
   const rateLimitWindow = normalizeRateLimitHeaders(headers);
@@ -1236,6 +1255,21 @@ export function analyzeHttpError(response) {
       requiresFallback: true,
       actionable: true,
       suggestedFix: 'Check API key configuration for this provider'
+    };
+  }
+
+  // Ollama may wrap the upstream JSON error inside another JSON string. Match
+  // only this specific 400 and emit a fixed message rather than copying an
+  // untrusted response body (which may contain prompts or credentials).
+  if (status === 400 && isUnsupportedImageError(body)) {
+    return {
+      hasError: true,
+      category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED,
+      message: 'The selected model does not support image inputs.',
+      waitTime: null,
+      requiresFallback: false,
+      actionable: true,
+      suggestedFix: 'Choose a vision-capable model for this request.'
     };
   }
 

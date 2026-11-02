@@ -24,12 +24,15 @@ snapshot:
 
 The response also carries the compatibility `counts`, `generatedAt`, and row
 fields already consumed by the Review Hub. `total` and each
-`totalsBySource` value are `null` when a source failed or its bounded read was
-truncated. `partial` is true in either case; an unavailable source must never
+`totalsBySource` value are `null` when a source failed, its read was truncated,
+or its checks are incomplete. `partial` is true in those cases; an unavailable
+source must never
 be represented as an empty, healthy inbox.
 
 Each source descriptor includes `availability`, `available`, `error`,
-`truncation`, `lowerBound`, `total`, and `shown`. A numeric lower bound counts
+`truncation`, `incomplete`, `lowerBound`, `total`, and `shown`. An incomplete
+software-update source has checks still pending or retrying; it contributes no
+diagnostic rows to the action count. A numeric lower bound counts
 the unique rows collected from that source in the snapshot.
 
 ## Canonical rows
@@ -97,6 +100,7 @@ action kinds and are never merged merely because they share a task or agent.
 | Paused automation | Required with series/run id and link | Series/run reference; `autopilot.resume` / Resume | Resume remains in the owning automation surface |
 | Explicit content review | Required with report/reference id and link | Report or review id; `content.review` / Review | Private security and malware reports remain source-owned |
 | Health and backup | Required only with a known human remedy | Alert or last-run identity; Investigate or Retry | No generic Complete operation |
+| Software updates | Required for a known update or runtime mismatch with a user remedy | Runtime or harness id; open its updater | Unknown-only observations and newer upstream pm2 releases remain diagnostic; a last known action survives a failed check |
 | Product recommendations | Optional when a current POST or creative-feedback signal is available | Product action id plus local-day/run occurrence; Open | Feature-disabled signals disappear without deleting their local triage marker |
 | Legacy Review alerts | Required as explicit triage | Stored Review item id; `review.triage` / Review | Never silently completed or deleted |
 | Briefings, generic warnings, client errors, and uncorrelated notifications | Not admitted | No proven obligation contract | Remain in Review history/context |
