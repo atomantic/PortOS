@@ -32,7 +32,7 @@ vi.mock('../../lib/fileUtils.js', async (load) => ({
 }));
 vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (body) => body }));
 vi.mock('../musicVideo/clipCastReferences.js', () => ({
-  musicVideoLocalReferenceFiles: m.localReferences,
+  musicVideoLocalReferencePaths: m.localReferences,
   musicVideoClipCastReferences: m.hostedReferences,
 }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: async () => null }));
@@ -49,7 +49,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.settings = { imageGen: { local: { pythonPath: '/example/python' }, grok: { enabled: true, grokPath: '/example/grok' } },
     videoGen: { defaultModelId: 'omni' } };
-  m.localReferences.mockImplementation(async (_tag, limit) => ['lead.png', 'guest.png', 'third.png'].slice(0, limit));
+  m.localReferences.mockImplementation(async (_tag, limit, { excludePath } = {}) => ['/mock/images/still.png', '/mock/images/lead.png', '/mock/images/guest.png']
+    .filter((path) => path !== excludePath).slice(0, limit));
   m.hostedReferences.mockResolvedValue([]);
   m.enqueue.mockResolvedValue({ jobId: 'job', status: 'queued', position: 1 });
 });
@@ -57,13 +58,34 @@ beforeEach(() => {
 describe('Music Video cast references at video submission', () => {
   it('queues the default local model with cast sheets within its combined limit', async () => {
     await expect(submitVideoGenJob(body({ backend: 'local' }), {})).resolves.toMatchObject({ mode: 'local', model: 'omni' });
-    expect(m.localReferences).toHaveBeenCalledWith(tag, 2);
+    expect(m.localReferences).toHaveBeenCalledWith(tag, 2, { excludePath: '/mock/images/still.png' });
     expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/images/lead.png', '/mock/images/guest.png']);
   });
 
   it('also augments a request that resolves to local without an explicit backend', async () => {
     await expect(submitVideoGenJob(body(), {})).resolves.toMatchObject({ mode: 'local', model: 'omni' });
     expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/images/lead.png', '/mock/images/guest.png']);
+  });
+
+  it('excludes the staged upload path without discarding a different gallery file', async () => {
+    const sourceImage = { path: '/tmp/source.png', originalname: 'source.png' };
+    await submitVideoGenJob(body({ backend: 'local' }), { sourceImage });
+    const params = m.enqueue.mock.calls[0][0].params;
+    expect(params.sourceImagePath).toMatch(/^\/mock\/uploads\/video-source-/);
+    expect(m.localReferences).toHaveBeenCalledWith(tag, 2, { excludePath: params.sourceImagePath });
+    expect(params.referenceImagePaths).toEqual(['/mock/images/still.png', '/mock/images/lead.png']);
+  });
+
+  it('does not replace caller-supplied reference images', async () => {
+    await submitVideoGenJob(body({ backend: 'local', referenceImageFiles: ['chosen.png'] }), {});
+    expect(m.localReferences).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/images/chosen.png']);
+  });
+
+  it('passes an internally resolved cast guide outside the gallery to the local job', async () => {
+    m.localReferences.mockResolvedValue(['/mock/image-refs/guide.png']);
+    await submitVideoGenJob(body({ backend: 'local' }), {});
+    expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/image-refs/guide.png']);
   });
 
   it('keeps an inherited Grok route even when the local default accepts cast sheets', async () => {
