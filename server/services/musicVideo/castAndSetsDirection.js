@@ -437,6 +437,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- looks: each is a different complete outfit the protagonist wears at their present-story age. An outfit from another age goes in that age\'s protagonist.forms wardrobe, never in looks.',
+    '- People and wardrobe sheets show empty, relaxed hands. In protagonist/cast/form appearance descriptions, looks and wardrobe, describe the person, worn clothing and worn accessories only. Put carried or held objects in props, never in these descriptions; signature may describe a story prop, but it is not drawn on a person or wardrobe sheet.',
     '- sets in another era: a place the story shows in a memory or another period gets that era and, when the story gives the era its own film stock or color, that look; the same place in two eras is two sets. Present-story sets leave both empty.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
     `- protagonist.expressions: 4–6 moods the protagonist actually shows in THIS story, each "<mood>: <what the face, eyes and head do>" (e.g. "grief held in: eyes closed, head bowed"). They become the expression sheet. ${musicVideoLipSyncs(project)
