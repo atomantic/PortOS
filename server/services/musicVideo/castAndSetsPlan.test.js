@@ -40,6 +40,12 @@ describe('Cast & Sets face sheets', () => {
   it('opens every face sheet with the head angles and gives each cast member one built on their cast sheet', () => {
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, WITH_CAST);
     expect(plan.expressions.label).toBe('Face sheet');
+    for (const key of ['expressions', 'face:kevin']) {
+      expect(plan[key].refTemplates).toEqual(['music-video-face-angles.png']);
+      expect(plan[key].prompt).toContain('Reference image 1 is ONLY an angle/layout guide');
+      expect(plan[key].prompt).toContain('LEFT faces image-left; RIGHT faces image-right');
+      expect(plan[key].prompt).toContain('Never copy the template');
+    }
     expect(plan.expressions.prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT');
     expect(plan['face:kevin']).toMatchObject({ kind: 'face', deps: ['cast:kevin'], refKeys: ['cast:kevin'], label: 'Kevin face sheet' });
     expect(plan['face:kevin'].prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT');

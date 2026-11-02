@@ -7,14 +7,14 @@ import { formatCount } from '../../utils/formatters';
 import { normalizeImage } from '../media/normalize.js';
 import CastAndSetsItemActions from './CastAndSetsItemActions.jsx';
 
-const imageSource = ({ kind, filename }) => `/data/${kind === 'image-ref' ? 'image-refs' : 'images'}/${encodeURIComponent(filename)}`;
-// Reference sheets live under /data/image-refs, so they get their own key
-// prefix and can't collide with a same-named gallery image (usePreviewRoute).
-export const castAndSetsPreviewKey = ({ kind, filename }) => `${kind === 'image-ref' ? 'image-ref' : 'image'}:${filename}`;
+const imageSource = ({ kind, filename }) => `/data/${kind === 'template' ? 'templates' : kind === 'image-ref' ? 'image-refs' : 'images'}/${encodeURIComponent(filename)}`;
+// Uploaded references and shipped templates use their own key prefixes so
+// same-named gallery images cannot take their preview route (usePreviewRoute).
+export const castAndSetsPreviewKey = ({ kind, filename }) => `${kind === 'template' ? 'template' : kind === 'image-ref' ? 'image-ref' : 'image'}:${filename}`;
 
 function previewItem(ref, prompt) {
   const item = normalizeImage({ filename: ref.filename, path: imageSource(ref), prompt });
-  return ref.kind === 'image-ref' ? { ...item, key: castAndSetsPreviewKey(ref) } : item;
+  return ref.kind !== 'image' ? { ...item, key: castAndSetsPreviewKey(ref) } : item;
 }
 
 // Submitted inputs once the job is recorded, else what the plan will send.
@@ -22,6 +22,7 @@ function cardReferences(item, stage) {
   const image = stage.images?.[item.key] || {};
   if (typeof image.submittedPrompt === 'string') return image.submittedReferences || [];
   return [
+    ...(item.refTemplates || []).map((filename) => ({ kind: 'template', filename })),
     ...(item.refKeys || []).flatMap((key) => stage.images?.[key]?.imageId
       ? [{ kind: 'image', filename: stage.images[key].imageId }] : []),
     ...(item.refImages || []).map((filename) => ({ kind: 'image', filename })),

@@ -31,10 +31,13 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { randomUUID } from 'crypto';
 import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
 import { readFile } from 'fs/promises';
+import { existsSync } from 'node:fs';
+import { FACE_SHEET_ANGLE_TEMPLATE } from '../../lib/faceSheetAngleTemplate.js';
+import { atomicWrite } from '../../lib/fileCore.js';
 import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
-import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
+import { resolveGalleryImage, resolveImageRef, resolveTemplateAsset } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
@@ -307,7 +310,10 @@ async function currentImagePlan(project, direction) {
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greyboxes = Object.fromEntries(await Promise.all((direction.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
   const catalogLikeness = await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
-  return { codeOnly, plan: buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(project.castAndSets?.keyNotes), greyboxes, catalogLikeness }) };
+  const plan = buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(project.castAndSets?.keyNotes), greyboxes, catalogLikeness });
+  // Planned cards are published before their dependent renders can start.
+  if (Object.values(plan).some((item) => item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE))) await ensureFaceSheetTemplate();
+  return { codeOnly, plan };
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
@@ -373,8 +379,18 @@ const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNot
 
 // ---- images -----------------------------------------------------------------------
 
-function referencePaths(stage, item) {
+async function ensureFaceSheetTemplate() {
+  const path = resolveTemplateAsset(FACE_SHEET_ANGLE_TEMPLATE, { mustExist: false });
+  if (!existsSync(path)) {
+    await atomicWrite(path, await readFile(new URL(`../../../data.reference/templates/${FACE_SHEET_ANGLE_TEMPLATE}`, import.meta.url)));
+  }
+  return path;
+}
+
+async function referencePaths(stage, item) {
   const paths = [];
+  // Only the shipped layout is admissible here; plan data never selects a host path.
+  if (item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE)) paths.push(await ensureFaceSheetTemplate());
   for (const key of item.refKeys || []) {
     const id = stage.images?.[key]?.imageId;
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
@@ -408,7 +424,7 @@ export async function imageJobParams(settings, route, common) {
 
 async function enqueueImage(project, stage, key) {
   const item = stage.plan[key];
-  const referenceImagePaths = referencePaths(stage, item);
+  const referenceImagePaths = await referencePaths(stage, item);
   if (item.setReference?.greyboxShotId) {
     const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
     const greybox = await loadMusicVideoGreybox(project, { sceneId: key, setReference: item.setReference });
@@ -440,6 +456,7 @@ async function enqueueImage(project, stage, key) {
     const filename = basename(path);
     if (resolveGalleryImage(filename, { mustExist: false }) === path) return [{ kind: 'image', filename }];
     if (resolveImageRef(filename, { mustExist: false }) === path) return [{ kind: 'image-ref', filename }];
+    if (resolveTemplateAsset(filename, { mustExist: false }) === path) return [{ kind: 'template', filename }];
     return [];
   });
   const prompt = String(params.prompt || '');
