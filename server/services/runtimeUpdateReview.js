@@ -12,6 +12,7 @@ const UPDATE_LINK = `/apps/${PORTOS_APP_ID}/update`;
 const CACHE_FILE = join(PATHS.data, 'cache', 'runtime-update-review.json');
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 15 * 60 * 1000;
+const MISSING_DIAGNOSTIC_GRACE_MS = 2 * RETRY_INTERVAL_MS;
 
 const row = (id, title, summary, drillTo, revision, severity = 'normal') => ({
   id, title, summary, drillTo, revision, severity,
@@ -56,7 +57,7 @@ function readNodeEvidence(node, releases) {
  * not hide either.
  */
 function holdsPreviousNodeRow(previous, { security, unsupported, securityRevision }) {
-  if (!previous) return false;
+  if (!previous || (previous.unverified && !previous.unverifiedPrevious)) return false;
   if (unsupported && previous.severity !== 'high') return false;
   if (!security) return true;
   const previousSecurity = previous.revision?.startsWith('security:') ? previous.revision.slice('security:'.length) : null;
@@ -162,11 +163,26 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
     // changed PATH. It is not proof that a previous update was installed.
     if (harness.probeState === 'missing') {
       if (removalsBeforeRead.has(harness.id)) { removedHarnesses.delete(harness.id); rows.delete(id); }
-      else if (rows.has(id)) rows.set(id, unknown(rows.get(id)));
+      else if (rows.has(id)) {
+        const previous = rows.get(id);
+        if (previous.unverified && !previous.unverifiedPrevious) {
+          const now = Date.now();
+          const since = Number.isFinite(previous.missingSince) && previous.missingSince <= now ? previous.missingSince : now;
+          // After sustained absence, a diagnostic with no known action is the
+          // same as a cold missing probe; it never means an update was installed.
+          if (!harness.package || now - since >= MISSING_DIAGNOSTIC_GRACE_MS) rows.delete(id);
+          else rows.set(id, { ...unknown(previous), retrySoon: true, missingSince: since });
+        } else rows.set(id, { ...unknown(previous), retrySoon: true });
+      }
       continue;
     }
+    if (rows.get(id)?.missingSince !== undefined) {
+      const previous = { ...rows.get(id) };
+      delete previous.missingSince;
+      rows.set(id, previous);
+    }
     if (harness.probeState === 'unavailable' || harness.probeState === 'unprobed') {
-      rows.set(id, unknown(rows.get(id), row(id, `${harness.label} status unverified`, 'The installed harness could not report its version.', link, 'unverified')));
+      rows.set(id, { ...unknown(rows.get(id), row(id, `${harness.label} status unverified`, 'The installed harness could not report its version.', link, 'unverified')), retrySoon: true });
       continue;
     }
     if (!harness.installed) { rows.delete(id); continue; }
@@ -179,7 +195,7 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
       rows.set(id, row(id, `${harness.label} update available`, `Installed ${harness.version}; latest ${harness.latestVersion}. Review the harness updater before updating.`, link, `${harness.version}:${harness.latestVersion}`));
     } else rows.delete(id);
   }
-  for (const id of priorIds) rows.set(id, unknown(rows.get(id)));
+  for (const id of priorIds) rows.set(id, { ...unknown(rows.get(id)), retrySoon: true });
 }
 
 /** One refresh at a time; a mutation during a refresh forces another observation. */
@@ -190,25 +206,39 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
   let started = false;
   let ready = false;
   let checked = false;
+  let sourceReadIncomplete = false;
   let timer = null;
   const removedHarnesses = new Set();
-  const items = () => (checked || rows.size ? [...rows.values()] : [unknown(null, row('runtime-check', 'Software update checks pending', 'Node.js, pm2 and harness checks have not completed yet.', UPDATE_LINK, 'unverified'))]).map((entry) => ({
-    ...entry,
-    ...(entry.unverified ? { summary: `${entry.unverifiedPrevious ? 'Status unverified; last known result:' : 'Status unverified.'} ${entry.summary}` } : {}),
-  }));
+  // Unknown checks and a newer upstream pm2 release are diagnostic. Keep them
+  // for caching and retry; the bundled pm2 changes with a PortOS dependency update.
+  const items = () => [...rows.values()]
+    .filter((entry) => entry.id !== 'pm2-upstream' && (!entry.unverified || entry.unverifiedPrevious))
+    .map((entry) => ({
+      ...entry,
+      ...(entry.unverified ? { summary: `Status unverified; last known result: ${entry.summary}` } : {}),
+    }));
+  const snapshot = () => ({
+    items: items(),
+    // An unsupported comparison is not a failed check and cannot be retried.
+    incomplete: !checked || sourceReadIncomplete || [...rows.values()].some((entry) => entry.id !== 'pm2-upstream' && entry.unverified && entry.retrySoon !== false),
+  });
   const refresh = () => {
     if (inflight) { again = true; return inflight; }
     inflight = (async () => {
       do {
         again = false;
         const before = [...rows.values()];
+        const previousReadIncomplete = sourceReadIncomplete;
         const removalsBeforeRead = new Set(removedHarnesses);
         const [runtime, harnesses] = await Promise.allSettled([Promise.resolve().then(readRuntime), Promise.resolve().then(readHarnesses)]);
-        reconcileRuntime(rows, runtime.status === 'fulfilled' ? runtime.value : null);
-        reconcileHarnesses(rows, harnesses.status === 'fulfilled' ? harnesses.value : null, removedHarnesses, removalsBeforeRead);
+        const runtimeValue = runtime.status === 'fulfilled' ? runtime.value : null;
+        const harnessValues = harnesses.status === 'fulfilled' ? harnesses.value : null;
+        sourceReadIncomplete = !runtimeValue?.node?.version || !runtimeValue?.pm2 || !Array.isArray(harnessValues);
+        reconcileRuntime(rows, runtimeValue);
+        reconcileHarnesses(rows, harnessValues, removedHarnesses, removalsBeforeRead);
         const wasChecked = checked;
         checked = true;
-        if (!wasChecked || !isDeepStrictEqual(before, [...rows.values()])) {
+        if (!wasChecked || previousReadIncomplete !== sourceReadIncomplete || !isDeepStrictEqual(before, [...rows.values()])) {
           notify();
           await save([...rows.values()]).catch((error) => console.error(`❌ Runtime update cache write failed: ${error.message}`));
         }
@@ -220,7 +250,8 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
     refresh().catch((error) => console.error(`❌ Runtime update check failed: ${error.message}`)).finally(() => {
       if (!started) return;
       clearTimeout(timer);
-      timer = setTimeout(tick, [...rows.values()].some((entry) => entry.unverified && entry.retrySoon !== false) ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
+      const retry = sourceReadIncomplete || [...rows.values()].some((entry) => entry.unverified && entry.retrySoon !== false);
+      timer = setTimeout(tick, retry ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
       timer.unref?.();
     });
   };
@@ -243,7 +274,7 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
     tick();
   };
   const stop = () => { started = false; ready = false; clearTimeout(timer); runtimeUpdateEvents.off('changed', onChange); };
-  return { items, refresh, start, stop };
+  return { items, snapshot, refresh, start, stop };
 }
 
 const monitor = createRuntimeUpdateReviewMonitor({
@@ -254,6 +285,6 @@ const monitor = createRuntimeUpdateReviewMonitor({
   save: async (entries) => atomicWrite(CACHE_FILE, entries),
 });
 
-export const getRuntimeUpdateReviewItems = () => monitor.items();
+export const getRuntimeUpdateReviewSnapshot = () => monitor.snapshot();
 export const startRuntimeUpdateReview = () => monitor.start();
 export const __testing = { createRuntimeUpdateReviewMonitor };

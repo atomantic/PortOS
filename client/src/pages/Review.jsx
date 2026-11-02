@@ -71,6 +71,9 @@ const QUEUE_SEVERITY_STYLE = {
   normal: 'border-port-border'
 };
 
+const INLINE_RESOLUTION_OPERATIONS = new Set(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']);
+const isInlineResolution = (operation) => operation?.available !== false && INLINE_RESOLUTION_OPERATIONS.has(operation?.id);
+
 const safeExternalHttpUrl = (value) => {
   if (typeof value !== 'string' || !value.trim()) return null;
   try {
@@ -399,6 +402,9 @@ export default function Review() {
   const queueSourceErrors = useMemo(
     () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
     [queue]);
+  const queueSourceIncomplete = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.incomplete),
+    [queue]);
   const selectedAction = useMemo(
     () => (queue?.items || []).find((item) => item.id === actionId) || null,
     [queue, actionId]);
@@ -553,7 +559,12 @@ export default function Review() {
                 Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
               </p>
             )}
-            {queue?.partial && (
+            {queueSourceIncomplete.length > 0 && (
+              <p role="status" className="text-xs text-gray-500">
+                Some checks for {queueSourceIncomplete.map(([, s]) => s.label).join(', ')} are unverified; automatic checks will retry.
+              </p>
+            )}
+            {queue?.partial && (queueSourceIncomplete.length === 0 || Object.values(queue.sources || {}).some(source => source.truncation)) && (
               <p role="status" className="text-xs text-gray-500">
                 This bounded view may omit additional actions; open a source to see its complete list.
               </p>
@@ -947,7 +958,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
   const simpleTargets = promoteTargets.filter(t => t !== 'goal');
   const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
   const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
-    ? item.operations.filter(operation => operation && operation.available !== false)
+    ? item.operations.filter(isInlineResolution)
     : [];
   const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
   // Agent-run feedback renders the shared agent card right in the queue so the
@@ -1057,14 +1068,15 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </label>
         )}
         <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
-        <button
-          type="button"
-          onClick={() => onDrill(item)}
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
-          title="Open" aria-label="Open"
-        >
-          <ArrowRight size={16} />
-        </button>
+        {item.drillTo && (
+          <button
+            type="button"
+            onClick={() => onDrill(item)}
+            className="min-h-[44px] inline-flex items-center gap-1 rounded-md border border-port-accent/30 px-2 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/10 transition-colors"
+          >
+            <ArrowRight size={16} /> {item.drillLabel || 'Open source'}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1322,7 +1334,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
   if (!item) return null;
 
   const operations = Array.isArray(item.operations)
-    ? item.operations.filter((operation) => operation?.available !== false)
+    ? item.operations.filter(isInlineResolution)
     : [];
   const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
   const externalState = item.meta?.externalState;

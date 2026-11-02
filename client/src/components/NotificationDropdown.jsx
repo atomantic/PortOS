@@ -100,6 +100,9 @@ export default function NotificationDropdown({
   const actionQueue = useActionQueue();
   const requiredCount = actionQueue.data?.items.filter((item) => item.required === true).length;
   const partialCount = actionQueue.data?.partial || Boolean(actionQueue.error);
+  const sources = Object.values(actionQueue.data?.sources || {});
+  const onlyUnverifiedChecks = !actionQueue.error && actionQueue.data?.partial && sources.some(source => source.incomplete)
+    && sources.every(source => !source.error && !source.truncation && source.availability !== 'unavailable' && source.available !== false);
   const actionCountLabel = requiredCount == null
     ? (actionQueue.error ? 'actions unavailable' : 'loading actions')
     : `${partialCount ? 'at least ' : ''}${formatCount(requiredCount)} required action${requiredCount === 1 ? '' : 's'}`;
@@ -186,7 +189,7 @@ export default function NotificationDropdown({
         aria-expanded={isOpen}
       >
         <Bell size={18} className={requiredCount > 0 ? 'text-yellow-400' : 'text-gray-500'} aria-hidden="true" />
-        {(requiredCount > 0 || partialCount) && (
+        {(requiredCount > 0 || (partialCount && !onlyUnverifiedChecks)) && (
           <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5" aria-hidden="true">
             {requiredCount == null ? '?' : `${formatCount(requiredCount)}${partialCount ? '+' : ''}`}
           </span>
