@@ -21,6 +21,11 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 describe('saved Codex image usage recovery', () => {
+  it('normalizes UUID case for new render group identities', () => {
+    const mixed = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+    expect(codexRenderReceipt(meta({ codexSessionId: mixed })).renderKey)
+      .toBe(codexRenderReceipt(meta({ codexSessionId: mixed.toUpperCase() })).renderKey);
+  });
   it('deduplicates repeated outputs and derived copies, groups sessions, and preserves token history across repeated applies', async () => {
     await sidecar('original', meta());
     await sidecar('duplicate', meta());
@@ -51,8 +56,8 @@ describe('saved Codex image usage recovery', () => {
     await expect(applyImageRenderBackfill(root, oldPlan, join(root, 'journal.json'))).rejects.toThrow('inventory changed');
     const plan = await planImageRenderBackfill(root);
     await applyImageRenderBackfill(root, plan, join(root, 'journal.json'));
-    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderGroups: 1, savedOutputs: 2 });
-    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderGroups: 0, savedOutputs: 0 });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-01', to: '2026-07-01' })).toMatchObject({ renderGroups: 1, savedOutputs: 1 });
+    expect(await getImageRenderUsage({ directory, from: '2026-07-02' })).toMatchObject({ renderGroups: 0, savedOutputs: 1 });
   });
 
   it('publishes complete receipts exactly once across simultaneous writers and does not replace a live receipt during backfill', async () => {

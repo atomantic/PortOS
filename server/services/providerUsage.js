@@ -890,25 +890,38 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * therefore unified with what peers published for the same family before it is
  * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
-export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period } = {}) {
-  const cards = await readProviderQuotas({ wait, family, period });
+export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
+  const { cards, families, complete } = await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
   // overlap. Recording is awaited rather than fired off so a caller that
   // immediately re-reads (the page's per-card Refresh) sees its own reading.
   const [, peerEntries] = await Promise.all([
-    recordLocalQuotaCards(cards).catch((err) => {
+    recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
       console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
     }),
-    getApiBilledInstanceIds()
-      .then((excludeInstanceIds) => getFleetQuotaEntries({ excludeInstanceIds }))
+    (scope === 'instances' ? getFleetQuotaEntries({ includeEmpty: true })
+      : getApiBilledInstanceIds().then((excludeInstanceIds) => getFleetQuotaEntries({ excludeInstanceIds })))
       .catch((err) => {
         // A federation read that fails must not take the cards down with it — a
         // this-machine-only card is a smaller loss than an empty usage page.
         console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
-        return [];
+        return scope === 'instances' ? null : [];
       }),
   ]);
+  if (scope === 'instances') {
+    return {
+      providers: [
+        ...cards.map((card) => ({ ...card, origin: { self: true, name: 'This instance' } })),
+        ...(peerEntries || []).flatMap((peer) => peer.quotas.filter((card) => !family || card.family === family).map((card) => ({
+          ...stampReadAt(pruneExpiredWindows(card, Date.now()), Date.now()), supported: card.supported !== false,
+          origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
+        }))),
+      ],
+      unreportedInstances: (peerEntries || []).filter((peer) => !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
+      federationUnavailable: peerEntries === null,
+    };
+  }
   return mergeFleetQuotaCards(cards, peerEntries);
 }
 
@@ -930,9 +943,15 @@ async function readProviderQuotas({ wait, family, period }) {
   // install rendering a spent meter its federated twin drops.
   const now = Date.now();
   const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
-  if (family && family !== IMAGE_GEN_FAMILY) return prune(familyCards);
-  const imageCard = await fetchImageGenQuota({ period });
-  return prune(imageCard ? [...familyCards, imageCard] : familyCards);
+  if (family && family !== IMAGE_GEN_FAMILY) return { cards: prune(familyCards), families: null, complete: null };
+  const image = await fetchImageGenQuota({ period });
+  const cards = prune(image.card ? [...familyCards, image.card] : familyCards);
+  if (family) return { cards, families: null, complete: null };
+  const ids = familyCards.map((card) => card.family);
+  if (image.card || !image.complete) ids.push(IMAGE_GEN_FAMILY);
+  const complete = image.complete && cards.filter((card) => card.family !== IMAGE_GEN_FAMILY)
+    .every((card) => !card.pending && !card.error && (card.supported === false || card.limits?.length || card.activity?.length || card.metrics?.length));
+  return { cards, families: ids, complete: Boolean(complete) };
 }
 
 /**
@@ -954,10 +973,11 @@ const fetchImageGenQuota = async ({ period } = {}) => {
     return null;
   });
   // Only quota-window backends — a fal.ai-only install has no quota to show.
+  if (!settings) return { card: null, complete: false };
   const enabledModes = enabledCloudImageModes(settings).filter(isQuotaTrackedImageMode);
-  if (!enabledModes.length) return null; // no quota-tracked cloud image backend → no card
-  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).catch((err) => {
+  if (!enabledModes.length) return { card: null, complete: true };
+  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).then((card) => ({ card, complete: !card?.error })).catch((err) => {
     console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
-    return null;
+    return { card: null, complete: false };
   });
 };

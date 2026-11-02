@@ -28,6 +28,7 @@ vi.mock('./usage.js', async () => {
 });
 
 const { buildUsageDigest, buildUsageReport } = await import('./usage.js');
+const { familyForProviderId } = await import('../lib/providerFamilies.js');
 const {
   getUsageSnapshot,
   getUsageManifest,
@@ -88,13 +89,13 @@ const usageFixture = ({ day = '2026-08-30', tokensOut = 1000, lastUpdated = '202
   reconciledRuns: { 'run-1': '2026-08-30T12:00:00.000Z' },
 });
 
-const peerEntry = (overrides = {}) => ({
-  instanceId: 'inst-peer',
-  name: 'Studio',
-  capturedAt: '2026-08-30T09:00:00.000Z',
-  usage: buildUsageDigest(usageFixture({ tokensOut: 4000 })),
-  ...overrides,
-});
+const peerEntry = (overrides = {}) => {
+  const usage = overrides.usage || buildUsageDigest(usageFixture({ tokensOut: 4000 }));
+  const ids = new Set(Object.values({ ...usage.dailyActivity, ...usage.monthlyActivity })
+    .flatMap((bucket) => Object.keys(bucket.byProvider || {})));
+  const providerClasses = Object.fromEntries([...ids].map((id) => [id, { free: false, family: familyForProviderId(id) }]));
+  return { instanceId: 'inst-peer', name: 'Studio', capturedAt: '2026-08-30T09:00:00.000Z', usage, providerClasses, ...overrides };
+};
 
 const readStoreFile = async () => JSON.parse(await readFile(PEER_USAGE_FILE, 'utf8'));
 
@@ -149,13 +150,29 @@ describe('usage sync category', () => {
     const { data } = await getUsageSnapshot();
     expect(Object.keys(data.instances)).toEqual(['inst-self']);
     expect(data.instances['inst-self'].name).toBe('Workshop');
-    expect(data.instances['inst-self'].capturedAt).toBe('2026-08-30T12:00:00.000Z');
+    expect(Date.parse(data.instances['inst-self'].capturedAt)).toBeGreaterThan(Date.parse(localUsage.lastUpdated));
   });
 
   it('keeps the checksum stable while local usage has not moved', async () => {
     const a = await getUsageSnapshot();
     const b = await getUsageSnapshot();
     expect(b.checksum).toBe(a.checksum);
+  });
+
+  it('persists a monotonic version for projection-only changes and preserves peer writes', async () => {
+    const first = await getUsageSnapshot();
+    const firstStamp = first.data.instances['inst-self'].capturedAt;
+    expect((await getUsageSnapshot()).data.instances['inst-self'].capturedAt).toBe(firstStamp);
+    await recordLocalQuotaCards([quotaCard()]);
+    await Promise.all([
+      getUsageSnapshot(),
+      applyUsageRemote({ instances: { 'inst-peer': peerEntry() } }),
+    ]);
+    const second = await getUsageSnapshot();
+    expect(Date.parse(second.data.instances['inst-self'].capturedAt)).toBeGreaterThan(Date.parse(firstStamp));
+    expect(second.data.instances['inst-peer']).toBeDefined();
+    expect((await readStoreFile()).selfVersion.capturedAt).toBe(second.data.instances['inst-self'].capturedAt);
+    expect((await getUsageSnapshot()).checksum).toBe(second.checksum);
   });
 
   it('stores a peer digest side by side instead of summing it into local usage', async () => {
@@ -232,7 +249,7 @@ describe('usage sync manifest (#5759)', () => {
 
     const { data } = await getUsageManifest();
     expect(data.instances).toEqual({
-      'inst-self': '2026-08-30T12:00:00.000Z',
+      'inst-self': expect.any(String),
       'inst-peer': '2026-08-30T09:00:00.000Z',
       'inst-other': '2026-08-30T08:00:00.000Z',
     });
@@ -439,7 +456,7 @@ describe('fleet report', () => {
     const peer = peerEntry();
     await applyUsageRemote({ instances: { 'inst-peer': peer } });
     await applyUsageRemote({ instances: { 'inst-peer': peer, 'inst-self': peerEntry({ instanceId: 'inst-self' }) } });
-    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'anthropic', type: 'api' }] });
     const [provider] = fleet.report.providers;
     expect(fleet.coverage.instanceCount).toBe(2);
     expect(fleet.report.totals).toMatchObject({ sessions: 4, messages: 10, tokensIn: 1000, tokensOut: 5000 });
@@ -458,6 +475,31 @@ describe('fleet report', () => {
     const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
     expect(fleet.coverage.missingInstances).toEqual(['Missing']);
     expect(fleet.report.totals.sessions).toBe(2);
+  });
+
+  it('uses each origin’s provider classification even when provider ids collide', async () => {
+    const rename = (usage) => {
+      const source = structuredClone(usage);
+      const day = source.dailyActivity['2026-08-30'];
+      day.byProvider.shared = day.byProvider.anthropic;
+      delete day.byProvider.anthropic;
+      return source;
+    };
+    localUsage = rename(usageFixture());
+    const peer = peerEntry({ usage: buildUsageDigest(rename(usageFixture({ tokensOut: 4000 }))), providerClasses: { shared: { free: false, family: 'codex' } } });
+    await applyUsageRemote({ instances: { 'inst-peer': peer } });
+    const result = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'shared', ollamaBacked: true }] });
+    expect(result.report.providers).toHaveLength(2);
+    expect(result.report.providers.find((row) => row.free)).toMatchObject({ tokensOut: 1000, estimatedCost: 0 });
+    expect(result.report.providers.find((row) => row.family === 'codex')).toMatchObject({ tokensOut: 4000, classificationKnown: true });
+    expect(result.report.providers.find((row) => row.family === 'codex').estimatedCost).toBeGreaterThan(0);
+  });
+
+  it('does not price an older peer whose classification was never reported', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ providerClasses: null }) } });
+    const result = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'anthropic', type: 'api' }] });
+    expect(result.coverage).toMatchObject({ pricingIncomplete: true, classificationUnreported: ['Studio'] });
+    expect(result.report.providers.find((row) => !row.classificationKnown)).toMatchObject({ estimatedCost: null, tokensOut: 4000 });
   });
 
   it('keeps external transcript usage and empty months in the selected monthly chart', async () => {
@@ -526,7 +568,7 @@ describe('fleet report', () => {
     const selected = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
     expect(selected.report.providers.map((row) => row.id).sort()).toEqual(['anthropic', 'codex-cli']);
     expect(selected.report.totals.sessions).toBe(4);
-    expect(selected.report.providers.find((row) => row.id === 'codex-cli').family).toBeNull();
+    expect(selected.report.providers.find((row) => row.id === 'codex-cli').family).toBe('codex');
     const all = await getFleetUsage();
     expect(all.report.totals).toMatchObject({ sessions: 7, messages: 13 });
     expect(all.report.providers.find((row) => row.id === 'legacy')).toMatchObject({ sessions: 3, messages: 3 });
@@ -541,7 +583,7 @@ describe('fleet report', () => {
     provider.byModel['claude-opus-5'].tokensIn = 1000;
     localUsage = small;
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(small) }) } });
-    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'anthropic', type: 'api' }] });
     expect(fleet.instances.map((row) => row.totals.estimatedCost)).toEqual([0.01, 0.01]);
     expect(fleet.totals.estimatedCost).toBe(0.01);
     expect(fleet.report.totals.estimatedCost).toBe(0.01);
@@ -609,10 +651,78 @@ describe('fleet report', () => {
     const outside = await getFleetUsage({ from: '2026-09-01', to: '2026-09-30', providers: [] });
     expect(outside.totals.tokensOut).toBe(0);
   });
+
+  it('derives the all-time subscription window from the included instances', async () => {
+    const earlier = usageFixture({ day: '2026-01-01' });
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(earlier, { now: new Date('2026-01-10T00:00:00Z') }) }) } });
+    const all = await getFleetUsage();
+    const excluded = await getFleetUsage({ apiBilledInstanceIds: ['inst-peer'] });
+    expect(all.subscriptionFirstActivityDay).toBe('2026-01-01');
+    expect(excluded.subscriptionFirstActivityDay).toBe('2026-08-30');
+    expect(excluded.firstActivityDay).toBe('2026-01-01');
+  });
+});
+
+describe('selected-period hourly and image observations', () => {
+  it('sums daily hours across instances, filters dates and flags legacy buckets', async () => {
+    const localHours = Array(24).fill(0); localHours[8] = 2;
+    localUsage.dailyActivity['2026-08-30'].hourlyActivity = localHours;
+    const remote = usageFixture();
+    const remoteHours = Array(24).fill(0); remoteHours[9] = 2;
+    remote.dailyActivity['2026-08-30'].hourlyActivity = remoteHours;
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(remote) }) } });
+    const selected = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(selected.hourlyActivity[8]).toBe(2);
+    expect(selected.hourlyActivity[9]).toBe(2);
+    expect(selected.coverage.hourlyIncomplete).toBe(false);
+    const empty = await getFleetUsage({ from: '2026-09-01', to: '2026-09-02' });
+    expect(empty.hourlyActivity.reduce((a, b) => a + b, 0)).toBe(0);
+    localUsage.dailyActivity['2026-08-30'] = { byProvider: { example: { sessions: 1 } } };
+    const legacy = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(legacy.coverage.hourlyIncomplete).toBe(true);
+  });
+
+  it('deduplicates projected image outputs, filters output dates, and reports missing peers', async () => {
+    const receipt = { id: 'a'.repeat(64), renderKey: 'b'.repeat(64), occurredAt: '2026-08-30T23:00:00.000Z', identitySource: 'codex-session', driverTotal: 12, privatePrompt: 'do not transmit' };
+    const next = { ...receipt, id: 'c'.repeat(64), occurredAt: '2026-08-31T01:00:00.000Z' };
+    const projection = { complete: true, receipts: [receipt, next] };
+    await applyUsageRemote({ instances: {
+      'inst-peer': peerEntry({ imageReceipts: projection }),
+      'inst-two': peerEntry({ instanceId: 'inst-two', imageReceipts: projection }),
+    } });
+    const snapshot = await getUsageSnapshot();
+    expect(JSON.stringify(snapshot.data.instances['inst-peer'].imageReceipts)).not.toContain('do not transmit');
+    const first = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(first.imageRenders).toMatchObject({ codexSessions: 1, savedOutputs: 1, incomplete: false, driverTokens: { reportedTotal: 12, sessionsMeasured: 1 } });
+    const second = await getFleetUsage({ from: '2026-08-31', to: '2026-08-31' });
+    expect(second.imageRenders).toMatchObject({ codexSessions: 0, savedOutputs: 1 });
+    configuredPeers = [{ instanceId: 'offline', name: 'Offline' }];
+    expect((await getFleetUsage()).imageRenders.incomplete).toBe(true);
+  });
+
+  it('reports per-origin block observations in the selected period without sharing error prose', async () => {
+    localUsage.blockEvents = [{ providerId: 'anthropic', model: 'example', at: Date.parse('2026-08-30T12:00:00Z'), message: 'private error content' }];
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ blockEvents: [
+      { providerId: 'anthropic', model: 'example', at: Date.parse('2026-08-30T13:00:00Z'), resetHint: 'private hint' },
+      { providerId: 'anthropic', at: Date.parse('2026-08-31T13:00:00Z') },
+    ] }) } });
+    const result = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks.map((block) => block.originName).sort()).toEqual(['Studio', 'Workshop']);
+    expect(JSON.stringify((await getUsageSnapshot()).data)).not.toMatch(/private (?:error content|hint)/);
+  });
 });
 
 describe('fleet rolling 30-day cost', () => {
-  const dayCost = (usage, day) => buildUsageReport({ [day]: usage.dailyActivity[day] }, { providers: [] }).totals.estimatedCost;
+  const fixtureProviders = [{ id: 'anthropic', type: 'api' }, { id: 'claude-code', type: 'cli', command: 'claude' }];
+  const dayCost = (usage, day) => buildUsageReport({ [day]: usage.dailyActivity[day] }, { providers: fixtureProviders }).totals.estimatedCost;
+
+  it('marks removed local provider classifications incomplete instead of guessing', async () => {
+    const now = new Date('2026-09-01T00:00:00Z');
+    const chart = await getFleetRollingCost({ providers: [], now });
+    expect(chart.pricingIncomplete).toBe(true);
+    expect(chart.points.at(-1).cost).toBe(0);
+  });
 
   // Every instance counts — including one marked API-billed, whose spend at API
   // rates is exactly what this chart totals — and a day leaves the window 30
@@ -623,7 +733,7 @@ describe('fleet rolling 30-day cost', () => {
     const both = dayCost(localUsage, '2026-08-30') + dayCost(peer.usage, '2026-08-30');
     expect(both).toBeGreaterThan(0);
 
-    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-28T12:00:00Z') });
+    const series = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-28T12:00:00Z') });
     expect(series.instanceCount).toBe(2);
     expect(series.points).toHaveLength(90);
     const at = (date) => series.points.find((p) => p.date === date).cost;
@@ -636,7 +746,7 @@ describe('fleet rolling 30-day cost', () => {
     expect(series.series).toEqual([{ key: 'provider:anthropic', label: 'Anthropic' }]);
     expect(series.points.at(-1).values[0]).toBeCloseTo(both, 2);
 
-    const later = await getFleetRollingCost({ providers: [], now: new Date('2026-09-29T00:00:00Z') });
+    const later = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-29T00:00:00Z') });
     expect(later.points.at(-1).cost).toBe(0);
   });
 
@@ -649,10 +759,10 @@ describe('fleet rolling 30-day cost', () => {
       }),
     });
     await applyUsageRemote({ instances: { 'inst-peer': rolledUp } });
-    const monthCost = buildUsageReport({}, { monthlyActivity: rolledUp.usage.monthlyActivity, providers: [] }).totals.estimatedCost;
+    const monthCost = buildUsageReport({}, { monthlyActivity: rolledUp.usage.monthlyActivity, providers: fixtureProviders }).totals.estimatedCost;
     expect(monthCost).toBeGreaterThan(0);
 
-    const series = await getFleetRollingCost({ providers: [], range: 'all', now: new Date('2026-09-01T00:00:00Z') });
+    const series = await getFleetRollingCost({ providers: fixtureProviders, range: 'all', now: new Date('2026-09-01T00:00:00Z') });
     const at = (date) => series.points.find((p) => p.date === date).cost;
     expect(series.range).toBe('all');
     expect(series.points[0].date).toBe('2026-03-01');
@@ -660,7 +770,7 @@ describe('fleet rolling 30-day cost', () => {
     expect(at('2026-03-30')).toBeCloseTo((monthCost * 30) / 31, 1);
     expect(at('2026-08-30')).toBeCloseTo(dayCost(localUsage, '2026-08-30'), 2);
 
-    const year = await getFleetRollingCost({ providers: [], range: '1y', now: new Date('2026-09-01T00:00:00Z') });
+    const year = await getFleetRollingCost({ providers: fixtureProviders, range: '1y', now: new Date('2026-09-01T00:00:00Z') });
     expect(year.points).toHaveLength(365);
   });
 
@@ -674,7 +784,7 @@ describe('fleet rolling 30-day cost', () => {
     };
     localUsage = asProvider(usageFixture(), 'claude-code');
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(asProvider(usageFixture({ tokensOut: 4000 }), 'claude-opus-cli')) }) } });
-    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    const series = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-01T00:00:00Z') });
     expect(series.series).toEqual([{ key: 'claude', label: 'Claude Code' }]);
     expect(series.points.at(-1).values).toEqual([series.points.at(-1).cost]);
   });
@@ -720,18 +830,18 @@ describe('fleet rolling 30-day cost', () => {
     const dayTranscript = (day) => summarizeTranscriptDays({ [day]: transcript[day] }).totals.estimatedCost;
     expect(dayTranscript('2026-08-30')).toBeGreaterThan(ledger);
 
-    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    const series = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-01T00:00:00Z') });
     expect(series.series).toEqual([{ key: 'claude', label: 'Claude Code' }]);
     expect(series.points.at(-1).cost).toBeCloseTo(dayTranscript('2026-08-30') + dayTranscript('2026-08-29'), 1);
 
     // A day where the ledger already holds more keeps the ledger's figure.
     await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: { '2026-08-30': { 'claude-opus-5': { messages: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } } }, updatedAt: '2026-08-31T01:00:00.000Z' });
-    const lower = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    const lower = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-01T00:00:00Z') });
     expect(lower.points.at(-1).cost).toBeCloseTo(ledger, 2);
   });
 
   it('charts this machine alone before any peer has synced', async () => {
-    const series = await getFleetRollingCost({ providers: [], now: new Date('2026-09-01T00:00:00Z') });
+    const series = await getFleetRollingCost({ providers: fixtureProviders, now: new Date('2026-09-01T00:00:00Z') });
     expect(series.instanceCount).toBe(1);
     expect(series.points.at(-1).cost).toBeCloseTo(dayCost(localUsage, '2026-08-30'), 2);
   });
@@ -758,8 +868,9 @@ describe('fleet calendar-month usage', () => {
     }) } });
 
     const now = new Date('2026-09-30T23:59:59Z');
-    const monthly = await getFleetMonthlyUsage({ now });
-    const rolling = await getFleetRollingCost({ now });
+    const providers = [{ id: 'claude-code', type: 'cli', command: 'claude' }];
+    const monthly = await getFleetMonthlyUsage({ now, providers });
+    const rolling = await getFleetRollingCost({ now, providers });
     expect(monthly.instanceCount).toBe(2);
     expect(monthly.series.map((row) => row.key).sort()).toEqual(['claude', 'codex']);
     expect(monthly.history).toHaveLength(1);
@@ -772,7 +883,7 @@ describe('fleet calendar-month usage', () => {
     localUsage = usageFixture({ day: '2025-06-01' });
     localUsage.dailyActivity['2025-06-01'] = { byProvider: { example: { tokensIn: 10, tokensOut: 20, cacheReadTokens: 30, cacheWriteTokens: 40, source: 'measured' } } };
     localUsage.monthlyActivity = { '2025-04': { tokensIn: 1000000, tokens: 2000000 } };
-    const monthly = await getFleetMonthlyUsage({ now: new Date('2025-06-30T23:59:59Z') });
+    const monthly = await getFleetMonthlyUsage({ now: new Date('2025-06-30T23:59:59Z'), providers: [{ id: 'legacy', type: 'api' }, { id: 'example', type: 'api' }] });
     expect(monthly.history).toEqual([
       { month: '2025-04', estimatedCost: 33, values: [33, 0], tokens: 3000000, partial: false },
       { month: '2025-05', estimatedCost: 0, values: [0, 0], tokens: 0, partial: false },
@@ -790,7 +901,7 @@ describe('fleet calendar-month usage', () => {
     bucket.byProvider = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`example-${i}`, { tokensOut: (i + 1) * 1000000 }]));
     bucket.byProvider.ollama = { tokensOut: 5000000 };
     bucket.tokens = 26000000;
-    const monthly = await getFleetMonthlyUsage({ now: new Date('2026-09-30T00:00:00Z'), providers: [{ id: 'ollama', type: 'ollama' }] });
+    const monthly = await getFleetMonthlyUsage({ now: new Date('2026-09-30T00:00:00Z'), providers: [{ id: 'ollama', type: 'ollama' }, ...Array.from({ length: 6 }, (_, i) => ({ id: `example-${i}`, type: 'api' }))] });
     expect(monthly.series).toHaveLength(5);
     expect(monthly.series.at(-1)).toEqual({ key: 'other', label: 'Other' });
     expect(monthly.history[0]).toMatchObject({ estimatedCost: 315, tokens: 26000000 });
@@ -804,6 +915,21 @@ describe('fleet calendar-month usage', () => {
 });
 
 describe('federated subscription-quota readings', () => {
+  it('replaces an obsolete quota with an explicitly unsupported provider', async () => {
+    await recordLocalQuotaCards([quotaCard()]);
+    await recordLocalQuotaCards([{ family: 'claude', label: 'Claude', supported: false, limits: [], activity: [], fetchedAt: '2026-09-01T00:00:00.000Z' }], { families: ['claude'], complete: true });
+    expect((await readLocalQuotaCards()).quotas[0]).toMatchObject({ supported: false, limits: [] });
+  });
+  it('distinguishes a partial family refresh from a complete empty scan and retires disabled families', async () => {
+    await recordLocalQuotaCards([quotaCard()]);
+    expect((await readLocalQuotaCards()).reported).toBe(false);
+    await recordLocalQuotaCards([quotaCard({ family: 'codex' })], { families: ['codex'], complete: true });
+    expect((await readLocalQuotaCards()).quotas.map((card) => card.family)).toEqual(['codex']);
+    expect((await readLocalQuotaCards()).reported).toBe(true);
+    await recordLocalQuotaCards([], { families: [], complete: true });
+    expect(await readLocalQuotaCards()).toMatchObject({ quotas: [], reported: true });
+  });
+
   it('publishes this machine\'s readings and advances the LWW stamp past them', async () => {
     await recordLocalQuotaCards([quotaCard()]);
     const { data } = await getUsageSnapshot();

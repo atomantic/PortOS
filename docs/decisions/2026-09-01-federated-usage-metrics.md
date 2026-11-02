@@ -101,6 +101,16 @@ It carries:
 - session / message / token / cache counts and their day+month buckets
 - the publishing instance's id and name — both of which peers already exchange
   during registration (`handleAnnounce`)
+- provider accounting classifications, quota readings and daily hourly counts
+- up to 200 observed limit-block provider/model ids and timestamps per origin;
+  error messages and reset-hint prose are excluded
+- a bounded projection of saved Codex image receipts: hashed output and session
+  identities, timestamp, identity type, and the reported driver-token total.
+  These pseudonymous hashes are linkable across instances and let the fleet
+  deduplicate mirrored outputs; they are not anonymous aggregate counters.
+  Each origin sends at most 10,000 receipts and reports truncation as partial.
+  They travel only under the user-controlled `usage` sync category and remain
+  in the peer usage snapshot until replaced or its origin is retired.
 
 It carries no prompts, no transcripts, no record contents, no file paths, and
 nothing about the human. The rejected alternative — federating the raw

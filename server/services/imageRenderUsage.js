@@ -42,7 +42,7 @@ export function codexRenderReceipt(meta) {
   if (!session && !job) return null;
   const occurredAt = timestamp(meta.renderStartedAt) || timestamp(meta.createdAt);
   if (!occurredAt) return null;
-  const renderKey = digest(`codex:${session || job}`);
+  const renderKey = digest(`codex:${(session || job).toLowerCase()}`);
   // Without a job id, a recovered tool call supplies a stable output identity.
   const outputKey = digest(job ? `codex-job:${job.toLowerCase()}` : `${renderKey}:${meta.codexCallId || 'saved-output'}`);
   return {
@@ -128,27 +128,38 @@ export async function recordCodexRender(meta) {
   return recordRenderReceipt(receipt);
 }
 
-export async function getImageRenderUsage({ from = null, to = null, directory } = {}) {
-  const receipts = await readRenderReceipts({ directory });
+export function summarizeRenderReceipts(receipts, { from = null, to = null } = {}) {
+  // Receipts can be mirrored between instances. Their output IDs are stable;
+  // keep one output and preserve the largest reported footer for that output.
+  const unique = new Map();
+  let conflicts = false;
+  for (const receipt of receipts) {
+    const previous = unique.get(receipt.id);
+    if (!previous) { unique.set(receipt.id, receipt); continue; }
+    if (previous.renderKey !== receipt.renderKey || previous.occurredAt !== receipt.occurredAt || previous.identitySource !== receipt.identitySource) conflicts = true;
+    const previousTokens = previous.driverTokens?.reportedTotal ?? -1;
+    const tokens = receipt.driverTokens?.reportedTotal ?? -1;
+    if (tokens > previousTokens) unique.set(receipt.id, { ...previous, driverTokens: receipt.driverTokens });
+  }
+  const inRange = (day) => (!from || day >= from) && (!to || day <= to);
+  const savedOutputs = [...unique.values()].filter((receipt) => inRange(receipt.occurredAt.slice(0, 10))).length;
   // Filter sessions by their first observed output so a session spanning UTC
   // midnight is not counted twice in adjacent reporting windows.
   const sessions = new Map();
-  for (const receipt of receipts) {
-    const session = sessions.get(receipt.renderKey) || { occurredAt: receipt.occurredAt, outputs: 0, fallback: false, driverTotal: null };
+  for (const receipt of unique.values()) {
+    const session = sessions.get(receipt.renderKey) || { occurredAt: receipt.occurredAt, fallback: false, driverTotal: null };
     if (receipt.occurredAt < session.occurredAt) session.occurredAt = receipt.occurredAt;
-    session.outputs++;
     if (receipt.driverTokens?.source === 'codex-cli-footer' && Number.isSafeInteger(receipt.driverTokens.reportedTotal)) {
       session.driverTotal = Math.max(session.driverTotal ?? 0, receipt.driverTokens.reportedTotal);
     }
     session.fallback ||= receipt.identitySource === 'portos-job';
     sessions.set(receipt.renderKey, session);
   }
-  let renderSessions = 0, savedOutputs = 0, jobIdentitySessions = 0, driverSessionsMeasured = 0, driverReportedTotal = 0;
+  let renderSessions = 0, jobIdentitySessions = 0, driverSessionsMeasured = 0, driverReportedTotal = 0;
   for (const session of sessions.values()) {
     const day = session.occurredAt.slice(0, 10);
-    if ((from && day < from) || (to && day > to)) continue;
+    if (!inRange(day)) continue;
     renderSessions++;
-    savedOutputs += session.outputs;
     if (session.fallback) jobIdentitySessions++;
     if (session.driverTotal !== null) { driverSessionsMeasured++; driverReportedTotal += session.driverTotal; }
   }
@@ -156,6 +167,10 @@ export async function getImageRenderUsage({ from = null, to = null, directory } 
     scope: 'local-codex-saved-renders', renderGroups: renderSessions, codexSessions: renderSessions - jobIdentitySessions, savedOutputs, jobIdentityGroups: jobIdentitySessions,
     driverTokens: driverSessionsMeasured ? { reportedTotal: driverReportedTotal, sessionsMeasured: driverSessionsMeasured } : null,
     driverSessionsUnknown: renderSessions - driverSessionsMeasured,
-    imageTokens: null, imageCostUsd: null, allowanceUnits: null,
+    imageTokens: null, imageCostUsd: null, allowanceUnits: null, conflicts,
   };
+}
+
+export async function getImageRenderUsage({ from = null, to = null, directory } = {}) {
+  return summarizeRenderReceipts(await readRenderReceipts({ directory }), { from, to });
 }

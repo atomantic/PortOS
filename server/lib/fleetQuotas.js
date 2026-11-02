@@ -80,6 +80,28 @@ function sanitizeActivity(raw) {
   return { period, requests: int(raw?.requests) ?? 0, sessions: int(raw?.sessions) ?? 0, notes };
 }
 
+// Image quota counters are structured observations, not account-wide quota.
+// Rebuild display strings from fixed labels and integers so arbitrary peer
+// prose (including prompts or paths) never enters the shared snapshot.
+const IMAGE_LABELS = { 'imagegen-codex': 'Codex · image_gen', 'imagegen-grok': 'Grok · image_gen', 'imagegen-agy': 'Agy · generate_image' };
+const PERIODS = { '24h': ['24h', '24h'], '7d': ['Week', 'week'], '30d': ['Month', 'month'], reset: ['Reset', 'reset'] };
+function sanitizeImageMetrics(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 3).flatMap((metric) => {
+    if (!Object.hasOwn(IMAGE_LABELS, metric?.key) || !metric.periods || typeof metric.periods !== 'object') return [];
+    const periods = {};
+    for (const [key, [label, suffix]] of Object.entries(PERIODS)) {
+      const item = metric.periods[key];
+      if (!Number.isSafeInteger(item?.count) || item.count < 0 || !Number.isSafeInteger(item.failed) || item.failed < 0 || item.failed > item.count) continue;
+      periods[key] = { key, label, count: item.count, failed: item.failed,
+        value: item.count ? `${item.count} render${item.count === 1 ? '' : 's'} · ${suffix}` : `No renders · ${suffix}`,
+        detail: item.failed ? `${item.failed} failed` : key === 'reset' ? 'since last reset' : 'quota not reported by this CLI' };
+    }
+    const active = periods['24h'] || Object.values(periods)[0];
+    return active ? [{ key: metric.key, label: IMAGE_LABELS[metric.key], value: active.value, detail: active.detail, periods }] : [];
+  });
+}
+
 /**
  * Rebuild a peer's quota payload to the known wire shape, dropping anything
  * else. Cards without a family id, and limits without a key, are unmergeable
@@ -95,14 +117,17 @@ export function sanitizeQuotaCards(raw) {
       .slice(0, MAX_LIMITS_PER_CARD).map(sanitizeLimit).filter(Boolean);
     const activity = (Array.isArray(card?.activity) ? card.activity : [])
       .slice(0, MAX_ACTIVITY_PER_CARD).map(sanitizeActivity).filter(Boolean);
+    const metrics = family === 'imagegen' ? sanitizeImageMetrics(card.metrics) : [];
     // A reading with nothing to contribute is not worth a wire slot.
-    if (!limits.length && !activity.length) continue;
+    if (!limits.length && !activity.length && !metrics.length && card.supported !== false) continue;
     out.push({
       family,
+      ...(card.supported === false ? { supported: false } : {}),
       label: str(card?.label, 120) || family,
       plan: str(card?.plan, 60),
       limits,
       activity,
+      ...(metrics.length ? { metrics, period: '24h' } : {}),
       fetchedAt: str(card?.fetchedAt, 40),
     });
   }

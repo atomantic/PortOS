@@ -169,7 +169,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
       )}
 
       {showActivity && quota.activity?.length > 0 && (
-        <div className="hidden sm:grid sm:grid-cols-2 gap-2 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           {quota.activity.map((a) => (
             <StatTile
               key={a.period}

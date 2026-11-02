@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import * as usage from '../services/usage.js';
-import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
@@ -34,18 +33,13 @@ router.get('/', asyncHandler(async (req, res) => {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const summary = usage.getUsageSummary({ from, to, providers });
-  const [fleetResult, imageRenders] = await Promise.all([
-    getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
-      getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
-    getImageRenderUsage({ from, to }).catch(err => {
-      console.error(`❌ Failed to read image render usage: ${err.message}`);
-      return { error: 'Image render usage is unavailable.' };
-    }),
-  ]);
-  const { report, subscriptionReport, firstActivityDay, activity, last7Days, hourlyActivity, totalToolCalls, coverage, monthly, transcriptUpdatedAt, ...fleet } = fleetResult;
+  const apiBilledInstanceIds = await getApiBilledInstanceIds();
+  const fleetResult = await getFleetUsage({ from, to, providers, apiBilledInstanceIds });
+  const { report, subscriptionReport, subscriptionFirstActivityDay, activity, last7Days, hourlyActivity, totalToolCalls, coverage, monthly, transcriptUpdatedAt, imageRenders, blocks, firstActivityDay: _firstActivityDay, ...fleet } = fleetResult;
   const subscriptionSavings = await getSubscriptionSavings({
-    report: subscriptionReport, providers, from, to, firstActivityDay: from ? null : firstActivityDay,
+    report: subscriptionReport, providers, from, to, firstActivityDay: from ? null : subscriptionFirstActivityDay,
   });
+  subscriptionSavings.costIncomplete ||= Boolean(coverage.missingInstances.length || coverage.notSyncingInstances.length || coverage.incompleteMonths.length);
   res.json({
     ...summary,
     report,
@@ -66,17 +60,13 @@ router.get('/', asyncHandler(async (req, res) => {
     activity,
     hourlyActivity,
     transcriptUpdatedAt,
-    // Limit-block events and image receipts are local-only and can be mirrored
-    // across machines; there is no fleet identity to safely deduplicate them.
     freeTier: {
       ...summary.freeTier,
       providers: report.providers.filter((row) => row.free),
-      blocks: coverage.instanceCount > 1 || coverage.missingInstances.length ? [] : (summary.freeTier?.blocks || []),
-      blocksUnavailableAcrossInstances: coverage.instanceCount > 1 || coverage.missingInstances.length > 0,
+      blocks,
+      blocksIncomplete: coverage.blockEventsUnreported?.length > 0 || coverage.missingInstances.length > 0 || coverage.notSyncingInstances.length > 0,
     },
-    imageRenders: coverage.instanceCount > 1 || coverage.missingInstances.length
-      ? { unavailableAcrossInstances: true }
-      : imageRenders,
+    imageRenders,
     monthlyHistory: monthly.history,
     monthlySeries: monthly.series,
     monthlyInstanceCount: monthly.instanceCount,
@@ -156,14 +146,15 @@ router.put('/fleet-billing', asyncHandler(async (req, res) => {
 // every provider's TUI scrape. An id that no longer resolves to an enabled
 // family answers with an empty list — the card is gone, not broken.
 router.get('/providers', asyncHandler(async (req, res) => {
-  const { refresh: refreshParam, family, period } = validateRequest(providerUsageQuerySchema, req.query);
+  const { refresh: refreshParam, family, period, scope } = validateRequest(providerUsageQuerySchema, req.query);
   const refresh = refreshParam === '1' || refreshParam === 'true';
   const providers = await getProviderQuotas({
     wait: refresh ? WAIT.FRESH : WAIT.NEVER,
     family: family ?? null,
     ...(period ? { period } : {}),
+    ...(scope ? { scope } : {}),
   });
-  res.json({ providers });
+  res.json(Array.isArray(providers) ? { providers } : providers);
 }));
 
 // GET /api/usage/claude-code - Claude Code SUBSCRIPTION rate-limit usage,

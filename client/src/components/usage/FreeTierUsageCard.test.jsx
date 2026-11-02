@@ -43,4 +43,11 @@ describe('FreeTierUsageCard unknown counts', () => {
     );
     expect(screen.getByText('OpenCode Zen CLI')).toBeInTheDocument();
   });
+
+  it('combines free classifications from multiple instances by provider', () => {
+    render(<FreeTierUsageCard freeTier={{ providers: [provider(10, 20, 'measured'), provider(30, 40, 'estimate')], blocks: [] }} />);
+    expect(screen.getAllByText('OpenCode Zen CLI')).toHaveLength(1);
+    expect(screen.getByText('4 queries · 6 msgs')).toBeInTheDocument();
+    expect(screen.getByText('Part est.')).toBeInTheDocument();
+  });
 });

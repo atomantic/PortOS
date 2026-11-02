@@ -24,6 +24,8 @@ import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods'
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
 const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
+const FLEET_SYNC_EVENTS = ['sync:progress'];
+const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -71,7 +73,7 @@ function FleetSourcesPill({ fleet }) {
 // error; a supported adapter that failed transiently shows a soft warning.
 function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
+    <div className="min-w-0 bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
       <div className="flex items-center justify-between gap-1 sm:gap-2 mb-1 sm:mb-2">
         {/* min-w-0 so the provider name shrinks with the card instead of being
             crushed to nothing by the fixed-width controls beside it. */}
@@ -86,7 +88,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
               of them. The button is a 44px touch target around the small
               icon; its negative margins let it overhang the header's line box
               and the card padding, so the compact phone card doesn't grow. */}
-          <button
+          {quota.origin?.self !== false && <button
             type="button"
             onClick={() => onRefresh(quota.family)}
             disabled={refreshing || disabled}
@@ -97,12 +99,13 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
             {/* `will-change-transform` — see the section-level Refresh button's
                 comment on the compositor-layer artifact this avoids. */}
             <RefreshCw size={14} className={`w-3 h-3 sm:w-3.5 sm:h-3.5 will-change-transform ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
+          </button>}
         </div>
       </div>
 
+      {quota.origin && <p className="text-xs text-gray-400 mb-2 break-words">{quota.origin.name}{!quota.origin.self && quota.fetchedAt ? ` · read ${timeAgo(quota.fetchedAt)}` : ''}</p>}
       <ProviderQuotaBody quota={quota} />
-      {quota.metrics?.length > 0 && <p className="mt-2 text-xs text-gray-500">Observed metrics are from this machine only.</p>}
+      {quota.metrics?.length > 0 && <p className="mt-2 text-xs text-gray-500">Observed on this instance; readings may overlap with other instances.</p>}
     </div>
   );
 }
@@ -125,6 +128,16 @@ const GROUPED_FAMILIES = new Set(CELL_GROUPS.flat());
 // CELL_GROUPS (Image Gen, or one added later) still gets its own cell in server
 // order — this is a display preference, never a filter.
 export function arrangeQuotaCells(quotas) {
+  const groups = new Map();
+  for (const quota of quotas) {
+    const id = quota.origin?.instanceId || 'self';
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(quota);
+  }
+  return [...groups.entries()].flatMap(([id, cards]) => arrangeOriginQuotaCells(cards).map((cell) => ({ ...cell, key: `${id}:${cell.key}` })));
+}
+
+function arrangeOriginQuotaCells(quotas) {
   const byFamily = new Map(quotas.map((q) => [q.family, q]));
   const toCell = (cards) => ({ key: cards.map((q) => q.family).join('+'), cards });
 
@@ -144,14 +157,19 @@ function ProviderQuotaSection() {
   const [quotas, setQuotas] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [coverage, setCoverage] = useState(null);
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
+  const quotaRequest = useRef(0);
 
   const load = useCallback(async (refresh = false) => {
+    const token = ++quotaRequest.current;
     setLoading(true);
     setError(false);
-    const result = await api.getProviderUsage({ refresh }).catch(() => null);
+    const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
+    if (token !== quotaRequest.current) return;
     if (result?.providers) {
       setQuotas(result.providers);
+      setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
       setError(true);
@@ -159,7 +177,7 @@ function ProviderQuotaSection() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); return () => { quotaRequest.current += 1; }; }, [load]);
 
   // Refresh ONE provider card. The whole-section Refresh spawns every family's
   // scrape at once (10-20s each); this asks for the single card the user
@@ -167,17 +185,18 @@ function ProviderQuotaSection() {
   // reading — and its age — untouched. A failure toasts through the request
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
+    const token = ++quotaRequest.current;
     setRefreshingFamilies((prev) => new Set(prev).add(family));
-    const result = await api.getProviderUsage({ refresh: true, family, silent: false }).catch(() => null);
-    if (result?.providers) {
-      const card = result.providers.find((q) => q.family === family);
+    const result = await api.getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
+    if (token === quotaRequest.current && result?.providers) {
+      const card = result.providers.find((q) => q.family === family && q.origin?.self !== false);
       // No card back for a family we asked for means it is no longer enabled
       // (its provider was turned off) — drop it rather than leave a reading
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
       setQuotas((prev) => (card
-        ? prev.map((q) => (q.family === family ? card : q))
-        : prev.filter((q) => q.family !== family)));
+        ? prev.map((q) => (q.family === family && q.origin?.self !== false ? card : q))
+        : prev.filter((q) => q.family !== family || q.origin?.self === false)));
     }
     setRefreshingFamilies((prev) => {
       const next = new Set(prev);
@@ -188,6 +207,7 @@ function ProviderQuotaSection() {
 
   // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
   useQuotaUpdates(load);
+  useSocketResource(() => load(), { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
   return (
     <div className="space-y-3">
@@ -208,7 +228,9 @@ function ProviderQuotaSection() {
         </button>
       </div>
 
-      <p className="text-xs text-gray-500">Quota cards cover locally enabled provider families and shared subscription accounts; peer-only families and separately billed accounts may be missing.</p>
+      <p className="text-xs text-gray-500">Last reported readings are shown per instance; accounts may be shared, so allowances are not added together. Refresh reads this instance only.</p>
+      {coverage?.federationUnavailable && <p className="text-xs text-port-warning">Peer quota readings are unavailable.</p>}
+      {coverage?.unreportedInstances?.length > 0 && <p className="text-xs text-port-warning">Quota reporting is unavailable from {coverage.unreportedInstances.join(', ')}.</p>}
 
       {loading && !quotas && (
         // Reserve the quota-card grid below rather than a centered spinner
@@ -239,7 +261,7 @@ function ProviderQuotaSection() {
             <div key={cell.key} className="contents sm:block sm:space-y-4">
               {cell.cards.map((quota) => (
                 <ProviderQuotaCard
-                  key={quota.family}
+                  key={`${quota.origin?.instanceId || 'self'}:${quota.family}`}
                   quota={quota}
                   onRefresh={refreshFamily}
                   refreshing={refreshingFamilies.has(quota.family)}
@@ -287,7 +309,7 @@ function CostReportTable({ report }) {
       {/* Mobile view (< sm): Card list for easy mobile reading without horizontal scroll */}
       <div className="block sm:hidden space-y-3">
         {report.providers.map((provider) => (
-          <div key={provider.id} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+          <div key={provider.rowKey || provider.id} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="font-medium text-white text-sm truncate">{provider.name}</span>
@@ -297,7 +319,7 @@ function CostReportTable({ report }) {
                 {!provider.free && <SourcePill source={provider.source} className="shrink-0" />}
               </div>
               <span className="text-sm font-semibold text-port-success shrink-0" title={approxMark(provider.rateMatch) ? 'Approximate pricing' : undefined}>
-                {approxMark(provider.rateMatch)}{formatUsd(provider.estimatedCost)}
+                {provider.estimatedCost == null ? '—' : `${approxMark(provider.rateMatch)}${formatUsd(provider.estimatedCost)}`}
               </span>
             </div>
 
@@ -327,7 +349,7 @@ function CostReportTable({ report }) {
                   <div key={m.model} className="bg-port-card/30 p-2 rounded text-xs space-y-1">
                     <div className="flex items-center justify-between font-mono text-gray-300 text-[11px]">
                       <span className="truncate pr-2" title={m.model}>{m.model}</span>
-                      <span className="text-gray-400 shrink-0 font-sans font-medium">{approxMark(m.rateMatch)}{formatUsd(m.estimatedCost)}</span>
+                      <span className="text-gray-400 shrink-0 font-sans font-medium">{m.estimatedCost == null ? '—' : `${approxMark(m.rateMatch)}${formatUsd(m.estimatedCost)}`}</span>
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-gray-400">
                       <span>{formatNumber(m.sessions)} sess</span>
@@ -346,7 +368,7 @@ function CostReportTable({ report }) {
 
         <div className="bg-port-bg border border-port-border rounded-lg p-3 flex items-center justify-between text-xs font-semibold text-white">
           <span>Total ({formatNumber(report.totals.sessions)} sessions)</span>
-          <span className="text-port-success text-sm">{formatUsd(report.totals.estimatedCost)}</span>
+              <span className="text-port-success text-sm">{report.totals.costIncomplete ? '≥ ' : ''}{formatUsd(report.totals.estimatedCost)}</span>
         </div>
       </div>
 
@@ -366,7 +388,7 @@ function CostReportTable({ report }) {
           </thead>
           <tbody>
             {report.providers.map((provider) => (
-              <ProviderCostRows key={provider.id} provider={provider} />
+              <ProviderCostRows key={provider.rowKey || provider.id} provider={provider} />
             ))}
           </tbody>
           <tfoot>
@@ -377,7 +399,7 @@ function CostReportTable({ report }) {
               <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheReadTokens)}</td>
               <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheWriteTokens)}</td>
               <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensOut)}</td>
-              <td className="py-2 pl-2 text-right text-port-success">{formatUsd(report.totals.estimatedCost)}</td>
+              <td className="py-2 pl-2 text-right text-port-success">{report.totals.costIncomplete ? '≥ ' : ''}{formatUsd(report.totals.estimatedCost)}</td>
             </tr>
           </tfoot>
         </table>
@@ -423,7 +445,7 @@ function ProviderCostRows({ provider }) {
           className="py-2 pl-2 text-right"
           title={approxMark(provider.rateMatch) ? 'Approximate — provider or legacy usage uses fallback pricing' : undefined}
         >
-          {approxMark(provider.rateMatch)}{formatUsd(provider.estimatedCost)}
+          {provider.estimatedCost == null ? '—' : `${approxMark(provider.rateMatch)}${formatUsd(provider.estimatedCost)}`}
         </td>
       </tr>
       {provider.models.map((m) => (
@@ -445,7 +467,7 @@ function ProviderCostRows({ provider }) {
           <td className="py-1.5 px-2 text-right text-xs hidden md:table-cell">{formatNumber(m.cacheWriteTokens)}</td>
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.tokensOut)}</td>
           <td className="py-1.5 pl-2 text-right text-xs" title={approxMark(m.rateMatch) ? 'Approximate — no exact published rate for this model id' : undefined}>
-            {approxMark(m.rateMatch)}{formatUsd(m.estimatedCost)}
+            {m.estimatedCost == null ? '—' : `${approxMark(m.rateMatch)}${formatUsd(m.estimatedCost)}`}
           </td>
         </tr>
       ))}
@@ -511,6 +533,24 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
 }
 
 // Derive top providers for the active period (or fallback to usage.topProviders)
+function combineSummaryRows(rows, keyOf) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { ...row, estimatedCost: row.rawEstimatedCost ?? row.estimatedCost ?? 0, costIncomplete: row.estimatedCost == null });
+      continue;
+    }
+    for (const field of ['sessions', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens']) existing[field] = (existing[field] || 0) + (row[field] || 0);
+    existing.estimatedCost += row.rawEstimatedCost ?? row.estimatedCost ?? 0;
+    existing.costIncomplete ||= row.estimatedCost == null;
+    if (existing.free !== row.free) existing.free = null;
+    if (existing.source !== row.source) existing.source = 'mixed';
+  }
+  return [...groups.values()].map((row) => ({ ...row, estimatedCost: Math.round(row.estimatedCost * 100) / 100 }));
+}
+
 function getPeriodTopProviders(usage) {
   if (usage?.report?.providers) {
     const totalTokens = usage.report.providers.reduce(
@@ -518,7 +558,7 @@ function getPeriodTopProviders(usage) {
       0
     ) || usage.report.providers.reduce((sum, p) => sum + (p.sessions || 0), 0) || 1;
 
-    return usage.report.providers
+    const rows = usage.report.providers
       .map((p) => {
         const tokens = (p.tokensIn || 0) + (p.tokensOut || 0) + (p.cacheReadTokens || 0) + (p.cacheWriteTokens || 0);
         return {
@@ -531,12 +571,15 @@ function getPeriodTopProviders(usage) {
           cacheReadTokens: p.cacheReadTokens,
           cacheWriteTokens: p.cacheWriteTokens,
           estimatedCost: p.estimatedCost,
+          rawEstimatedCost: p.rawEstimatedCost,
           free: p.free,
           source: p.source,
           rateMatch: p.rateMatch,
           percent: Math.min(100, Math.round(((tokens || p.sessions || 0) / totalTokens) * 100))
         };
-      })
+      });
+    return combineSummaryRows(rows, (row) => row.id)
+      .map((row) => ({ ...row, percent: Math.min(100, Math.round(((row.tokens || row.sessions || 0) / totalTokens) * 100)) }))
       .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
       .slice(0, 5);
   }
@@ -570,6 +613,8 @@ function getPeriodTopModels(usage) {
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
           estimatedCost: m.estimatedCost,
+          rawEstimatedCost: m.rawEstimatedCost,
+          providerId: p.id,
           rateMatch: m.rateMatch
         });
       }
@@ -578,7 +623,7 @@ function getPeriodTopModels(usage) {
       const totalTokens = allModels.reduce((sum, m) => sum + m.tokens, 0)
         || allModels.reduce((sum, m) => sum + m.sessions, 0) || 1;
 
-      return allModels
+      return combineSummaryRows(allModels, (row) => `${row.providerId}\u0000${row.model}`)
         .map((m) => ({
           ...m,
           percent: Math.min(100, Math.round(((m.tokens || m.sessions || 0) / totalTokens) * 100))
@@ -601,6 +646,7 @@ function getPeriodTopModels(usage) {
 }
 
 function InternalUsageMetrics() {
+  const [fleetRevision, setFleetRevision] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const period = searchParams.get('period') || DEFAULT_USAGE_PERIOD;
   const from = searchParams.get('from') || '';
@@ -647,6 +693,8 @@ function InternalUsageMetrics() {
   }, [fetchUsage]);
 
   useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
+  useSocketResource(() => { setFleetRevision((value) => value + 1); return fetchUsage(); },
+    { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
     const status = await api.startUsageBackfill({ silent: true });
@@ -715,14 +763,16 @@ function InternalUsageMetrics() {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
-      <RollingCostCard />
-      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} />
+      <RollingCostCard coverage={usage.coverage} fleetRevision={fleetRevision} />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} />
       {reportControls}
       {usage.coverage && (
         <div className="text-xs text-gray-400 space-y-1" role="status">
           <p>Usage from {formatCount(usage.coverage.instanceCount)} reported instance{usage.coverage.instanceCount === 1 ? '' : 's'}; peer data reflects the last sync.</p>
           {usage.coverage.instanceCount > 1 && <p>Each instance snapshot is counted once. Runs recorded independently on multiple machines cannot be deduplicated from the available aggregates.</p>}
-          {usage.coverage.instanceCount > 1 && <p className="text-port-warning">Peer provider billing settings are not included in snapshots. API costs use this machine&rsquo;s provider configuration and may be inaccurate; unrecognized providers cannot be attributed to a subscription.</p>}
+          <p>Cost classifications use each instance&rsquo;s current provider configuration; historical configuration changes are not available.</p>
+          {usage.coverage.pricingIncomplete && <p className="text-port-warning">Some provider classifications are unavailable. API cost and savings include only classified usage and are incomplete.</p>}
+          {usage.coverage.classificationUnreported?.length > 0 && <p className="text-port-warning">Provider classifications have not been reported by {usage.coverage.classificationUnreported.join(', ')}.</p>}
           {usage.coverage.missingInstances?.length > 0 && <p className="text-port-warning">No usage snapshot from {usage.coverage.missingInstances.join(', ')}. Totals are incomplete.</p>}
           {usage.coverage.notSyncingInstances?.length > 0 && <p className="text-port-warning">Usage sync is disabled for {usage.coverage.notSyncingInstances.join(', ')}. Their saved figures may be stale.</p>}
           {usage.coverage.transcriptUnreported?.length > 0 && <p className="text-port-warning">Claude transcript history has not been reported by {usage.coverage.transcriptUnreported.join(', ')}; the monthly chart may be incomplete.</p>}
@@ -773,12 +823,11 @@ function InternalUsageMetrics() {
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
           <h3 className="text-sm font-medium text-white">Codex image usage</h3>
-          {usage.imageRenders.unavailableAcrossInstances ? (
-            <p className="text-sm text-gray-400" role="status">Fleet image usage is unavailable: image receipts are not federated and mirrored outputs cannot be counted safely.</p>
-          ) : usage.imageRenders.error ? (
+          {usage.imageRenders.error ? (
             <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
           ) : (
             <>
+          {usage.imageRenders.incomplete && <p className="text-xs text-port-warning" role="status">Partial: some instances did not report complete image receipts or reported conflicting identities.</p>}
           <p className="text-sm text-gray-300">
             {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
           </p>
@@ -786,7 +835,8 @@ function InternalUsageMetrics() {
             Image tokens, image cost and subscription allowance attribution: unknown.
             Any driver tokens already captured by text accounting stay in the text report. Image costs are excluded from the API estimate.
             Saved outputs show observed activity; they do not measure every image-tool call or failed attempt.
-            Historical saved records do not establish which machine executed a render.
+            Mirrored outputs are counted once by their saved identity.
+            Sessions and driver totals are attributed to the day of the first saved output; outputs are counted on their own day.
           </p>
           <p className="text-xs text-gray-400">
             {usage.imageRenders.driverTokens
@@ -831,7 +881,7 @@ function InternalUsageMetrics() {
           </div>
           <div className="flex items-center gap-2">
             {report?.totals?.source && <SourcePill source={report.totals.source} />}
-            <span className="text-xl font-bold text-port-success">{formatUsd(report?.totals?.estimatedCost)}</span>
+            <span className="text-xl font-bold text-port-success">{report?.totals?.costIncomplete ? '≥ ' : ''}{formatUsd(report?.totals?.estimatedCost)}</span>
           </div>
         </div>
         <CostReportTable report={report} />
@@ -856,7 +906,7 @@ function InternalUsageMetrics() {
       <FreeTierUsageCard freeTier={usage.freeTier} />
 
       {/* Claude Code tokens per model (all instances) for the same window. */}
-      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} onRefreshed={fetchUsage} transcriptUpdatedAt={usage.transcriptUpdatedAt} />
+      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} onRefreshed={fetchUsage} transcriptUpdatedAt={usage.transcriptUpdatedAt} fleetRevision={fleetRevision} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
@@ -921,8 +971,9 @@ function InternalUsageMetrics() {
             <span>6pm</span>
             <span>12am</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">All-time sessions across available instances, by each instance&rsquo;s local clock.</p>
-          </> : <p className="text-sm text-gray-500">Hourly data is only available for all time, not the selected period.</p>}
+          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by each instance&rsquo;s local clock.</p>
+          {usage.coverage?.hourlyIncomplete && <p className="text-xs text-port-warning mt-1">Partial: older sessions or unavailable instances do not provide hourly detail.</p>}
+          </> : <p className="text-sm text-gray-500">Hourly data is unavailable for this period.</p>}
         </div>
       </div>
 
@@ -948,7 +999,7 @@ function InternalUsageMetrics() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 text-xs">
                     {provider.estimatedCost != null && provider.estimatedCost > 0 && (
-                      <span className="text-port-success font-semibold">{formatUsd(provider.estimatedCost)}</span>
+                      <span className="text-port-success font-semibold">{provider.costIncomplete ? '≥ ' : ''}{formatUsd(provider.estimatedCost)}</span>
                     )}
                     <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
                       {provider.percent}%
@@ -1002,7 +1053,7 @@ function InternalUsageMetrics() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 text-xs">
                     {model.estimatedCost != null && model.estimatedCost > 0 && (
-                      <span className="text-port-success font-semibold">{formatUsd(model.estimatedCost)}</span>
+                      <span className="text-port-success font-semibold">{model.costIncomplete ? '≥ ' : ''}{formatUsd(model.estimatedCost)}</span>
                     )}
                     <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
                       {model.percent}%

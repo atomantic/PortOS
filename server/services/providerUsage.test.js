@@ -69,6 +69,7 @@ import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
+import { getFleetQuotaEntries } from './peerUsage.js';
 
 // Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
 // `needsProcessGroup` is false there and these sites spawn attached. The policy
@@ -376,6 +377,22 @@ describe('getProviderQuotas', () => {
     __resetUsageScrapeCache();
     scrapeTuiUsage.mockReset();
     getImageGenQuota.mockClear();
+    getFleetQuotaEntries.mockReset().mockResolvedValue([]);
+  });
+
+  it('returns separate peer-only and API-billed readings, ages windows, and reports old peers', async () => {
+    getAllProviders.mockResolvedValueOnce({ providers: [] });
+    getFleetQuotaEntries.mockResolvedValueOnce([
+      { instanceId: 'a', name: 'Peer A', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [{ key: 'week', resetsAt: '2026-01-02T00:00:00.000Z', percentUsed: 100 }], activity: [] }] },
+      { instanceId: 'b', name: 'Peer B', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [], activity: [{ period: 'week', requests: 2, sessions: 1 }] }] },
+      { instanceId: 'old', name: 'Old peer', quotaReported: false, quotas: [] },
+    ]);
+    const result = await getProviderQuotas({ scope: 'instances' });
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ includeEmpty: true });
+    expect(result.providers).toHaveLength(2);
+    expect(result.providers[0]).toMatchObject({ origin: { instanceId: 'a' }, limits: [], error: expect.stringMatching(/since reset/) });
+    expect(result.providers[1]).toMatchObject({ origin: { instanceId: 'b' }, activity: [{ requests: 2 }] });
+    expect(result.unreportedInstances).toEqual(['Old peer']);
   });
 
   it('unwraps the { providers } object shape from getAllProviders', async () => {

@@ -56,7 +56,7 @@ function ModelTable({ models, totals }) {
  * transcripts (so it counts sessions run outside PortOS) and federates the
  * per-day totals; peers show as of their last sync.
  */
-export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom, onRefreshed, transcriptUpdatedAt }) {
+export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom, onRefreshed, transcriptUpdatedAt, fleetRevision }) {
   // undefined = still loading, null = the read failed
   const [report, setReport] = useState(undefined);
   const loading = report === undefined;
@@ -77,7 +77,7 @@ export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom, 
         }
       });
     return () => { cancelled = true; };
-  }, [period, from, to, isCustom, onRefreshed]);
+  }, [period, from, to, isCustom, onRefreshed, fleetRevision]);
 
   const instances = report?.instances || [];
   const pending = report?.pendingInstances || [];

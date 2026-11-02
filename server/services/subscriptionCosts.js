@@ -111,9 +111,12 @@ export async function getSubscriptionSavings({ report, providers = [], from = nu
     apiCost: byFamily.get(f.family) || 0,
     source: sources.get(f.family)
   }));
-  return buildSubscriptionSavings({
+  return {
+    ...buildSubscriptionSavings({
     entries,
     range: resolveSavingsWindow({ from, to, firstActivityDay, today }),
     unmatchedApiCost: unmatched
-  });
+    }),
+    costIncomplete: Boolean(report?.totals?.costIncomplete),
+  };
 }

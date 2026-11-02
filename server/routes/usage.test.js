@@ -3,8 +3,6 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/imageRenderUsage.js', () => ({ getImageRenderUsage: vi.fn(async () => ({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null })) }));
-
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -56,7 +54,6 @@ vi.mock('../services/usageBackfill.js', () => ({
 }));
 
 import * as usage from '../services/usage.js';
-import { getImageRenderUsage } from '../services/imageRenderUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
@@ -78,9 +75,10 @@ const fleetResult = (overrides = {}) => ({
   instances: [], totals: null,
   report: { providers: [], totals: { sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 12 } },
   subscriptionReport: { providers: [], totals: { estimatedCost: 12 } },
-  firstActivityDay: '2026-01-01', activity: [], last7Days: [], hourlyActivity: null, totalToolCalls: null,
+  firstActivityDay: '2026-01-01', subscriptionFirstActivityDay: '2026-01-01', activity: [], last7Days: [], hourlyActivity: null, totalToolCalls: null,
   coverage: { instanceCount: 1, missingInstances: [], notSyncingInstances: [], incompleteMonths: [] },
   monthly: { instanceCount: 1, series: [], history: [] },
+  imageRenders: { renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null },
   ...overrides,
 });
 
@@ -94,22 +92,18 @@ describe('usage routes', () => {
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
     const response = await request(buildApp()).get('/api/usage?from=2026-07-01&to=2026-07-31');
     expect(response.status).toBe(200);
-    expect(getImageRenderUsage).toHaveBeenCalledWith({ from: '2026-07-01', to: '2026-07-31' });
+    expect(getFleetUsage).toHaveBeenCalledWith(expect.objectContaining({ from: '2026-07-01', to: '2026-07-31' }));
     expect(response.body.imageRenders).toEqual({ renderGroups: 2, codexSessions: 2, jobIdentityGroups: 0, savedOutputs: 3, imageCostUsd: null });
     expect(response.body.report.totals.estimatedCost).toBe(12);
   });
 
-  it('keeps text reporting available when the optional image ledger is damaged', async () => {
+  it('keeps text reporting available when image coverage is incomplete', async () => {
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
-    getImageRenderUsage.mockRejectedValueOnce(new Error('Invalid image render usage receipt'));
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const response = await request(buildApp()).get('/api/usage');
-      expect(response.status).toBe(200);
-      expect(response.body.report.totals.estimatedCost).toBe(12);
-      expect(response.body.imageRenders).toEqual({ error: 'Image render usage is unavailable.' });
-      expect(logged).toHaveBeenCalled();
-    } finally { logged.mockRestore(); }
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ imageRenders: { incomplete: true, savedOutputs: 0 } }));
+    const response = await request(buildApp()).get('/api/usage');
+    expect(response.status).toBe(200);
+    expect(response.body.report.totals.estimatedCost).toBe(12);
+    expect(response.body.imageRenders).toEqual({ incomplete: true, savedOutputs: 0 });
   });
 
   it('returns the fleet report and compares subscription-covered usage without double pricing plans', async () => {
@@ -123,7 +117,7 @@ describe('usage routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.report).toEqual(all);
     expect(res.body.coverage.missingInstances).toEqual(['Offline']);
-    expect(res.body.imageRenders).toEqual({ unavailableAcrossInstances: true });
+    expect(res.body.imageRenders.savedOutputs).toBe(3);
     expect(getSubscriptionSavings).toHaveBeenCalledWith(expect.objectContaining({ report: covered, from: '2026-02-01', to: '2026-02-07' }));
   });
 
@@ -267,13 +261,14 @@ describe('usage routes', () => {
     });
   });
 
-  it('uses the earliest fleet activity to price all-time plans', async () => {
+  it('uses the earliest subscription-covered activity to price all-time plans', async () => {
     usage.getUsageSummary.mockReturnValue({});
     await request(buildApp()).get('/api/usage?period=7d');
     expect(getSubscriptionSavings).toHaveBeenLastCalledWith(expect.objectContaining({ firstActivityDay: null }));
 
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ subscriptionFirstActivityDay: '2026-03-01' }));
     await request(buildApp()).get('/api/usage?period=all');
-    expect(getSubscriptionSavings).toHaveBeenLastCalledWith(expect.objectContaining({ firstActivityDay: '2026-01-01' }));
+    expect(getSubscriptionSavings).toHaveBeenLastCalledWith(expect.objectContaining({ firstActivityDay: '2026-03-01' }));
   });
 
   it('PUT /api/usage/subscriptions saves a price patch, including a null clear', async () => {
