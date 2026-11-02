@@ -10,7 +10,7 @@ const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMain
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 const recovery = vi.hoisted(() => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('../services/heldCheckoutRecovery.js', () => recovery);
-const releaseSync = vi.hoisted(() => ({ resetReleaseSynchronization: vi.fn() }));
+const releaseSync = vi.hoisted(() => ({ resetReleaseSynchronization: vi.fn(), verifyIndependentReleaseDelivery: vi.fn() }));
 vi.mock('../services/releaseSynchronization.js', () => releaseSync);
 const refreshInventory = vi.hoisted(() => vi.fn());
 vi.mock('../services/branchReconcileRefresh.js', () => ({ refreshBranchReconcileInventory: refreshInventory }));
@@ -58,6 +58,17 @@ describe('CoS Schedule Routes', () => {
     expect(releaseSync.resetReleaseSynchronization).toHaveBeenCalledWith(identity, reason, 'local-operator', []);
     expect((await request(app).post(path).send({ identity, reason: '' })).status).toBe(400);
     expect((await request(app).post(path).send({ identity, reason, actor: 'operator-session' })).status).toBe(400);
+  });
+
+  it('accepts only an identity and PR number for independent delivery verification', async () => {
+    app.use(errorMiddleware);
+    const identity = 'a'.repeat(64), prNumber = 42;
+    releaseSync.verifyIndependentReleaseDelivery.mockResolvedValue({ status: 'verified', number: prNumber });
+    const path = '/api/cos/schedule/release-synchronization/verify-delivery';
+    expect((await request(app).post(path).send({ identity, prNumber })).body).toEqual({ status: 'verified', number: prNumber });
+    expect(releaseSync.verifyIndependentReleaseDelivery).toHaveBeenCalledWith(identity, prNumber);
+    expect((await request(app).post(path).send({ identity, prNumber, verified: true })).status).toBe(400);
+    expect((await request(app).post(path).send({ identity, prNumber: 0 })).status).toBe(400);
   });
 
   it('refreshes only a validated managed app target', async () => {

@@ -145,8 +145,10 @@ export function ReleasePublicationLine({ publication, synchronization, className
   const publishedAt = publicationVerified ? pub?.publishedAt || sync?.publishedAt : null;
 
   const syncStatus = sync?.status;
+  const delivered = publicationVerified && sync?.delivery?.status === 'verified';
   const publicationLabel = publicationVerified ? 'Published' : 'Publication not verified';
   const syncLabel = () => {
+    if (delivered) return `${publicationLabel} — delivery observed`;
     if (!syncStatus || syncStatus === 'pending') {
       return sync ? `${publicationLabel} — synchronization pending` : `${publicationLabel} — synchronization not yet verified`;
     }
@@ -157,6 +159,7 @@ export function ReleasePublicationLine({ publication, synchronization, className
   };
 
   const syncTone = () => {
+    if (delivered) return 'text-port-success';
     if (syncStatus === 'verified') return 'text-port-success';
     if (syncStatus === 'blocked') return 'text-port-error';
     if (syncStatus === 'running') return 'text-port-warning';
@@ -193,9 +196,22 @@ export function ReleasePublicationLine({ publication, synchronization, className
           </a>
         </div>
       )}
+      {delivered && sync.delivery.prUrl && (
+        <div className="text-xs">
+          <a href={sync.delivery.prUrl} target="_blank" rel="noopener noreferrer" className="underline text-port-accent">
+            Delivery PR{sync.delivery.headSha ? ` (${sync.delivery.headSha.slice(0, 7)})` : ''}
+          </a>
+        </div>
+      )}
+      {delivered && sync.delivery.checkedAt && (
+        <div className="text-xs text-port-text-muted">Delivery checked: <time dateTime={sync.delivery.checkedAt}>{formatDateTime(sync.delivery.checkedAt)}</time></div>
+      )}
+      {delivered && syncStatus === 'blocked' && (
+        <div className="text-xs text-port-text-muted">Historical synchronization: blocked</div>
+      )}
       {syncStatus === 'blocked' && sync?.blocker && (
         <div className="text-xs text-port-error">
-          Blocker: {sync.blocker}
+          {delivered ? 'Historical blocker' : 'Blocker'}: {sync.blocker}
         </div>
       )}
       {syncStatus === 'blocked' && sync?.nextAction && (

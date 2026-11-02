@@ -15,11 +15,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 import * as taskStore from './cosTaskStore.js';
 import * as appActivity from './appActivity.js';
-import { releaseTaskDispatchDisposition } from './releaseSynchronization.js';
+import { releaseTaskDispatchDisposition, deliveredReleaseTaskIds } from './releaseSynchronization.js';
+import * as apps from './apps.js';
+import * as taskSchedule from './taskSchedule.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: vi.fn(async () => null) }));
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: vi.fn(async () => null), deliveredReleaseTaskIds: vi.fn(async () => new Set()) }));
 
 // buildJiraTicketTask resolves the claim-issue-jira prompt body (dynamic import)
 // and the Code Review Defaults (static import). Mock both leaf services so the
@@ -1418,6 +1420,29 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     // Source-pinned: the queue path must consume buildImprovementDedupSets so
     // its occupancy semantics can't silently drift from the tested helper.
     expect(GEN_SRC).toMatch(/buildImprovementDedupSets\(existingTasks/);
+  });
+
+  it('queues a due release past a delivered historical task, while unfinished work keeps the slot', async () => {
+    const previous = { id: 'old-release', status: 'blocked', description: 'Release App One',
+      metadata: { app: 'app-1', analysisType: 'do-release' } };
+    const state = { config: { improvementEnabled: true, appReviewCooldownMs: 0 } };
+    const prepareTask = vi.fn(async () => ({ task: { description: 'Release App One', status: 'pending',
+      metadata: { app: 'app-1', analysisType: 'do-release' } }, pendingPerpetualDispatch: null }));
+    const persistTask = vi.fn(async task => task);
+    vi.spyOn(apps, 'getActiveApps').mockResolvedValue([{ id: 'app-1', name: 'App One' }]);
+    vi.spyOn(appActivity, 'loadAppActivity').mockResolvedValue({ apps: {} });
+    vi.spyOn(taskSchedule, 'getDueTasks').mockImplementation(async appId => appId ? [{ taskType: 'do-release', reason: 'cron-due' }] : []);
+    vi.spyOn(taskSchedule, 'recordExecution').mockResolvedValue();
+    try {
+      vi.mocked(deliveredReleaseTaskIds).mockResolvedValueOnce(new Set([previous.id]));
+      await cosTaskGenerator.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
+      expect(persistTask).toHaveBeenCalledWith(expect.objectContaining({ metadata: expect.objectContaining({ analysisType: 'do-release' }) }),
+        'internal', expect.objectContaining({ deliveredReleaseTaskIds: [previous.id] }));
+      prepareTask.mockClear(); persistTask.mockClear();
+      vi.mocked(deliveredReleaseTaskIds).mockResolvedValueOnce(new Set());
+      await cosTaskGenerator.queueEligibleImprovementTasks(state, { tasks: [previous] }, { prepareTask, persistTask, wakeAfterRecord: false });
+      expect(prepareTask).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); }
   });
 
   it('queues a due install-wide task once and skips blocked or hook-declined types', async () => {
