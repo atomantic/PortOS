@@ -91,10 +91,10 @@ it('uses the message thread fallback consistently for listing, viewing and purgi
     expect(query.mock.calls[0][0]).toContain(`COUNT(DISTINCT ${grouping})`);
     for (const field of ['chatGuid', 'conversationId']) {
       await listEvents({ source, [field]: conversations[0].chatGuid });
-      expect(query.mock.lastCall[1]).toEqual([source, 'thread-a', 500]);
+      expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), [source, 'thread-a', 500]]);
       query.mockResolvedValueOnce({ rowCount: 2 });
       expect(await deleteEvents({ source, [field]: conversations[0].chatGuid })).toEqual({ deleted: 2 });
-      expect(query.mock.lastCall[1]).toEqual([source, 'thread-a']);
+      expect(query.mock.lastCall).toEqual([expect.stringContaining(`source = $1 AND ${selector} = $2`), [source, 'thread-a']]);
     }
     query.mockClear();
   }

@@ -459,10 +459,10 @@ const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVE
 
 function conversationFilter(field, source, parameter) {
   if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
-  if (MESSAGE_ACCOUNT_TYPES.includes(source)) {
-    if (field === 'chatGuid') return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
-    return `(${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter} OR (NULLIF(account_id, '') IS NULL AND ${MESSAGE_THREAD_RAW_ID_SQL} = $${parameter}))`;
-  }
+  // Message threads are keyed by [account_id, threadId] when an account is present,
+  // or raw threadId for unscoped imports (e.g. mbox); MESSAGE_THREAD_CONVERSATION_SQL
+  // evaluates to the exact selector for both chatGuid and conversationId.
+  if (MESSAGE_ACCOUNT_TYPES.includes(source)) return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
   if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
   if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
   // Raw conversationId remains supported. An ambiguous scope/title label must

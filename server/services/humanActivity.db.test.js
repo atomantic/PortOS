@@ -486,7 +486,6 @@ describe.skipIf(!runDb)('Message thread conversation management', () => {
     expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
     expect(await listEvents({ source: 'gmail', chatGuid: keyAcc2ThreadA })).toHaveLength(1);
 
-    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
     expect(await deleteEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toEqual({ deleted: 2 });
     expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(0);
     // Account 2 with same thread is preserved
