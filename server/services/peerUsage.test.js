@@ -1056,4 +1056,46 @@ describe('federated Claude Code tokens per model', () => {
     await applyUsageRemote({ instances: { 'inst-peer': { ...peerEntry(), claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: { '2026-09-10': { m: { messages: 1, evil: 5 } }, junk: {} } } } } });
     expect((await readStoreFile()).instances['inst-peer'].claudeCode.days).toEqual({ '2026-09-10': { m: { messages: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } });
   });
+
+  it('discards prototype-polluting keys in peer buckets without polluting Object.prototype', async () => {
+    const maliciousUsage = {
+      dailyActivity: {
+        '2026-09-10': {
+          byProvider: {
+            __proto__: { cost: 100 },
+            constructor: { cost: 100 },
+            prototype: { cost: 100 },
+            openai: {
+              byModel: {
+                __proto__: { messages: 100 },
+                constructor: { messages: 100 },
+                prototype: { messages: 100 },
+                'gpt-4': { messages: 1, inputTokens: 10 },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    await applyUsageRemote({
+      instances: {
+        'inst-peer': peerEntry({
+          capturedAt: '2026-09-22T00:00:00.000Z',
+          usage: maliciousUsage,
+        }),
+      },
+    });
+
+    expect(Object.prototype.cost).toBeUndefined();
+    expect(Object.prototype.messages).toBeUndefined();
+    expect(Object.prototype.inputTokens).toBeUndefined();
+    const stored = (await readStoreFile()).instances['inst-peer'];
+    const provs = stored.usage.dailyActivity['2026-09-10'].byProvider;
+    expect(Object.hasOwn(provs, '__proto__')).toBe(false);
+    expect(Object.hasOwn(provs, 'constructor')).toBe(false);
+    expect(Object.hasOwn(provs, 'prototype')).toBe(false);
+    expect(Object.keys(provs)).toEqual(['openai']);
+    expect(Object.keys(provs.openai.byModel)).toEqual(['gpt-4']);
+  });
 });
