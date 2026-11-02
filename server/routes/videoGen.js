@@ -543,6 +543,8 @@ const generateBodySchema = z.object({
       // The shot card's Song audio toggle: hand a cutaway its song slice (true) or
       // render it silent (false), whatever the project's generation mode says.
       songAudio: z.boolean().optional(),
+      // Refuse if the saved shot no longer matches the mode the board priced.
+      expectedShot: z.enum(['cutaway', 'lipsync', 'music']).optional(),
       // The shot card's Whole sung line: a performance take's song slice covers
       // the full lyric line the shot sits in; its edit points still frame the shot.
       wholeLine: z.boolean().optional(),

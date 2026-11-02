@@ -79,6 +79,10 @@ export const MUSIC_VIDEO_SHOT_MODES = Object.freeze(['cutaway', 'performance']);
 export const isPerformanceScene = (scene) => scene?.shotMode === 'performance'
   && (scene.visualLayer == null || scene.visualLayer === 'footage');
 
+/** The semantic shot type a renderer must agree on before accepting a board request. */
+export const sceneRenderShot = (scene) => !scene ? null : !isPerformanceScene(scene) ? 'cutaway'
+  : scene.performanceStyle === 'music' ? 'music' : 'lipsync';
+
 /**
  * How a performance shot follows the song: `lipsync` (absent on every older
  * record) syncs a singer's mouth to the vocal; `music` lets the song slice

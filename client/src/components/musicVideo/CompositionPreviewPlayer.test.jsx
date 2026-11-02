@@ -670,6 +670,7 @@ describe('native composition playback', () => {
   });
 
   it('fails visibly and pauses on queue overflow rather than discarding a source frame', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const p = await presenter();
     p.frame(1);
     p.frame(2);
@@ -680,12 +681,14 @@ describe('native composition playback', () => {
     expect(p.pause).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
     expect(socket.emit).toHaveBeenCalledWith('generated-preview:close', expect.objectContaining({ sessionId: p.native.session().sessionId }));
+    expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/presentation-queue-full \(pending=2, ageMs=0\)/));
     await p.task();
     expect(p.image.src).toBe(p.baseline);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it('enforces the receipt-to-ack deadline even when decode finishes but RAF is held', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const p = await presenter();
     const first = p.frame(1);
     await p.task();
@@ -694,6 +697,7 @@ describe('native composition playback', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     await p.advance(1);
     expect(screen.getByRole('alert')).toHaveTextContent('presentation fell behind');
+    expect(log).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('presentation-deadline (pending=0, ageMs=100)'));
     expect(p.image.src).toBe(first);
     expect(p.pause).toHaveBeenCalled();
     expect(p.callbacks.size).toBe(0);
@@ -1046,6 +1050,7 @@ describe('native composition playback', () => {
   });
 
   it('resynchronizes clock drift at actual audio time and stops repeated clock failures with a visible error', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     installNative();
     media();
     const { container } = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' />);
@@ -1061,6 +1066,7 @@ describe('native composition playback', () => {
     }
     await act(async () => receive('playback-state', { ...playbackMessages('play').at(-1), action: 'sync', status: 'resync-required' }));
     expect(screen.getByRole('alert')).toHaveTextContent('repeatedly lost synchronization');
+    expect(log).toHaveBeenCalledExactlyOnceWith('❌ Generated preview repeatedly lost audio synchronization');
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
     expect(playbackMessages('prepare')).toHaveLength(4);
   });
@@ -1086,6 +1092,7 @@ describe('native composition playback', () => {
   });
 
   it('keeps native playback stopped when audio play fails', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     installNative();
     const { play, pause } = media();
     play.mockRejectedValue(new Error('Audio permission denied'));
@@ -1095,6 +1102,36 @@ describe('native composition playback', () => {
     expect(pause).toHaveBeenCalled();
     expect(playbackMessages('play')).toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Retry preview' })).toBeEnabled();
+    expect(log).toHaveBeenCalledExactlyOnceWith('❌ Generated preview failed during audio-start');
+  });
+
+  it('stops native playback and reports a media error without logging the audio source', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    installNative();
+    const { pause } = media();
+    const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(function () {
+      this.currentTime = 0;
+      Object.defineProperty(this, 'error', { configurable: true, value: null });
+    });
+    const { container } = render(<CompositionPreviewPlayer project={project} audioUrl='/private-example.mp3' />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    await waitFor(() => expect(playbackMessages('play')).toHaveLength(1));
+    const audio = container.querySelector('audio');
+    audio.currentTime = 3;
+    Object.defineProperty(audio, 'error', { configurable: true, value: { code: 3, message: 'private-example.mp3' } });
+    fireEvent.error(audio);
+    fireEvent.error(audio);
+    expect(pause).toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('song audio could not be played');
+    expect(screen.getByRole('button', { name: 'Retry preview' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+    expect(log).toHaveBeenCalledExactlyOnceWith('❌ Generated preview audio failed (decode)');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry preview' }));
+    expect(load).toHaveBeenCalledOnce();
+    expect(audio.currentTime).toBe(3);
+    fireEvent.click(await screen.findByRole('button', { name: 'Play' }));
+    await waitFor(() => expect(playbackMessages('play')).toHaveLength(2));
+    expect(playbackMessages('play').at(-1).t).toBeGreaterThanOrEqual(3);
   });
 
   it('pauses with a visible error when native preparation never becomes ready', async () => {

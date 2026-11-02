@@ -14,7 +14,8 @@ import { captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/
 import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 
 const SONG_SAMPLE_RATE = 48000;
@@ -156,6 +157,16 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.');
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
+  if (musicVideo.expectedShot) {
+    const preparedShot = !performance ? 'cutaway' : performance.shotInstruction?.performanceStyle === 'music' ? 'music' : 'lipsync';
+    if (sceneRenderShot(scene) !== musicVideo.expectedShot || preparedShot !== musicVideo.expectedShot) {
+      refuse(409, 'MUSIC_VIDEO_SHOT_TYPE_CHANGED', 'The shot type changed or has not saved yet — save it and submit again');
+    }
+  }
+  if (musicVideo.storyboardStill && (scene?.referenceImageId !== musicVideo.storyboardStill
+    || sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) !== 'footage')) {
+    refuse(409, 'MUSIC_VIDEO_STORYBOARD_STALE', 'The storyboard still or shot layer changed — submit the clip again');
+  }
   assertShotActionContract(scene);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);

@@ -35,7 +35,7 @@ const assertRevisionOpen = vi.fn(async () => {});
 vi.mock('./revisionService.js', () => ({ assertRevisionOpen: (...a) => assertRevisionOpen(...a) }));
 vi.mock('../../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 
-const { dispatchProductionStep } = await import('./productionDispatch.js');
+const { dispatchProductionStep, dispatchStoryboardStillClip } = await import('./productionDispatch.js');
 const { assertProductionSubmission } = await import('./productionService.js');
 
 const project = {
@@ -50,6 +50,28 @@ const settings = { imageGen: { mode: 'local', local: { pythonPath: '/opt/example
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.restoreAllMocks());
+
+describe('storyboard clip audio', () => {
+  it('preserves the hosted cutaway choice without falling back to the project audio mode', async () => {
+    await dispatchStoryboardStillClip({ project: { ...project, videoSettings: { backend: 'local', generationMode: 'suppliedAudio' } },
+      scene, backend: 'grok', songAudio: false });
+    expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({ backend: 'grok',
+      musicVideo: expect.objectContaining({ songAudio: false, expectedShot: 'cutaway' }) }), {});
+  });
+
+  it('keeps Local song audio and omits its incompatible end frame', async () => {
+    await dispatchStoryboardStillClip({ project, scene: { ...scene, endImageId: 'end.png' },
+      backend: 'local', model: 'ltx25_example', songAudio: true });
+    const body = submitVideoGenJob.mock.calls[0][0];
+    expect(body.musicVideo).toMatchObject({ songAudio: true, expectedShot: 'cutaway' });
+    expect(body).not.toHaveProperty('lastImageFile');
+  });
+
+  it('preserves absence for older queued storyboard requests', async () => {
+    await dispatchStoryboardStillClip({ project, scene, backend: 'local' });
+    expect(submitVideoGenJob.mock.calls[0][0].musicVideo).not.toHaveProperty('songAudio');
+  });
+});
 
 describe('production scene dispatch (#9066)', () => {
   it('enqueues a frame on the chosen cloud route with the step tag and the conditioning references', async () => {

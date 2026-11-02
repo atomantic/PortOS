@@ -30,7 +30,7 @@ it('previews the Grok shot with the duration and frame the card will submit', as
     lipSyncBackend="grok" falVideoSettings={{ backend: 'grok', grokDuration: 6 }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
   await waitFor(() => expect(previewVideoPrompt).toHaveBeenCalledWith(expect.objectContaining({
     backend: 'grok', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 10,
-    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true },
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, songAudio: false },
   }), { silent: true }));
 });
 
@@ -453,7 +453,7 @@ describe('clip from the storyboard panel', () => {
     );
     expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
-    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok' } });
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok', songAudio: false } });
     fireEvent.click(screen.getByRole('button', { name: 'Still only' }));
     expect(onGenerateFrame).toHaveBeenLastCalledWith(scene);
     expect(onGenerateVideo).not.toHaveBeenCalled();
@@ -727,6 +727,26 @@ describe('Sent to the model', () => {
     fireEvent.click(within(inputs).getByLabelText('Song audio'));
     fireEvent.click(screen.getByRole('button', { name: 'Render' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
+  });
+
+  it.each(['fal', 'runway'])('sends silent cutaways on %s without changing the project audio default', (backend) => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      falVideoSettings={{ backend, generationMode: 'suppliedAudio' }} />);
+    expect(screen.getByLabelText('Song audio')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({ songAudio: false }) }));
+  });
+
+  it('does not silently discard Local song audio when the selected model is unavailable', () => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      falVideoSettings={{ backend: 'local', modelId: 'missing-model', generationMode: 'suppliedAudio' }} />);
+    expect(screen.getByLabelText('Song audio')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).not.toHaveProperty('songAudio');
   });
 });
 

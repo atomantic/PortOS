@@ -1802,6 +1802,28 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('rejects a mismatched board shot type carried through the video route', async () => {
+      const project = { id: 'mv-1', scenes: [{ sceneId: 'mvs-1', shotMode: 'cutaway' }] };
+      await getMusicVideoProject.withImplementation(async () => project, async () => {
+        const r = await request(app).post('/api/video-gen/').send({ prompt: 'a singer', mode: 'image',
+          sourceImageFile: 'scene-frame.png', musicVideo: JSON.stringify({ projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'lipsync', songAudio: false }) });
+        expect(r.status).toBe(409);
+        expect(r.body.code).toBe('MUSIC_VIDEO_SHOT_TYPE_CHANGED');
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+    });
+
+    it('accepts a matching cutaway shot type through the video route', async () => {
+      const project = { id: 'mv-1', scenes: [{ sceneId: 'mvs-1', shotMode: 'cutaway' }] };
+      await getMusicVideoProject.withImplementation(async () => project, async () => {
+        const tag = { projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'cutaway', songAudio: false };
+        const r = await request(app).post('/api/video-gen/').send({ prompt: 'a shot', mode: 'image',
+          sourceImageFile: 'scene-frame.png', musicVideo: JSON.stringify(tag) });
+        expect(r.status).toBe(200);
+        expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ musicVideo: tag }) }));
+      });
+    });
+
     it('forwards a musicVideo i2v tag into job.params alongside the resolved frame (#1760 Phase 1)', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'slow dolly across the skyline',

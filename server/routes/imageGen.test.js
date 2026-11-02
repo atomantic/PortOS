@@ -1354,6 +1354,16 @@ describe('Image Gen Routes', () => {
     // burst of writers-room storyboard renders queues against itself
     // instead of failing the second-and-onwards calls with 409
     // IMAGE_GEN_BUSY.
+    it('retains the storyboard clip audio choice through the image route', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: true, model: 'example' } } });
+      const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'a lighthouse',
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', thenClip: { backend: 'grok', songAudio: false } } });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        musicVideo: expect.objectContaining({ thenClip: { backend: 'grok', songAudio: false } }),
+      }) }));
+    });
+
     it('codex mode enqueues through mediaJobQueue and returns queued status', async () => {
       getSettings.mockResolvedValueOnce({
         imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.4' } },

@@ -20,7 +20,7 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
-  falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
+  falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot,
 } from '../lib/musicVideoShotTiming.js';
 
 // Refusals the image route returns when the resolved backend can't consume
@@ -400,7 +400,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
-    const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    // Hosted performance shots use their own server-prepared song window, not
+    // the Local cutaway's supplied-audio route.
+    const hostedPerformance = performance && settings.backend === 'fal';
+    const songAudio = hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
     const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
@@ -450,7 +453,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       } : {}),
       musicVideo: JSON.stringify({
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
-        compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
+        compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
+        ...(hostedPerformance ? { songAudio: false } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),

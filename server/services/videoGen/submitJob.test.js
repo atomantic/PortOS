@@ -382,6 +382,64 @@ describe('submitVideoGenJob', () => {
       expect(params.generateAudio).toBeUndefined();
     });
 
+    it('keeps the fal performance audio window when the Local supplied-audio default is overridden', async () => {
+      const shotInstruction = { version: 1, shotMode: 'performance', performanceStyle: 'lipsync', edit: { inSec: 1, outSec: 2 } };
+      const request = { ...musicVideo, songAudio: false, expectedShot: 'lipsync' };
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', videoSettings: { generationMode: 'suppliedAudio' },
+        scenes: [{ sceneId: 'mvs-1', shotMode: 'performance' }] });
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.preparePerformanceShot.mockResolvedValue({ audioFilePath: '/example/uploads/performance.wav', shotInstruction,
+        modelId: 'minimax/h3-max/lip-sync/image-to-video', resolution: '1080P', enableTranscription: false });
+
+      await submitVideoGenJob({ prompt: 'singer', backend: 'fal', mode: 'image', musicVideo: request }, {});
+      expect(mocks.preparePerformanceShot).toHaveBeenCalledWith(expect.objectContaining({ musicVideo: request, backend: 'fal' }));
+      expect(mocks.enqueueJob.mock.calls[0][0].params).toMatchObject({ audioFilePath: '/example/uploads/performance.wav',
+        modelId: 'minimax/h3-max/lip-sync/image-to-video', shotInstruction });
+    });
+
+    it.each([
+      ['lipsync', { shotMode: 'cutaway' }, null],
+      ['lipsync', { shotMode: 'performance' }, null],
+      ['music', { shotMode: 'performance', performanceStyle: 'music' }, { shotInstruction: { performanceStyle: 'lipsync' } }],
+      ['cutaway', { shotMode: 'cutaway' }, { shotInstruction: { performanceStyle: 'music' } }],
+    ])('refuses %s when the saved or prepared shot type differs before enqueue', async (expectedShot, scene, performance) => {
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', ...scene }] });
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      if (performance) mocks.preparePerformanceShot.mockResolvedValue({ ...performance, audioFilePath: '/example/uploads/performance.wav' });
+      await expect(submitVideoGenJob({ prompt: 'singer', backend: 'fal', mode: 'image',
+        musicVideo: { ...musicVideo, expectedShot, songAudio: false } }, {}))
+        .rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_SHOT_TYPE_CHANGED' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+      if (performance) expect(mocks.unlink).toHaveBeenCalledWith('/example/uploads/performance.wav');
+    });
+
+    it('refuses a deferred storyboard clip if the shot changed from footage to a still', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', composition: { mode: 'document' },
+        scenes: [{ sceneId: 'mvs-1', visualLayer: 'still', referenceImageId: 'frame.png' }] });
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await expect(submitVideoGenJob({ prompt: 'a shot', backend: 'fal', mode: 'image',
+        musicVideo: { ...musicVideo, expectedShot: 'cutaway', storyboardStill: 'frame.png', songAudio: false } }, {}))
+        .rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_STORYBOARD_STALE' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses a deferred storyboard clip if the selected still changes while preparing', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', referenceImageId: 'other.png' }] });
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await expect(submitVideoGenJob({ prompt: 'a shot', backend: 'fal', mode: 'image',
+        musicVideo: { ...musicVideo, expectedShot: 'cutaway', storyboardStill: 'frame.png', songAudio: false } }, {}))
+        .rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_STORYBOARD_STALE' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('accepts a plain-video storyboard clip whose still layer is effectively footage', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', visualLayer: 'still', referenceImageId: 'frame.png' }] });
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      await submitVideoGenJob({ prompt: 'a shot', backend: 'fal', mode: 'image',
+        musicVideo: { ...musicVideo, expectedShot: 'cutaway', storyboardStill: 'frame.png', songAudio: false } }, {});
+      expect(mocks.enqueueJob).toHaveBeenCalledOnce();
+    });
+
     it('asks for the project aspect and crops the clip frames to it (a 9:16 project)', async () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
       mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1' }], treatment: { brief: { aspectRatio: '9:16' } } });

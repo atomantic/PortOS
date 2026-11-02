@@ -141,7 +141,7 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
   it('slices the exact song window, submits it once, and trims the delivered take at its edit points', async () => {
     getProject.mockResolvedValue(project());
     const prepared = await preparePerformanceShot({
-      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image',
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'lipsync' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image',
     });
 
     // A 1.5s shot is padded to the 5s provider minimum (+ margin), centered:
