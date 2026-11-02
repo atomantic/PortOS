@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMounted } from '../../hooks/useMounted.js';
+import useMounted from '../../hooks/useMounted.js';
 import { Scissors } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import { previewMusicVideoPacingRecut, recutMusicVideoToPacing } from '../../services/apiMusicVideo.js';
