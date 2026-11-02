@@ -78,16 +78,19 @@ async function reconcile(agentId, reason, operator, state, save) {
     || successor.metadata?.taskAnalysisType !== 'do-release' || successor.metadata.isWorktree !== false
     || hold?.status !== 'held') refuse('candidate-not-held');
   const prior = hold.reconciliation;
-  if (prior) {
-    if (prior.reason !== reason) refuse('candidate-already-reconciled');
-    return { receipt: prior, task: await loadHeldTask(successor) };
-  }
-  if (!INSUFFICIENT_EVIDENCE_HOLD_REASONS.includes(hold.reason)) refuse('candidate-hold-not-reconcilable');
+  if (prior && prior.reason !== reason) refuse('candidate-already-reconciled');
+  if (!prior && !INSUFFICIENT_EVIDENCE_HOLD_REASONS.includes(hold.reason)) refuse('candidate-hold-not-reconcilable');
   const task = await loadHeldTask(successor);
+  if (prior && task.status === 'completed' && task.metadata?.releaseCandidateReconciliation?.reconciledAt === prior.reconciledAt) {
+    return { receipt: prior, task };
+  }
+  // A repeated request finishes a failed task update, but only while nothing
+  // has resumed the task or the repository since the receipt was recorded.
   if (!['blocked', 'pending'].includes(task.status)) refuse('candidate-task-unverified');
   const repoPath = await realpath(repository(successor)).catch(() => null);
   if (!repoPath) refuse('release-active');
   await assertRepositoryIdle(state, repoPath);
+  if (prior) return { receipt: prior, task };
   const { getAgentRecord } = await import('./cosAgentLifecycle.js');
   const identity = await candidateIdentity(state.agents[hold.predecessorAgentId] || await getAgentRecord(hold.predecessorAgentId), repoPath);
   await assertUnpromoted(repoPath, identity);
@@ -104,7 +107,7 @@ async function reconcile(agentId, reason, operator, state, save) {
 /** Retire the held successor's task. The receipt is already on the successor,
  * so a failure here is repaired by repeating the same request. */
 async function closeTask(task, receipt) {
-  if (task.status === 'completed' && task.metadata?.releaseCandidateReconciliation?.reconciledAt === receipt.reconciledAt) return true;
+  if (task.status === 'completed') return true;
   const { updateTask } = await import('./cosTaskStore.js');
   const saved = await updateTask(task.id, { status: 'completed', metadata: {
     resolution: 'candidate-reconciled', releaseCandidateReconciliation: receipt } }, task.taskType || 'internal',

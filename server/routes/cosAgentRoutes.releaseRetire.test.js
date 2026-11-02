@@ -145,6 +145,11 @@ describe('POST /agents/:id/release-candidate retire (#14773)', () => {
     expect(holdOf().reconciliation).toBeDefined();
     expect(fixture.task.status).toBe('blocked');
     fixture.failTaskUpdate = false;
+    // A retry never closes a task that something resumed in the meantime.
+    fixture.task.status = 'in_progress';
+    expect((await auditedCall()).body).toEqual({ retired: false, reason: 'candidate-task-unverified' });
+    expect(fixture.task.status).toBe('in_progress');
+    fixture.task.status = 'blocked';
     expect((await auditedCall()).body).toMatchObject({ retired: true, reconciliation: holdOf().reconciliation });
     expect(fixture.task.status).toBe('completed');
   });
