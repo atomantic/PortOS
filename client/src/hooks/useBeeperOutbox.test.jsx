@@ -88,6 +88,24 @@ describe('useBeeperOutbox', () => {
     expect(listOutboxEntries).toHaveBeenCalledTimes(3);
   });
 
+  it('restarts the interrupted read after overlapping delivery checks', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishRead;
+    let finishFirstCheck;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise(resolve => { finishFirstCheck = resolve; }))
+      .mockResolvedValueOnce({ ...pending, state: 'sent' });
+    act(() => { void result.current.refresh(); void result.current.reconcile(pending); });
+    await act(async () => result.current.reconcile(pending));
+    await act(async () => { finishFirstCheck(pending); finishRead({ entries: [pending] }); });
+    expect(result.current).toMatchObject({ loadState: 'ready', entries: [{ ...pending, state: 'sent' }] });
+    expect(listOutboxEntries).toHaveBeenCalledTimes(3);
+  });
+
   it('checks delivery in place without sending or clearing the composer, and ignores a late result from another chat', async () => {
     const pending = { ...ENTRY, state: 'awaiting-confirmation', errorCode: 'DELIVERY_UNCONFIRMED' };
     listOutboxEntries.mockResolvedValue({ entries: [pending] });

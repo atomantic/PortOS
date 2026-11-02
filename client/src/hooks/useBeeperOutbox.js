@@ -259,7 +259,6 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   const reconcile = useCallback(async (entry) => {
     const generation = ++scope.refreshGeneration;
     const interruptedRead = scope.readInFlight;
-    scope.readInFlight = false;
     const updated = await reconcileOutboxEntry(entry.id, { silent: true }).catch((err) => {
       if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
       return null;
