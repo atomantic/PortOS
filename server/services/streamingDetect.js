@@ -319,6 +319,42 @@ function ecosystemAppBlocks(content) {
   return blocks;
 }
 
+// Comment spans for best-effort PM2_HOME discovery when source tokenization fails.
+function commentRanges(content) {
+  const ranges = [];
+  let i = 0;
+  const n = content.length;
+  let inString = false;
+  let stringChar = null;
+  while (i < n) {
+    const c = content[i];
+    const nx = i + 1 < n ? content[i + 1] : '';
+    if (inString) {
+      if (c === '\\') { i += 2; continue; }
+      if (c === stringChar) inString = false;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inString = true; stringChar = c; i++; continue; }
+    if (c === '/' && nx === '/') {
+      const start = i; i += 2;
+      while (i < n && content[i] !== '\n') i++;
+      ranges.push([start, i]);
+      continue;
+    }
+    if (c === '/' && nx === '*') {
+      const start = i; i += 2;
+      while (i < n && !(content[i] === '*' && content[i + 1] === '/')) i++;
+      i += 2;
+      ranges.push([start, Math.min(i, n)]);
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+
 /**
  * Extract and resolve PM2_HOME path from ecosystem config content.
  * Supports optional declaration keywords (const|let|var), handles single, double,
@@ -432,7 +468,8 @@ function extractPm2Home(content, currentUsername = () => {
 
 /**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
- * Uses regex parsing since we can't safely execute arbitrary JS
+ * Uses AST analysis when attributable, with best-effort legacy discovery for
+ * unsupported configuration. Writers never use the legacy fallback.
  * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export function parseEcosystemConfig(content) {
