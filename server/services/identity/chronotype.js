@@ -163,7 +163,7 @@ export async function deriveChronotype() {
   const caffeineMarkers = extractCaffeineMarkers(savedMarkers);
 
   // Load existing behavioral data if present
-  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE);
+  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, { strict: true });
   const behavioralData = existing.behavioralData;
 
   const { type, confidence, scores } = computeChronotype(geneticMarkers, behavioralData);

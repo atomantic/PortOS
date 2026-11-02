@@ -60,7 +60,7 @@ export async function deriveLongevity(birthDate) {
   const cardiovascularMarkers = extractCardiovascularMarkers(savedMarkers);
 
   // Use provided birthDate or fall back to stored goals birthDate
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS, { strict: true });
   const effectiveBirthDate = birthDate || goals.birthDate || null;
 
   const { longevityScore, cardiovascularRisk, lifeExpectancy, timeHorizons, confidence } =
