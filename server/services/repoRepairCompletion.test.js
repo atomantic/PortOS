@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it as vitestIt, vi } from 'vitest';
@@ -181,6 +181,23 @@ describe('checkout repair public completion boundary', () => {
     writeFileSync(join(facts.repo, 'README.md'), 'local resolution work\n'); await dispatch();
     git(facts.repo, 'reset', '--hard', 'origin/main'); expect(await evaluate()).toBe(false);
     writeFileSync(join(facts.repo, 'README.md'), 'local resolution work\n'); git(facts.repo, 'commit', '-am', 'preserve resolution');
+    publish(); expect(await evaluate()).toBe(true);
+  });
+
+
+  it('captures a rename source deletion and refuses a PR that restores it', async () => {
+    repo(); git(facts.repo, 'mv', 'README.md', 'renamed.md'); await dispatch();
+    expect(facts.task.metadata.repoRepairContract.files).toContainEqual({ path: 'README.md', blob: null, mode: null });
+    writeFileSync(join(facts.repo, 'README.md'), 'seed\n'); git(facts.repo, 'add', '.'); git(facts.repo, 'commit', '-m', 'retain both paths');
+    publish(); expect(await evaluate()).toBe(false);
+  });
+
+  it('checks filenames literally instead of borrowing matching content from another path', async () => {
+    repo(); writeFileSync(join(facts.repo, 'draft1.txt'), 'draft\n'); git(facts.repo, 'add', '.');
+    git(facts.repo, 'commit', '-m', 'existing draft'); git(facts.repo, 'push', 'origin', 'main');
+    writeFileSync(join(facts.repo, 'draft[1].txt'), 'draft\n'); await dispatch();
+    unlinkSync(join(facts.repo, 'draft[1].txt')); expect(await evaluate()).toBe(false);
+    writeFileSync(join(facts.repo, 'draft[1].txt'), 'draft\n'); git(facts.repo, 'add', '.'); git(facts.repo, 'commit', '-m', 'preserve literal filename');
     publish(); expect(await evaluate()).toBe(true);
   });
 

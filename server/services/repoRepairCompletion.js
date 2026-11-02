@@ -30,8 +30,8 @@ export async function captureRepoRepairContract(verdict) {
   const head = await git(dir, ['rev-parse', '--verify', 'HEAD^{commit}']);
   const paths = async args => (await execGit(args, dir)).stdout.split('\0').filter(Boolean);
   const [changed, untracked, staged] = await Promise.all([
-    paths(['diff', '--name-only', '-z', 'HEAD']), paths(['ls-files', '--others', '--exclude-standard', '-z']),
-    paths(['diff', '--cached', '--name-only', '-z', 'HEAD']),
+    paths(['diff', '--no-renames', '--name-only', '-z', 'HEAD']), paths(['ls-files', '--others', '--exclude-standard', '-z']),
+    paths(['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD']),
   ]);
   const ignored = new Set(verdict.lockfilePaths || []);
   const files = [];
@@ -45,9 +45,9 @@ export async function captureRepoRepairContract(verdict) {
   }
   // Preserve a separately staged version too, rather than silently losing it to an unstaged edit.
   for (const path of staged.filter(path => !ignored.has(path))) {
-    const row = await git(dir, ['ls-files', '--stage', '--', path]);
+    const row = (await execGit(['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', path], dir)).stdout;
     if (!row) files.push({ path, blob: null, mode: null });
-    else for (const entry of row.split('\n')) {
+    else for (const entry of row.split('\0').filter(Boolean)) {
       if (!/^\d+ [a-f0-9]{40} [0-3]\t/.test(entry)) throw new Error('Repair index evidence is unreadable');
       const [mode, blob] = entry.split(' ');
       files.push({ path, blob, mode });
@@ -56,17 +56,22 @@ export async function captureRepoRepairContract(verdict) {
   return contractSchema.parse({ version: 1, taskId: 'pending', instanceId, repoPath: dir, origin, head, files });
 }
 
+async function treePreservesFile(dir, head, file) {
+  const rows = (await execGit(['--literal-pathspecs', 'ls-tree', '-z', head, '--', file.path], dir, { timeout: 15000 })).stdout
+    .split('\0').filter(Boolean);
+  return file.blob === null ? rows.length === 0
+    : rows.length === 1 && rows[0] === `${file.mode} blob ${file.blob}\t${file.path}`;
+}
+
 async function preservesFiles(dir, head, files) {
   for (const file of files) {
-    const row = await git(dir, ['ls-tree', head, '--', file.path]);
-    if (file.blob === null) { if (row !== '') return false; }
-    else if (!row.startsWith(`${file.mode} blob ${file.blob}\t`)) {
+    if (!await treePreservesFile(dir, head, file)) {
+      if (file.blob === null) return false;
       // Separately staged content/modes may live in an earlier preservation tree.
-      const history = await git(dir, ['rev-list', '--full-history', head, '--', file.path]);
+      const history = await git(dir, ['--literal-pathspecs', 'rev-list', '--full-history', head, '--', file.path]);
       let preserved = false;
       for (const commit of history.split('\n').filter(Boolean)) {
-        const prior = await git(dir, ['ls-tree', commit, '--', file.path]);
-        if (prior.startsWith(`${file.mode} blob ${file.blob}\t`)) { preserved = true; break; }
+        if (await treePreservesFile(dir, commit, file)) { preserved = true; break; }
       }
       if (!preserved) return false;
     }
