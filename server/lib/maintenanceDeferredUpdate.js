@@ -83,6 +83,8 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
   };
   const request = () => transaction(state => {
     if (inspect(state)) stale();
+    if (state.operations.some(op => ['harness-action', 'harness-action-wake'].includes(op.kind)))
+      throw error('MAINTENANCE_HELD', 'A harness action is still running or finishing.');
     const operation = { id: makeId(), ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: new Date(now()).toISOString() };
     save(state, operation);
     return { ...operation };

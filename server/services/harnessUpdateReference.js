@@ -119,7 +119,8 @@ async function captureExecutable(command) {
 
 function createService({ runtimeFor = getProviderRuntime, snapshot = getRuntimeUpdateReviewSnapshot,
   probe = (id) => getProviderRuntimeStatus(id, { fresh: true }), capture = captureExecutable,
-  read = createReader(), now = Date.now, token = randomUUID } = {}) {
+  read = createReader(), now = Date.now, token = randomUUID,
+  supported = () => ['darwin', 'linux'].includes(process.platform) } = {}) {
   const cache = new Map();
   const tickets = new Map();
   const rowFor = id => snapshot().items.find(item => item.id === `harness:${id}` && !item.unverified && item.harnessUpdate);
@@ -153,6 +154,7 @@ function createService({ runtimeFor = getProviderRuntime, snapshot = getRuntimeU
     const last = await probe(runtime.id).catch(() => null);
     const after = await capture(runtime.command).catch(() => null);
     if (!sameIdentity(before, after) || last?.version !== item.installedVersion || !sameRow(rowFor(runtime.id), row)) return { state: 'changed', ticket: null };
+    if (!supported()) return { ...result, ticket: null, unsupported: true };
     const time = now();
     for (const [key, value] of tickets) if (value.expiresAt <= time) tickets.delete(key);
     if (tickets.size >= 32) tickets.delete(tickets.keys().next().value);

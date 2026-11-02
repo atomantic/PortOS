@@ -541,7 +541,7 @@ export function describeRuntimeInstall(id, action = 'install') {
  * `action` selects install / update / uninstall from the table; an unsupported
  * pairing returns `null` rather than falling back to a different action.
  */
-export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install', verifiedCommand = null } = {}) {
+export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install', verifiedCommand = null, detached = !IS_WIN } = {}) {
   const invocation = buildRuntimeActionCommand(id, action);
   if (!invocation) return null;
   const runtime = getProviderRuntime(id);
@@ -555,7 +555,7 @@ export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install
     // npm and vendor install scripts both run lifecycle children. Give the
     // POSIX install its own group so closing the modal stops that entire
     // install, not just the parent.
-    detached: !IS_WIN,
+    detached,
   }));
 }
 

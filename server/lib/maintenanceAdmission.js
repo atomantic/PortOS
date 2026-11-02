@@ -8,6 +8,7 @@ import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createMaintenanceJournal, maintenanceError as error, syncMaintenanceDirectory } from './maintenanceJournal.js';
 import { createDeferredUpdateAdmission } from './maintenanceDeferredUpdate.js';
+import { createHarnessActionAdmission } from './maintenanceHarnessAction.js';
 import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
 
 export { syncMaintenanceDirectory } from './maintenanceJournal.js';
@@ -32,7 +33,7 @@ export const maintenanceResumeSchema = z.object({ id: z.string().uuid(), revisio
 export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(err?.code);
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
-  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false } = {}) {
+  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid } = {}) {
   const context = new AsyncLocalStorage();
   const events = new EventEmitter();
   const { directory, lock, read, readForStatus, transaction, exists, unavailable, isUncertain, markUncertain } = createMaintenanceJournal(dataDir, {
@@ -71,6 +72,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const exclusive = createMaintenanceExclusive({ transaction, read, lockExists: () => exists(lock), makeId, error, now,
     verifyReceipt: verifyExclusiveReceipt });
   const deferredUpdate = createDeferredUpdateAdmission({ transaction, read: readForStatus, makeId, error, now, directory, io, syncDirectory: syncMaintenanceDirectory });
+  const harnessActions = createHarnessActionAdmission({ transaction, read: readForStatus, makeId, error, now,
+    absent: harnessAbsent, ownerPresent: harnessOwnerPresent, parentPid: harnessParentPid });
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
   const currentId = () => context.getStore() ?? null;
@@ -140,6 +143,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
       if (existing) { recovery = recoverySnapshot(existing); return existing.id; }
       const id = makeId();
       exclusive.observeExistingWork(state);
+      harnessActions.observeExistingWork(state);
       state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
       return id;
     });
@@ -222,6 +226,8 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         throw error('MAINTENANCE_STALE', 'This maintenance hold changed. Refresh before resuming.');
       if (deferredUpdate.inspect(state)?.holdId === expected.id)
         throw error('MAINTENANCE_STALE', 'The update owns this hold until its processes settle.');
+      if (harnessActions.inspect(state)?.holdId === expected.id)
+        throw error('MAINTENANCE_STALE', 'The harness action owns this hold until its processes settle.');
       if (state.exclusive)
         throw error('MAINTENANCE_STALE', 'An exclusive maintenance operation owns this hold until verified reconciliation.');
       state.hold = null;
@@ -270,7 +276,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     return receipt;
   });
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { deferredUpdate, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+  return { deferredUpdate, harnessActions, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
     observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
 }
 

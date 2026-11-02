@@ -30,7 +30,7 @@ describe('inline harness update review', () => {
     expect(changeWarning).toHaveBeenCalledWith(7);
     fireEvent.click(screen.getByRole('button', { name: 'Update Example CLI' }));
     expect(screen.getByText(/published less than 3 days ago/)).toBeInTheDocument();
-    expect(screen.getByText(/does not detect other terminal sessions or prevent new jobs/)).toBeInTheDocument();
+    expect(screen.getByText(/cannot detect other terminal sessions or processes that leave/)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Update now for urgent security' }));
     expect(update).toHaveBeenCalledWith({ ...harness, ticket });
@@ -56,6 +56,13 @@ describe('inline harness update review', () => {
     getHarnessUpdateReference.mockRejectedValue(Object.assign(new Error('Forbidden'), { code: 'HOST_CONTROL_FORBIDDEN' }));
     render(<HarnessUpdateControl harness={harness} warningDays={0} onWarningDays={vi.fn()} onUpdate={vi.fn()} />);
     expect(await screen.findByText(/Host control is required/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update Example CLI' })).toBeDisabled();
+  });
+
+  it('explains when protected inline updates are unsupported', async () => {
+    getHarnessUpdateReference.mockResolvedValue({ state: 'unknown', ticket: null, unsupported: true });
+    render(<HarnessUpdateControl harness={harness} warningDays={0} onWarningDays={vi.fn()} onUpdate={vi.fn()} />);
+    expect(await screen.findByText(/Protected inline updates are not available/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Update Example CLI' })).toBeDisabled();
   });
 

@@ -48,6 +48,7 @@ export default function HarnessUpdateControl({ harness, warningDays, onWarningDa
     {reference && !valid && <p>{reference.state === 'host-control-required'
       ? 'Host control is required to review or update this harness.'
       : `Release and advisory details could not be verified${changed ? '; refresh the update card' : ''}.`}</p>}
+    {reference?.unsupported && <p>Protected inline updates are not available on this platform.</p>}
     {reference && <button type="button" onClick={() => setAttempt(value => value + 1)} disabled={disabled}
       className="rounded border border-port-border px-3 py-2">Recheck update</button>}
     {valid && <>
@@ -72,7 +73,7 @@ export default function HarnessUpdateControl({ harness, warningDays, onWarningDa
       {warningDays > 0 && <p className="text-port-warning">The actual updater target and its publication age are unknown; this is a warning about the npm reference only.</p>}
       <p>Age does not prove a release is safe. Waiting may leave security issues exposed. The vendor updater may install a different version.</p>
       {warningDays > 0 && <p>If you believe a security issue is urgent, you can choose to update now.</p>}
-      <p>PortOS checks known PortOS work. It does not detect other terminal sessions or prevent new jobs from starting during the update. Make sure your terminal sessions are idle and keep work idle until it finishes.</p>
+      <p>PortOS checks its known work and holds new PortOS work during the update. It cannot detect other terminal sessions or processes that leave the updater's process group. Make sure those sessions are idle.</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => setConfirming(false)} className="rounded border border-port-border px-3 py-2">Wait</button>
         {warningDays > 0 && <button type="button" onClick={() => onUpdate({ ...harness, ticket: reference.ticket })} disabled={disabled || changed}

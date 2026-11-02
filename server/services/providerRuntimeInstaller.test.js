@@ -199,6 +199,12 @@ describe('provider runtime installer', () => {
     expect(spawnImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('can keep the vendor updater in its supervisor process group', () => {
+    const spawnImpl = vi.fn(() => ({ pid: 123 }));
+    spawnRuntimeInstaller('opencode', { action: 'update', detached: false, spawnImpl });
+    expect(spawnImpl).toHaveBeenCalledWith(expect.any(String), ['upgrade'], expect.objectContaining({ detached: false }));
+  });
+
   // A provider may be configured with any command spelling its vendor accepts
   // (`antigravity` as well as `agy`), and the card looks its runtime up by that
   // command — so every alias the vendor matches must resolve the same row.

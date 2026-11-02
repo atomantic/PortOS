@@ -93,7 +93,7 @@ describe('review ticket', () => {
   } });
   const setup = (overrides = {}) => createService({ runtimeFor: () => runtime, snapshot: () => ({ items: [row()] }),
     probe: async () => ({ version: current }), capture: async () => identity, read: async () => ({ state: 'unknown' }),
-    now: () => 1000, token: () => token, ...overrides });
+    now: () => 1000, token: () => token, supported: () => true, ...overrides });
 
   it('binds a single-use, expiring ticket to the observed runtime and version', async () => {
     let time = 1000;
@@ -133,5 +133,11 @@ describe('review ticket', () => {
     currentRow = { ...currentRow, unverified: true };
     release({ state: 'unknown' });
     expect(await pending).toEqual({ state: 'changed', ticket: null });
+  });
+
+  it('keeps the reference readable but does not authorize an unsupported platform', async () => {
+    const service = setup({ supported: () => false });
+    expect(await service.get('example')).toEqual({ state: 'unknown', ticket: null, unsupported: true });
+    expect(service.take('example', token, current, target)).toBeNull();
   });
 });

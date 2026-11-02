@@ -71,6 +71,7 @@ import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
+import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
@@ -433,6 +434,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Stamp uncertain publications before later boot steps read the journal.
   // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
   reconcileDeadOwnerReservations();
+  startHarnessActionRecovery();
 
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
@@ -1254,6 +1256,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // No teardown await may delay the hard deadline, recovery snapshot, or
     // disarming timers that could launch work while shutdown is suspended.
     stopIdleReaper();
+    stopHarnessActionRecovery();
     stopHostedSessionSweep();
     stopBeeperSocket();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
