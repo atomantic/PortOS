@@ -197,33 +197,82 @@ function ecosystemAppBlocks(content) {
   } catch {
     return [];
   }
-  const stack = [];
-  const blocks = [];
   const punctuation = index => tokens[index]?.t === 'p' ? tokens[index].v : null;
+  const isWord = (index, word) => tokens[index]?.t === 'id' && tokens[index].v === word;
   const isKey = (index, key) => ['id', 's'].includes(tokens[index]?.t) && tokens[index].v === key;
+  const stack = [];
+  const matching = new Map();
   const closes = { '}': '{', ']': '[', ')': '(' };
   for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
     const symbol = punctuation(i);
-    const previous = punctuation(i - 1);
-    const parent = stack.at(-1);
-    if (['{', '[', '('].includes(symbol)) {
-      stack.push({
-        open: symbol,
-        start: token.i,
-        apps: symbol === '[' && previous === ':' && isKey(i - 2, 'apps') &&
-          ['{', ','].includes(punctuation(i - 3)),
-        app: symbol === '{' && parent?.apps && ['[', ','].includes(previous),
-        name: null,
-      });
-    } else if (Object.hasOwn(closes, symbol)) {
-      const frame = stack.pop();
-      if (frame?.open !== closes[symbol]) return blocks;
-      if (frame.app && frame.name) blocks.push({ start: frame.start, end: token.i, name: frame.name });
-    } else if (parent?.app && previous === ':' && isKey(i - 2, 'name') &&
-      ['{', ','].includes(punctuation(i - 3))) {
-      parent.name = token.t === 's' && [',', '}'].includes(punctuation(i + 1)) ? token.v : null;
+    if (['{', '[', '('].includes(symbol)) stack.push(i);
+    else if (Object.hasOwn(closes, symbol)) {
+      const open = stack.pop();
+      if (punctuation(open) !== closes[symbol]) return [];
+      matching.set(open, i);
     }
+  }
+  if (stack.length) return [];
+
+  // Only module-scope bindings can supply the exported literal configuration.
+  // Reading unrelated objects as apps would let an example shadow the real app.
+  const bindings = new Map();
+  let exported = null;
+  for (let i = 0; i < tokens.length; i++) {
+    if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
+      bindings.set(tokens[i + 1].v, i + 3);
+    }
+    if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
+      exported = i + 4;
+    } else if (isWord(i, 'export') && isWord(i + 1, 'default')) {
+      exported = i + 2;
+    }
+    i = matching.get(i) ?? i;
+  }
+  const resolve = (index, seen = new Set()) => {
+    const token = tokens[index];
+    if (token?.t !== 'id') return index;
+    if (seen.has(token.v) || !bindings.has(token.v)) return null;
+    seen.add(token.v);
+    return resolve(bindings.get(token.v), seen);
+  };
+  const expressionEnd = (start, limit) => {
+    let end = start;
+    while (end < limit && punctuation(end) !== ',') end = (matching.get(end) ?? end) + 1;
+    return end;
+  };
+  const property = (object, key) => {
+    let found = null;
+    const limit = matching.get(object);
+    for (let i = object + 1; i < limit;) {
+      if (punctuation(i) === ',') { i++; continue; }
+      const end = expressionEnd(i, limit);
+      if (isKey(i, key)) {
+        if (punctuation(i + 1) === ':') found = { start: i + 2, end };
+        else if (tokens[i].t === 'id' && end === i + 1) found = { start: i, end };
+      }
+      i = end;
+    }
+    return found;
+  };
+
+  const config = resolve(exported);
+  if (config === null) return [];
+  const appsProperty = punctuation(config) === '{' ? property(config, 'apps') : null;
+  const apps = appsProperty ? resolve(appsProperty.start) : config;
+  if (punctuation(apps) !== '[') return [];
+  const blocks = [];
+  const limit = matching.get(apps);
+  for (let i = apps + 1; i < limit;) {
+    if (punctuation(i) === ',') { i++; continue; }
+    const object = resolve(i);
+    if (punctuation(object) === '{') {
+      const name = property(object, 'name');
+      if (name && name.end === name.start + 1 && tokens[name.start]?.t === 's' && tokens[name.start].v) {
+        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: tokens[name.start].v });
+      }
+    }
+    i = expressionEnd(i, limit);
   }
   return blocks;
 }

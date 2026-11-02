@@ -460,6 +460,7 @@ describe('rewriteEcosystemPortsByProcess', () => {
 const example = "{ name: 'example-api', env: { PORT: 6100 } }";
 const pattern = /[}\"']/;
 const template = \`outer \${\`inner }\`}\`;
+const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
 module.exports = { apps: [
   ${active},
   { name: 'example-worker', env: { PORT: 6100 } }
@@ -472,6 +473,24 @@ module.exports = { apps: [
       content: content.replace(active, active.replace('6100', '6200')),
       applied: [edit],
       unapplied: [],
+    });
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100],
+    ]);
+  });
+
+  it('rewrites a statically bound apps array referenced by the exported config', () => {
+    const active = `{ script: 'server.js', name: 'example-api', env: { PORT: 6100 } }`;
+    const content = `const example = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+const apps = [${active}, { name: 'example-worker', env: { PORT: 6100 } }];
+module.exports = { apps };`;
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+
+    expect(result).toEqual({
+      content: content.replace(active, active.replace('6100', '6200')),
+      applied: [edit], unapplied: [],
     });
     expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
       ['example-api', 6200], ['example-worker', 6100],
@@ -1366,6 +1385,8 @@ describe('streamDetection frame sequence', () => {
 const example = "apps: [{ name: 'example-string-api', env: { PORT: 6107 } }]";
 const pattern = /[}\"']/;
 const template = \`outer \${\`inner }\`}\`;
+const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+const exampleObject = { apps: [{ name: 'example-object-api', env: { PORT: 6106 } }] };
 module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
 throw new Error('ecosystem source must not execute');
 `);
@@ -1395,6 +1416,21 @@ throw new Error('ecosystem source must not execute');
     expect(completed.result).toMatchObject({
       pm2ProcessNames: ['example-api', 'example-worker'], apiPort: 6100, uiPort: null,
     });
+  });
+
+  it('imports apps from a static binding referenced by the exported configuration', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `
+const example = { apps: [{ name: 'example-old-api', env: { PORT: 6109 } }] };
+const apps = [{ script: 'server.js', name: 'example-api', env: { PORT: 6100 } }];
+const config = { apps };
+module.exports = config;
+`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({ pm2ProcessNames: ['example-api'], apiPort: 6100 });
   });
 
   it('reads PORT and VITE_PORT as exact independent active keys', async () => {
