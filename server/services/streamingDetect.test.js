@@ -1001,6 +1001,27 @@ module.exports = { apps: [
     expect(result.changed).toBe(false);
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
   });
+
+  it.each([null, undefined])('applies targeted edits when remap is %s', async remap => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } }
+] };\n`);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      remap,
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+    );
+    expect(result.changed).toBe(true);
+    expect(result.remapApplied).toBe(false);
+    expect(result.applied).toEqual([
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(result.unapplied).toEqual([]);
+    const ports = parseEcosystemConfig(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).processes[0].ports;
+    expect(ports.ui).toBe(7000);
+    expect(ports.api).toBe(6000);
+  });
 });
 
 // The client mirrors these two Sets by hand in

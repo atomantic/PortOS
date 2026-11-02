@@ -1102,8 +1102,8 @@ export async function writeEcosystemPortEdits(repoPath, remap, edits) {
     // Pick the order that avoids the collision present; if BOTH directions
     // collide there's no safe order, so treat the whole batch as unpersistable
     // (the caller 422s — honest, vs. silently corrupting a sibling port).
-    const remapOlds = remap.map(([o]) => o);
-    const remapNews = remap.map(([, n]) => n);
+    const remapOlds = (remap || []).map(([o]) => o);
+    const remapNews = (remap || []).map(([, n]) => n);
     const targetedOlds = (edits || []).map(e => e.oldPort);
     const targetedNews = (edits || []).map(e => e.newPort);
     const forwardCollision = hasRemap && hasEdits && targetedOlds.some(o => remapNews.includes(o));
