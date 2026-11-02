@@ -844,6 +844,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'GET /api/browser/downloads',
   'GET /api/browser/downloads/:name',
   'POST /api/harnesses/action',
+  'GET /api/harnesses/update-reference',
+  'POST /api/harnesses/review-update',
   'POST /api/local-llm/laya-mlx/install',
   'POST /api/local-llm/security-guard/install',
   'POST /api/local-llm/jev/install',

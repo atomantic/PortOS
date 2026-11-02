@@ -142,7 +142,7 @@ export default function RuntimeInstallModal({
             </>
           ) : error ? (
             <InstallErrorFooter
-              message="Installer hit an error - see logs above."
+              message={error || 'Installer hit an error - see logs above.'}
               label={label || runtime}
               stage={currentStage}
               error={error}

@@ -112,6 +112,7 @@ vi.mock('../services/api', () => ({
   getGitHubDeploymentReview: vi.fn(),
   reviewGitHubDeployment: vi.fn(),
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
+  getHarnessUpdateReference: vi.fn(() => Promise.resolve({ state: 'unknown' })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -150,7 +151,7 @@ const summaryValue = (label) => {
 const forceOverflow = () =>
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 beforeEach(() => {
   __resetActionQueue();
@@ -203,6 +204,23 @@ it('shows the harness update destination beside snooze in the action row', async
   fireEvent.click(screen.getByRole('button', { name: 'Open harness' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/ai/harnesses/example');
   expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
+it('starts the guarded harness update from the action row without navigating away', async () => {
+  const request = vi.fn(async () => new Response(JSON.stringify({ error: 'Agent work is active.' }), { status: 409, headers: { 'content-type': 'application/json' } }));
+  vi.stubGlobal('fetch', request);
+  api.getHarnessUpdateReference.mockResolvedValueOnce({ state: 'unknown', ticket: '00000000-0000-4000-8000-000000000001' });
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
+    title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example',
+    harnessUpdate: { id: 'example', label: 'Example CLI', installedVersion: '1.2.3', candidateVersion: '1.2.4', updatable: true },
+  }] });
+  render(<Review />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Update Example CLI' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Start update' }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/api/harnesses/review-update?runtime=example&expectedVersion=1.2.3&candidateVersion=1.2.4&ticket=00000000-0000-4000-8000-000000000001', expect.objectContaining({ method: 'POST' })));
+  expect(routerState.navigate).not.toHaveBeenCalled();
+  expect(await screen.findByText('Agent work is active.')).toBeInTheDocument();
 });
 
 it('shows unverified update checks as background status instead of an action', async () => {

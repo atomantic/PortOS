@@ -24,6 +24,7 @@ import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import {
   buildRuntimeActionCommand,
   describeRuntimeInstall,
@@ -80,7 +81,7 @@ export const HARNESS_ACTION_COPY = Object.freeze({
  * @param {import('express').Response} res
  * @param {{runtime: unknown, action?: string}} params
  */
-export async function streamHarnessAction(req, res, { runtime: runtimeId, action = 'install' }) {
+export async function streamHarnessAction(req, res, { runtime: runtimeId, action = 'install', requireIdle = false, expectedVersion = null, reviewed = null }) {
   if (!RUNTIME_ACTIONS.includes(action)) {
     throw new ServerError('Unknown harness action', { status: 400, code: 'UNKNOWN_HARNESS_ACTION', context: { action: String(action || '') } });
   }
@@ -107,6 +108,11 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
     target: `${row.command} on PortOS's PATH`,
   });
   const emit = (event) => { installLog.onEvent(event); send(event); };
+  // An exact PATH executable is internal review evidence and may include the
+  // account name. Do not echo that path through spawn error messages.
+  const startError = (err) => reviewed
+    ? (/^[A-Z0-9_]+$/.test(err?.code || '') ? err.code : 'The reviewed updater could not be started.')
+    : err.message;
   let child = null;
   let finished = false;
   let clientGone = false;
@@ -119,7 +125,9 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
     installLog.cancel();
     if (finished) return;
     if (child) stopRuntimeInstaller(child);
-    if (reservation && actionInFlight === reservation) actionInFlight = null;
+    if (!child) {
+      if (reservation && actionInFlight === reservation) actionInFlight = null;
+    }
     safeEnd();
   });
 
@@ -127,6 +135,11 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   // terminal, and a stale answer would run redundant or impossible work.
   const status = await getProviderRuntimeStatus(row.id, { fresh: true });
   if (clientGone) return safeEnd();
+  if (expectedVersion && status.version !== expectedVersion) {
+    send({ type: 'error', message: 'The installed harness version changed. Refresh the update card before retrying.' });
+    runtimeUpdateEvents.emit('changed');
+    return safeEnd();
+  }
   if (status.installed && copy.skipWhenInstalled) {
     send({ type: 'log', message: `${status.label} is already available to PortOS.` });
     send({ type: 'complete', message: copy.skipWhenInstalled });
@@ -154,8 +167,43 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   // directory.
   reservation = {};
   actionInFlight = reservation;
+  if (requireIdle && action === 'update') {
+    const [count, records, isLiveAgentRecord] = await Promise.all([
+      import('./updatePreflight.js').then(({ countActiveCosAgents }) => countActiveCosAgents()).catch(() => null),
+      import('./cosState.js').then(({ readAgentsStateForSafetyCheck }) => readAgentsStateForSafetyCheck()).catch(() => null),
+      import('./cosAgentLifecycle.js').then(module => module.isLiveAgentRecord).catch(() => null),
+    ]);
+    const view = maintenance.status();
+    const trusted = records?.trusted === true && records.agents && typeof records.agents === 'object' && typeof isLiveAgentRecord === 'function'
+      && view.state !== 'unavailable' && Array.isArray(view.blockers);
+    const liveRecord = trusted && Object.values(records.agents).some(agent => !agent || isLiveAgentRecord(agent));
+    const pausedRecord = trusted && Object.values(records.agents).some(agent => agent?.status === 'paused');
+    const busy = count > 0 || view.state !== 'normal' || view.blockers?.length > 0 || liveRecord;
+    if (clientGone || count === null || !trusted || busy) {
+      if (actionInFlight === reservation) actionInFlight = null;
+      if (!clientGone) send({ type: 'error', message: count === null || !trusted
+        ? 'Could not check active PortOS work. Try again when its status is available.'
+        : pausedRecord ? 'Paused agents still count as work. Resume and finish them before updating a harness.'
+          : 'PortOS work is active or starting. Wait for it to finish before updating a harness.' });
+      return safeEnd();
+    }
+    const [matches, current] = await Promise.all([
+      import('./harnessUpdateReference.js').then(({ matchesHarnessUpdateTicket }) => matchesHarnessUpdateTicket(row, reviewed)).catch(() => false),
+      import('./runtimeUpdateReview.js').then(({ getRuntimeUpdateReviewSnapshot }) => getRuntimeUpdateReviewSnapshot()).catch(() => null),
+    ]);
+    const currentRow = current?.items?.find(item => item.id === `harness:${row.id}` && !item.unverified);
+    const finalView = maintenance.status();
+    if (clientGone || !matches || !currentRow?.harnessUpdate?.updatable
+      || currentRow.harnessUpdate.installedVersion !== expectedVersion
+      || currentRow.harnessUpdate.candidateVersion !== reviewed?.candidate || finalView.state !== 'normal'
+      || !Array.isArray(finalView.blockers) || finalView.blockers.length) {
+      if (actionInFlight === reservation) actionInFlight = null;
+      if (!clientGone) send({ type: 'error', message: 'The harness review, executable, or active work changed. Refresh the update card before retrying.' });
+      return safeEnd();
+    }
+  }
   if (clientGone) {
-    actionInFlight = null;
+    if (actionInFlight === reservation) actionInFlight = null;
     return safeEnd();
   }
 
@@ -169,14 +217,15 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   // terminal SSE frame, since the headers are already flushed and the error
   // middleware can no longer send JSON to this response.
   try {
-    child = spawnRuntimeInstaller(row.id, { action });
+    child = spawnRuntimeInstaller(row.id, { action, ...(reviewed ? { verifiedCommand: reviewed.identity.path } : {}) });
   } catch (err) {
     finished = true;
     if (actionInFlight === reservation) actionInFlight = null;
-    emit({ type: 'error', message: `${status.label} ${copy.noun} failed to start: ${err.message}` });
+    emit({ type: 'error', message: `${status.label} ${copy.noun} failed to start: ${startError(err)}` });
     return safeEnd();
   }
   actionInFlight = child;
+  child.once('close', () => { if (actionInFlight === child) actionInFlight = null; });
 
   const onLine = (line) => {
     const text = line.trimEnd();
@@ -194,8 +243,8 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   child.on('error', (err) => {
     if (finished) return;
     finished = true;
-    if (actionInFlight === child) actionInFlight = null;
-    emit({ type: 'error', message: `${status.label} ${copy.noun} failed to start: ${err.message}` });
+    if (!requireIdle && actionInFlight === child) actionInFlight = null;
+    emit({ type: 'error', message: `${status.label} ${copy.noun} failed to start: ${startError(err)}` });
     safeEnd();
   });
   child.on('close', async (code) => {

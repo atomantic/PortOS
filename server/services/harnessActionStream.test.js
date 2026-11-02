@@ -30,6 +30,17 @@ const installer = vi.hoisted(() => ({
   RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
 vi.mock('./providerRuntimeInstaller.js', () => installer);
+const activity = vi.hoisted(() => ({ countActiveCosAgents: vi.fn() }));
+vi.mock('./updatePreflight.js', () => activity);
+const records = vi.hoisted(() => ({ readAgentsStateForSafetyCheck: vi.fn() }));
+vi.mock('./cosState.js', () => records);
+vi.mock('./cosAgentLifecycle.js', () => ({ isLiveAgentRecord: agent => Boolean(agent) && agent.status !== 'completed' }));
+const gate = vi.hoisted(() => ({ status: vi.fn() }));
+vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: gate }));
+const reference = vi.hoisted(() => ({ matchesHarnessUpdateTicket: vi.fn() }));
+vi.mock('./harnessUpdateReference.js', () => reference);
+const review = vi.hoisted(() => ({ getRuntimeUpdateReviewSnapshot: vi.fn() }));
+vi.mock('./runtimeUpdateReview.js', () => review);
 
 import { streamHarnessAction, __resetHarnessActionGuard } from './harnessActionStream.js';
 import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
@@ -47,7 +58,9 @@ const makeChild = () => {
 const app = () => {
   const server = express();
   server.post('/action', (req, res, next) => {
-    streamHarnessAction(req, res, { runtime: req.query.runtime, action: req.query.action }).catch(next);
+    streamHarnessAction(req, res, { runtime: req.query.runtime, action: req.query.action,
+      ...(req.query.requireIdle === '1' ? { requireIdle: true, reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } } : {}),
+      ...(req.query.expectedVersion ? { expectedVersion: req.query.expectedVersion } : {}) }).catch(next);
   });
   server.use(errorMiddleware);
   return server;
@@ -71,6 +84,13 @@ beforeEach(() => {
   installer.getProviderRuntime.mockImplementation((id) => RUNTIMES[id] || null);
   installer.describeRuntimeInstall.mockImplementation((id, action) => `${id} ${action}`);
   installer.buildRuntimeActionCommand.mockImplementation((id) => (RUNTIMES[id] ? { command: id, args: [] } : null));
+  activity.countActiveCosAgents.mockResolvedValue(0);
+  records.readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {} });
+  gate.status.mockReturnValue({ state: 'normal', blockers: [] });
+  reference.matchesHarnessUpdateTicket.mockResolvedValue(true);
+  review.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ id: 'harness:opencode', harnessUpdate: {
+    installedVersion: '1.18.27', candidateVersion: '1.19.0', updatable: true,
+  } }] });
 });
 
 describe('streamHarnessAction — update', () => {
@@ -171,6 +191,52 @@ describe('streamHarnessAction — uninstall', () => {
 });
 
 describe('streamHarnessAction — guards', () => {
+  it('does not update over active or unreadable PortOS agent work', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
+    activity.countActiveCosAgents.mockResolvedValueOnce(1).mockRejectedValueOnce(new Error('unavailable'));
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('PortOS work is active or starting');
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('Could not check active PortOS work');
+    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+  });
+
+  it('also refuses when persisted agents or maintenance blockers indicate work', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
+    records.readAgentsStateForSafetyCheck.mockResolvedValueOnce({ trusted: true, agents: { a: { status: 'running' } } });
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('PortOS work is active');
+    records.readAgentsStateForSafetyCheck.mockResolvedValueOnce({ trusted: true, agents: { a: { status: 'paused' } } });
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('Paused agents still count as work');
+    gate.status.mockReturnValue({ state: 'normal', blockers: [{ kind: 'media' }] });
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('PortOS work is active');
+    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+  });
+
+  it('does not disclose the reviewed executable path in a startup failure', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
+    installer.spawnRuntimeInstaller.mockImplementationOnce(() => { throw Object.assign(new Error('spawn /fixture/opencode denied'), { code: 'EACCES' }); });
+    const response = await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    expect(response.text).toContain('EACCES');
+    expect(response.text).not.toContain('/fixture/opencode');
+  });
+
+  it('rechecks candidate and executable and uses the reviewed binary when it starts', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
+    reference.matchesHarnessUpdateTicket.mockResolvedValueOnce(false);
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27')).text).toContain('review, executable, or active work changed');
+    review.getRuntimeUpdateReviewSnapshot.mockReturnValueOnce({ items: [{ id: 'harness:opencode', harnessUpdate: {
+      installedVersion: '1.18.27', candidateVersion: '1.19.1', updatable: true,
+    } }] });
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27')).text).toContain('review, executable, or active work changed');
+    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+    await runAction('runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('opencode', { action: 'update', verifiedCommand: '/fixture/opencode' });
+  });
+
+  it('refuses a stale inline update when the installed version changed', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode', { version: '1.19.0' }));
+    const response = await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    expect(response.text).toContain('version changed');
+    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+  });
   it('rejects an unknown action and an unknown runtime before the headers flush', async () => {
     expect((await request(app()).post('/action?runtime=opencode&action=purge')).status).toBe(400);
     expect((await request(app()).post('/action?runtime=nope&action=install')).status).toBe(400);

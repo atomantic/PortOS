@@ -20,6 +20,10 @@ import { request } from './apiCore.js';
 export const getHarnesses = ({ fresh = false, ...options } = {}) =>
   request(`/harnesses${fresh ? '?fresh=1' : ''}`, options);
 
+export const getHarnessUpdateReference = (id, options) => request(
+  `/harnesses/update-reference?runtime=${encodeURIComponent(id)}`, options,
+);
+
 /**
  * Re-read one harness's own model catalog and write it to every provider that
  * draws from it. Resolves `{ models, updated }`; rejects with the server's
