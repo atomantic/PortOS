@@ -1109,7 +1109,7 @@ module.exports = { apps: [
     writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
     const result = await writeEcosystemPortsByProcess(dir, [
       { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },      // applies
-      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (external const)
+      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (dynamic source)
     ]);
     expect(result.changed).toBe(false);
     expect(result.applied).toHaveLength(0); // nothing persisted
@@ -1160,7 +1160,7 @@ module.exports = { apps: [
     const result = await writeEcosystemPortEdits(
       dir,
       [[5556, 7001]],                                                          // distinct, rewritable
-      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // shared, in external const → unapplied
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // dynamic source → unapplied
     );
     expect(result.changed).toBe(false);
     expect(result.remapApplied).toBe(false); // reported as not-persisted

@@ -2,13 +2,13 @@
  * supply a process identity, object spread, or writable port source. */
 import { parse } from '@babel/parser';
 
-function walk(node, visit) {
+function walk(node, visit, parent = null, parentKey = null) {
   if (!node || typeof node !== 'object') return;
-  if (node.type) visit(node);
+  if (node.type) visit(node, parent, parentKey);
   for (const [key, value] of Object.entries(node)) {
     if (['loc', 'extra', 'comments', 'tokens'].includes(key)) continue;
-    if (Array.isArray(value)) value.forEach(child => walk(child, visit));
-    else if (value && typeof value === 'object') walk(value, visit);
+    if (Array.isArray(value)) value.forEach(child => walk(child, visit, node, key));
+    else if (value && typeof value === 'object') walk(value, visit, node, key);
   }
 }
 
@@ -50,7 +50,7 @@ function contextFor(content) {
       if (binding?.start > node.start && binding.type !== 'FunctionDeclaration') return null;
       return resolve(binding, seen);
     }
-    if (node.type === 'MemberExpression') {
+    if (['MemberExpression', 'OptionalMemberExpression'].includes(node.type)) {
       const key = !node.computed || node.property.type === 'StringLiteral' ? keyOf(node.property) : null;
       return key === null ? null : resolve(object(node.object, seen)?.get(key), seen);
     }
@@ -96,19 +96,46 @@ function contextFor(content) {
     }
     return fields;
   };
+  const portReads = new Set();
+  const structuralObject = (input, seen = new Set()) => {
+    if (!input || seen.has(input)) return null;
+    seen.add(input);
+    portReads.add(input);
+    const resolved = resolve(input);
+    if (resolved?.type === 'ObjectExpression') {
+      for (const property of resolved.properties) {
+        if (property.type === 'SpreadElement') structuralObject(property.argument, seen);
+      }
+    }
+    return object(input);
+  };
   const scalar = node => {
     const resolved = resolve(node);
     if (['StringLiteral', 'NumericLiteral', 'BooleanLiteral'].includes(resolved?.type)) return resolved.value;
+    if (resolved?.type === 'NullLiteral') return null;
     if (resolved?.type === 'TemplateLiteral' && resolved.expressions.length === 0) return resolved.quasis[0].value.cooked;
     return undefined;
   };
-  return { ast, bindings, exported, exportAssignment, protectedNodes, resolve, object, scalar };
+  return { ast, bindings, exported, exportAssignment, protectedNodes, resolve, object, scalar, portReads, structuralObject };
 }
 
-function portSource(node, context) {
+function portSource(node, context, track = true) {
+  if (track && node) context.portReads.add(node);
   const resolved = context.resolve(node);
   if (!resolved) return null;
-  if (resolved.type === 'LogicalExpression' && ['||', '??'].includes(resolved.operator)) return portSource(resolved.right, context);
+  if (resolved.type === 'LogicalExpression' && ['||', '??'].includes(resolved.operator)) {
+    const left = context.scalar(resolved.left);
+    if (left !== undefined) {
+      const usesLeft = resolved.operator === '||' ? Boolean(left) : left !== null;
+      return portSource(usesLeft ? resolved.left : resolved.right, context, track);
+    }
+    // Environment overrides have a meaningful configurable default. Arbitrary
+    // calls/arithmetic do not establish which operand supplies the listener.
+    const candidate = context.resolve(resolved.left) || resolved.left;
+    const env = candidate?.type === 'MemberExpression' && candidate.object;
+    if (env?.type !== 'MemberExpression' || env.object?.name !== 'process' || keyOf(env.property) !== 'env') return null;
+    return portSource(resolved.right, context, track);
+  }
   const value = context.scalar(resolved);
   const port = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
   return isPort(port) ? { value: port, start: resolved.start, end: resolved.end,
@@ -136,14 +163,15 @@ function argsSource(node, context, content) {
     if ([...rendered.matchAll(/(?:^|\s)--port(?:\s+|=)/g)].length !== 1) return null;
     for (let index = 0; index < resolved.expressions.length; index++) {
       if (/--port(?:\s+|=)$/.test(resolved.quasis[index].value.cooked) &&
-          /^(?:\s|$)/.test(resolved.quasis[index + 1].value.cooked)) return portSource(resolved.expressions[index], context);
+          (/^(?:\s)/.test(resolved.quasis[index + 1].value.cooked) ||
+            (index === resolved.expressions.length - 1 && resolved.quasis[index + 1].value.cooked === ''))) return portSource(resolved.expressions[index], context);
     }
   }
   return null;
 }
 
 function processInfo(node, context, content) {
-  const fields = context.object(node);
+  const fields = context.structuralObject(node);
   if (!fields) throw new Error('Unknown process shape');
   const name = context.scalar(fields.get('name'));
   if (typeof name !== 'string' || !name) throw new Error('Unknown process name');
@@ -155,13 +183,16 @@ function processInfo(node, context, content) {
     sources.get(label).push(source);
     if (primary) ports[label] = source.value;
   };
-  const explicit = fields.has('ports') ? context.object(fields.get('ports')) : null;
+  const explicit = fields.has('ports') ? context.structuralObject(fields.get('ports')) : null;
   if (fields.has('ports') && !explicit) throw new Error('Unknown ports map');
   for (const [label, value] of explicit || []) add(label, portSource(value, context));
   const env = new Map();
-  for (const key of ['env', 'env_development', 'env_production']) {
+  const envKeys = [...fields.keys()].filter(key => /^env(?:_.+)?$/.test(key));
+  const precedence = key => key === 'env' ? 0 : key === 'env_development' ? 1 : key === 'env_production' ? 3 : 2;
+  envKeys.sort((a, b) => precedence(a) - precedence(b));
+  for (const key of envKeys) {
     if (!fields.has(key)) continue;
-    const block = context.object(fields.get(key));
+    const block = context.structuralObject(fields.get(key));
     if (!block) throw new Error('Unknown environment shape');
     for (const [key, value] of block) {
       if (/^(?:PORT|[A-Z][A-Z0-9_]*_PORT)$/.test(key)) {
@@ -170,9 +201,10 @@ function processInfo(node, context, content) {
       }
     }
   }
+  const runtimeUiLabel = explicit?.has('devUi') ? 'devUi' : 'ui';
   const envLabel = key => key === 'PORT'
-    ? /[-_](ui|client)$/i.test(name) ? 'ui' : /[-_]browser$/i.test(name) && env.has('CDP_PORT') ? 'health' : 'api'
-    : key === 'VITE_PORT' ? 'ui' : key === 'CDP_PORT' ? 'cdp'
+    ? /[-_](ui|client)$/i.test(name) ? runtimeUiLabel : /[-_]browser$/i.test(name) && env.has('CDP_PORT') ? 'health' : 'api'
+    : key === 'VITE_PORT' ? runtimeUiLabel : key === 'CDP_PORT' ? 'cdp'
       : key.replace(/_PORT$/, '').toLowerCase().replace(/_(\w)/g, (_, c) => c.toUpperCase());
   for (const [key, values] of env) {
     const label = envLabel(key);
@@ -181,11 +213,11 @@ function processInfo(node, context, content) {
     if (!explicit?.size && values.at(-1) === null) delete ports[label];
   }
   const args = argsSource(fields.get('args'), context, content);
-  add('ui', args, !explicit?.size && Object.keys(ports).length === 0);
+  add(runtimeUiLabel, args, !explicit?.size && Object.keys(ports).length === 0);
   const argsValue = context.scalar(fields.get('args'));
   if (fields.has('args') && !args && (typeof argsValue !== 'string' || /--port(?:\s|=)/.test(argsValue))) {
-    if (!sources.has('ui')) sources.set('ui', []);
-    sources.get('ui').push(null);
+    if (!sources.has(runtimeUiLabel)) sources.set(runtimeUiLabel, []);
+    sources.get(runtimeUiLabel).push(null);
   }
   if (!explicit?.size && Object.keys(ports).length === 0) add('api', portSource(fields.get('port'), context));
   const usesVite = /\bvite\b/i.test(context.scalar(fields.get('script')) || '') ||
@@ -194,7 +226,7 @@ function processInfo(node, context, content) {
 }
 
 function assertNoSideEffects(context) {
-  const { ast, exportAssignment, protectedNodes, resolve } = context;
+  const { ast, bindings, exportAssignment, protectedNodes, resolve } = context;
   const touchesConfig = node => {
     const seen = new Set();
     let touches = false;
@@ -210,30 +242,70 @@ function assertNoSideEffects(context) {
     return touches;
   };
   walk(ast, node => {
+    if (node.type === 'VariableDeclarator' &&
+        (node.id.type !== 'Identifier' || bindings.get(node.id.name) !== node.init) && touchesConfig(node.init)) {
+      throw new Error('Unsupported configuration alias');
+    }
     if ((node.type === 'AssignmentExpression' && node !== exportAssignment) ||
         ['UpdateExpression', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) ||
         (node.type === 'UnaryExpression' && node.operator === 'delete')) throw new Error('Dynamic mutation');
     if (node.type === 'WithStatement' || (node.type === 'Identifier' && ['eval', 'Function'].includes(node.name))) throw new Error('Dynamic evaluation');
     if (['CallExpression', 'NewExpression', 'OptionalCallExpression', 'TaggedTemplateExpression'].includes(node.type)) {
       const inputs = node.arguments || [node.quasi];
-      if (inputs.some(touchesConfig) || (node.callee?.type === 'MemberExpression' && touchesConfig(node.callee.object))) {
+      if (inputs.some(touchesConfig) || (['MemberExpression', 'OptionalMemberExpression'].includes(node.callee?.type) && touchesConfig(node.callee.object))) {
         throw new Error('Configuration escapes to a call');
       }
     }
   });
 }
 
+function markNonPortConsumers(context, processes) {
+  const forbidden = new Set();
+  const mark = (input, seen = new Set()) => {
+    if (!input || seen.has(input)) return;
+    seen.add(input);
+    const source = portSource(input, context, false);
+    if (source) { forbidden.add(`${source.start}:${source.end}`); return; }
+    const resolved = context.resolve(input);
+    if (resolved?.type === 'ObjectExpression') {
+      for (const property of resolved.properties) mark(property.value || property.argument, seen);
+    } else if (resolved?.type === 'ArrayExpression') resolved.elements.forEach(element => mark(element, seen));
+    else if (['MemberExpression', 'OptionalMemberExpression'].includes(input.type)) mark(input.object, seen);
+  };
+  walk(context.ast, (node, parent, key) => {
+    if (!['Identifier', 'MemberExpression', 'OptionalMemberExpression'].includes(node.type) || context.portReads.has(node)) return;
+    if ((key === 'key' && !parent.computed) || (key === 'property' && !parent.computed) ||
+        (key === 'object' && ['MemberExpression', 'OptionalMemberExpression'].includes(parent?.type)) ||
+        key === 'id' || key === 'params' || (parent?.type === 'VariableDeclarator' && key === 'init')) return;
+    mark(node);
+  });
+  for (const proc of processes) {
+    for (const sources of proc.sources.values()) {
+      for (const source of sources) {
+        if (source && forbidden.has(`${source.start}:${source.end}`)) source.nonPortConsumer = true;
+      }
+    }
+  }
+}
+
 /** Returns null for ambiguous configuration; never executes helpers or imports. */
 export function analyzeEcosystemPorts(content) {
   try {
     const context = contextFor(content);
+    context.portReads.add(context.exported);
     const exported = context.resolve(context.exported);
-    const apps = exported?.type === 'ArrayExpression' ? exported : context.resolve(context.object(exported)?.get('apps'));
+    const config = context.structuralObject(exported);
+    const appsInput = exported?.type === 'ArrayExpression' ? exported : config?.get('apps');
+    context.portReads.add(appsInput);
+    // The shipped exported PORTS map intentionally exposes these same defaults.
+    if (config?.has('PORTS')) context.portReads.add(config.get('PORTS'));
+    const apps = context.resolve(appsInput);
     if (apps?.type !== 'ArrayExpression') return null;
     context.protectedNodes.add(apps);
     const processes = apps.elements.map(node => processInfo(node, context, content));
     if (new Set(processes.map(proc => proc.name)).size !== processes.length) return null;
     assertNoSideEffects(context);
+    markNonPortConsumers(context, processes);
     if (processes.some(proc => proc.ports.api)) {
       for (const proc of processes) {
         if (proc.usesVite && proc.ports.ui && !proc.ports.devUi) {
@@ -275,7 +347,7 @@ export function planEcosystemPortEdits(content, remap = [], edits = []) {
     const sources = proc.sources.get(label) || [];
     if (!sources.length || sources.some(source => source === null)) return failed();
     for (const source of sources) {
-      if (source.value !== edit.oldPort) return failed();
+      if (source.nonPortConsumer || source.value !== edit.oldPort) return failed();
       const key = `${source.start}:${source.end}`;
       const replacement = source.quoted ? JSON.stringify(String(edit.newPort)) : String(edit.newPort);
       if (replacements.has(key) && replacements.get(key).text !== replacement) return failed();

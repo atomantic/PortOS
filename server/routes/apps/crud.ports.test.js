@@ -99,6 +99,60 @@ describe('app port updates with real configuration and registry files', () => {
     await expectRefused(before, { apiPort: 7100 });
   });
 
+  it.each([
+    "const { env } = server; Object.assign(env, { PORT: 8000 });",
+    "function mutate() { const env = server.env; Object.assign(env, { PORT: 8000 }); } mutate();",
+    "const apps = [server]; apps?.pop();",
+    "const apps = [server]; apps.pop?.();",
+  ])('refuses unsupported aliases and optional receiver mutations: %s', async mutation => {
+    const before = await fixture(`const server = { name: 'example-server', env: { PORT: 7000 } };
+${mutation}
+module.exports = { apps: [server] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it('updates explicit devUi declarations with their env and argument sources', async () => {
+    const content = `module.exports = { apps: [
+      { name: 'example-server', env: { PORT: 7000 } },
+      { name: 'example-ui', ports: { devUi: 7001 }, args: 'vite --port 7001', env: { VITE_PORT: 7001 } }
+    ] };`;
+    await fixture(content, { devUiPort: 7001, pm2ProcessNames: ['example-server', 'example-ui'] });
+    expect((await update({ devUiPort: 7101 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replaceAll('7001', '7101'));
+    expect((await getAppById('example')).devUiPort).toBe(7101);
+  });
+
+  it('updates matching custom environments and refuses a conflicting environment atomically', async () => {
+    const content = `module.exports = { apps: [{ name: 'example-server', env: { PORT: 7000 }, env_staging: { PORT: 7000 } }] };`;
+    await fixture(content);
+    expect((await update({ apiPort: 7100 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replaceAll('7000', '7100'));
+    invalidateCache();
+    const before = await fixture(content.replace('env_staging: { PORT: 7000', 'env_staging: { PORT: 7001'));
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it.each(["name: P", "name: 'example-server', note: P"])(
+    'preserves constants shared with non-port consumers: %s', async otherField => {
+      const before = await fixture(`const P = '7000'; module.exports = { apps: [{ ${otherField}, env: { PORT: P } }] };`,
+        { pm2ProcessNames: [otherField === 'name: P' ? '7000' : 'example-server'] });
+      await expectRefused(before, { apiPort: 7100 });
+    });
+
+  it('preserves a port object also consumed as unrelated metadata', async () => {
+    const before = await fixture(`const settings = { api: 7000 };
+module.exports = { apps: [{ name: 'example-server', ports: settings, metadata: settings }] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it.each(['7000 || 7001', '7000 ?? 7001', 'null ?? 7000', 'false || 7000'])(
+    'edits the effective short-circuit operand: %s', async expression => {
+      const content = `module.exports = { apps: [{ name: 'example-server', env: { PORT: ${expression} } }] };`;
+      await fixture(content);
+      expect((await update({ apiPort: 7100 })).status).toBe(200);
+      expect(await readFile(configPath, 'utf8')).toBe(content.replace('7000', '7100'));
+    });
+
   it('refuses opaque imported spreads without executing them', async () => {
     const before = await fixture(`const extra = require('./missing-helper.cjs');
 module.exports = { apps: [{ name: 'example-server', env: { PORT: 7000 }, ...extra() }] };`);
@@ -128,7 +182,7 @@ module.exports = { apps: [makeApp('other-server')] };`);
     await expectRefused(before, { apiPort: 7100, uiPort: 7101 });
   });
 
-  it.each(["dynamicArgs()", "'vite --port 7001 --port 7002'", "`--port ${7001}suffix`"])(
+  it.each(["dynamicArgs()", "'vite --port 7001 --port 7002'", "`--port ${7001}suffix`", "`--port ${7}${'001'}`"])(
     'refuses an uncertain runtime argument port even with a literal env: %s', async args => {
       const before = await fixture(`module.exports = { apps: [
         { name: 'example-server', env: { PORT: 7000 } },
