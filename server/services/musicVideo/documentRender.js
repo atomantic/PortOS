@@ -46,15 +46,15 @@ import { documentDirectoryForRender } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
+import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 
-export const DOCUMENT_RENDER_FPS = 24;
+export { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 // The frame each project aspect renders at (the composition browser's sizes).
 export const DOCUMENT_FRAME_SIZES = Object.freeze({
   '16:9': Object.freeze({ width: 1920, height: 1080 }),
   '9:16': Object.freeze({ width: 1080, height: 1920 }),
   '1:1': Object.freeze({ width: 1080, height: 1080 }),
 });
-const SONG_CAP_SEC = 900;
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
@@ -110,18 +110,6 @@ function documentTargetFrame(contract, project) {
     });
   }
   return { ...contract, width, height };
-}
-
-/** The song length the document is timed against (analysis first). */
-export function documentSongDuration(project) {
-  const duration = finite(project?.audioAnalysis?.durationSec);
-  return duration && duration > 0 ? Math.min(duration, SONG_CAP_SEC) : null;
-}
-
-/** Whole frames that fit inside the song at `fps` (the contract ceiling). */
-export function documentRenderClock(songDurationSec, fps = DOCUMENT_RENDER_FPS) {
-  const frames = Math.max(0, Math.floor(songDurationSec * fps + 1e-6));
-  return { fps, frames, durationSec: frames / fps };
 }
 
 /**

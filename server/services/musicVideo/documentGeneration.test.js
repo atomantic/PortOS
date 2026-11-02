@@ -839,11 +839,42 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });
 
+  it('upgrades the original shipped generated Canvas wrapper without changing authored sections', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    // Captured from the original shipping serializer, not the current serializer.
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngine11406.txt', import.meta.url));
+    const wrapper = await readFile(new URL('../../routes/fixtures/musicVideoGeneratedEngineLegacy.txt', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), wrapper);
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
+  });
+
   it('refuses to replace a customized generated layered engine', async () => {
     const id = await fixture();
     const first = (await generateMixedMediaDocument(id)).document;
     const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
     const customized = Buffer.concat([generatedCanvasPlaybackEngine(legacy), Buffer.from('\n// authored customization')]);
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
+    await acceptMixedMediaDocument(id, first.directory);
+    await expect(upgradeDocumentEngine(id, first.directory)).rejects.toMatchObject({ code: 'COMPOSITION_ENGINE_CUSTOM' });
+    expect(await readFile(join(PATHS.data, first.directory, 'engine.js'))).toEqual(customized);
+  });
+
+  it('refuses a customized original generated Canvas wrapper', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngine11406.txt', import.meta.url));
+    const original = await readFile(new URL('../../routes/fixtures/musicVideoGeneratedEngineLegacy.txt', import.meta.url));
+    const customized = Buffer.concat([original, Buffer.from('\n// authored customization')]);
     await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
     await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
     await acceptMixedMediaDocument(id, first.directory);

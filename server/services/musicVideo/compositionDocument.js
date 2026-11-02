@@ -38,9 +38,10 @@ import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
-import { isEndFrameImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { sceneTransitions } from '../../lib/musicVideoTransitions.js';
+import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { documentRenderClock, documentSongDuration } from './documentTiming.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
 // and a render adds the staged scene media beside the document.
@@ -451,6 +452,10 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 const UPGRADABLE_LAYERED_ENGINES = new Set([
   // The shipped engine before document end-frame and selected glitch effects.
   '0cc9d52c4bbf82cec93b418e41e7cfe49a89f6feb0602c02ecdee6f00f9cf307',
+  // Shipped between still effects (#11319) and the later lyric-runtime check.
+  '22d6cf739b607da221780f32524baeb70ae86ddf9f0a83d57b9a5462dd93b44a',
+  'ecf110208a0861eb35a39ca559997eca647b922b49c1ca5d5bddc35b2f37bd61',
+  '20fff73949a37d069f1de4cf2dab4d185049f799fe4bb129747cc3bf678d9e4f',
   // #14276's engine: one photo at a time, before overlapping photo stacks (#14277).
   '934ee8ca6b42f642bec05019c208e54369d063f06b521384d20d54b0b8e0900a',
   '2844a20f3d6ad57022e97ae79705a9296479ff5a59cdebeaa9e48246d3d7a086',
@@ -467,15 +472,28 @@ const UPGRADABLE_LAYERED_ENGINES = new Set([
 ]);
 // Shipped still-effect modules a document may carry; adoption replaces them with the current one.
 const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+  // #11319's initial still-effect module.
+  '4f13c0c26039cdecd0dab5450ebe702d49653e207594af07297ced8f21c2eb1e',
   'b771bf1da99500e14b751ffe82a95ddee749df2030d1a8be7c21b068a7def1e8',
   // #14276: photo sequences, before stacked layers (#14277).
   '6289528435cb4b9cd535679a6492a6ecd22258213fc5361db13ae301dfda3cde',
+]);
+// This shipped module already supplies the new engine's imports and also
+// exposes an extra export. Keep its bytes for documents that may use it.
+const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
+  'b5905e6d5be37d5d8b1ed0a1c741e3f9813b65c70eec182a3a3cf86efd4ec92d',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
 function generatedLayeredEngineMatches(engine, reference) {
   if (!reference || !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(reference))) return false;
-  try { return engine.equals(generatedCanvasPlaybackEngine(reference)); } catch { return false; }
+  try {
+    // The first shipped generated Canvas wrapper used a different serialized
+    // function name. Pin its exact bytes and its exact shipped reference.
+    const firstGeneratedCanvas = engineDigest(reference) === 'ecf110208a0861eb35a39ca559997eca647b922b49c1ca5d5bddc35b2f37bd61'
+      && createHash('sha256').update(engine).digest('hex') === 'ac67ea53b8007d974e941e1a311ff8b801696928c67cca664580a7485972748f';
+    return firstGeneratedCanvas || engine.equals(generatedCanvasPlaybackEngine(reference));
+  } catch { return false; }
 }
 
 /**
@@ -509,11 +527,19 @@ export function upgradeDocumentEngine(projectId, directory) {
     if (generated && reference ? !generatedLayeredEngineMatches(prior, reference) : !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior))) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
+    const imageEffects = files.find(file => file.rel === 'musicVideoImageEffects.js');
+    const shippedImageEffects = await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    if (imageEffects) {
+      const digest = engineDigest(await readFile(imageEffects.abs));
+      if (digest !== engineDigest(shippedImageEffects) && !UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest) && !COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest)) {
+        throw refuse('The still-effect module was customized or is not a supported shipped version — preserve it and revise it explicitly before upgrading', 'COMPOSITION_ENGINE_CUSTOM', 409);
+      }
+    }
     const loaded = await Promise.all(files.map(async file => ({
       rel: file.rel, data: file.rel === 'engine.js' ? nextEngine
         : generated && file.rel === 'engine-reference.js' ? shipped
         : file.rel === 'musicVideoImageEffects.js' && UPGRADABLE_IMAGE_EFFECT_MODULES.has(engineDigest(await readFile(file.abs)))
-          ? await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url)) : await readFile(file.abs),
+          ? shippedImageEffects : await readFile(file.abs),
     })));
     // Add the shared lyric-type and still-effect modules only to a template-shaped
     // page. storeVersionNow supplies missing module files and fonts; authored
@@ -630,14 +656,34 @@ export async function readDocumentFiles(project, { requireLyricVisibility = true
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
   if (requireSelectedEffects) {
-    const selectedTransitions = (project.scenes || []).some(scene => {
-      const transitions = sceneTransitions(scene);
-      return Boolean(transitions.transitionIn || transitions.transitionOut || transitions.shotGlitches?.length);
-    });
-    const endScenes = (project.scenes || []).filter(scene => scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
+    const scenes = project.scenes || [];
+    const duration = documentSongDuration(project);
+    const { fps, frames } = documentRenderClock(duration || 0);
+    const sections = sceneTransitionSections(scenes, fps, { endSec: duration });
+    const inSong = effect => effect.frame >= 0 && effect.frame < frames;
+    const selectedTransitions = transitionGlitchFrames(sections, { totalFrames: frames }).length > 0
+      || sceneShotGlitchFrames(scenes, fps, { endSec: duration }).some(inSong);
+    const endScenes = scenes.filter(scene => Number.isFinite(scene?.startSec) && scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
       && scene.endImageId && documentSceneVisualLayer(project, scene, { generated: project.composition?.document?.source?.kind === 'generated' }) === 'still');
-    const selectedEnd = endScenes.some(scene => isTopLevelEntryName(scene.endImageId) && !scene.endImageId.includes('..')
-      && existsSync(join(PATHS.images, scene.endImageId)));
+    const imageExists = id => isTopLevelEntryName(id) && !id.includes('..') && existsSync(join(PATHS.images, id));
+    const eligibleEnd = endScenes.filter(scene => {
+      const sequence = scenePhotoSequence(scene);
+      return imageExists(scene.endImageId) && (sequence ? sequence.imageIds.length > 0 && sequence.imageIds.every(imageExists) : imageExists(scene.referenceImageId));
+    });
+    // The layered engine displays only valid intervals, using the latest valid
+    // scene at an overlap. Its glitch overlay has a separate frame timeline.
+    const layeredScenes = scenes.filter(scene => scene?.sceneId && Number.isFinite(scene.startSec)
+      && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec).sort((a, b) => a.startSec - b.startSec);
+    const selectedEnd = eligibleEnd.some(scene => {
+      const index = layeredScenes.indexOf(scene);
+      if (index < 0) return false;
+      const next = layeredScenes[index + 1];
+      const lastFrame = Math.min(frames, Math.ceil(scene.endSec * fps), next ? Math.ceil(next.startSec * fps) : frames) - 1;
+      if (lastFrame < Math.max(0, Math.ceil(scene.startSec * fps))) return false;
+      const state = imageEffectState(sceneImageEffect(scene, { layered: true }), (lastFrame - Math.round(scene.startSec * fps)) / fps, { fps });
+      return state.end > 0 || state.flash > 0;
+    }) || sceneImageEffectGlitchFrames(scenes.map(scene => eligibleEnd.includes(scene) ? scene : { ...scene, imageEffect: null }),
+      fps, { layered: true, endSec: duration }).some(inSong);
     if (selectedTransitions || selectedEnd) {
       const declarations = files.filter(file => ['engine.js', 'index.html'].includes(file.rel));
       const marked = await Promise.all(declarations.map(async file =>
