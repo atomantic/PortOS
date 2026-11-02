@@ -59,7 +59,7 @@ const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: car
 const LOOK_AND_SET_RULES = [
   '- look: palette, light quality, film stock, grain and texture only. Never a person, place, object or pose: it is appended to every image, including the empty set plates.',
   '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
-  '- sets: every detail must agree with the rest of the set and with how such a place really works in its era. An abandoned or boarded-up house has an empty driveway and an unkept yard; a car belongs at a lived-in house. Put each object where people actually put it (a portable basketball hoop on its base at the curb, a fixed one on a single pole by the driveway), and name each fixture once.',
+  '- sets: preserve the director\'s requested story details, including deliberate unusual or stylized arrangements. Otherwise, choose details consistent with each other, the described place and its era; avoid unexplained contradictions such as a pristine parked car at a place described as deserted or an unintended second post on a single-pole hoop. Name each fixture once.',
 ].join('\n');
 
 export const CAST_SETS_LIMITS = Object.freeze({
