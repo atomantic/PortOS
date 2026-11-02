@@ -10,7 +10,7 @@ const angles = [
   { label: 'PROFILE RIGHT', turn: 1, profile: true },
 ];
 
-/** Regenerate the shipped PNG with sharp(Buffer.from(faceSheetAngleTemplateSvg())).png(). */
+/** Regenerate the shipped PNG: node server/scripts/generate-face-sheet-angle-template.mjs. */
 export function faceSheetAngleTemplateSvg() {
   const head = (turn, profile) => {
     const face = `<ellipse cx="0" cy="0" rx="${profile ? 40 : 61}" ry="83" fill="#929292"/><path d="M-53 98 Q0 68 53 98 L75 125 H-75Z" fill="#777"/>`;
