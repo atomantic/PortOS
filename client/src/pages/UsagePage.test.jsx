@@ -3,7 +3,7 @@ vi.mock('../services/socket', async () => {
   const { EventEmitter } = await import('events');
   return { default: new EventEmitter() };
 });
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -369,6 +369,326 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.queryByText('20% used')).not.toBeInTheDocument();
   });
 
+  it('keeps the last unexpired local meter beside failed family and full refreshes', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Family scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Family scrape failed/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Full scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    expect(await screen.findByText(/Full scrape failed/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.queryByText(/Full scrape failed/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a passive failure visible beside the last reading until a passive recovery', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Passive scrape failed' }] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Passive scrape failed/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.queryByText(/Passive scrape failed/)).not.toBeInTheDocument();
+  });
+
+  it('clears an older passive failure after a successful explicit family refresh', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Passive scrape failed' }] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Passive scrape failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.queryByText(/Passive scrape failed/)).not.toBeInTheDocument();
+  });
+
+  it('clears an older passive failure after a family refresh even if a full read overlaps it', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Old passive failure' }] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Old passive failure/)).toBeInTheDocument();
+
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [local] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishFamily({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.queryByText(/Old passive failure/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a newer passive failure after an older family refresh succeeds', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [{ ...local, limits: [], error: 'New passive failure' }] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/New passive failure/)).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] }));
+    expect(await screen.findByText('55% used')).toBeInTheDocument();
+    expect(screen.getByText(/New passive failure/)).toBeInTheDocument();
+  });
+
+  it('does not let an older family failure replace a newer full-refresh failure', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [{ ...local, limits: [], error: 'New full failure' }] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    expect(await screen.findByText(/New full failure/)).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [{ ...local, limits: [], error: 'Old family failure' }] }));
+    expect(screen.getByText(/New full failure/)).toBeInTheDocument();
+    expect(screen.queryByText(/Old family failure/)).not.toBeInTheDocument();
+  });
+
+  it('does not clear a newer passive failure when an older full refresh finishes', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    let finishFull;
+    api.getProviderUsage.mockImplementation(({ refresh }) => refresh
+      ? new Promise((resolve) => { finishFull = resolve; })
+      : Promise.resolve({ providers: [{ ...local, limits: [], error: 'New passive failure' }] }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/New passive failure/)).toBeInTheDocument();
+    await act(async () => finishFull({ providers: [local] }));
+    expect(screen.getByText(/New passive failure/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
+  it('keeps an explicit refresh error after a passive failure and recovery', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Explicit scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Explicit scrape failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Passive scrape failed' }] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [local] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(screen.getByText(/Explicit scrape failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Passive scrape failed/)).not.toBeInTheDocument();
+  });
+
+  it('shows a newer passive limit warning without hiding an explicit refresh failure', async () => {
+    const local = { ...card('codex', 'Codex', 20), fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+      origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Explicit scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Codex usage' }));
+    expect(await screen.findByText(/Explicit scrape failed/)).toBeInTheDocument();
+
+    const blocked = { ...local, limits: [], fetchedAt: new Date().toISOString(), error: 'Weekly limit reached',
+      quotaStatus: 'limit_reached', quotaScope: 'week' };
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [blocked] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Weekly limit reached/)).toBeInTheDocument();
+    expect(screen.getByText(/Explicit scrape failed/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
+  it.each([false, true])('keeps a newer local full-read observation when an older family refresh finishes later (federation unavailable: %s)', async (federationUnavailable) => {
+    const stamp = (ago) => new Date(Date.now() - ago).toISOString();
+    const local = (used, ago) => ({ ...card('codex', 'Codex', used), fetchedAt: stamp(ago),
+      origin: { self: true, name: 'This instance' } });
+    const initial = local(20, 60_000), older = local(40, 20_000), newer = local(80, 10_000);
+    api.getProviderUsage.mockResolvedValue({ providers: [initial] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'codex'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [newer], federationUnavailable }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Codex usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [older] }));
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    expect(screen.queryByText('40% used')).not.toBeInTheDocument();
+  });
+
+  it('does not re-add a provider omitted by a newer successful full read', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('No enabled providers report subscription usage.')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] }));
+    expect(screen.getByText('No enabled providers report subscription usage.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Grok' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the peer slot without restoring the local refresh button after a newer full read', async () => {
+    const local = { ...card('grok', 'Grok', 20), fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true } };
+    const peer = { ...card('grok', 'Grok', 40), fetchedAt: '2026-01-02T00:00:00.000Z',
+      origin: { self: false, instanceId: 'peer', capturedAt: '2026-01-02T00:00:00.000Z' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Grok usage' });
+
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [peer] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Refresh Grok usage' })).not.toBeInTheDocument());
+    await act(async () => finishFamily({ providers: [local, peer] }));
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh Grok usage' })).not.toBeInTheDocument();
+  });
+
+  it('preserves a newer unsupported result when an older family refresh completes', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true } };
+    const unsupported = { ...local, supported: false, limits: [], activity: [] };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [unsupported] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('Usage reporting is not available for this provider.')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [{ ...card('grok', 'Grok', 55), origin: local.origin }] }));
+    expect(screen.getByText('Usage reporting is not available for this provider.')).toBeInTheDocument();
+    expect(screen.queryByText('55% used')).not.toBeInTheDocument();
+  });
+
+  it('does not revive a retained quota window that reset during a failed refresh', async () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const local = { ...card('grok', 'Grok', 20), limits: [{ ...card('grok', 'Grok', 20).limits[0],
+      resetsAt: new Date(now + 1000).toISOString() }], origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    clock.mockReturnValue(now + 2000);
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    expect(await screen.findByText(/Scrape failed/)).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('expires retained windows at their reset times without another server event', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const now = Date.now();
+    const local = { ...card('grok', 'Grok', 20), limits: [
+      { key: 'session', label: 'Session', percentUsed: 20, percentRemaining: 80, resetsAt: new Date(now + 2000).toISOString() },
+      { key: 'week', label: 'Weekly', percentUsed: 80, percentRemaining: 20, resetsAt: new Date(now + 5000).toISOString() },
+    ], origin: { self: true } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Scrape failed' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Scrape failed/)).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+    expect(screen.getByText(/last available quota reading has expired/i)).toBeInTheDocument();
+    expect(screen.getByText(/Scrape failed/)).toBeInTheDocument();
+  });
+
+  it('cancels the old reset timer when a newer reading replaces it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const now = Date.now();
+    const local = { ...card('grok', 'Grok', 20), limits: [{ ...card('grok', 'Grok', 20).limits[0],
+      resetsAt: new Date(now + 2000).toISOString() }], origin: { self: true } };
+    const newer = { ...card('grok', 'Grok', 80), limits: [{ ...card('grok', 'Grok', 80).limits[0],
+      resetsAt: new Date(now + 10_000).toISOString() }], origin: local.origin };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [newer] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await screen.findByText('80% used');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(screen.queryByText('80% used')).not.toBeInTheDocument();
+  });
+
+  it('caps a distant reset timer and re-arms it until the window expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-02T00:00:00.000Z'));
+    const timeout = vi.spyOn(globalThis, 'setTimeout');
+    const maxDelay = 2_147_483_647;
+    const resetDelay = 3_000_000_000;
+    const local = { ...card('grok', 'Grok', 20), limits: [{ ...card('grok', 'Grok', 20).limits[0],
+      resetsAt: new Date(Date.now() + resetDelay).toISOString() }], origin: { self: true } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    // Wait for the resolved API calls and React's effects before inspecting the timer.
+    await act(async () => {});
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(timeout).toHaveBeenCalledWith(expect.any(Function), maxDelay);
+    await act(async () => { await vi.advanceTimersByTimeAsync(maxDelay); });
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(timeout).toHaveBeenCalledWith(expect.any(Function), resetDelay - maxDelay);
+    await act(async () => { await vi.advanceTimersByTimeAsync(resetDelay - maxDelay - 1); });
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+    expect(screen.getByText(/last available quota reading has expired/i)).toBeInTheDocument();
+    unmount();
+  });
+
   it('applies concurrent family refreshes even when a fleet read overlaps', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     await screen.findByText('Grok');
@@ -483,6 +803,34 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.queryByText(/^This instance/)).not.toBeInTheDocument();
   });
 
+  it('keeps a newer local meter when an unsuccessful live refresh falls back to older telemetry', async () => {
+    const stamp = (ago) => new Date(Date.now() - ago).toISOString();
+    const local = { ...card('codex', 'Codex', 80), fetchedAt: stamp(10_000), origin: { self: true, name: 'This instance' } };
+    const fallback = { ...card('codex', 'Codex', 40), fetchedAt: stamp(20_000), origin: local.origin, refreshUnavailable: true };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('80% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [fallback] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Codex usage' }));
+    expect(await screen.findByText(/Live quota refresh was unavailable/)).toBeInTheDocument();
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    expect(screen.queryByText('40% used')).not.toBeInTheDocument();
+  });
+
+  it('does not hide a newer limit-reached warning while retaining an older meter', async () => {
+    const local = { ...card('codex', 'Codex', 20), fetchedAt: new Date(Date.now() - 60_000).toISOString(),
+      origin: { self: true, name: 'This instance' } };
+    const blocked = { ...local, limits: [], fetchedAt: new Date().toISOString(), error: 'Weekly limit reached',
+      quotaStatus: 'limit_reached', quotaScope: 'week' };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('20% used');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [blocked] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Codex usage' }));
+    expect(await screen.findByText(/Weekly limit reached/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
   it('shows a failed live refresh when its local fallback expired but a peer meter is current', async () => {
     const local = { ...card('grok', 'Grok', 20), fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'Local Box' } };
     const peer = { ...card('grok', 'Grok', 55), fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } };
@@ -524,6 +872,77 @@ describe('UsagePage per-provider refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
     await waitFor(() => expect(screen.queryByText(/Local scrape failed/)).not.toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'Grok' })).toBeInTheDocument();
+  });
+
+  it.each(['removed', 'unsupported'])('retires a local refresh failure when a passive read confirms the provider is %s', async (status) => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    const peer = { ...card('grok', 'Grok', 40), origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Grok usage' });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Retired local failure' }, peer] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Retired local failure/)).toBeInTheDocument();
+    const unsupported = { ...local, supported: false, limits: [], activity: [] };
+    api.getProviderUsage.mockResolvedValueOnce({ providers: status === 'removed' ? [peer] : [unsupported, peer] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await waitFor(() => expect(screen.queryByText(/Retired local failure/)).not.toBeInTheDocument());
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+    if (status === 'removed') expect(screen.queryByRole('button', { name: 'Refresh Grok usage' })).not.toBeInTheDocument();
+    // A later re-enable cannot resurrect the old local failure.
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [local, peer] });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByRole('button', { name: 'Refresh Grok usage' })).toBeInTheDocument();
+    expect(screen.queryByText(/Retired local failure/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a local failure while an older passive removal overlaps a newer family refresh', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    const peer = { ...card('grok', 'Grok', 40), origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Grok usage' });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Earlier local failure' }, peer] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Earlier local failure/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh Grok usage' })).toBeEnabled());
+    let finishFull, finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => new Promise((resolve) => {
+      if (family === 'grok') finishFamily = resolve;
+      else finishFull = resolve;
+    }));
+    const refresh = screen.getByRole('button', { name: 'Refresh Grok usage' });
+    await act(async () => {
+      socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(finishFull).toEqual(expect.any(Function));
+      fireEvent.click(refresh);
+    });
+    expect(finishFamily).toEqual(expect.any(Function));
+    await act(async () => finishFull({ providers: [peer] }));
+    expect(screen.getByText(/Earlier local failure/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh Grok usage' })).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [{ ...local, limits: [], error: 'Newer local failure' }, peer] }));
+    expect(screen.getByText(/Newer local failure/)).toBeInTheDocument();
+  });
+
+  it('keeps an image refresh failure through an incomplete passive omission', async () => {
+    const local = { family: 'imagegen', label: 'Image Gen', supported: true,
+      limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100 }], metrics: [], origin: { self: true, name: 'This instance' } };
+    const peer = { ...local, limits: [], origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer], imageQuotaComplete: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Image Gen usage' });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Local image failure' }, peer], imageQuotaComplete: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
+    expect(await screen.findByText(/Local image failure/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: false });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(screen.getByText(/Local image failure/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: true });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await waitFor(() => expect(screen.queryByText(/Local image failure/)).not.toBeInTheDocument());
   });
 
   it('keeps an image failure when an incomplete read omits the local card', async () => {
@@ -615,6 +1034,7 @@ describe('UsagePage per-provider refresh', () => {
   it('keeps another forced failure without overwriting a newer family refresh', async () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText('20% used')).toBeInTheDocument();
+    const oldReadAt = new Date(Date.now() - 60_000).toISOString();
     let finishFamily, finishForced;
     api.getProviderUsage.mockImplementation(({ refresh, family }) => family === 'grok'
       ? new Promise((resolve) => { finishFamily = resolve; })
@@ -624,7 +1044,7 @@ describe('UsagePage per-provider refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
     await act(async () => finishFamily({ providers: [card('grok', 'Grok', 80)] }));
     await act(async () => finishForced({ providers: [
-      { ...card('grok', 'Grok', 20), limits: [], error: 'Old Grok failure' },
+      { ...card('grok', 'Grok', 20), fetchedAt: oldReadAt, limits: [], error: 'Old Grok failure' },
       { ...card('claude', 'Claude Code', 10), limits: [], error: 'Claude failure' },
     ] }));
     expect(await screen.findByText(/Claude failure/)).toBeInTheDocument();
