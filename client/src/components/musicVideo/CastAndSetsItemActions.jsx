@@ -1,3 +1,4 @@
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import CastAndSetsImageEditor from './CastAndSetsImageEditor.jsx';
 import { useId, useRef, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
@@ -153,8 +154,9 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * protagonist. Shown only while the stage is not working. `formSubjects` are the
  * catalog-linked characters an age may be grounded on.
  */
-export default function CastAndSetsItemActions({ item, image, direction, revision, projectId, busy, onEditImage, onAcceptImageEdit, onDiscardImageEdit, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
+export default function CastAndSetsItemActions({ item, image, direction, revision, projectId, busy, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
   const [mode, setMode] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [resolution, setResolution] = useState(null);
   const [pending, setPending] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -209,6 +211,22 @@ export default function CastAndSetsItemActions({ item, image, direction, revisio
       {image?.status === 'done' && onEditImage && <CastAndSetsImageEditor
         key={`${projectId}:${revision}:${image.imageId}`} projectId={projectId} item={item} image={image} revision={revision} busy={busy}
         onRender={onEditImage} onAccept={onAcceptImageEdit} onDiscard={onDiscardImageEdit} />}
+      {onUseImage && <div className="space-y-2">
+        <button type="button" className={buttonClass} disabled={actionBusy} onClick={() => setPickerOpen(true)} aria-label={`Choose primary image for ${label}`}>Choose from gallery</button>
+        {!!image?.history?.length && <details>
+          <summary className="min-h-[44px] cursor-pointer text-xs">Earlier takes ({image.history.length})</summary>
+          <div className="flex flex-wrap gap-2">
+            {image.history.filter((id) => id !== image.imageId).map((imageId) => <div key={imageId} className="w-28 space-y-1">
+              <img src={`/data/images/${encodeURIComponent(imageId)}`} alt={`Earlier ${label} take`} className="h-20 w-full rounded object-cover" loading="lazy" />
+              <button type="button" className={buttonClass} disabled={actionBusy} onClick={() => onUseImage({ key: item.key, imageId })}>Use this image</button>
+            </div>)}
+          </div>
+        </details>}
+        {pickerOpen && <GalleryImagePicker open onClose={() => setPickerOpen(false)} onSelect={(selected) => {
+          setPickerOpen(false);
+          if (selected?.filename) onUseImage({ key: item.key, imageId: selected.filename });
+        }} />}
+      </div>}
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={actionBusy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
           <RotateCcw size={12} aria-hidden="true" /> Regenerate

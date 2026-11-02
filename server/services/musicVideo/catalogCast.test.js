@@ -4,7 +4,7 @@ vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => false }));
 
 import { createHash } from 'crypto';
 
-const { saveCheckinCastToCatalog, previewCatalogCastImport, commitCatalogCastImport } = await import('./catalogCast.js');
+const { syncCheckinImageToCatalog, saveCheckinCastToCatalog, previewCatalogCastImport, commitCatalogCastImport } = await import('./catalogCast.js');
 
 // The deterministic catalog id two synced machines both derive for a subject.
 const PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
@@ -214,6 +214,26 @@ describe('music video cast import', () => {
 });
 
 describe('re-approving Cast & Sets', () => {
+  it('syncs an adopted slot before re-approval without refreshing other slots or taking over manual media', async () => {
+    const projects = [videoProject()];
+    const { deps, media } = makeDeps({ projects });
+    await saveCheckinCastToCatalog('mv-1', deps);
+    const leadId = projects[0].concept.subjects[0].ingredientId;
+    const setId = projects[0].concept.subjects.find((subject) => subject.id === 'cs-set-diner').ingredientId;
+    await deps.catalogDB.attachMedia(leadId, 'manual.png', 'reference', { caption: 'Director reference' });
+    projects[0] = { ...projects[0], castAndSets: { ...approvedStage, status: 'imaging', images: {
+      ...approvedStage.images,
+      character: { status: 'done', imageId: 'chosen.png', history: ['ada-sheet.png'] },
+      'set:diner': { status: 'done', imageId: 'other.png', history: ['diner-plate.png'] },
+    } } };
+    await syncCheckinImageToCatalog('mv-1', 'character', deps);
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual.png', 'chosen.png']);
+    expect(media.filter((row) => row.id === setId).map((row) => row.key)).toEqual(['diner-plate.png']);
+    await syncCheckinImageToCatalog('mv-1', 'set:diner', deps);
+    expect(media.filter((row) => row.id === setId).map((row) => row.key)).toEqual(['other.png']);
+    expect(deps.catalogDB.createIngredient).toHaveBeenCalledTimes(3);
+  });
+
   it('refreshes owned text and sheets while preserving hand-linked records and unrelated media', async () => {
     const { castAndSetsSubjects } = await import('./castAndSetsPlan.js');
     const projects = [videoProject()];

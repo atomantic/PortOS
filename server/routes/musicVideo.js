@@ -1,4 +1,4 @@
-import { musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
@@ -237,6 +237,7 @@ import {
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
+  useCastAndSetsImage,
   acknowledgeCastAndSetsImage,
   reconfirmCastAndSets,
   skipCastAndSets,
@@ -1640,6 +1641,13 @@ router.post('/:id/cast-and-sets', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsRegenerateSchema, req.body || {});
   res.status(202).json(await regenerateCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/use-image', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsUseImageSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await useCastAndSetsImage(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/edit-image-preview', asyncHandler(async (req, res) => {

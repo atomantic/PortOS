@@ -8,10 +8,11 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
+  api: { selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
   greyboxData: { places: {} },
 }));
+vi.mock('../imageGen/GalleryImagePicker', () => ({ default: ({ onSelect }) => <button type="button" onClick={() => onSelect({ filename: 'gallery-choice.png' })}>Pick gallery choice</button> }));
 vi.mock('../../hooks/useMusicVideoGreyboxPlaces.js', () => ({ default: () => greyboxData.places }));
 vi.mock('../../services/socket', () => ({ default: {
   on: (event, fn) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(fn); },
@@ -63,6 +64,23 @@ beforeEach(() => {
   api.getMusicVideoProject.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
+
+it('selects a history take and a gallery image from the check-in and applies each returned project', async () => {
+  const initial = project({ character: { ...done('current.png', 'Keeper portrait'), history: ['earlier.png'] } }, { status: 'approved', direction: { protagonist: { name: 'Keeper' } } });
+  api.selectMusicVideoCastAndSetsImage.mockImplementation(async (_id, { imageId }) => ({ project: {
+    ...initial, castAndSets: { ...initial.castAndSets, revision: 2,
+      images: { character: { ...done(imageId, null), history: ['current.png'] } } },
+  } }));
+  render(<Harness initial={initial} locked={false} />);
+  fireEvent.click(card('Keeper').getByText('Earlier takes (1)'));
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Use this image' }));
+  await waitFor(() => expect(api.selectMusicVideoCastAndSetsImage).toHaveBeenCalledWith('example-project', { key: 'character', imageId: 'earlier.png' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('button', { name: 'Choose primary image for Keeper' }).disabled).toBe(false));
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Choose primary image for Keeper' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Pick gallery choice' }));
+  await waitFor(() => expect(api.selectMusicVideoCastAndSetsImage).toHaveBeenLastCalledWith('example-project', { key: 'character', imageId: 'gallery-choice.png' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('gallery-choice.png'));
+});
 
 describe('optional greybox references on Look', () => {
   const sets = [{ id: 'lab', name: 'Lamp room' }, { id: 'harbor', name: 'Harbor' }];

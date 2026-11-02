@@ -1979,6 +1979,45 @@ describe('editing a saved Cast & Sets image', () => {
       productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
   }
 
+  it('adopts gallery and history takes through the route, syncing only the chosen reference and retaining it on re-approval', async () => {
+    let project = await ready();
+    await service.approveCastAndSets(project.id);
+    project = await current(project.id);
+    const old = project.castAndSets.images.character.imageId;
+    const count = jobs.length;
+    onDisk('chosen-gallery.png');
+    for (const imageId of ['chosen-gallery.png', old]) {
+      const before = await current(project.id);
+      const selected = await request(app).post(editUrl(project.id, 'use-image')).send({ key: 'character', imageId });
+      expect(selected.status).toBe(202);
+      expect(selected.body.project.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe(imageId);
+      expect(selected.body.project.visualSpec.references.filter((ref) => ref.id !== 'mvr-cs-character'))
+        .toEqual(before.visualSpec.references.filter((ref) => ref.id !== 'mvr-cs-character'));
+      expect(selected.body.project.castAndSets.images.character).toMatchObject({ imageId, inspection: null, inspectionAcknowledgement: null, submittedPrompt: null });
+      await service.__settleCastAndSetsForTests();
+      const saved = await current(project.id);
+      expect(saved.castAndSets.status).toBe('review');
+      expect(saved.castAndSets.images.character.history).toContain(before.castAndSets.images.character.imageId);
+      expect(saved.castAndSets.images.character.history).not.toContain(imageId);
+      expect(saved.castAndSets.images.character.inspection.inputs.imageId).toBe(imageId);
+      const approved = await request(app).post(editUrl(project.id, 'approve')).send({});
+      expect(approved.status).toBe(200);
+      expect(approved.body.project.visualSpec.references).toEqual(saved.visualSpec.references);
+    }
+    expect(jobs).toHaveLength(count);
+  });
+
+  it('refuses invalid, missing and unauthorized selections without mutating the stage', async () => {
+    const project = await ready();
+    onDisk('chosen-gallery.png');
+    const url = editUrl(project.id, 'use-image');
+    expect((await request(app).post(url).send({ key: 'character', imageId: 42 })).status).toBe(400);
+    expect((await request(app).post(url).send({ key: 'missing-slot', imageId: 'chosen-gallery.png' })).status).toBe(404);
+    expect((await request(app).post(url).send({ key: 'character', imageId: 'missing.png' })).status).toBe(404);
+    expect((await request(app).post(url).set('x-test-auth-method', 'peer-credential').send({ key: 'character', imageId: 'chosen-gallery.png' })).status).toBe(403);
+    expect((await current(project.id)).castAndSets).toEqual(project.castAndSets);
+  });
+
   it('edits only the displayed image, previews without replacing it, and publishes only after acceptance and approval', async () => {
     let project = await ready();
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,

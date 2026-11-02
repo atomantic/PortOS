@@ -607,6 +607,9 @@ export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // `keys` re-renders just those images (and what depends on them).
 export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const selectMusicVideoCastAndSetsImage = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/use-image`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const previewMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/edit-image-preview`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const editMusicVideoCastAndSetsImage = (id, body, options = {}) =>
