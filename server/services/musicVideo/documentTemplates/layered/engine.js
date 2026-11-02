@@ -587,10 +587,10 @@
     vignette(0.5);
     grain(t, 0.09);
     if (effect) _flash(effect.flash);
-    const glitch = effectFrames.get(frameOf(t));
-    if (glitch) {
+    const selectedEffect = effectFrames.get(frameOf(t));
+    if (selectedEffect) {
       if (!globalThis.__portosMusicVideoGlitch) throw new Error('Music-video effect painter is unavailable');
-      ctx.save(); globalThis.__portosMusicVideoGlitch(canvas, glitch, frameOf(t)); ctx.restore();
+      ctx.save(); globalThis.__portosMusicVideoGlitch(canvas, selectedEffect, frameOf(t)); ctx.restore();
     }
     drawHud(t);
     drawNarrativeEvents(state);

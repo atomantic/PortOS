@@ -302,7 +302,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), images[i])));
     const created = await projects.createProject({ name: 'Synthetic selected effects' });
     await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
-      audioAnalysis: { durationSec: 2, sections: [] },
+      audioAnalysis: { durationSec: 2, sections: [{ id: 'hook', label: 'Hook', startSec: 0, endSec: 2 }] },
       scenes: [{ sceneId: 'effect', startSec: 0.26, endSec: 2, visualLayer: 'still', stillMove: 'hold',
         referenceImageId: names[0], endImageId: names[1], imageEffect: 'end-flash', imageEffectSec: 0.5,
         glitches: [{ atSec: 0.9, style: 'light-leak', lengthSec: 0.25, color: '#00ff00', edge: 'right', strength: 0.8 }] }],
