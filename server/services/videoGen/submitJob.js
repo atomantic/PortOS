@@ -472,10 +472,14 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
 // A Music Video shot rendered on a local reference-to-video model (FastH3 Omni) carries the
 // shot's cast sheets beside its still, as a Grok clip does, unless the request already names references.
 const withLocalCastReferences = async (body) => {
-  if (body.backend && body.backend !== 'local') return body;
-  if (!body.modelId || body.referenceImageFiles?.length || !body.musicVideo?.sceneId) return body;
-  const { listVideoModels } = await import('./generateVideo.js');
-  const model = listVideoModels().find((m) => m.id === body.modelId);
+  // Peer transport does not carry extra references yet, so a peer-routed shot keeps its still only.
+  if ((body.backend && body.backend !== 'local') || body.mediaProviderPeerId) return body;
+  if (body.referenceImageFiles?.length || !body.musicVideo?.sceneId) return body;
+  const { listVideoModels, defaultVideoModelId } = await import('./local.js');
+  const [{ getSettings }, { captureSystemCapabilities }] = await Promise.all([import('../settings.js'), import('../../lib/systemCapabilities.js')]);
+  // 'Local default' omits modelId; resolve it the way preparation will.
+  const modelId = body.modelId || defaultVideoModelId(captureSystemCapabilities(), (await getSettings())?.videoGen?.defaultModelId);
+  const model = listVideoModels().find((m) => m.id === modelId);
   const total = Number(model?.maxReferenceTotal) || Infinity;
   const limit = Math.min((Number(model?.maxReferenceImages) || 0) - 1, total - 1);
   if (!(limit > 0)) return body;
