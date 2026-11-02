@@ -240,6 +240,7 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
     metadata: {
       chatTitle: chatTitle || null,
       chatScope: scope || null,
+      conversationId: scope || chatTitle || null,
       sender: msg.sender,
       hasMedia,
       dateOrder: order,

@@ -433,6 +433,17 @@ export async function stripParticipantsForAccount(accountId, source, aliasEmails
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
 // pointers. `accountId` scopes to one source account (#2820). Newest first,
 // capped by `limit` (default 500, max 2000).
+// WhatsApp exports historically stored only scope/title. Use one identity for
+// management reads and deletes; fallback fields apply only to WhatsApp and only
+// when a stronger identifier is absent, so a title cannot erase another scope.
+const CONVERSATION_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), CASE WHEN source = 'whatsapp' THEN COALESCE(NULLIF(metadata->>'chatScope', ''), NULLIF(metadata->>'chatTitle', '')) END, '')";
+
+function conversationFilter(field, source, parameter) {
+  return source === 'whatsapp'
+    ? `${CONVERSATION_ID_SQL} = $${parameter}`
+    : `metadata->>'${field}' = $${parameter}`;
+}
+
 export async function listEvents({ from, to, source, accountId, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
@@ -453,11 +464,11 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
   }
   if (chatGuid != null && String(chatGuid).length > 0) {
     params.push(String(chatGuid));
-    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+    clauses.push(conversationFilter('chatGuid', source, params.length));
   }
   if (conversationId != null && String(conversationId).length > 0) {
     params.push(String(conversationId));
-    clauses.push(`metadata->>'conversationId' = $${params.length}`);
+    clauses.push(conversationFilter('conversationId', source, params.length));
   }
   if (threadId != null && String(threadId).length > 0) {
     params.push(String(threadId));
@@ -517,11 +528,11 @@ export async function deleteEvents({ ids, source, chatGuid, conversationId, hand
   }
   if (hasChat) {
     params.push(String(chatGuid));
-    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+    clauses.push(conversationFilter('chatGuid', source, params.length));
   }
   if (hasConversation) {
     params.push(String(conversationId));
-    clauses.push(`metadata->>'conversationId' = $${params.length}`);
+    clauses.push(conversationFilter('conversationId', source, params.length));
   }
   if (hasHandle) {
     params.push(String(handle));
@@ -597,14 +608,14 @@ export async function listConversations({ source, q, limit } = {}) {
       LOWER(COALESCE(title, '')) LIKE $${params.length}
       OR LOWER(COALESCE(summary, '')) LIKE $${params.length}
       OR LOWER(COALESCE(metadata->>'handle', '')) LIKE $${params.length}
-      OR LOWER(COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '')) LIKE $${params.length}
+      OR LOWER(${CONVERSATION_ID_SQL}) LIKE $${params.length}
     )`);
   }
   const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
   params.push(cap);
   const result = await query(
     `SELECT
-       COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') AS chat_guid,
+       ${CONVERSATION_ID_SQL} AS chat_guid,
        MAX(title) AS title,
        MAX(NULLIF(metadata->>'handle', '')) AS handle,
        COUNT(*)::int AS event_count,
@@ -614,7 +625,7 @@ export async function listConversations({ source, q, limit } = {}) {
           FILTER (WHERE summary IS NOT NULL AND summary <> ''))[1] AS last_summary
      FROM human_activity_events
      WHERE ${clauses.join(' AND ')}
-     GROUP BY COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '')
+     GROUP BY ${CONVERSATION_ID_SQL}
      ORDER BY MAX(happened_at) DESC
      LIMIT $${params.length}`,
     params,
@@ -670,7 +681,7 @@ export async function sourceStats(source) {
   const result = await query(
     `SELECT
        COUNT(*)::int AS event_count,
-       COUNT(DISTINCT COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', ''))::int AS conversation_count,
+       COUNT(DISTINCT ${CONVERSATION_ID_SQL})::int AS conversation_count,
        MIN(happened_at) AS earliest_at,
        MAX(happened_at) AS latest_at
      FROM human_activity_events
