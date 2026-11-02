@@ -600,17 +600,50 @@ function checkinPlanSize(stage) {
   return `The Cast & Sets check-in needs ${pending.length} image${pending.length === 1 ? '' : 's'}${cast ? `, ${cast} of them supporting cast sheets` : ''}`;
 }
 
-async function advanceOnce(projectId) {
+// Retakes keep the revision and only replace the flagged key, not its dependents.
+async function retryInspectedImage(projectId, { key, inputs, inspectionId, note }) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
+  const eligible = (current) => current.castAndSets?.status === 'imaging'
+    && current.castAndSets.processId === PROCESS_ID && current.castAndSets.revision === stage.revision
+    && current.castAndSets.productionRunId === stage.productionRunId && stage.productionRunId
+    && current.castAndSets.images[key]?.renderQualityRetry?.revision !== stage.revision
+    && currentCastSetsInspection(current.castAndSets, key)?.id === inspectionId
+    && sameCastSetsInspectionInputs(inputs, castSetsInspectionInputs(current.castAndSets, key));
+  if (!eligible(project)) return;
+  const keyNotes = { ...stage.keyNotes, [key]: [...(stage.keyNotes?.[key] || []), note].slice(-CAST_SETS_MAX_KEY_NOTES) };
+  const { plan } = await currentImagePlan({ ...project, castAndSets: { ...stage, keyNotes } }, stage.direction);
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (!eligible(current)) return { project: current, changed: false };
+    const run = findProductionRun(current, stage.productionRunId);
+    if (run.status !== 'running') return { project: current, changed: false };
+    const live = current.castAndSets;
+    return { project: { ...current, castAndSets: { ...live,
+      keyNotes: { ...live.keyNotes, [key]: keyNotes[key] },
+      plan: { ...live.plan, [key]: plan[key] },
+      images: { ...live.images, [key]: { ...live.images[key], status: 'pending', jobId: null,
+        renderQualityRetry: { revision: stage.revision, jobId: inputs.jobId },
+        inspectionAcknowledgement: null, failures: 0, error: null } },
+    } }, changed: true };
+  });
+  if (out.changed) publish(projectId, out.project);
+}
+
+async function advanceOnce(projectId) {
+  let project = await requireProject(projectId);
+  let stage = project.castAndSets;
   if (!stage || stage.processId !== PROCESS_ID || stage.status !== 'imaging') return;
   if (allCastAndSetsImagesDone(stage)) {
     const { inspectCastAndSetsImages } = await import('./castAndSetsInspection.js');
-    await inspectCastAndSetsImages(projectId, { processId: PROCESS_ID, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish });
+    await inspectCastAndSetsImages(projectId, { processId: PROCESS_ID, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish, retryImage: (opts) => retryInspectedImage(projectId, opts) });
     const fresh = await requireProject(projectId);
     if (fresh.castAndSets?.revision !== stage.revision || fresh.castAndSets.status !== 'imaging' || fresh.castAndSets.processId !== PROCESS_ID) return;
-    await assemble(projectId);
-    return;
+    if (allCastAndSetsImagesDone(fresh.castAndSets)) {
+      await assemble(projectId);
+      return;
+    }
+    project = fresh;
+    stage = fresh.castAndSets;
   }
   if (stage.productionRunId) {
     const run = findProductionRun(project, stage.productionRunId);

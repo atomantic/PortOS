@@ -8,7 +8,7 @@ import { findProductionRun, assertProductionActive, reserveProductionReview } fr
 const MAX_ATTEMPTS = 2;
 export { reviewRenderedImage as reviewCastSetsImage } from '../imageRenderInspection.js';
 
-export async function inspectCastAndSetsImages(projectId, { processId, resolveReviewer, reviewImage, publish }) {
+export async function inspectCastAndSetsImages(projectId, { processId, resolveReviewer, reviewImage, publish, retryImage }) {
   const original = await requireProject(projectId);
   const revision = original.castAndSets.revision;
   const owned = (p) => p.castAndSets?.processId === processId && p.castAndSets.revision === revision && p.castAndSets.status === 'imaging';
@@ -57,6 +57,14 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
       });
       if (!settled.changed) return;
       publish(projectId, settled.project);
+      const checks = outcome.checks || [];
+      const defect = checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
+      if (project.castAndSets.productionRunId && outcome.verdict === 'mismatch'
+        && defect
+        && ['subject', 'setting', 'empty-set'].every((checkId) => checks.some((check) => check.id === checkId && check.status === 'pass'))) {
+        await retryImage({ key, inputs, inspectionId: id,
+          note: `avoid: ${defect.note}` });
+      }
       if (outcome.verdict !== 'unreviewed' || attempts >= MAX_ATTEMPTS) break;
     }
   }

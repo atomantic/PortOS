@@ -247,7 +247,7 @@ export function linkCastAndSetsJob(project, key, jobId, submission = {}, now = n
 export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null }, now = new Date().toISOString()) {
   const stage = project?.castAndSets;
   const img = stage?.images?.[key];
-  if (!img || img.status !== 'queued' || (revision != null && revision !== stage.revision)
+  if (!img || img.status !== 'queued' || (jobId && img.renderQualityRetry?.jobId === jobId) || (revision != null && revision !== stage.revision)
     || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
   if (filename) {
     const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-CAST_SETS_MAX_IMAGE_HISTORY) : (img.history || []);

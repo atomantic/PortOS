@@ -213,8 +213,8 @@ afterEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
-async function productionCheckin(limits, price = 0.25) {
-  const project = await seed();
+async function productionCheckin(limits, price = 0.25, overrides = {}) {
+  const project = await seed(overrides);
   const { run } = await projects.mutateProjectRecord(project.id, (current) => production.startProductionOnProject(current, {
     pool: [{ kind: 'image', mode: 'codex', model: null }],
     processId: 'example-process', limits: { maxReviewAttempts: 2, ...limits }, pricing: { 'image:codex:': price },
@@ -2091,5 +2091,106 @@ describe('editing a saved Cast & Sets image', () => {
     const rejected = await current(project.id);
     expect(rejected.castAndSets.images.character.edit).toMatchObject({ status: 'failed', imageId: null });
     expect(rejected.productionRuns[0].steps.find((step) => step.key === missing.params.musicVideo.productionStepKey).status).toBe('failed');
+  });
+});
+
+
+describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
+  const defect = 'The stool is fused into the bench.';
+  function inspectWithDefect({ persistent = false, promptMismatch = false } = {}) {
+    const calls = new Map();
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
+      await beforeExecute();
+      const n = (calls.get(inputs.key) || 0) + 1;
+      calls.set(inputs.key, n);
+      const failed = inputs.key === 'set:lab' && (persistent || n === 1);
+      return { verdict: failed ? 'mismatch' : 'pass', discrepancy: failed ? `Rendering defect: ${defect}` : '',
+        checks: ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id,
+          status: failed && (id === 'render-quality' || (promptMismatch && id === 'setting')) ? 'fail' : 'pass', note: defect })) };
+    } }));
+    return calls;
+  }
+  const auto = { automation: { checkins: { castAndSets: 'auto' } } };
+
+  it('retakes only the defective image, charges it, and approves after re-inspection without changing revision', async () => {
+    const calls = inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'approved');
+    const saved = await current(project.id);
+    const stage = saved.castAndSets;
+    const count = Object.keys(stage.plan).length;
+    expect(stage.revision).toBe(1);
+    expect(jobs).toHaveLength(count + 1);
+    expect([...calls.entries()].filter(([, n]) => n > 1)).toEqual([['set:lab', 2]]);
+    const takes = jobs.filter((job) => keyOf(job) === 'set:lab');
+    expect(takes).toHaveLength(2);
+    expect(takes[1].params.prompt).toContain(`avoid: ${defect}`);
+    expect(stage.keyNotes['set:lab']).toContain(`avoid: ${defect}`);
+    expect(stage.images['set:lab'].inspection.inputs.imageId).toBe(`${takes[1].id}.png`);
+    expect(stage.images['set:lab'].history).toContain(`${takes[0].id}.png`);
+    expect(saved.productionRuns[0].usage).toEqual({ generations: count + 1, spentUsd: (count + 1) * 0.25 });
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin' && step.sceneId === 'set:lab').map((step) => step.status)).toEqual(['completed', 'completed']);
+  });
+
+  it('parks a second defect with its evidence, and a new manual revision gets one fresh automatic retake', async () => {
+    inspectWithDefect({ persistent: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    const first = await current(project.id);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(2);
+    expect(first.castAndSets.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', discrepancy: `Rendering defect: ${defect}` });
+    expect(readFileSync(join(ROOT(), first.devArtifacts[0].file), 'utf8')).toContain(defect);
+    await service.regenerateCastAndSets(project.id, { keys: ['set:lab'] });
+    await runTo(project.id, 'review');
+    expect((await current(project.id)).castAndSets.revision).toBe(2);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(4);
+  });
+
+  it('never retakes a manual check-in or a prompt mismatch even when rendering also fails', async () => {
+    inspectWithDefect();
+    const manual = await seed(auto);
+    await service.startCastAndSets(manual.id);
+    await runTo(manual.id, 'review');
+    expect(jobs).toHaveLength(Object.keys((await current(manual.id)).castAndSets.plan).length);
+    inspectWithDefect({ promptMismatch: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    expect(jobs.filter((job) => job.params.musicVideo.projectId === project.id)).toHaveLength(Object.keys((await current(project.id)).castAndSets.plan).length);
+  });
+
+  it('halts at the budget limit before submitting a retake', async () => {
+    inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await until(async () => jobs.length > 0, 'the initial images');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((run) => ({ ...run, limits: { ...run.limits, maxGenerations: Object.keys(current.castAndSets.plan).length } })),
+    } }));
+    await runTo(project.id, 'failed');
+    const saved = await current(project.id);
+    expect(saved.productionRuns[0].status).toBe('limit-reached');
+    expect(jobs).toHaveLength(Object.keys(saved.castAndSets.plan).length);
+    expect(saved.castAndSets.images['set:lab'].inspection.discrepancy).toContain(defect);
+  });
+
+  it('ignores a duplicate completion from the rejected take while its replacement is being submitted', async () => {
+    inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    heldWorkReleases.add(() => release());
+    enqueue.mockImplementation(async (job) => {
+      if (job.params.prompt.includes(`avoid: ${defect}`)) await held;
+      return queueJob(job);
+    });
+    await until(async () => {
+      await land(project.id);
+      const stage = (await current(project.id)).castAndSets;
+      return stage.images['set:lab']?.status === 'queued' && !!stage.images['set:lab'].renderQualityRetry;
+    }, 'the held retake');
+    const oldTake = jobs.find((job) => keyOf(job) === 'set:lab');
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'set:lab', revision: 1,
+      jobId: oldTake.id, filename: `${oldTake.id}.png` })).toBe(false);
+    release();
+    await runTo(project.id, 'approved');
   });
 });
