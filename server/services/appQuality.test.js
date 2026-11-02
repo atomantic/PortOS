@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
 import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS } from '../lib/auditQuality.js';
+import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 
 const report = (overrides = {}) => ({ version: 1, category: 'better-complexity', score: 35, worstSeverity: 8,
   coverage: 'broad', confidence: 'high', summary: 'The checkout has a major branching hotspot in the job dispatcher.', scannedFiles: 100, totalFiles: 100, ...overrides });
@@ -163,6 +164,41 @@ describe('scheduled audit measurement workflow', () => {
     const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
     expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 50, window: { runs: 2 } });
+  });
+
+  it('selects the same numeric winner for local and published records at an exact timestamp tie', () => {
+    const at = '2026-09-10T10:00:00.000Z';
+    const a = { category: 'security', assessedAt: at, agentId: 'a', report: report({ category: 'security', score: 40 }) };
+    const b = { category: 'security', assessedAt: at, agentId: 'z', report: report({ category: 'security', score: 90 }) };
+    const compact = serializeQualitySnapshot('a'.repeat(64), [a, b].map(({ assessedAt, report: value }) => ({ ...value, assessedAt })));
+    const saved = classifyQualitySnapshot(compact).records[0];
+    const release = { category: saved.category, assessedAt: saved.assessedAt, sourcePeerName: 'Release snapshot',
+      report: { version: 1, ...saved, summary: 'Published' } };
+    delete release.report.assessedAt;
+    delete release.report.measurementId;
+    const select = rows => dailyQualityRecords(rows)[0].report.score;
+    expect(select([a, b, release])).toBe(saved.score);
+    expect(select([release, b, a])).toBe(saved.score);
+  });
+
+  it('keeps a local applicability ruling when the same run is present in the release snapshot', () => {
+    const local = { category: 'security', assessedAt: '2026-09-10T10:00:00Z', agentId: 'local', report: report({
+      category: 'security', score: null, coverage: 'not-applicable', scannedFiles: 0, totalFiles: 0,
+    }) };
+    const release = { ...local, agentId: null, sourcePeerName: 'Release snapshot' };
+    const daily = dailyQualityRecords([local, release]);
+    expect(daily[0].agentId).toBe('local');
+    expect(summarizeAppQuality(daily, Date.parse('2026-09-10T12:00:00Z')).categories.find(c => c.id === 'security'))
+      .toMatchObject({ applicable: false, coverage: 'not-applicable' });
+  });
+
+  it('shows retired numeric history separately from the active overall score', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const active = { category: 'security', assessedAt: '2026-09-10T10:00:00Z', report: report({ category: 'security', score: 80 }) };
+    const retired = { category: 'retired-audit', assessedAt: '2026-09-10T09:00:00Z', report: report({ category: 'retired-audit', score: 20 }) };
+    const history = buildAppQualityHistory([active, retired], 1, now);
+    expect(history.additionalCategories).toEqual([{ id: 'retired-audit', label: 'Other / previous: retired-audit' }]);
+    expect(history.points[0]).toMatchObject({ score: 80, ratedCategories: 1, categories: { 'retired-audit': { score: 20 } } });
   });
 
   // Unique regression: a "broad" claim over a partial scan (5907/8923 files) used to drop the whole run's measurement.

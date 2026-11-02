@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { AUDIT_TASK_TYPE_LIST, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
-import { auditQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport } from '../lib/auditQuality.js';
+import { auditQualityReportSchema, historicalQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
@@ -19,14 +19,16 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 // A stored v2 (slice-scored) report travels as the v1 numeric shape: the wire
 // contract is unchanged, so a peer that predates v2 reads the run score it
 // already expects, and the slice text never leaves this machine (#12076).
-const numericReportSchema = z.preprocess(value => value && typeof value === 'object'
-  ? { ...numericQualityReport(value), summary: sharedSummary } : value, auditQualityReportSchema)
+const numericSchema = schema => z.preprocess(value => value && typeof value === 'object'
+  ? { ...numericQualityReport(value), summary: sharedSummary } : value, schema)
   .transform(({ summary: _summary, ...report }) => report);
+const numericReportSchema = numericSchema(auditQualityReportSchema);
 const measurementSchema = z.object({
   measurementId: z.string().regex(/^[a-f0-9]{64}$/),
   assessedAt: z.string().datetime(),
   report: numericReportSchema,
 }).strict();
+const historicalMeasurementSchema = measurementSchema.extend({ report: numericSchema(historicalQualityReportSchema) });
 // Rows are validated one by one (below), so a peer on a newer catalog that
 // sends a category this install does not know costs that row, not the peer.
 // Everything this install can parse, sent with each request so a peer on a
@@ -81,17 +83,19 @@ export function qualityRecord(row) {
     measurementId: hash(row.agent_id), assessedAt: new Date(row.assessed_at).toISOString(), report: row.report };
 }
 
-/** Daily category winners include the freshness lookback required for historical snapshots. */
+/** Daily category winners; null days reads all local history for publication. */
 export async function readQualityRecords(appId, days, now, deps = {}) {
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
-  start.setUTCDate(start.getUTCDate() - days + 1);
+  if (days !== null) start.setUTCDate(start.getUTCDate() - days + 1);
   const result = await (deps.query || query)(
-    `SELECT DISTINCT ON (category, (assessed_at AT TIME ZONE 'UTC')::date)
-       category, agent_id, assessed_at, report FROM app_quality_measurements
-     WHERE app_id = $1 AND assessed_at >= $2 AND assessed_at <= $3
-     ORDER BY category, (assessed_at AT TIME ZONE 'UTC')::date, assessed_at DESC, agent_id DESC`,
-    [appId, new Date(start.getTime() - AUDIT_FRESHNESS_MS), new Date(now)]
+    `SELECT category, agent_id, assessed_at, report FROM (
+       SELECT category, agent_id, assessed_at, report,
+         rank() OVER (PARTITION BY category, (assessed_at AT TIME ZONE 'UTC')::date ORDER BY assessed_at DESC) AS run_rank
+       FROM app_quality_measurements
+       WHERE app_id = $1 AND ($2::timestamptz IS NULL OR assessed_at >= $2) AND assessed_at <= $3
+     ) runs WHERE run_rank = 1 ORDER BY category, assessed_at DESC, agent_id DESC`,
+    [appId, days === null ? null : new Date(start.getTime() - AUDIT_FRESHNESS_MS), new Date(now)]
   );
   return result.rows.map(qualityRecord);
 }
@@ -121,7 +125,8 @@ export async function buildQualitySnapshot(app = { id: PORTOS_APP_ID }, days = 3
   if (!repository) return null;
   const records = await readQualityRecords(app.id, days, deps.now ?? Date.now(), deps);
   const measurements = records.flatMap(record => {
-    const parsed = measurementSchema.safeParse({ measurementId: record.measurementId,
+    const schema = days === null ? historicalMeasurementSchema : measurementSchema;
+    const parsed = schema.safeParse({ measurementId: record.measurementId,
       assessedAt: record.assessedAt, report: record.report });
     return parsed.success && parsed.data.report.category === record.category ? [parsed.data] : [];
   });
@@ -180,7 +185,7 @@ async function releasePayload(deps, app) {
   const { readStoredQualitySnapshot } = await import('./appQualitySnapshotFile.js');
   const stored = await readStoredQualitySnapshot(repoPath, deps);
   // 'future-categories': a newer install's snapshot — its known rows still count.
-  return ['v1', 'v2', 'future-categories'].includes(stored.status) ? stored : null;
+  return ['v1', 'v2', 'v3', 'future-categories'].includes(stored.status) ? stored : null;
 }
 
 /** Shipped evidence is read-only and never re-exported as a local audit. */

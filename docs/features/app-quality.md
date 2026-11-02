@@ -209,10 +209,13 @@ and category, including a 30-day lookback to seed the selected range.
 
 ## Release snapshot file
 
-A managed app can publish its recent numeric scores into `.quality.json` at the
-repository root. The file is a bounded projection, not the audit history:
-PostgreSQL keeps every measurement, and the file keeps one row per UTC day and
-category for the same 30-day window the quality panel uses, capped at 4 MiB.
+A managed app can publish numeric scores into `.quality.json` at the repository
+root. This file is shared history across installs: publishing unions the local
+measurements with all previously published dates and categories. PostgreSQL
+keeps individual local runs; the 30-day freshness rule for the current score
+does not delete published history. A file is limited to 250,000 rows and 16 MiB;
+publication reports `snapshot-too-large` and leaves it intact if either limit
+would be exceeded.
 Publish opens an immediately-merged pull request on `portos/quality-snapshot` and
 does not commit the live checkout. With no local evidence, a non-empty file is
 left as it is. The immediate merge takes the install's repository merge
@@ -220,15 +223,20 @@ admission (the lease a `/claim` run holds around its final verify-and-merge); wh
 another owner holds it, or ownership can't be verified, the PR stays open and is
 handed to the pending-merge queue (GitHub) or retried on the next publish (GitLab).
 
-The checked-in schema is v2. It stores an opaque origin fingerprint, sorted
+The checked-in schema is v3. It stores an opaque origin fingerprint, sorted
 category and enum dictionaries, and fixed rows
 `[assessedAt, categoryIndex, score, worstSeverity, coverageIndex, confidenceIndex, scannedFiles, totalFiles]`.
-Scores stay nullable. `assessedAt` is a UTC date (`YYYY-MM-DD`); older files with full ISO instants are still read. The file does not store
-summaries, paths, app names, agent ids, or `measurementId`. Same-timestamp
-ordering uses a transient digest of the row, computed when the file is read.
+Scores stay nullable. New `assessedAt` values retain their UTC timestamp; legacy
+date-only values remain dates because their time is unknown. The file does not
+store summaries, paths, app names, agent ids, or `measurementId`. For each UTC
+day and category, a later known timestamp replaces an earlier known timestamp.
+For older date-only records, a deterministic choice resolves same-day conflicts;
+when a timestamped record is available, it is preferred. The exact order of
+legacy date-only runs cannot be recovered from the file.
 
 That file is not the peer federation payload. Peers still exchange schema v1
-objects. Upgrading the file does not require every peer to upgrade.
+objects. Older installations cannot read v3 and will refuse to rewrite it as a
+future format; upgrade each publisher to resume publishing its new results.
 
 The category catalog can grow without breaking that exchange. A requester sends
 the categories it can parse (`categories=` on `GET /api/apps/quality-federation`),
@@ -239,25 +247,20 @@ install rejects a whole payload over one row it cannot parse. On receipt, rows a
 validated one at a time, so a malformed or unknown row costs that row, not the
 peer's other evidence.
 
-Readers accept a v1 `.quality.json` and, when that file is absent, the historical
+Readers accept v1 and v2 `.quality.json` and, when that file is absent, the historical
 `quality-snapshot.json` name. A read never rewrites the checkout. Future schemas,
 unrecognized documents (including TSV, CSV, or NDJSON), malformed snapshots, and
-oversize files are not evidence and are not overwritten. A v2 file whose
-category dictionary names categories this install does not know yet — written by
-a newer install after the catalog grew — is read for the rows it does know and is
-never rewritten, since canonicalizing it would drop the newer rows. (Installs
-predating that rule treat such a file as malformed: safe, but its scores are not
-shown until they upgrade.) TSV is not the
-canonical artifact: an append-only text log would grow without a bound and would
-be harder to validate, while the database is already the history.
+oversize files are not evidence and are not overwritten. Valid numeric rows for
+retired or newer categories are preserved and appear as “Other / previous” in
+the history selector. They do not become active checks or enter the current
+overall score.
 
-`npm run quality:snapshot` writes canonical v2 from local evidence, including
-when the committed file is still v1. `npm run quality:snapshot -- --migrate`
-converts a v1 file or the historical filename to canonical v2 using only the
+`npm run quality:snapshot` writes canonical v3 from local and previously
+published evidence, including when the committed file is still v1 or v2.
+`npm run quality:snapshot -- --migrate`
+converts an older file or the historical filename to canonical v3 using only the
 rows already stored, through the same pull request. A second publish of the
-same normalized v2 snapshot does not open another pull request. Rows sharing
-one UTC day and category collapse to the latest on every read and write, so a
-second run the same day replaces the first and older files upgrade on their next save.
+same normalized v3 snapshot does not open another pull request.
 
 ## Weekly quality schedule
 

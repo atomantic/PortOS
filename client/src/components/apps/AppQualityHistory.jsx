@@ -9,9 +9,10 @@ import { pluralize } from '../../lib/textUtils';
 export default function AppQualityHistory({ appId, categories = [] }) {
   const [params, setParams] = useSearchParams();
   const days = ['30', '90', '365'].includes(params.get('qualityDays')) ? params.get('qualityDays') : '90';
-  const category = categories.some(c => c.id === params.get('qualityCategory')) ? params.get('qualityCategory') : 'overall';
   const [state, setState] = useState({ loading: true });
   const [refresh, setRefresh] = useState(0);
+  const allCategories = [...categories, ...(state.data?.additionalCategories || []).filter(c => !categories.some(known => known.id === c.id))];
+  const category = allCategories.some(c => c.id === params.get('qualityCategory')) ? params.get('qualityCategory') : 'overall';
   useEffect(() => {
     let active = true;
     setState({ loading: true });
@@ -50,7 +51,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
           </select>
           <label htmlFor="quality-history-category" className="sr-only">Category</label>
           <select id="quality-history-category" className="bg-port-bg border border-port-border rounded p-1 max-w-[12rem]" value={category} onChange={e => change('qualityCategory', e.target.value)}>
-            <option value="overall">Overall</option>{categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            <option value="overall">Overall</option>{allCategories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
           <button type="button" aria-label="Refresh history" title="Refresh history" className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-gray-400 hover:text-port-accent" onClick={() => setRefresh(n => n + 1)}>
             <RefreshCw size={14} aria-hidden="true" />
