@@ -102,6 +102,7 @@ export async function bindCompletionTaskDispatch(agentId, task, previousTask = n
     && spawnCount(task.metadata.totalSpawnCount) === spawnCount(runtime.totalSpawnCount) + 1;
   return !!await updateAgent(agentId, { metadata: { completionTaskDispatch: {
     taskId: task.id, taskType: task.taskType || 'user', expected: entries(task.metadata, DISPATCH_KEYS),
+    ...(task.metadata.repoRepairContract ? { repoRepairContract: structuredClone(task.metadata.repoRepairContract) } : {}),
     ...(runtimeContinuation ? { runtimeContinuation: structuredClone({
       prerequisite: runtime, description: task.description, priority: task.priority,
     }) } : {}),

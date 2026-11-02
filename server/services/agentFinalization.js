@@ -136,8 +136,14 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
+export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
   if (terminatedByUser) return null;
+  if (task?.metadata?.repoRepairContract) {
+    if (!success || !agentId) return false;
+    return import('./repoRepairCompletion.js')
+      .then(({ verifyRepoRepairCompletion }) => verifyRepoRepairCompletion(task, agentId, workspacePath))
+      .catch(() => false);
+  }
   if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
@@ -2128,6 +2134,7 @@ async function finalizeAgentInCompletionContext({
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
   const validationPassed = await evaluateSuccessCriteria({
+    agentId,
     task,
     terminatedByUser,
     workspacePath,

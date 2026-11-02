@@ -1864,7 +1864,7 @@ async function clearSequencerState(dir, gitDirPath) {
  * @param {string} dir - Repo root to check
  * @returns {Promise<string|null>} - Agent id, or null
  */
-export async function findActiveAgentInWorkspace(dir, { includePaused = false, failClosed = false } = {}) {
+export async function findActiveAgentInWorkspace(dir, { includePaused = false, failClosed = false, excludeAgentId = null } = {}) {
   const { getAgents } = await import('./cosAgentLifecycle.js').catch((err) => {
     if (failClosed) throw err;
     return { getAgents: null };
@@ -1879,7 +1879,7 @@ export async function findActiveAgentInWorkspace(dir, { includePaused = false, f
   });
   const target = resolve(dir);
   const busy = agents.find(agent =>
-    (agent.status === 'running' || (includePaused && agent.status === 'paused'))
+    agent.id !== excludeAgentId && (agent.status === 'running' || (includePaused && agent.status === 'paused'))
     && agent.metadata?.workspacePath
     && resolve(agent.metadata.workspacePath) === target
   );
