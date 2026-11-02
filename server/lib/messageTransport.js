@@ -15,6 +15,8 @@ export const MESSAGE_ACCOUNT_TRANSPORT = Object.freeze({
   teams: Object.freeze({ sendVia: 'playwright', email: false, syncModes: Object.freeze(['full']), readState: false })
 });
 
+export const MESSAGE_ACCOUNT_TYPES = Object.freeze(Object.keys(MESSAGE_ACCOUNT_TRANSPORT));
+
 export const ALL_SYNC_MODES = Object.freeze(['unread', 'full']);
 
 /** Sync modes an account type can honor; an unknown type keeps every mode (the provider dispatch rejects it). */

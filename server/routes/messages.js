@@ -7,7 +7,7 @@ import {
   messageActionBodySchema, messageTokenProviderBodySchema,
 } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
-import { MESSAGE_ACCOUNT_TRANSPORT, sendViaForAccountType } from '../lib/messageTransport.js';
+import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';
 import * as messageSync from '../services/messageSync.js';
 import * as messageDrafts from '../services/messageDrafts.js';
@@ -28,7 +28,7 @@ const FULL_BODY_REFRESH_LIMIT = 1000;
 // === Validation Schemas ===
 const createAccountSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(['gmail', 'outlook', 'teams']),
+  type: z.enum(MESSAGE_ACCOUNT_TYPES),
   email: z.union([z.string().email(), z.literal('')]).optional().default(''),
   syncConfig: z.object({
     maxAge: z.string().optional(),

@@ -1,4 +1,5 @@
 import { messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
+import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
 /**
  * Human Activity timeline (#2150) — unified, machine-local event store.
  *
@@ -446,12 +447,22 @@ const WHATSAPP_ID_TYPE_SQL = `CASE
   ELSE 'title' END`;
 const WHATSAPP_CONVERSATION_SQL = `jsonb_build_array(${WHATSAPP_ID_TYPE_SQL}, ${WHATSAPP_RAW_ID_SQL})::text`;
 const DISCORD_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'channelId', ''), '')";
+const MESSAGE_THREAD_RAW_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+const MESSAGE_THREAD_CONVERSATION_SQL = `CASE
+  WHEN ${MESSAGE_THREAD_RAW_ID_SQL} = '' THEN ''
+  WHEN NULLIF(account_id, '') IS NOT NULL THEN jsonb_build_array(account_id, ${MESSAGE_THREAD_RAW_ID_SQL})::text
+  ELSE ${MESSAGE_THREAD_RAW_ID_SQL} END`;
 const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVERSATION_SQL}
   WHEN source = 'discord' THEN ${DISCORD_CONVERSATION_SQL}
+  WHEN source IN (${MESSAGE_ACCOUNT_TYPES.map((s) => `'${s}'`).join(', ')}) THEN ${MESSAGE_THREAD_CONVERSATION_SQL}
   ELSE COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') END`;
 
 function conversationFilter(field, source, parameter) {
   if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
+  // Message threads are keyed by [account_id, threadId] when an account is present,
+  // or raw threadId for unscoped imports (e.g. mbox); MESSAGE_THREAD_CONVERSATION_SQL
+  // evaluates to the exact selector for both chatGuid and conversationId.
+  if (MESSAGE_ACCOUNT_TYPES.includes(source)) return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
   if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
   if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
   // Raw conversationId remains supported. An ambiguous scope/title label must
@@ -616,8 +627,10 @@ export async function listSourceCounts() {
 
 /**
  * Aggregate conversations for a single source (iMessage, Signal, …) grouped by
- * `metadata.chatGuid` or `metadata.conversationId`. Newest activity first. Optional free-text `q` filters
- * title/handle/summary. Cap defaults to 500 conversations.
+ * source conversation selector (CONVERSATION_ID_SQL: falls back to channelId for Discord,
+ * threadId for message-account sources such as Gmail/Outlook/Teams, and typed tuples for
+ * WhatsApp). Newest activity first. Optional free-text `q` filters title/handle/summary.
+ * Cap defaults to 500 conversations.
  */
 export async function listConversations({ source, q, limit } = {}) {
   if (!source) return [];
