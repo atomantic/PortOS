@@ -60,6 +60,9 @@ export { CAST_SETS_SUBJECT_PREFIX };
 // Only the medium is fixed; the look (film stock, light, texture) comes from
 // the project's own mood board / style via `direction.look`.
 const PHOTO = 'photorealistic, editorial photography';
+// Identity and wardrobe sheets define the person; recurring objects have their
+// own sheet, even when a legacy signature or wardrobe mentions carrying one.
+const EMPTY_HANDS = 'Hands empty and relaxed, no camera, device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only; never put a carried object from the description or reference images in their hands';
 // Stacked, interlocked or piled look-alike objects are where image models fuse
 // geometry (chairs molded into a table), and every shot on the set copies it.
 const PLAUSIBLE_SET = 'Keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects';
@@ -273,9 +276,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       identities.length && 'The SAME person as the identity reference images: keep their face, hair and build exactly',
       identity(p),
       heightLine(protagonistHeight),
-      p.signature && `Signature detail, always visible: ${p.signature}`,
       firstLook && `Wearing ${firstLook.description}`,
       rulesLine(p),
+      EMPTY_HANDS,
       'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
       style && `Look: ${style}`,
       `${PHOTO}, even studio light, lookbook realism`,
@@ -344,7 +347,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       'The same one person alone in every panel, nobody else in frame',
       identity(p),
       rulesLine(p),
-      ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}${p.signature ? `, with ${p.signature}` : ''}`),
+      ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}`),
+      EMPTY_HANDS,
       `Seamless dark grey backdrop, typewriter captions ${looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}`).join(', ')}`,
       style && `Look: ${style}`,
       `${PHOTO}, lookbook realism`,
@@ -376,6 +380,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         form.hair && `hair: ${form.hair}`,
         form.wardrobe && `Wearing ${form.wardrobe}`,
         rulesLine(p),
+        EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
         (form.look || style) && `Look: ${form.look || style}`,
@@ -404,6 +409,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         identity(c),
         heightLine(castHeight(c)),
         c.wardrobe && `Wearing ${c.wardrobe}`,
+        EMPTY_HANDS,
         p.name && `A different person from ${p.name}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
         style && `Look: ${style}`,

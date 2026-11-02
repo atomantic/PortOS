@@ -14,6 +14,29 @@ const DIRECTION = {
 };
 
 describe('Cast & Sets prop sheet', () => {
+  it('keeps people and wardrobe sheets empty-handed while their signature object belongs to the prop sheet', () => {
+    const signature = 'matte black plastic 35mm snapshot camera on a wrist strap';
+    const direction = { ...DIRECTION,
+      protagonist: { ...DIRECTION.protagonist, signature,
+        forms: [{ id: 'age-7', label: 'Age 7', age: '7', wardrobe: 'a plaid dress and a silver watch' }] },
+      cast: [{ id: 'kevin', name: 'Kevin', wardrobe: 'a denim jacket and a gold ring' }],
+    };
+    for (const props of [direction.props, []]) {
+      const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, props });
+      for (const key of ['character', 'looks', 'form:age-7', 'cast:kevin']) {
+        expect(plan[key].prompt).toContain('Hands empty and relaxed, no camera, device or carried object');
+        expect(plan[key].prompt).toContain('Carried props are drawn on the prop sheet');
+        expect(plan[key].prompt).not.toContain(signature);
+      }
+      expect(plan.character.prompt).toContain('lavender tee and cutoffs');
+      expect(plan['form:age-7'].prompt).toContain('a plaid dress and a silver watch');
+      expect(plan['cast:kevin'].prompt).toContain('a denim jacket and a gold ring');
+      if (props.length) expect(plan.props.prompt).toContain(signature);
+    }
+    // The plan chooses fields for each sheet; it never edits the director's source text.
+    expect(direction.protagonist.signature).toBe(signature);
+  });
+
   it('plans one prop sheet naming every prop exactly, and none without props', () => {
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, DIRECTION);
     expect(plan.props).toMatchObject({ kind: 'props', deps: [], refKeys: [] });

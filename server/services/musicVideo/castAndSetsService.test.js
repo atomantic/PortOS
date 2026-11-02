@@ -343,10 +343,14 @@ describe('Cast & Sets check-in', () => {
     for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
     expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
+    expect(character.params.prompt).toContain('Hands empty and relaxed');
+    expect(character.params.prompt).not.toContain('a brass lantern');
 
     await land(project.id, ['character']);
     await until(async () => jobs.some((j) => keyOf(j) === 'looks'), 'the looks sheet');
     const looks = jobs.find((j) => keyOf(j) === 'looks');
+    expect(looks.params.prompt).toContain('Hands empty and relaxed');
+    expect(looks.params.prompt).not.toContain('a brass lantern');
     expect(looks.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual([`${character.id}.png`]);
     expect(jobs.some((j) => keyOf(j).startsWith('test:'))).toBe(false);
 
