@@ -1,6 +1,6 @@
 /** Shared claim-ownership fence and trusted reader, independent of reconciliation. */
-import { resolve } from 'path';
 import { isDeepStrictEqual } from 'node:util';
+import { canonicalizePath } from '../lib/pathContainment.js';
 
 // One in-process tail shared by binding and branch-reconcile's retirement, so a
 // bind cannot land between cleanup's ownership re-read and its removal.
@@ -17,7 +17,7 @@ export function withClaimOwnershipLock(work) {
 // admissions off the one checkout meanwhile. The removal path still re-reads
 // owners and fingerprints under the lock, so the fence adds refusal, never permission.
 const retirementFences = new Set();
-const fencePath = p => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+const fencePath = p => (process.platform === 'win32' ? canonicalizePath(p).toLowerCase() : canonicalizePath(p));
 const fenceBranch = b => (b ? String(b).replace(/^refs\/heads\//, '') : null);
 
 /** `checkout-retirement-reserved` when `branch` or checkout `path` of `repoPath` is fenced. */

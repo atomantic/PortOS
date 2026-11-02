@@ -346,7 +346,7 @@ async function archiveCompletedAgent(agentId, agent) {
  * lock serializes live updates and archive rewrites; no transcript is loaded.
  */
 export function recordRepoStateVerification(agentId, verification) {
-  return updateCompletionReceipt(agentId, metadata => {
+  return updateCompletionReceipt(agentId, (metadata, agent) => {
     const capture = metadata.checkoutCapture;
     const retired = capture?.status === 'retired' && capture.unknown === true
       && /^[a-f0-9]{64}$/.test(capture.receiptDigest || '') && /^[a-f0-9]{64}$/.test(capture.checkoutIdentity || '')
@@ -357,6 +357,12 @@ export function recordRepoStateVerification(agentId, verification) {
     // An absent task cannot undo an already verified physical retirement. The
     // startup selector may still hold the snapshot from before receipt replay.
     const next = verification.status === 'pending' && retired ? { ...verification, status: 'completed', reasons: [] } : verification;
+    const completionCleanup = metadata.completionCleanup;
+    if (next.status === 'completed' && agent.result?.cleanupPending !== true && completionCleanup?.replay
+      && ['completed', 'failed', 'abandoned'].includes(completionCleanup.status)) {
+      const { replay: _replay, ...settled } = completionCleanup;
+      return { ...metadata, completionCleanup: settled, repoStateVerification: { ...metadata.repoStateVerification, ...next } };
+    }
     return { ...metadata, repoStateVerification: { ...metadata.repoStateVerification, ...next } };
   });
 }
@@ -577,7 +583,10 @@ export async function recordCompletionCleanup(agentId, startedAt, patch) {
       stages: { ...prior.stages, ...patch.stages }, updatedAt: new Date().toISOString() };
     if (['completed', 'failed', 'abandoned'].includes(completionCleanup.status)) {
       delete completionCleanup.context;
-      delete completionCleanup.replay;
+      // Repository cleanup can outlive the other completion stages, including
+      // when its task has aged out of the queue. Keep its existing replay input.
+      if (agent.result?.cleanupPending !== true
+        && !(agent.result?.success === true && metadata.repoStateVerification?.status === 'pending')) delete completionCleanup.replay;
     }
     return { ...metadata, completionCleanup };
   });
@@ -655,12 +664,15 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
     const instanceId = await getInstanceId();
     const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds',
       'worktreeBranch', 'workspacePath', 'sourceWorkspace', 'isWorktree', 'claimBranches', 'claimReleasedBranches'];
-    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId || !agent.result?.cleanupPending
+    const successfulAudit = agent.result?.success === true && agent.result?.cleanupPending !== true;
+    if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId
+      || (agent.result?.cleanupPending !== true && !successfulAudit)
       || !instanceId || instanceId === UNKNOWN_INSTANCE_ID || metadata.instanceId !== instanceId
       || keys.some(key => !isDeepStrictEqual(metadata[key], expected.metadata?.[key]))
       || await getTaskById(agent.taskId)) return metadata;
     const prior = metadata.completionCleanup;
-    if (prior?.version !== 1 || !prior.replay || prior.status !== 'pending') return metadata;
+    if (prior?.version !== 1 || !prior.replay
+      || (successfulAudit ? prior.status !== 'completed' || prior.stages?.worktree?.status !== 'done' : prior.status !== 'pending')) return metadata;
     const stages = { ...prior.stages, worktree: { status: 'done', retryable: false, value: [], verifiedBy: 'repository-state-verification' } };
     if (['sentinel', 'jira', 'notification', 'pipeline', 'creative', 'report'].some(key => stages[key]?.status !== 'done')
       || Object.values(stages).some(stage => stage.status !== 'done')) return metadata;
