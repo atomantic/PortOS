@@ -411,14 +411,11 @@ export async function deleteGenome() {
   // Raw data and every derived identity snapshot share one backup lease, so a
   // backup cannot capture a deleted genome alongside its cached genetic markers.
   await withBackupAssetPublication(async () => {
-    await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
-    snpIndex = null;
-    indexBuiltAt = 0;
-    // Recompute scores and recommendations too, retaining behavioral inputs and
-    // the birth date rather than merely blanking the marker maps.
-    await deriveChronotype();
-    await deriveLongevity();
+    // Erase derived data first. A failed read/write must leave the source genome
+    // available, rather than delete it while retaining cached genetic conclusions.
+    // Recompute recommendations and scores while preserving behavioral inputs.
+    await deriveChronotype({ withoutGenetics: true });
+    await deriveLongevity(undefined, { withoutGenetics: true });
     // setBirthDate also caches these genetic adjustments in the local goals
     // document. Keep the actual goals and birth date, including MortalLoom data.
     await mutateGoals(goals => {
@@ -426,6 +423,10 @@ export async function deleteGenome() {
       goals.timeHorizons = null;
       return goals;
     }, { localOnly: true });
+    await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    snpIndex = null;
+    indexBuiltAt = 0;
   });
   noteReadinessChanged();
   console.log('🧬 Genome data deleted');

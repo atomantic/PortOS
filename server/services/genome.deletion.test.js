@@ -99,13 +99,23 @@ describe('genome deletion erases derived identity', () => {
     await mkdir(rawFile);
     await expect(deleteGenome()).rejects.toThrow();
     expect((await getGenomeSummary()).uploaded).toBe(true);
-    expect(Object.keys((await getChronotype()).geneticMarkers)).not.toHaveLength(0);
     await rm(rawFile, { recursive: true });
+  });
+
+  it('retains the source genome when a derived snapshot cannot be written', async () => {
+    await rm(LONGEVITY_FILE);
+    await mkdir(LONGEVITY_FILE);
+    await expect(deleteGenome()).rejects.toThrow();
+    expect((await getGenomeSummary()).uploaded).toBe(true);
+    expect(await readFile(join(PATHS.meatspace, 'genome-raw.txt'), 'utf8')).toContain('rs4753426');
+    expect(await readJSON(GOALS_FILE)).toEqual(originalGoals);
   });
 
   it('reports a derived-store read failure instead of replacing behavioral data with defaults', async () => {
     await writeFile(CHRONOTYPE_FILE, '{broken');
     await expect(deleteGenome()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect(await readFile(CHRONOTYPE_FILE, 'utf8')).toBe('{broken');
+    expect((await getGenomeSummary()).uploaded).toBe(true);
+    expect(await readFile(join(PATHS.meatspace, 'genome-raw.txt'), 'utf8')).toContain('rs4753426');
   });
 });

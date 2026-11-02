@@ -52,8 +52,8 @@ export async function getLongevity() {
   return deriveLongevity();
 }
 
-export async function deriveLongevity(birthDate) {
-  const genomeSummary = await getGenomeSummary();
+export async function deriveLongevity(birthDate, { withoutGenetics = false } = {}) {
+  const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
   const savedMarkers = genomeSummary?.savedMarkers || {};
 
   const longevityMarkers = extractLongevityMarkers(savedMarkers);

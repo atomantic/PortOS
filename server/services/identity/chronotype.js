@@ -155,8 +155,8 @@ export async function getChronotype() {
   return deriveChronotype();
 }
 
-export async function deriveChronotype() {
-  const genomeSummary = await getGenomeSummary();
+export async function deriveChronotype({ withoutGenetics = false } = {}) {
+  const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
   const savedMarkers = genomeSummary?.savedMarkers || {};
 
   const geneticMarkers = extractSleepMarkers(savedMarkers);
