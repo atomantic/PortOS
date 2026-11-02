@@ -154,6 +154,36 @@ describe('commands routes', () => {
     expect((await request(app).get('/api/commands/processes?appId=app-a')).status).toBe(503);
   });
 
+  it('reads monit data from the selected app PM2 home and distinguishes unavailable PM2', async () => {
+    getAppById.mockResolvedValue({ id: 'app-a', pm2Home: '/example/pm2' });
+    pm2Service.listProcessesStrict.mockResolvedValue([{
+      name: 'example-api', status: 'online', pid: 42, cpu: 3, memory: 1024, uptime: 5000, restarts: 2,
+    }]);
+    const { app } = createApp();
+
+    const response = await request(app).get('/api/commands/processes/example-api/monit?appId=app-a');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      name: 'example-api', status: 'online', pid: 42, cpu: 3, memory: 1024, uptime: 5000, restarts: 2,
+    });
+    expect(getAppById).toHaveBeenCalledWith('app-a');
+    expect(pm2Service.listProcessesStrict).toHaveBeenCalledWith('/example/pm2');
+
+    pm2Service.listProcessesStrict.mockResolvedValue(null);
+    const unavailable = await request(app).get('/api/commands/processes/example-api/monit?appId=app-a');
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body.code).toBe('PM2_UNAVAILABLE');
+  });
+
+  it('validates monit query parameters and reports unknown apps', async () => {
+    const { app } = createApp();
+    expect((await request(app).get('/api/commands/processes/example-api/monit?appId=')).status).toBe(400);
+    getAppById.mockResolvedValue(null);
+    const unknownApp = await request(app).get('/api/commands/processes/example-api/monit?appId=missing');
+    expect(unknownApp.status).toBe(404);
+    expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
+  });
+
   it('preserves host-control and command-policy gates on process actions', async () => {
     const remote = createApp(undefined, { remoteAddress: '192.0.2.10' }).app;
     expect((await request(remote).post('/api/commands/processes/example-api/action').send({ action: 'stop' })).status).toBe(403);
