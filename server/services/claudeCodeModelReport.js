@@ -21,14 +21,15 @@ function rollUp(rows) {
   const byModel = new Map();
   for (const row of rows) {
     const acc = byModel.get(row.model) || { model: row.model, ...Object.fromEntries(SUM_FIELDS.map((f) => [f, 0])) };
-    for (const f of SUM_FIELDS) acc[f] += row[f] || 0;
+    for (const f of SUM_FIELDS) acc[f] += (f === 'estimatedCost' ? (row.rawEstimatedCost ?? row.estimatedCost) : row[f]) || 0;
     byModel.set(row.model, acc);
   }
   const models = [...byModel.values()]
-    .map((row) => ({ ...row, estimatedCost: roundCents(row.estimatedCost) }))
+    .map((row) => ({ ...row, rawEstimatedCost: row.estimatedCost, estimatedCost: roundCents(row.estimatedCost) }))
     .sort((a, b) => b.estimatedCost - a.estimatedCost || b.total - a.total);
   const totals = Object.fromEntries(SUM_FIELDS.map((f) => [f, models.reduce((sum, row) => sum + row[f], 0)]));
-  totals.estimatedCost = roundCents(totals.estimatedCost);
+  totals.rawEstimatedCost = models.reduce((sum, row) => sum + row.rawEstimatedCost, 0);
+  totals.estimatedCost = roundCents(totals.rawEstimatedCost);
   return { models, totals };
 }
 

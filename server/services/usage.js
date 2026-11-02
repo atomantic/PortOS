@@ -1031,7 +1031,7 @@ function usageRowCost(modelId, counts, rates, free) {
   return tokens + premium + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 
-export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null } = {}) {
+export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null, totalSessions = null, totalMessages = null, additionalSources = [] } = {}) {
   const configById = new Map((providers || []).map((p) => [p.id, p]));
   const agg = new Map(); // providerId -> { name, sessions, messages, tokensIn, tokensOut, byModel: Map }
   let breakdownSince = null;
@@ -1097,47 +1097,52 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     }
   };
 
-  // Rolled-up monthly buckets first, so `breakdownSince` reflects the earliest
-  // month once old days have been collapsed. A `YYYY-MM` key overlaps the range
-  // whenever its month is within the from/to months (compared at month prefix).
-  const fromMonth = from ? from.slice(0, 7) : null;
-  const toMonth = to ? to.slice(0, 7) : null;
-  for (const [month, bucket] of Object.entries(monthlyActivity || {})) {
-    if (bucket?.byProvider) {
-      const monthStart = `${month}-01`;
-      if (!breakdownSince || monthStart < breakdownSince) breakdownSince = monthStart;
-    }
-    if (fromMonth && month < fromMonth) continue;
-    if (toMonth && month > toMonth) continue;
-    if (bucket) foldBucket(bucket);
-  }
-
-  for (const [date, day] of Object.entries(dailyActivity || {})) {
-    if (day?.byProvider && (!breakdownSince || date < breakdownSince)) breakdownSince = date;
-    if (from && date < from) continue;
-    if (to && date > to) continue;
-    if (day) foldBucket(day);
-  }
-
-  // The legacy POST /usage/tokens path historically updated only all-time
-  // totals. On an unbounded report, retain any portion not already represented
-  // by day/month buckets without double-counting normal recorded messages.
-  if (totalTokens) {
-    const represented = [...agg.values()].reduce((sum, provider) => ({
+  const representedCounters = () => [...agg.values()].reduce((sum, provider) => ({
       // `totalTokens.input` counts every billable input tier (see
       // recordMessages), so the represented side must include the cache tiers
       // too — otherwise a measured run's cache reads look unaccounted-for and
       // get re-added as a legacy residual, double-billing them.
       input: sum.input + provider.tokensIn + provider.cacheReadTokens + provider.cacheWriteTokens,
-      output: sum.output + provider.tokensOut
-    }), { input: 0, output: 0 });
-    const residualIn = Math.max(0, (totalTokens.input || 0) - represented.input);
-    const residualOut = Math.max(0, (totalTokens.output || 0) - represented.output);
-    if (residualIn > 0 || residualOut > 0) {
-      const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME);
-      legacy.tokensIn += residualIn;
-      legacy.tokensOut += residualOut;
-      legacy.source = mergeSource(legacy.source, 'estimate');
+      output: sum.output + provider.tokensOut,
+      sessions: sum.sessions + provider.sessions,
+      messages: sum.messages + provider.messages,
+    }), { input: 0, output: 0, sessions: 0, messages: 0 });
+
+  // Keep each origin's legacy residual separate: an overrepresented bucket on
+  // one machine must not conceal unbucketed tokens on another.
+  for (const source of [{ dailyActivity, monthlyActivity, totalTokens, totalSessions, totalMessages }, ...additionalSources]) {
+    const before = representedCounters();
+    const fromMonth = from ? from.slice(0, 7) : null;
+    const toMonth = to ? to.slice(0, 7) : null;
+    for (const [month, bucket] of Object.entries(source.monthlyActivity || {})) {
+      if (bucket?.byProvider) {
+        const monthStart = `${month}-01`;
+        if (!breakdownSince || monthStart < breakdownSince) breakdownSince = monthStart;
+      }
+      if (fromMonth && month < fromMonth) continue;
+      if (toMonth && month > toMonth) continue;
+      if (bucket) foldBucket(bucket);
+    }
+    for (const [date, day] of Object.entries(source.dailyActivity || {})) {
+      if (day?.byProvider && (!breakdownSince || date < breakdownSince)) breakdownSince = date;
+      if (from && date < from) continue;
+      if (to && date > to) continue;
+      if (day) foldBucket(day);
+    }
+    if (source.totalTokens || source.totalSessions != null || source.totalMessages != null) {
+      const after = representedCounters();
+      const residualIn = Math.max(0, (source.totalTokens?.input || 0) - (after.input - before.input));
+      const residualOut = Math.max(0, (source.totalTokens?.output || 0) - (after.output - before.output));
+      const residualSessions = Math.max(0, (source.totalSessions || 0) - (after.sessions - before.sessions));
+      const residualMessages = Math.max(0, (source.totalMessages || 0) - (after.messages - before.messages));
+      if (residualIn || residualOut || residualSessions || residualMessages) {
+        const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME);
+        legacy.tokensIn += residualIn;
+        legacy.tokensOut += residualOut;
+        legacy.sessions += residualSessions;
+        legacy.messages += residualMessages;
+        legacy.source = mergeSource(legacy.source, 'estimate');
+      }
     }
   }
 
@@ -1224,6 +1229,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       ...pickUsageCounters(p),
       source: p.source || 'estimate',
       estimatedCost: roundCents(providerCost),
+      rawEstimatedCost: providerCost,
       rateMatch: pid === LEGACY_PROVIDER_ID
         ? 'fallback'
         : (models.some((model) => model.rateMatch !== 'exact' && model.rateMatch !== 'free') || unattributedIn > 0 || unattributedOut > 0
@@ -1234,6 +1240,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
   }
 
   providerRows.sort((a, b) => b.estimatedCost - a.estimatedCost || b.tokensOut - a.tokensOut);
+  totals.rawEstimatedCost = totals.estimatedCost;
   totals.estimatedCost = roundCents(totals.estimatedCost);
   // Report-level provenance: `measured` only when every row that carries counts
   // was read from a provider transcript, so the UI can state plainly whether the

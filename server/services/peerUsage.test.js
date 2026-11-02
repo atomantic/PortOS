@@ -12,11 +12,13 @@ vi.mock('../lib/fileUtils.js', async () => {
 // instanceIdentity.js (#6836; kept off dataSync's module graph); the digest
 // itself is whatever usage.js currently holds.
 const self = { instanceId: 'inst-self', name: 'Workshop' };
+let configuredPeers = [];
 // importActual so UNKNOWN_INSTANCE_ID stays the REAL sentinel — a hand-written
 // copy here would let the real one drift and silently stop being filtered.
 vi.mock('./instanceIdentity.js', async () => ({
   ...(await vi.importActual('./instanceIdentity.js')),
   getSelf: vi.fn(async () => self),
+  loadData: vi.fn(async () => ({ peers: configuredPeers })),
 }));
 
 let localUsage;
@@ -104,6 +106,7 @@ beforeEach(async () => {
   await atomicWrite(PEER_USAGE_FILE, { instances: {} });
   await atomicWrite(PROVIDER_QUOTAS_FILE, { quotas: [] });
   await atomicWrite(TRANSCRIPT_USAGE_FILE, { days: {}, updatedAt: null });
+  configuredPeers = [];
 });
 
 const quotaCard = (over = {}) => ({
@@ -397,8 +400,11 @@ describe('retiring an instance', () => {
 });
 
 describe('fleet report', () => {
-  it('is empty until a peer digest has synced', async () => {
-    expect(await getFleetUsage({ providers: [] })).toEqual({ instances: [], totals: null });
+  it('keeps the local report when no peer digest has synced', async () => {
+    expect(await getFleetUsage({ providers: [] })).toMatchObject({
+      instances: [], totals: null, report: { totals: { sessions: 2 } },
+      coverage: { instanceCount: 1, missingInstances: [] },
+    });
   });
 
   it('reports one row per instance plus the combined totals', async () => {
@@ -407,7 +413,7 @@ describe('fleet report', () => {
 
     expect(fleet.instances.map((i) => i.instanceId)).toEqual(['inst-self', 'inst-peer']);
     expect(fleet.instances[0].self).toBe(true);
-    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T09:00:00.000Z');
+    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T12:00:00.000Z');
     expect(fleet.totals.tokensOut).toBe(5000);
     expect(fleet.totals.sessions).toBe(4);
     expect(fleet.instances.every((i) => i.usesSubscriptions)).toBe(true);
@@ -425,6 +431,121 @@ describe('fleet report', () => {
     ]);
     expect(fleet.totals.tokensOut).toBe(1000);
     expect(fleet.totals.sessions).toBe(2);
+    expect(fleet.report.totals.sessions).toBe(4);
+    expect(fleet.subscriptionReport.totals.sessions).toBe(2);
+  });
+
+  it('combines origin snapshots once and keeps period, provider, model and monthly totals consistent', async () => {
+    const peer = peerEntry();
+    await applyUsageRemote({ instances: { 'inst-peer': peer } });
+    await applyUsageRemote({ instances: { 'inst-peer': peer, 'inst-self': peerEntry({ instanceId: 'inst-self' }) } });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    const [provider] = fleet.report.providers;
+    expect(fleet.coverage.instanceCount).toBe(2);
+    expect(fleet.report.totals).toMatchObject({ sessions: 4, messages: 10, tokensIn: 1000, tokensOut: 5000 });
+    expect(provider).toMatchObject({ id: 'anthropic', sessions: 4, tokensOut: 5000 });
+    expect(provider.models[0]).toMatchObject({ model: 'claude-opus-5', sessions: 4, tokensOut: 5000 });
+    expect(fleet.activity).toEqual([expect.objectContaining({ date: '2026-08-30', label: '08-30', sessions: 4 })]);
+    expect(fleet.monthly.history[0]).toMatchObject({ month: '2026-08', tokens: 6000, estimatedCost: fleet.report.totals.estimatedCost });
+    const empty = await getFleetUsage({ from: '2026-09-01', to: '2026-09-01' });
+    expect(empty.report.totals.sessions).toBe(0);
+    expect(empty.report.providers).toEqual([]);
+    expect(empty.activity[0].sessions).toBe(0);
+  });
+
+  it('reports peers that have never supplied a snapshot', async () => {
+    configuredPeers = [{ instanceId: 'inst-missing', name: 'Missing', directions: ['outbound'] }];
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(fleet.coverage.missingInstances).toEqual(['Missing']);
+    expect(fleet.report.totals.sessions).toBe(2);
+  });
+
+  it('keeps external transcript usage and empty months in the selected monthly chart', async () => {
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({
+      claudeCode: { updatedAt: '2026-09-30T12:00:00Z', days: { '2026-09-15': { 'claude-opus-5': { output: 1000 } } } },
+    }) } });
+    const fleet = await getFleetUsage({ from: '2026-08-01', to: '2026-10-31' });
+    expect(fleet.monthly.history.map((row) => row.month)).toEqual(['2026-08', '2026-09', '2026-10']);
+    expect(fleet.monthly.history[1].tokens).toBe(1000);
+    expect(fleet.monthly.history[2].tokens).toBe(0);
+  });
+
+  it('does not add a transcript again to its rolled-up ledger month', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    const source = usageFixture({ day: '2026-03-01', tokensOut: 0 });
+    source.dailyActivity['2026-03-01'].byProvider['claude-code'] = source.dailyActivity['2026-03-01'].byProvider.anthropic;
+    delete source.dailyActivity['2026-03-01'].byProvider.anthropic;
+    const provider = source.dailyActivity['2026-03-01'].byProvider['claude-code'];
+    provider.tokensIn = 31;
+    provider.byModel['claude-opus-5'].tokensIn = 31;
+    localUsage = buildUsageDigest(source, { retentionDays: 1, now: new Date('2026-04-15T00:00:00Z') });
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { updatedAt: '2026-04-16T00:00:00Z', days: {
+      '2026-03-01': { 'claude-opus-5': { messages: 1, input: 31, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    } });
+    const fleet = await getFleetUsage({ from: '2026-03-01', to: '2026-03-31', providers: [{ id: 'claude-code', command: 'claude', type: 'cli' }] });
+    expect(fleet.monthly.history[0].tokens).toBe(31);
+  });
+
+  it('keeps separately configured API usage apart from Claude Code transcripts', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    const day = localUsage.dailyActivity['2026-08-30'];
+    day.tokens = 0;
+    day.byProvider['claude-api'] = day.byProvider.anthropic;
+    delete day.byProvider.anthropic;
+    const provider = day.byProvider['claude-api'];
+    provider.tokensIn = 1_000_000;
+    provider.tokensOut = 0;
+    provider.byModel['claude-opus-5'].tokensIn = 1_000_000;
+    provider.byModel['claude-opus-5'].tokensOut = 0;
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { updatedAt: '2026-09-02T00:00:00Z', days: {
+      '2026-08-30': { 'claude-opus-5': { messages: 1, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    } });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'claude-api', type: 'api' }] });
+    expect(fleet.monthly.history[0]).toMatchObject({ tokens: 2_000_000, estimatedCost: 10 });
+  });
+
+  it('accumulates sub-cent transcript costs over the selected month', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    localUsage = { dailyActivity: {}, monthlyActivity: {}, lastUpdated: null };
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { updatedAt: '2026-09-02T00:00:00Z', days: {
+      '2026-08-29': { 'claude-opus-5': { messages: 1, input: 800, output: 0, cacheRead: 0, cacheWrite: 0 } },
+      '2026-08-30': { 'claude-opus-5': { messages: 1, input: 800, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    } });
+    const fleet = await getFleetUsage({ from: '2026-08-01', to: '2026-08-31' });
+    expect(fleet.monthly.history[0]).toMatchObject({ tokens: 1600, estimatedCost: 0.01 });
+  });
+
+  it('preserves mixed provider and model rows and counts undated legacy totals only for all time', async () => {
+    localUsage.totalSessions = 5;
+    localUsage.totalMessages = 8;
+    const other = usageFixture({ tokensOut: 3000 });
+    const provider = other.dailyActivity['2026-08-30'].byProvider.anthropic;
+    delete other.dailyActivity['2026-08-30'].byProvider.anthropic;
+    other.dailyActivity['2026-08-30'].byProvider['codex-cli'] = provider;
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(other) }) } });
+    const selected = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(selected.report.providers.map((row) => row.id).sort()).toEqual(['anthropic', 'codex-cli']);
+    expect(selected.report.totals.sessions).toBe(4);
+    expect(selected.report.providers.find((row) => row.id === 'codex-cli').family).toBeNull();
+    const all = await getFleetUsage();
+    expect(all.report.totals).toMatchObject({ sessions: 7, messages: 13 });
+    expect(all.report.providers.find((row) => row.id === 'legacy')).toMatchObject({ sessions: 3, messages: 3 });
+    expect(all.activity.find((row) => row.date === 'undated')?.sessions).toBe(3);
+  });
+
+  it('rounds after combining instance costs, keeping fleet and report totals consistent', async () => {
+    const small = usageFixture({ tokensOut: 0 });
+    small.totalTokens.input = 1000;
+    const provider = small.dailyActivity['2026-08-30'].byProvider.anthropic;
+    provider.tokensIn = 1000;
+    provider.byModel['claude-opus-5'].tokensIn = 1000;
+    localUsage = small;
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ usage: buildUsageDigest(small) }) } });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(fleet.instances.map((row) => row.totals.estimatedCost)).toEqual([0.01, 0.01]);
+    expect(fleet.totals.estimatedCost).toBe(0.01);
+    expect(fleet.report.totals.estimatedCost).toBe(0.01);
+    expect(fleet.monthly.history[0].estimatedCost).toBe(0.01);
   });
 
   // The wire digest folds days past its retention window into WHOLE months, and
@@ -461,10 +582,13 @@ describe('fleet report', () => {
 
     const clipped = await getFleetUsage({ from: '2026-05-10', to: '2026-05-15', providers: [] });
     expect(clipped.totals.tokensOut).toBe(0);
+    expect(clipped.coverage.incompleteMonths).toEqual(['2026-05']);
+    expect(clipped.monthly.history).toEqual([expect.objectContaining({ month: '2026-05', tokens: 0, partial: true })]);
 
     // A window that covers the whole month still reports it.
     const whole = await getFleetUsage({ from: '2026-05-01', to: '2026-05-31', providers: [] });
     expect(whole.totals.tokensOut).toBe(7000);
+    expect(whole.activity).toEqual([expect.objectContaining({ date: '2026-05', label: '2026-05', sessions: 2 })]);
   });
 
   it('carries a peer\'s media units and long-context subsets through the wire digest', async () => {
@@ -555,6 +679,31 @@ describe('fleet rolling 30-day cost', () => {
     expect(series.points.at(-1).values).toEqual([series.points.at(-1).cost]);
   });
 
+  it('invalidates the rolling chart when a provider changes subscription family', async () => {
+    const bucket = localUsage.dailyActivity['2026-08-30'];
+    bucket.byProvider['claude-api'] = bucket.byProvider.anthropic;
+    delete bucket.byProvider.anthropic;
+    const now = new Date('2026-09-01T00:00:00Z');
+    const api = await getFleetRollingCost({ now, providers: [{ id: 'claude-api', type: 'api' }] });
+    const cli = await getFleetRollingCost({ now, providers: [{ id: 'claude-api', type: 'cli', command: 'claude' }] });
+    expect(api.series[0].key).toBe('provider:claude-api');
+    expect(cli.series[0].key).toBe('claude');
+  });
+
+  it('keeps transcript dates when a rolled-up month contains only another provider', async () => {
+    const { atomicWrite } = await import('../lib/fileUtils.js');
+    localUsage = { dailyActivity: {}, monthlyActivity: { '2026-03': { byProvider: {
+      'codex-cli': { tokensIn: 1_000_000, byModel: { 'gpt-5': { tokensIn: 1_000_000 } } },
+    } } }, lastUpdated: '2026-03-30T00:00:00Z' };
+    await atomicWrite(TRANSCRIPT_USAGE_FILE, { updatedAt: '2026-03-30T00:00:00Z', days: {
+      '2026-03-15': { 'claude-opus-5': { messages: 1, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    } });
+    const chart = await getFleetRollingCost({ now: new Date('2026-03-30T00:00:00Z'), range: '1m' });
+    const claude = chart.series.findIndex((row) => row.key === 'claude');
+    expect(chart.points.find((row) => row.date === '2026-03-14').values[claude]).toBe(0);
+    expect(chart.points.find((row) => row.date === '2026-03-15').values[claude]).toBeGreaterThan(0);
+  });
+
   // Transcripts hold every Claude Code session on the machine, PortOS's own
   // runs included, and the ledger holds a subset of them: each day takes the
   // larger, never the sum.
@@ -625,9 +774,9 @@ describe('fleet calendar-month usage', () => {
     localUsage.monthlyActivity = { '2025-04': { tokensIn: 1000000, tokens: 2000000 } };
     const monthly = await getFleetMonthlyUsage({ now: new Date('2025-06-30T23:59:59Z') });
     expect(monthly.history).toEqual([
-      { month: '2025-04', estimatedCost: 33, values: [33], tokens: 3000000, partial: false },
-      { month: '2025-05', estimatedCost: 0, values: [0], tokens: 0, partial: false },
-      { month: '2025-06', estimatedCost: 0, values: [0], tokens: 100, partial: true },
+      { month: '2025-04', estimatedCost: 33, values: [33, 0], tokens: 3000000, partial: false },
+      { month: '2025-05', estimatedCost: 0, values: [0, 0], tokens: 0, partial: false },
+      { month: '2025-06', estimatedCost: 0, values: [0, 0], tokens: 100, partial: true },
     ]);
     const later = await getFleetMonthlyUsage({ now: new Date('2026-06-01T00:00:00Z') });
     expect(later.history).toHaveLength(12);
@@ -758,11 +907,21 @@ describe('federated Claude Code tokens per model', () => {
     expect(fleet.totals.estimatedCost).toBeGreaterThan(0);
   });
 
-  it('keeps an API-billed instance listed but out of the combined figures, and tolerates a peer with no history', async () => {
+  it('includes API-billed instances in the combined figures and tolerates a peer with no history', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': { ...peerEntry(), claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: days(3_000_000) } }, 'inst-old': peerEntry() } });
     const fleet = await getFleetClaudeCodeModels({ apiBilledInstanceIds: ['inst-peer'] });
     expect(fleet.instances).toEqual([expect.objectContaining({ instanceId: 'inst-peer', usesSubscriptions: false })]);
-    expect(fleet.totals.total).toBe(0);
+    expect(fleet.totals.total).toBe(8_000_000);
+  });
+
+  it('distinguishes a completed empty transcript scan from an unavailable peer', async () => {
+    await applyUsageRemote({ instances: {
+      'inst-peer': peerEntry({ claudeCode: { updatedAt: '2026-09-21T00:00:00.000Z', days: {} } }),
+      'inst-old': peerEntry({ instanceId: 'inst-old', name: 'Old' }),
+    } });
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(fleet.coverage.transcriptUnreported).toEqual(['Old']);
+    expect((await getFleetClaudeCodeModels()).pendingInstances).toEqual(['Old']);
   });
 
   it('rebuilds a hostile peer history to the fixed shape', async () => {

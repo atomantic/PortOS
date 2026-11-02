@@ -101,7 +101,7 @@ export function attributeReportCostToFamilies(report) {
   const sources = new Map();
   let unmatched = 0;
   for (const row of report?.providers || []) {
-    const cost = Number(row?.estimatedCost) || 0;
+    const cost = Number(row?.rawEstimatedCost ?? row?.estimatedCost) || 0;
     if (cost <= 0) continue;
     if (!row.family) { unmatched += cost; continue; }
     byFamily.set(row.family, (byFamily.get(row.family) || 0) + cost);

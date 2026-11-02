@@ -49,6 +49,32 @@ beforeEach(() => {
 });
 
 describe('UsagePage subscription savings', () => {
+  it('updates fleet counts with the selected period and identifies unavailable data', async () => {
+    const report = (sessions, tokens, cost) => ({
+      providers: [{ id: 'example', name: 'Example', sessions, messages: sessions, tokensIn: tokens, tokensOut: 0,
+        cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: cost, models: [] }],
+      totals: { sessions, messages: sessions, tokensIn: tokens, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: cost },
+    });
+    api.getUsage.mockImplementation(({ period }) => Promise.resolve({
+      ...usage,
+      report: period === '30d' ? report(300, 900, 30) : report(7, 21, 7),
+      activity: [{ date: '2026-01-01', label: '2026-01-01', sessions: period === '30d' ? 300 : 7 }],
+      hourlyActivity: null,
+      imageRenders: { unavailableAcrossInstances: true },
+      coverage: { instanceCount: 2, missingInstances: ['Offline'], notSyncingInstances: [], incompleteMonths: ['2025-01'] },
+    }));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('Usage from 2 reported instances; peer data reflects the last sync.')).toBeInTheDocument();
+    expect(screen.getByText(/No usage snapshot from Offline/)).toBeInTheDocument();
+    expect(screen.getByText(/Partial months 2025-01 are excluded/)).toBeInTheDocument();
+    expect(screen.getByText(/Fleet image usage is unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/Hourly data is only available for all time/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '30 days' }));
+    await waitFor(() => expect(api.getUsage).toHaveBeenLastCalledWith({ period: '30d' }, { silent: true }));
+    expect(await screen.findByText('Showing usage for 30 days.')).toBeInTheDocument();
+    expect(screen.getAllByText('300').length).toBeGreaterThan(0);
+  });
+
   it('updates quota cards on completion without recurring fetches', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);

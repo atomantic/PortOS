@@ -9,7 +9,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
-import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost, getFleetMonthlyUsage } from '../services/peerUsage.js';
+import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
@@ -34,37 +34,53 @@ router.get('/', asyncHandler(async (req, res) => {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
   const summary = usage.getUsageSummary({ from, to, providers });
-  // Independent reads overlap; savings and fleet use the report window:
-  // - savings: what the user's flat-rate plans cost over the SAME window, so
-  //   the headline API-rate figure has something to be compared against.
-  // - fleet: the per-instance breakdown across the federation, priced over the
-  //   same window by the same report builder. Empty on a single-machine install
-  //   (or before a peer's first usage sync) — the UI hides that section rather
-  //   than showing a one-row "fleet".
-  // - monthly: fixed calendar months with the rolling chart's fleet coverage.
-  const [subscriptionSavings, fleet, monthly, imageRenders] = await Promise.all([
-    getSubscriptionSavings({
-      report: summary.report,
-      providers,
-      from,
-      to,
-      // Only an unbounded ("All time") window needs a start day inferred from
-      // history; every other range already has one, so don't pay the scan.
-      firstActivityDay: from ? null : usage.getFirstActivityDay()
-    }),
+  const [fleetResult, imageRenders] = await Promise.all([
     getApiBilledInstanceIds().then((apiBilledInstanceIds) =>
       getFleetUsage({ from, to, providers, apiBilledInstanceIds })),
-    getFleetMonthlyUsage({ providers }),
     getImageRenderUsage({ from, to }).catch(err => {
       console.error(`❌ Failed to read image render usage: ${err.message}`);
       return { error: 'Image render usage is unavailable.' };
     }),
   ]);
+  const { report, subscriptionReport, firstActivityDay, activity, last7Days, hourlyActivity, totalToolCalls, coverage, monthly, transcriptUpdatedAt, ...fleet } = fleetResult;
+  const subscriptionSavings = await getSubscriptionSavings({
+    report: subscriptionReport, providers, from, to, firstActivityDay: from ? null : firstActivityDay,
+  });
   res.json({
-    ...summary, subscriptionSavings, fleet, imageRenders,
+    ...summary,
+    report,
+    totalSessions: report.totals.sessions,
+    totalMessages: report.totals.messages,
+    totalToolCalls,
+    totalTokens: {
+      input: report.totals.tokensIn + report.totals.cacheReadTokens + report.totals.cacheWriteTokens,
+      output: report.totals.tokensOut,
+    },
+    estimatedCost: report.totals.estimatedCost,
+    last7Days,
+    topProviders: report.providers.map((row) => ({ ...row, tokens: row.tokensIn + row.tokensOut })),
+    topModels: report.providers.flatMap((row) => row.models.map((model) => ({ ...model, tokens: model.tokensIn + model.tokensOut }))),
+    subscriptionSavings,
+    fleet,
+    coverage,
+    activity,
+    hourlyActivity,
+    transcriptUpdatedAt,
+    // Limit-block events and image receipts are local-only and can be mirrored
+    // across machines; there is no fleet identity to safely deduplicate them.
+    freeTier: {
+      ...summary.freeTier,
+      providers: report.providers.filter((row) => row.free),
+      blocks: coverage.instanceCount > 1 || coverage.missingInstances.length ? [] : (summary.freeTier?.blocks || []),
+      blocksUnavailableAcrossInstances: coverage.instanceCount > 1 || coverage.missingInstances.length > 0,
+    },
+    imageRenders: coverage.instanceCount > 1 || coverage.missingInstances.length
+      ? { unavailableAcrossInstances: true }
+      : imageRenders,
     monthlyHistory: monthly.history,
     monthlySeries: monthly.series,
     monthlyInstanceCount: monthly.instanceCount,
+    monthlyRangeTooWide: monthly.rangeTooWide || false,
   });
 }));
 
@@ -169,9 +185,9 @@ router.get('/claude-code', asyncHandler(async (req, res) => {
 // Same ?period=7d|30d|90d|all or ?from/?to window as GET /api/usage.
 router.get('/claude-code/models', asyncHandler(async (req, res) => {
   const { from, to } = resolveUsageRange(validateRequest(usageQuerySchema, req.query));
-  await refreshLocalTranscriptUsage();
+  const { refreshed, updatedAt } = await refreshLocalTranscriptUsage();
   const apiBilledInstanceIds = await getApiBilledInstanceIds();
-  res.json({ from, to, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
+  res.json({ from, to, transcriptRefreshed: refreshed, transcriptUpdatedAt: updatedAt, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
 }));
 
 // GET /api/usage/raw - Get raw usage data

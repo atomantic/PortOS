@@ -47,6 +47,14 @@ describe('applyFleetBilling', () => {
     expect(view.includedCount).toBe(2);
     expect(view.totals.estimatedCost).toBe(7);
   });
+
+  it('rounds a combined total after adding the exact instance costs', () => {
+    const small = { instances: [
+      row({ totals: { estimatedCost: 0.01, rawEstimatedCost: 0.005 } }),
+      row({ instanceId: 'inst-peer', totals: { estimatedCost: 0.01, rawEstimatedCost: 0.005 } }),
+    ] };
+    expect(applyFleetBilling(small).totals.estimatedCost).toBe(0.01);
+  });
 });
 
 describe('FleetUsageCard', () => {

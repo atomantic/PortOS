@@ -19,6 +19,7 @@ export function resolveUsageRange({ period, from, to } = {}) {
   if (period === 'all') return { from: null, to: null };
   const days = PERIOD_DAYS[period] || PERIOD_DAYS['7d'];
   const start = new Date();
-  start.setDate(start.getDate() - (days - 1));
-  return { from: start.toISOString().split('T')[0], to: null };
+  const end = start.toISOString().split('T')[0];
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  return { from: start.toISOString().split('T')[0], to: end };
 }

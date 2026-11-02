@@ -102,6 +102,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
       </div>
 
       <ProviderQuotaBody quota={quota} />
+      {quota.metrics?.length > 0 && <p className="mt-2 text-xs text-gray-500">Observed metrics are from this machine only.</p>}
     </div>
   );
 }
@@ -206,6 +207,8 @@ function ProviderQuotaSection() {
           <RefreshCw size={15} className={`will-change-transform ${loading ? 'animate-spin' : ''}`} /> Refresh all
         </button>
       </div>
+
+      <p className="text-xs text-gray-500">Quota cards cover locally enabled provider families and shared subscription accounts; peer-only families and separately billed accounts may be missing.</p>
 
       {loading && !quotas && (
         // Reserve the quota-card grid below rather than a centered spinner
@@ -509,15 +512,15 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
 
 // Derive top providers for the active period (or fallback to usage.topProviders)
 function getPeriodTopProviders(usage) {
-  if (usage?.report?.providers?.length) {
+  if (usage?.report?.providers) {
     const totalTokens = usage.report.providers.reduce(
-      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
+      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0) + (p.cacheReadTokens || 0) + (p.cacheWriteTokens || 0),
       0
     ) || usage.report.providers.reduce((sum, p) => sum + (p.sessions || 0), 0) || 1;
 
     return usage.report.providers
       .map((p) => {
-        const tokens = (p.tokensIn || 0) + (p.tokensOut || 0);
+        const tokens = (p.tokensIn || 0) + (p.tokensOut || 0) + (p.cacheReadTokens || 0) + (p.cacheWriteTokens || 0);
         return {
           id: p.id,
           name: p.name,
@@ -552,11 +555,11 @@ function getPeriodTopProviders(usage) {
 
 // Derive top models for the active period (or fallback to usage.topModels)
 function getPeriodTopModels(usage) {
-  if (usage?.report?.providers?.length) {
+  if (usage?.report?.providers) {
     const allModels = [];
     for (const p of usage.report.providers) {
       for (const m of (p.models || [])) {
-        const tokens = (m.tokensIn || 0) + (m.tokensOut || 0);
+        const tokens = (m.tokensIn || 0) + (m.tokensOut || 0) + (m.cacheReadTokens || 0) + (m.cacheWriteTokens || 0);
         allModels.push({
           model: m.model,
           providerName: p.name,
@@ -583,6 +586,7 @@ function getPeriodTopModels(usage) {
         .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
         .slice(0, 5);
     }
+    return [];
   }
 
   const totalTokens = usage?.topModels?.reduce((sum, m) => sum + (m.tokens || 0), 0)
@@ -621,7 +625,7 @@ function InternalUsageMetrics() {
     const token = ++requestRef.current;
     const params = isCustom ? { from, to } : { period };
     const rangeLabel = isCustom
-      ? `${from || 'Beginning'} to ${to || 'Today'}`
+      ? `${from || 'Beginning'} to ${to || 'No end'}`
       : (USAGE_PERIOD_OPTIONS.find((option) => option.id === period)?.label || period);
     setLoading(true);
     setReadError(false);
@@ -701,7 +705,7 @@ function InternalUsageMetrics() {
     );
   }
 
-  const maxActivity = Math.max(1, ...(usage.last7Days?.map(d => d.sessions) || []));
+  const maxActivity = Math.max(1, ...(usage.activity?.map(d => d.sessions) || []));
   const report = usage.report;
 
   const topProvidersList = getPeriodTopProviders(usage);
@@ -712,8 +716,19 @@ function InternalUsageMetrics() {
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
       <RollingCostCard />
-      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} />
       {reportControls}
+      {usage.coverage && (
+        <div className="text-xs text-gray-400 space-y-1" role="status">
+          <p>Usage from {formatCount(usage.coverage.instanceCount)} reported instance{usage.coverage.instanceCount === 1 ? '' : 's'}; peer data reflects the last sync.</p>
+          {usage.coverage.instanceCount > 1 && <p>Each instance snapshot is counted once. Runs recorded independently on multiple machines cannot be deduplicated from the available aggregates.</p>}
+          {usage.coverage.instanceCount > 1 && <p className="text-port-warning">Peer provider billing settings are not included in snapshots. API costs use this machine&rsquo;s provider configuration and may be inaccurate; unrecognized providers cannot be attributed to a subscription.</p>}
+          {usage.coverage.missingInstances?.length > 0 && <p className="text-port-warning">No usage snapshot from {usage.coverage.missingInstances.join(', ')}. Totals are incomplete.</p>}
+          {usage.coverage.notSyncingInstances?.length > 0 && <p className="text-port-warning">Usage sync is disabled for {usage.coverage.notSyncingInstances.join(', ')}. Their saved figures may be stale.</p>}
+          {usage.coverage.transcriptUnreported?.length > 0 && <p className="text-port-warning">Claude transcript history has not been reported by {usage.coverage.transcriptUnreported.join(', ')}; the monthly chart may be incomplete.</p>}
+          {usage.coverage.incompleteMonths?.length > 0 && <p className="text-port-warning">Older usage is available only by month. Partial months {usage.coverage.incompleteMonths.join(', ')} are excluded; totals are incomplete.</p>}
+        </div>
+      )}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -757,8 +772,10 @@ function InternalUsageMetrics() {
 
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
-          <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
-          {usage.imageRenders.error ? (
+          <h3 className="text-sm font-medium text-white">Codex image usage</h3>
+          {usage.imageRenders.unavailableAcrossInstances ? (
+            <p className="text-sm text-gray-400" role="status">Fleet image usage is unavailable: image receipts are not federated and mirrored outputs cannot be counted safely.</p>
+          ) : usage.imageRenders.error ? (
             <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
           ) : (
             <>
@@ -785,18 +802,18 @@ function InternalUsageMetrics() {
         </section>
       )}
 
-      {/* Summary Stats (all-time) */}
+      {/* Summary Stats for the selected report window */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalSessions)}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(report?.totals?.sessions)}</div>
           <div className="text-xs sm:text-sm text-gray-400">Sessions</div>
         </div>
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalMessages)}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(report?.totals?.messages)}</div>
           <div className="text-xs sm:text-sm text-gray-400">Messages</div>
         </div>
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber((usage.totalTokens?.input ?? 0) + (usage.totalTokens?.output ?? 0))}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber((report?.totals?.tokensIn ?? 0) + (report?.totals?.tokensOut ?? 0) + (report?.totals?.cacheReadTokens ?? 0) + (report?.totals?.cacheWriteTokens ?? 0))}</div>
           <div className="text-xs sm:text-sm text-gray-400">Tokens</div>
         </div>
       </div>
@@ -839,7 +856,7 @@ function InternalUsageMetrics() {
       <FreeTierUsageCard freeTier={usage.freeTier} />
 
       {/* Claude Code tokens per model (all instances) for the same window. */}
-      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} />
+      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} onRefreshed={fetchUsage} transcriptUpdatedAt={usage.transcriptUpdatedAt} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
@@ -850,12 +867,12 @@ function InternalUsageMetrics() {
       <SubscriptionSavingsCard savings={usage.subscriptionSavings} onSaved={fetchUsage} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-        {/* 7-Day Activity */}
+        {/* Selected-period activity */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Last 7 Days</h3>
+          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Sessions in selected period</h3>
           <div className="flex items-end gap-1 sm:gap-2 h-32 sm:h-40">
-            {usage.last7Days?.map((day, i) => (
-              <div key={i} className="flex-1 h-full flex flex-col items-center">
+            {usage.activity?.map((day) => (
+              <div key={day.date} title={`${day.date}: ${formatCount(day.sessions)} sessions`} className="flex-1 min-w-0 h-full flex flex-col items-center">
                 {/* percent heights need a definite-height parent, so the bar sits in a flex-1 slot */}
                 <div className="flex-1 w-full flex items-end min-h-0">
                   <div
@@ -863,16 +880,26 @@ function InternalUsageMetrics() {
                     style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
                   />
                 </div>
-                <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>
-                <div className="text-[10px] sm:text-xs text-gray-400">{day.sessions}</div>
+                {usage.activity.length <= 12 && <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>}
+                {usage.activity.length <= 12 && <div className="text-[10px] sm:text-xs text-gray-400">{formatCount(day.sessions)}</div>}
               </div>
             ))}
+            {usage.activity?.length === 0 && <p className="text-sm text-gray-500">No sessions in this period.</p>}
           </div>
+          {usage.activity?.length > 12 && (
+            <details className="mt-2 text-xs text-gray-400">
+              <summary className="cursor-pointer">View session counts by date</summary>
+              <ul className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-1">
+                {usage.activity.map((day) => <li key={day.date}>{day.date}: {formatCount(day.sessions)}</li>)}
+              </ul>
+            </details>
+          )}
         </div>
 
         {/* Hourly Distribution */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Hourly Distribution</h3>
+          {usage.hourlyActivity ? <>
           <div className="flex items-end gap-0.5 h-24 sm:h-32">
             {(() => {
               const maxHour = Math.max(1, ...(usage.hourlyActivity || []));
@@ -894,6 +921,8 @@ function InternalUsageMetrics() {
             <span>6pm</span>
             <span>12am</span>
           </div>
+          <p className="text-xs text-gray-500 mt-1">All-time sessions across available instances, by each instance&rsquo;s local clock.</p>
+          </> : <p className="text-sm text-gray-500">Hourly data is only available for all time, not the selected period.</p>}
         </div>
       </div>
 
@@ -937,12 +966,12 @@ function InternalUsageMetrics() {
 
                 {/* Detailed Breakdown stats */}
                 <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>{provider.sessions} session{provider.sessions === 1 ? '' : 's'}</span>
+                  <span>{formatCount(provider.sessions)} session{provider.sessions === 1 ? '' : 's'}</span>
                   <div className="flex items-center gap-1 sm:gap-2">
                     <span>{formatNumber(provider.tokens)} tokens</span>
                     {provider.tokensIn != null && provider.tokensOut != null && (
                       <span className="text-[10px] text-gray-500 hidden sm:inline">
-                        ({formatNumber(provider.tokensIn)} in / {formatNumber(provider.tokensOut)} out)
+                        ({formatNumber(provider.tokensIn)} fresh in / {formatNumber(provider.tokensOut)} out / {formatNumber((provider.cacheReadTokens || 0) + (provider.cacheWriteTokens || 0))} cache)
                       </span>
                     )}
                   </div>
@@ -991,12 +1020,12 @@ function InternalUsageMetrics() {
 
                 {/* Detailed Breakdown stats */}
                 <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>{model.sessions} session{model.sessions === 1 ? '' : 's'}</span>
+                  <span>{formatCount(model.sessions)} session{model.sessions === 1 ? '' : 's'}</span>
                   <div className="flex items-center gap-1 sm:gap-2">
                     <span>{formatNumber(model.tokens)} tokens</span>
                     {model.tokensIn != null && model.tokensOut != null && (
                       <span className="text-[10px] text-gray-500 hidden sm:inline">
-                        ({formatNumber(model.tokensIn)} in / {formatNumber(model.tokensOut)} out)
+                        ({formatNumber(model.tokensIn)} fresh in / {formatNumber(model.tokensOut)} out / {formatNumber((model.cacheReadTokens || 0) + (model.cacheWriteTokens || 0))} cache)
                       </span>
                     )}
                   </div>

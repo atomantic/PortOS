@@ -26,7 +26,7 @@ export function applyFleetBilling(fleet, overrides = {}) {
     }
     return acc;
   }, {});
-  totals.estimatedCost = Math.round((totals.estimatedCost || 0) * 100) / 100;
+  totals.estimatedCost = Math.round((totals.rawEstimatedCost ?? totals.estimatedCost ?? 0) * 100) / 100;
   return { instances, totals, includedCount: included.length };
 }
 
@@ -76,7 +76,7 @@ export default function FleetUsageCard({ fleet, onSaved }) {
     ? <Pill tone="context" size="xs" className="ml-2">This machine</Pill>
     : row.capturedAt && (
       <span className="ml-2 text-[10px] text-gray-500" title={row.capturedAt}>
-        synced {timeAgo(row.capturedAt)}
+        updated {timeAgo(row.capturedAt)}
       </span>
     ));
 

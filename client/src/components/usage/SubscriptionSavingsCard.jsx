@@ -159,7 +159,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
             Subscription vs. API Cost
           </h3>
           <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-            What your quota plans cost over {windowLabel}, against what the same usage would have cost at API rates.
+            What your quota plans cost over {windowLabel}, against the API-rate equivalent across instances marked as using subscriptions. Each shared plan is priced once.
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -294,7 +294,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
         {savings.unmatchedApiCost > 0 && (
           <>
             {' '}<span className="text-gray-400">{formatUsd(savings.unmatchedApiCost)}</span> of estimated API cost came from
-            usage no subscription covers (pay-as-you-go API providers or pre-breakdown legacy rows) and is excluded from savings.
+            usage not attributed to a configured subscription (including unknown peer providers and legacy rows) and is excluded from savings.
           </>
         )}
         {' '}Savings inherit the estimate&rsquo;s accuracy — rows badged estimated above understate real usage.

@@ -34,7 +34,7 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
-import { familyForProviderId, familyLabel } from '../lib/providerFamilies.js';
+import { familyForProvider, familyForProviderId, familyLabel } from '../lib/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
@@ -183,9 +183,9 @@ async function readStore() {
  * none (or an unorderable one). Rebuilt to the fixed day → model → counts shape.
  */
 function sanitizeClaudeCode(raw) {
-  if (!isPlainObject(raw) || parseTsMs(raw.updatedAt) === null) return null;
+  if (!isPlainObject(raw) || !isPlainObject(raw.days) || parseTsMs(raw.updatedAt) === null) return null;
   const days = sanitizeTranscriptDays(raw.days);
-  return Object.keys(days).length > 0 ? { updatedAt: raw.updatedAt, days } : null;
+  return { updatedAt: raw.updatedAt, days };
 }
 
 /**
@@ -241,7 +241,7 @@ async function buildSelfEntry() {
   const { quotas, capturedAt: quotasAt } = await readLocalQuotaCards();
   // An unreadable store publishes no history rather than failing every sync read.
   const local = await readLocalTranscriptUsage().catch(() => null);
-  const claudeCode = local?.updatedAt && Object.keys(local.days).length > 0 ? local : null;
+  const claudeCode = local?.updatedAt ? local : null;
   // capturedAt is the LWW stamp AND manifest fingerprint: the newest of every
   // component, so a transcript-store refresh alone still gets pulled by peers.
   const capturedAt = [usage.lastUpdated, quotasAt, claudeCode?.updatedAt].reduce(
@@ -440,54 +440,191 @@ function sumFleetTotals(rows) {
     }
     return acc;
   }, {});
-  totals.estimatedCost = roundCents(totals.estimatedCost || 0);
+  totals.estimatedCost = roundCents(totals.rawEstimatedCost ?? totals.estimatedCost ?? 0);
   return totals;
 }
 
 export async function getFleetUsage({ from = null, to = null, providers = [], apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
-  if (peers.length === 0) return { instances: [], totals: null };
+  const localIdentity = self || await readSelfIdentity();
 
   // Instances the viewer marked as paying API rates (not subscriptions). They
   // stay in `instances` so the spend is still visible, but they do not feed
   // the combined total. Default ON (not in the set) — a missing id counts.
   const apiBilled = new Set(Array.isArray(apiBilledInstanceIds) ? apiBilledInstanceIds : []);
+  const localTranscript = self ? self.claudeCode : await readLocalTranscriptUsage().catch(() => null);
 
-  const row = ({ instanceId, name, capturedAt, activity, isSelf }) => {
-    const report = buildUsageReport(activity.dailyActivity || {}, {
+  const sources = [
+    { instanceId: localIdentity?.instanceId || 'local', name: localIdentity?.name || 'This machine', capturedAt: self?.capturedAt, activity: getUsage() || {}, transcript: localTranscript?.days, isSelf: true },
+    ...peers.map((entry) => ({ ...entry, activity: entry.usage, transcript: entry.claudeCode?.days, isSelf: false })),
+  ];
+  const reportSource = (activity) => ({
+    dailyActivity: activity.dailyActivity || {},
+    monthlyActivity: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to),
+    totalTokens: from || to ? null : activity.totalTokens,
+    totalSessions: from || to ? null : activity.totalSessions,
+    totalMessages: from || to ? null : activity.totalMessages,
+  });
+  const reportFor = (entries) => {
+    const [first = {}, ...additionalSources] = entries.map(({ activity }) => reportSource(activity));
+    return buildUsageReport(first.dailyActivity || {}, {
       from,
       to,
       providers,
-      // A month bucket is folded in WHOLE whenever its month overlaps the window
-      // — fine locally, where months only exist past the 400-day daily retention
-      // and so can't land inside a range anyone asks for. A peer's digest rolls
-      // up at 120 days, well inside a reachable range, so an explicit narrow
-      // from/to over a rolled-up month would silently count days outside it.
-      // Drop the partially-covered months rather than over-report; the row's
-      // whole-month periods are unaffected.
-      monthlyActivity: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to),
-      // Same rule as the single-instance summary: the all-time (unbounded)
-      // window folds in legacy totals no bucket represents; a bounded window
-      // must not, or it attributes all-time residue to the range.
-      totalTokens: from || to ? null : activity.totalTokens,
+      monthlyActivity: first.monthlyActivity,
+      totalTokens: first.totalTokens,
+      totalSessions: first.totalSessions,
+      totalMessages: first.totalMessages,
+      additionalSources,
     });
+  };
+  const row = ({ instanceId, name, capturedAt, activity, isSelf }) => {
+    const report = reportFor([{ activity }]);
     return {
       instanceId,
       name: name || instanceId,
       self: isSelf,
-      capturedAt,
+      capturedAt: activity.lastUpdated || capturedAt,
       totals: report.totals,
       usesSubscriptions: !apiBilled.has(instanceId),
     };
   };
 
-  const rows = peers.map((e) => row({ ...e, activity: e.usage, isSelf: false }));
-  if (self) rows.unshift(row({ ...self, activity: getUsage(), isSelf: true }));
+  const rows = sources.map(row);
 
   rows.sort((a, b) => (b.self ? 1 : 0) - (a.self ? 1 : 0) || b.totals.estimatedCost - a.totals.estimatedCost);
 
   const included = rows.filter((r) => r.usesSubscriptions);
-  return { instances: rows, totals: sumFleetTotals(included) };
+  const { loadData } = await import('./instanceIdentity.js');
+  const configured = (await loadData()).peers || [];
+  const known = new Set(sources.map((source) => source.instanceId));
+  const established = configured.filter((peer) => !peer.directions?.length || peer.directions.includes('outbound')
+    || peer.syncCategories?.usage === true || peer.fullSync === true);
+  const missingInstances = established
+    .filter((peer) => !known.has(peer.instanceId))
+    .map((peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance');
+  const withSnapshots = established.filter((peer) => known.has(peer.instanceId));
+  const { resolveEffectiveCategories } = withSnapshots.length ? await import('./instances.js') : { resolveEffectiveCategories: () => ({}) };
+  const notSyncingInstances = withSnapshots.filter((peer) => peer.enabled === false || !resolveEffectiveCategories(peer).usage)
+    .map((peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance');
+  const incompleteMonths = [...new Set(sources.flatMap(({ activity }) => {
+    const months = activity.monthlyActivity || {};
+    const covered = dropPartiallyCoveredMonths(months, from, to);
+    return Object.keys(months).filter((month) => !covered[month]
+      && (!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)));
+  }))].sort();
+  const report = reportFor(sources);
+  const subscriptionReport = reportFor(sources.filter((source) => !apiBilled.has(source.instanceId)));
+  const activity = fleetPeriodActivity(sources, { from, to });
+  if (!from && !to) {
+    const undated = report.totals.sessions - activity.reduce((sum, item) => sum + item.sessions, 0);
+    if (undated > 0) activity.push({ date: 'undated', label: 'Undated', sessions: undated });
+  }
+  return {
+    instances: peers.length ? rows : [],
+    totals: peers.length ? sumFleetTotals(included) : null,
+    report,
+    subscriptionReport,
+    firstActivityDay: earliestDay(sources.map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
+    activity,
+    last7Days: fleetPeriodActivity(sources, { from: utcDay(Date.now() - 6 * DAY_MS), to: utcDay(Date.now()) })
+      .map((day) => ({ ...day, label: new Date(`${day.date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) })),
+    totalToolCalls: from || to ? null : sources.reduce((sum, source) => sum + (source.activity.totalToolCalls || 0), 0),
+    monthly: fleetPeriodMonthly(sources, { from, to }, providers),
+    transcriptUpdatedAt: localTranscript?.updatedAt || null,
+    hourlyActivity: from || to ? null : Array.from({ length: 24 }, (_, hour) =>
+      sources.reduce((sum, source) => sum + (source.activity.hourlyActivity?.[hour] || 0), 0)),
+    coverage: {
+      instanceCount: sources.length, missingInstances, notSyncingInstances, incompleteMonths,
+      transcriptUnreported: peers.filter((entry) => !entry.claudeCode).map((entry) => entry.name || entry.instanceId),
+    },
+  };
+}
+
+function fleetPeriodMonthly(sources, { from, to }, providers) {
+  const histories = sources.map(({ activity, transcript }) => ({
+    daily: activity.dailyActivity || {}, monthly: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to), transcript: transcript || {},
+  }));
+  const first = earliestDay(histories);
+  if (!first) return { instanceCount: sources.length, series: [], history: [] };
+  const start = from || first;
+  const end = to || utcDay(Date.now());
+  if (start > end) return { instanceCount: sources.length, series: [], history: [] };
+  const monthNumber = (day) => Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7)) - 1;
+  const firstMonth = monthNumber(start);
+  const lastMonth = monthNumber(end);
+  // A corrupt or extreme date range must not allocate an unbounded chart.
+  if (lastMonth - firstMonth > 1200) return { instanceCount: sources.length, series: [], history: [], rangeTooWide: true };
+  const labels = new Map();
+  const rows = [];
+  for (let value = firstMonth; value <= lastMonth; value++) {
+    const year = Math.floor(value / 12);
+    const number = (value % 12) + 1;
+    const month = `${String(year).padStart(4, '0')}-${String(number).padStart(2, '0')}`;
+    const last = new Date(dayMs(`${month}-01`) + 31 * DAY_MS);
+    last.setUTCDate(0);
+    const monthEnd = last.toISOString().slice(0, 10);
+    const beginDay = start > `${month}-01` ? start : `${month}-01`;
+    const endDay = end < monthEnd ? end : monthEnd;
+    const span = Array.from({ length: Math.floor((dayMs(endDay) - dayMs(beginDay)) / DAY_MS) + 1 }, (_, i) => utcDay(dayMs(beginDay) + i * DAY_MS));
+    const costs = {};
+    let tokens = 0;
+    for (const history of histories) {
+      for (const usage of instanceDailyUsage(history, span, providers, labels)) {
+        addInto(costs, usage.costs);
+        tokens += usage.tokens;
+      }
+    }
+    rows.push({ month, costs, tokens, partial: beginDay !== `${month}-01` || endDay !== monthEnd });
+  }
+  const { series, values } = stackCosts(rows.map((row) => row.costs), labels);
+  return {
+    instanceCount: sources.length,
+    series,
+    history: rows.map((row, index) => ({
+      month: row.month,
+      estimatedCost: roundCents(values[index].reduce((sum, value) => sum + value, 0)),
+      values: values[index].map(roundCents),
+      tokens: Math.round(row.tokens),
+      partial: row.partial,
+    })),
+  };
+}
+
+// Short windows show days, long windows show months. Rolled-up months clipped
+// by the selected range are omitted and separately reported as incomplete.
+function fleetPeriodActivity(sources, { from, to }) {
+  const end = to || new Date().toISOString().slice(0, 10);
+  const hasMonthlyBuckets = sources.some(({ activity }) => Object.keys(dropPartiallyCoveredMonths(activity.monthlyActivity, from, to))
+    .some((month) => (!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7))));
+  const daily = from && dayMs(end) >= dayMs(from) && dayMs(end) - dayMs(from) <= 31 * DAY_MS && !hasMonthlyBuckets;
+  const sessionsIn = (bucket) => Math.max(bucket.sessions || 0,
+    Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
+  const counts = new Map();
+  const add = (key, bucket) => {
+    const current = counts.get(key) || { sessions: 0, messages: 0, tokens: 0 };
+    current.sessions += sessionsIn(bucket);
+    current.messages += bucket.messages || 0;
+    current.tokens += bucket.tokens || 0;
+    counts.set(key, current);
+  };
+  if (daily) {
+    for (let ms = dayMs(from); ms <= dayMs(end); ms += DAY_MS) counts.set(utcDay(ms), { sessions: 0, messages: 0, tokens: 0 });
+  }
+  for (const { activity } of sources) {
+    for (const [day, bucket] of Object.entries(activity.dailyActivity || {})) {
+      if ((from && day < from) || (to && day > to) || (daily && day > end)) continue;
+      const key = daily ? day : day.slice(0, 7);
+      add(key, bucket);
+    }
+    if (!daily) {
+      for (const [month, bucket] of Object.entries(dropPartiallyCoveredMonths(activity.monthlyActivity, from, to))) {
+        if ((from && month < from.slice(0, 7)) || (to && month > to.slice(0, 7))) continue;
+        add(month, bucket);
+      }
+    }
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, label: daily ? date.slice(5) : date, ...count }));
 }
 
 export const ROLLING_COST_WINDOW_DAYS = 30;
@@ -507,14 +644,19 @@ const OTHER_GROUP = 'other';
  * family when it has one (a peer's provider may not be configured here, so the
  * id is tried too), else it stands alone under its own name.
  */
-function costByGroup(report, labels) {
+function reportFamily(row, providers) {
+  return row.family || (providers.some((provider) => provider.id === row.id) ? null : familyForProviderId(row.id));
+}
+
+function costByGroup(report, labels, providers) {
   const out = {};
   for (const row of report.providers) {
-    if (!(row.estimatedCost > 0)) continue;
-    const family = row.family || familyForProviderId(row.id);
+    const cost = row.rawEstimatedCost ?? row.estimatedCost;
+    if (!(cost > 0)) continue;
+    const family = reportFamily(row, providers);
     const key = family || `provider:${row.id}`;
     if (!labels.has(key)) labels.set(key, family ? familyLabel(family) : row.name || row.id);
-    out[key] = (out[key] || 0) + row.estimatedCost;
+    out[key] = (out[key] || 0) + cost;
   }
   return out;
 }
@@ -525,11 +667,11 @@ const addInto = (target, source, scale = 1) => {
 
 const reportTokens = (row) => row.tokensIn + row.tokensOut + row.cacheReadTokens + row.cacheWriteTokens;
 
-function dailyUsage(report, labels) {
+function dailyUsage(report, labels, providers) {
   return {
-    costs: costByGroup(report, labels),
+    costs: costByGroup(report, labels, providers),
     tokens: reportTokens(report.totals),
-    claudeTokens: report.providers.reduce((sum, row) => sum + ((row.family || familyForProviderId(row.id)) === 'claude' ? reportTokens(row) : 0), 0),
+    claudeTokens: report.providers.reduce((sum, row) => sum + (reportFamily(row, providers) === 'claude' ? reportTokens(row) : 0), 0),
   };
 }
 
@@ -553,6 +695,7 @@ function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span,
     if (!daily[day] && monthly[month]) missingDays.set(month, (missingDays.get(month) || 0) + 1);
   }
   const monthShare = new Map();
+  const monthSupplement = new Map();
   for (const [month, count] of missingDays) {
     const report = buildUsageReport({}, { monthlyActivity: { [month]: monthly[month] }, providers });
     // Days of the month outside the span still carry their share, so divide by
@@ -561,18 +704,38 @@ function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span,
     const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const rolledDays = daysInMonth - Object.keys(daily).filter((d) => d.startsWith(`${month}-`)).length;
     const divisor = Math.max(rolledDays, count);
-    const usage = dailyUsage(report, labels);
+    const usage = dailyUsage(report, labels, providers);
     const costs = {};
     addInto(costs, usage.costs, 1 / divisor);
     monthShare.set(month, { costs, tokens: usage.tokens / divisor, claudeTokens: usage.claudeTokens / divisor });
+    // A rollup containing only other providers cannot overlap Claude
+    // transcripts; preserve their exact day instead of spreading them.
+    if (!(usage.claudeTokens > 0) && !(usage.costs.claude > 0)) continue;
+    // The rollup no longer says which day contained a run. Compare its full
+    // month with transcripts before spreading any excess, or a transcript on
+    // one day would be added to the same rollup spread over the other days.
+    const first = `${month}-01`;
+    const last = utcDay(dayMs(first) + (daysInMonth - 1) * DAY_MS);
+    const ledger = dailyUsage(buildUsageReport(daily, { from: first, to: last, monthlyActivity: { [month]: monthly[month] }, providers }), labels, providers);
+    const observed = summarizeTranscriptDays(transcript, { from: first, to: last }).totals;
+    const extraCost = Math.max(0, (observed.rawEstimatedCost ?? observed.estimatedCost ?? 0) - (ledger.costs.claude || 0));
+    const extraTokens = Math.max(0, (observed.total || 0) - ledger.claudeTokens);
+    if (extraCost && !labels.has('claude')) labels.set('claude', familyLabel('claude'));
+    monthSupplement.set(month, { cost: extraCost / daysInMonth, tokens: extraTokens / daysInMonth });
   }
   return span.map((day) => {
     const usage = daily[day]
-      ? dailyUsage(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels)
+      ? dailyUsage(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels, providers)
       : monthShare.get(day.slice(0, 7)) || { costs: {}, tokens: 0, claudeTokens: 0 };
+    const supplement = monthSupplement.get(day.slice(0, 7));
+    if (supplement) {
+      const costs = { ...usage.costs };
+      if (supplement.cost) costs.claude = (costs.claude || 0) + supplement.cost;
+      return { costs, tokens: usage.tokens + supplement.tokens };
+    }
     const transcriptTotals = transcript[day] && summarizeTranscriptDays({ [day]: transcript[day] }).totals;
     return {
-      costs: withTranscriptClaude({ ...usage.costs }, transcriptTotals?.estimatedCost, labels),
+      costs: withTranscriptClaude({ ...usage.costs }, transcriptTotals?.rawEstimatedCost ?? transcriptTotals?.estimatedCost, labels),
       // Transcript sessions overlap the Claude ledger; reconcile tokens by the
       // same per-day maximum as cost, retaining every other provider's tokens.
       tokens: usage.tokens + Math.max(0, (transcriptTotals?.total || 0) - usage.claudeTokens),
@@ -585,8 +748,8 @@ function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span,
  * the terminal, the desktop app's Code tab, AND the runs PortOS spawned. The
  * ledger holds PortOS runs plus the terminal sessions the interactive scan
  * billed (usageInteractiveScan.js, which reaches back only ~35 days from its
- * first run), so each is a partial view of the same spend: the day's Claude
- * cost is the larger of the two, never their sum.
+ * first run), so each is a partial view of the same spend. Day-level history
+ * uses the larger value; a rolled-up month is reconciled over that whole month.
  */
 function withTranscriptClaude(costs, transcriptCost, labels) {
   if ((transcriptCost || 0) > (costs.claude || 0)) {
@@ -706,7 +869,7 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
   const spanLength = pointCount + ROLLING_COST_WINDOW_DAYS - 1;
   const span = Array.from({ length: spanLength }, (_, i) => utcDay(todayMs - (spanLength - 1 - i) * DAY_MS));
 
-  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
+  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p), familyForProvider(p)])]);
   if (rollingMemo?.key === key) return rollingMemo.value;
 
   const labels = new Map();
@@ -750,7 +913,7 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
     ...(self?.claudeCode ? [row(self, true)] : []),
     ...peers.filter((e) => e.claudeCode).map((e) => row(e, false)),
   ];
-  const combined = mergeModelRows(instances.filter((i) => i.usesSubscriptions).map((i) => i.models));
+  const combined = mergeModelRows(instances.map((i) => i.models));
   // Peers we know of that published no history (older build, or not scanned yet)
   // — named so the UI can say why they are missing rather than dropping them.
   const pending = peers.filter((e) => !e.claudeCode).map((e) => e.name || e.instanceId);

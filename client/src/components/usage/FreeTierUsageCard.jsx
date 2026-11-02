@@ -133,8 +133,8 @@ export default function FreeTierUsageCard({ freeTier }) {
         </Pill>
       </div>
       <p className="mb-2 text-[10px] text-gray-500 sm:text-xs">
-        Queries and tokens on free-tier quotas (e.g. opencode zen) over the selected period — tracked locally because
-        these providers expose no usage API. Unreported counts render as —, never 0.
+        Queries and tokens on free-tier quotas (e.g. opencode zen) over the selected period, from the available instance ledgers.
+        These providers expose no usage API. Unreported counts render as —, never 0.
       </p>
       {providers.length === 0 ? (
         <div className="py-2 text-sm text-gray-500">No free-tier usage recorded in this period.</div>
@@ -144,6 +144,9 @@ export default function FreeTierUsageCard({ freeTier }) {
             <ProviderRow key={provider.id} provider={provider} />
           ))}
         </div>
+      )}
+      {freeTier?.blocksUnavailableAcrossInstances && (
+        <p className="mt-2 text-xs text-gray-500">Observed limit blocks are unavailable across instances; individual block histories are not federated.</p>
       )}
       {blocks.length > 0 && (
         <div className="mt-3 border-t border-port-border pt-2">
