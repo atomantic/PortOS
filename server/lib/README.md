@@ -1073,3 +1073,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `imageRenderQuality.js` | Shared visible rendering-defect criteria for catalog sheets, Cast & Sets and shot stills. |
 
 | `greyboxSequence.js` | Offline sequence validation, absolute-time anchor/camera sampling and global frame-grid planning for greybox reference exports. |
+
+| `ecosystemPortEdits.js` | `analyzeEcosystemPorts` and `planEcosystemPortEdits` — non-executing AST analysis of process identities and runtime port source spans; rejects ambiguous mutations, opaque spreads and partial batches before file or registry writes. |

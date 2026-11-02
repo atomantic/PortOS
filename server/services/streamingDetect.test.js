@@ -502,15 +502,11 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
     expect(out).toContain('API: 5555'); // untouched
   });
 
-  it('rewrites quoted keys in PORTS constants and inline port objects', () => {
+  it('refuses a batch containing an unreferenced constant and preserves unrelated PORTS entries', () => {
     const content = `const PORTS = { "API": 6000, 'UI': 5000 };
-module.exports = { apps: [{ name: 'quoted-api', script: 's.js', ports: { "api": 6000 } }] };`;
-    const out = rewriteEcosystemPorts(content, [[6000, 6100], [5000, 5100]]);
-
-    expect(out).toContain('"API": 6100');
-    expect(out).toContain("'UI': 5100");
-    expect(out).toContain('"api": 6100');
-    expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6100);
+module.exports = { apps: [{ name: 'quoted-api', ports: { "api": 6000 } }] };`;
+    expect(rewriteEcosystemPorts(content, [[6000, 6100], [5000, 5100]])).toBe(content);
+    expect(rewriteEcosystemPorts(content, [[6000, 6100]])).toBe(content.replace('"api": 6000', '"api": 6100'));
   });
 
   it('does not treat a suffix of a quoted property name as the api key', () => {
@@ -548,7 +544,7 @@ module.exports = { apps: [{ name: 'quoted-api', script: 's.js', ports: { "api": 
 
   it('resolves 11+ remap pairs without placeholder prefix collision (index 1 vs 10)', () => {
     const pairs = Array.from({ length: 11 }, (_, k) => [7000 + k, 8000 + k]);
-    const content = pairs.map(([o]) => `PORT: ${o}`).join('\n');
+    const content = `module.exports = { apps: [${pairs.map(([o], i) => `{ name: 'app-${i}', env: { PORT: ${o} } }`).join(',')}] };`;
     const out = rewriteEcosystemPorts(content, pairs);
     for (const [, newP] of pairs) expect(out).toContain(`PORT: ${newP}`);
     expect(out).not.toMatch(/PORT_REMAP/);
@@ -857,24 +853,14 @@ module.exports = { apps };`;
     expect(parseEcosystemConfig(r.content).processes.find(p => p.name === 'srv-ui').ports.devUi).toBe(7002);
   });
 
-  it('does NOT rewrite env PORT as a fallback for a ports: PORTS.x reference block (honest unapplied, no false success)', () => {
-    // The block derives api/ui from `ports: PORTS.server` (a reference to a
-    // const outside the app block), so the parser ignores env.PORT. A targeted
-    // edit can't reach the external const from inside the block — so it must
-    // report `unapplied` (→ caller 422s) rather than rewriting env.PORT, which
-    // would falsely report success while the displayed/derived port reverts AND
-    // silently change the runtime API env port.
+  it('updates a resolved ports reference and its runtime env together', () => {
     const content = `const PORTS = { server: { api: 6000, ui: 6000 } };
-module.exports = { apps: [
-  { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // env.PORT untouched, nothing falsely rewritten
+module.exports = { apps: [{ name: 'srv', ports: PORTS.server, env: { PORT: 6000 } }] };`;
+    const edit = { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content: content.replace('api: 6000', 'api: 7000').replace('PORT: 6000', 'PORT: 7000'),
+      applied: [edit], unapplied: [],
+    });
   });
 
   it('rewrites only the edited key when an inline ports object has ui and devUi sharing a value', () => {
@@ -1003,41 +989,13 @@ module.exports = { apps: [
     expect(r.content).toContain('port: 7000');
   });
 
-  it('does NOT match a same-valued lowercase metadata field in a ports-reference block (no false api success)', () => {
-    // api is derived from `ports: PORTS.server` (external const). The block also
-    // carries a lowercase metadata field that happens to share the value. An
-    // unscoped `api:`/`ui:` key pattern would rewrite that metadata and falsely
-    // report applied while the real const reverts — so label-key patterns are
-    // scoped to inline ports objects only → this edit is unapplied.
-    const content = `const PORTS = { server: { api: 6000 } };
-module.exports = { apps: [
-  { name: 'srv', script: 's.js', ports: PORTS.server, max_restarts: 6000 }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // metadata field untouched
-  });
-
-  it('does NOT report success from an env-only ui rewrite when the ui port comes from a ports reference', () => {
-    // ui is derived from `ports: PORTS.client` (external const), but the block
-    // ALSO carries a same-valued VITE_PORT. Rewriting only VITE_PORT would be
-    // false success — the parser re-derives ui from the unchanged const. So the
-    // env/args fallback must be skipped for a reference block → unapplied.
+  it('updates referenced ports and matching runtime env while preserving metadata', () => {
     const content = `const PORTS = { client: { ui: 6000 } };
-module.exports = { apps: [
-  { name: 'srv-ui', script: 'npx', args: 'vite --host', ports: PORTS.client, env: { VITE_PORT: 6000 } }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // VITE_PORT untouched, no false rewrite
+module.exports = { apps: [{ name: 'srv-ui', ports: PORTS.client, metadata: { ui: 6000 }, env: { VITE_PORT: 6000 } }] };`;
+    const edit = { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7000 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.content).toBe(content.replace('client: { ui: 6000', 'client: { ui: 7000').replace('VITE_PORT: 6000', 'VITE_PORT: 7000'));
   });
 
   it('still rewrites VITE_PORT/--port for a ui edit when there is no ports reference (inline or sole source)', () => {
@@ -1138,11 +1096,11 @@ describe('writeEcosystemPortsByProcess', () => {
 
   it('does NOT persist a partial batch — leaves the file untouched when any edit is unapplied', async () => {
     // 'srv' has a literal api PORT (rewritable) but the same-valued ui lives in
-    // a ports: PORTS.client reference (not reachable in-block). The route 422s
+    // a dynamic ports: PORTS.client reference. The route 422s
     // such a request, so the applied subset must NOT be written to disk — else
     // config diverges from the un-updated registry for a "failed" request.
     dir = mkdtempSync(join(tmpdir(), 'eco-tgt-'));
-    const original = `const PORTS = { client: { ui: 6000 } };
+    const original = `const PORTS = { client: { ui: resolveUiPort() } };
 module.exports = { apps: [
   { name: 'srv', script: 's.js', env: { PORT: 6000 } },
   { name: 'srv-ui', script: 'npx', ports: PORTS.client }
@@ -1151,7 +1109,7 @@ module.exports = { apps: [
     writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
     const result = await writeEcosystemPortsByProcess(dir, [
       { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },      // applies
-      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (external const)
+      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (dynamic source)
     ]);
     expect(result.changed).toBe(false);
     expect(result.applied).toHaveLength(0); // nothing persisted
@@ -1188,11 +1146,11 @@ describe('writeEcosystemPortEdits (combined value-keyed + targeted, atomic)', ()
 
   it('persists NOTHING (not even the value-keyed pass) when a targeted edit is unapplied', async () => {
     // The atomicity bug: the value-keyed remap (devUiPort 5556→7001) is
-    // rewritable, but the shared uiPort lives in an external PORTS.server const
-    // the targeted pass can't reach → unapplied → the route 422s. The
+    // rewritable, but the shared uiPort lives in a dynamic PORTS.server value
+    // the static planner cannot resolve → unapplied → the route 422s. The
     // value-keyed change must NOT have already hit disk.
     dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
-    const original = `const PORTS = { server: { api: 6000, ui: 6000 } };
+    const original = `const PORTS = { server: { api: 6000, ui: resolveUiPort() } };
 module.exports = { apps: [
   { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } },
   { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
@@ -1202,7 +1160,7 @@ module.exports = { apps: [
     const result = await writeEcosystemPortEdits(
       dir,
       [[5556, 7001]],                                                          // distinct, rewritable
-      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // shared, in external const → unapplied
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // dynamic source → unapplied
     );
     expect(result.changed).toBe(false);
     expect(result.remapApplied).toBe(false); // reported as not-persisted
