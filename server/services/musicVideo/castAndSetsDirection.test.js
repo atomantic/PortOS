@@ -51,6 +51,7 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('The image generator never sees the mood board');
     expect(prompt).toContain('People and wardrobe sheets show empty, relaxed hands');
     expect(prompt).toContain('Put carried or held objects in props, never in these descriptions');
+    expect(prompt).toContain('An abandoned or boarded-up house has an empty driveway');
     expect(prompt).not.toContain('moodRefs');
     expect(prompt).toContain('Director guidance: keep it night-lit');
     expect(prompt).toContain('1. Chorus 0:20–1:00');

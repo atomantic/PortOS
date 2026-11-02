@@ -104,6 +104,7 @@ describe('Cast & Sets set plates', () => {
     const prompt = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets })['set:food-court'].prompt;
     expect(prompt).toContain('shuttered counters with their menu boards blank');
     expect(prompt).toMatch(/furniture stands upright on its own legs, nothing stacked, interlocked or piled/);
+    expect(prompt).toContain('Every detail agrees with how this place really works');
   });
 
   it('still drops a sentence that pictures people in an empty plate', () => {

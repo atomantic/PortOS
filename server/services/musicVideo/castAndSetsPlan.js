@@ -63,7 +63,7 @@ const PHOTO = 'photorealistic, editorial photography';
 const EMPTY_HANDS = 'Hands empty and relaxed, no camera, device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only; never put a carried object from the description or reference images in their hands';
 // Stacked, interlocked or piled look-alike objects are where image models fuse
 // geometry (chairs molded into a table), and every shot on the set copies it.
-const PLAUSIBLE_SET = 'Keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects';
+const PLAUSIBLE_SET = 'Keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Every detail agrees with how this place really works: each object stands where people actually put it, and nothing contradicts the state of the place';
 const sentence = (s) => {
   const t = String(s || '').trim();
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;

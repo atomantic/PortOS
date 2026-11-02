@@ -29,6 +29,12 @@ describe('Cast & Sets vision transport contract', () => {
     expect(runner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt).toMatch(/render-quality.*fused, melted or merged/s);
   });
 
+  it('counts real-world logic errors (a car at an abandoned house, a hoop planted mid-lawn) as render-quality failures', async () => {
+    runner.runPromptThroughProvider.mockResolvedValueOnce(response());
+    await reviewCastSetsImage({ inputs, reviewer });
+    expect(runner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt).toMatch(/render-quality.*real-world logic errors.*abandoned house.*middle of a lawn/s);
+  });
+
   it('refuses incomplete evidence and an unexpected execution provider instead of accepting text-only confidence', async () => {
     runner.runPromptThroughProvider.mockResolvedValueOnce({ ...response(), text: '{"checks":[]}' });
     await expect(reviewCastSetsImage({ inputs, reviewer })).rejects.toThrow('incomplete inspection');
