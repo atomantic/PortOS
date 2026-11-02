@@ -73,6 +73,9 @@ describe('Ask across conversation route changes', () => {
     api.streamAskTurn.mockImplementation(async (_payload, { onEvent }) => {
       onEvent({ event: 'open', data: { conversationId: 'ask_123456789_abcdef01' } });
     });
+    api.getAskConversation.mockImplementation(async (id) => id === 'ask_123456789_abcdef01'
+      ? new Promise(() => {})
+      : conversation('ask_111111111_aaaaaaaa', 'Answer from A'));
     const router = createMemoryRouter(
       [{ path: '/ask/:conversationId?', element: <Ask /> }],
       { initialEntries: ['/ask'] },

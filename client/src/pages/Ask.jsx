@@ -353,11 +353,13 @@ export default function Ask() {
 
   useEffect(() => {
     let cancelled = false;
+    const isStreamNavigation = streamingConvIdRef.current === conversationId;
     setActiveConv(null);
-    setLoadingConv(!!conversationId);
+    setLoadingConv(!!conversationId && !isStreamNavigation);
     if (!conversationId) {
       return undefined;
     }
+    if (isStreamNavigation) return undefined;
     api.getAskConversation(conversationId).then((data) => {
       if (cancelled) return;
       if (data?.conversation) {
