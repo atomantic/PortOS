@@ -91,8 +91,7 @@ async function divergence(repoPath, branch) {
  *   answers "is there anything to update to?" rather than "was there, last
  *   time something fetched?". The auto-updater wants this; a status read for
  *   the UI does not.
- * @param {string|null} [options.excludeAgentId] - verified finishing repair owner;
- *   completion inspection only. Scheduler callers retain the full ownership guard.
+ * @param {string|null} [options.excludeAgentId] - completion-only exclusion, after dispatch ownership is verified.
  * @returns {Promise<object>} the readiness verdict.
  */
 export async function checkUpdateRepoReadiness({ repoPath, fetch = false, excludeAgentId = null } = {}) {
@@ -147,7 +146,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false, exclud
     // Moving it, or running update.sh's pm2 restart under it, is the branch-jack
     // `repoSync` refuses on for the same reason — and the idle gate alone would
     // not catch a paused agent that still holds the tree.
-    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId }).catch(() => 'unknown'),
+    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId: excludeAgentId }).catch(() => 'unknown'),
   ]);
   if (branch === null || porcelain === null) {
     return verdict({ defaultBranch, reasons: ['git-unreadable'] });
@@ -297,15 +296,18 @@ export async function queueRepoRepairTask(verdict) {
     'Work in the primary checkout, not a worktree — the state that needs fixing is there.',
   ].filter((line) => line !== null).join('\n');
 
-  return import('./cosTaskStore.js')
-    .then(({ addTask }) => addTask({
-      description: REPO_REPAIR_TASK_DESCRIPTION,
-      priority: 'HIGH',
-      app: PORTOS_APP_ID,
-      context,
-      useWorktree: false,
-      metadata: { repoRepair: { version: 1, repoPath: verdict.repoPath } },
-    }, 'internal'))
+  return Promise.all([import('./cosTaskStore.js'), import('./updateRepoRepairCompletion.js')])
+    .then(async ([{ addTask }, { captureRepoRepairContract }]) => {
+      const repoRepairContract = await captureRepoRepairContract(verdict);
+      return addTask({
+        description: REPO_REPAIR_TASK_DESCRIPTION,
+        priority: 'HIGH',
+        app: PORTOS_APP_ID,
+        context,
+        useWorktree: false,
+        targetInstanceId: repoRepairContract.instanceId,
+      }, 'internal', { repoRepairContract });
+    })
     .catch((err) => {
       console.error(`❌ Failed to queue auto-update repo repair task: ${err.message}`);
       return null;

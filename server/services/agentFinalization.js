@@ -137,7 +137,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, agentId = null, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
+export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
   if (terminatedByUser) return null;
   if (isUpdateRepoRepairTask(task)) return success
     && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
@@ -2131,8 +2131,8 @@ async function finalizeAgentInCompletionContext({
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
   const validationPassed = await evaluateSuccessCriteria({
-    task,
     agentId,
+    task,
     terminatedByUser,
     workspacePath,
     startedAt: runStartedAt,

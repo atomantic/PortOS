@@ -514,7 +514,7 @@ export async function addTask(taskData, taskType = 'user', options = {}) {
   }
 }
 
-async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [] }) {
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [], repoRepairContract = null }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
@@ -672,6 +672,8 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   // Never accept proof supplied by an intake caller. A record with prior run
   // accounting is not a new episode merely because it was inserted here.
   const initialMetadata = { ...(newTask.metadata || {}) };
+  delete initialMetadata.repoRepairContract;
+  if (repoRepairContract && taskType === 'internal') initialMetadata.repoRepairContract = { ...repoRepairContract, taskId: newTask.id };
   delete initialMetadata.spawnBudgetProof;
   delete initialMetadata.spawnBudgetReconciledHold;
   const pristine = newTask.status === 'pending' && SPAWN_HISTORY_METADATA_KEYS.every(key => initialMetadata[key] == null);
@@ -1006,6 +1008,10 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  if (updates.metadata && Object.hasOwn(updates.metadata, 'repoRepairContract')
+    && !isDeepStrictEqual(updates.metadata.repoRepairContract, current.metadata?.repoRepairContract)) {
+    return { error: 'Checkout repair completion contract is server-owned and immutable' };
+  }
   if (spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive && isLeaseLive(current.metadata)) {
     return { statusChanged: true, task: current };
   }

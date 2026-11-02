@@ -3467,3 +3467,22 @@ describe('cosTaskStore completed history older than the working set', () => {
     expect((await getUserTasks()).tasks.map((task) => task.description).sort()).toEqual(['First of a burst', 'Second of a burst']);
   });
 });
+
+
+describe('server-owned checkout repair completion contract', () => {
+  it('binds the persisted task id, survives round trips, and refuses caller-created or edited proof', async () => {
+    const baseline = { version: 1, taskId: 'pending', instanceId: 'example-instance', repoPath: '/example/repo',
+      origin: 'https://github.com/example/PortOS.git', head: 'a'.repeat(40), files: [] };
+    const task = await addTask({ description: 'Repair checkout', app: 'portos-default', useWorktree: false }, 'internal', { repoRepairContract: baseline });
+    const contract = { ...baseline, taskId: task.id };
+    expect((await getCosTasks()).tasks.find(row => row.id === task.id).metadata.repoRepairContract).toEqual(contract);
+    expect(await updateTask(task.id, { metadata: { repoRepairContract: { ...contract, head: 'b'.repeat(40) } } }, 'internal'))
+      .toMatchObject({ error: expect.stringContaining('server-owned') });
+    const spoof = await addTask({ id: 'sys-spoof', status: 'pending', description: 'Spoofed repair', metadata: { repoRepairContract: contract } }, 'internal', { raw: true });
+    expect(spoof.metadata).not.toHaveProperty('repoRepairContract');
+    expect(await updateTask(spoof.id, { metadata: { repoRepairContract: contract } }, 'internal'))
+      .toMatchObject({ error: expect.stringContaining('server-owned') });
+    expect(await updateTask(task.id, { status: 'in_progress', metadata: { repoRepairContract: contract, totalSpawnCount: 1 } }, 'internal'))
+      .toMatchObject({ metadata: { repoRepairContract: contract } });
+  });
+});
