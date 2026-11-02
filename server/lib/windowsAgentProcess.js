@@ -104,20 +104,17 @@ export function prepareWindowsAgentLaunch(agentId, command, args, { cwd, env, pt
 
 /** Stop through the supervisor so it can persist kernel-backed settlement.
  * Lost/unreadable supervision remains a hold; PID-based fallback cannot prove it.
- * Every stop request, SIGKILL included, reaches the Linux supervisor as SIGTERM:
- * it terminates, escalates and reaps the tree itself, and a killed supervisor
- * could prove nothing. */
+ * The durable request survives a supervisor that has not started listening yet;
+ * every stop, SIGKILL included, lets the supervisor terminate, escalate and reap
+ * the tree itself, because a killed supervisor could prove nothing. */
 export function watchWindowsAgentProcess(child, launch) {
   if (!launch.settlementDirectory) return child;
-  const originalKill = child.kill.bind(child);
   const cancel = () => {
-    if (process.platform === 'win32') writeFileSync(join(launch.settlementDirectory, 'cancel'), '', { mode: 0o600 });
-    else {
-      try { originalKill('SIGTERM'); } catch { /* already exited */ }
-    }
+    writeFileSync(join(launch.settlementDirectory, 'cancel'), '', { mode: 0o600 });
     if (Object.hasOwn(child, 'killed')) child.killed = true;
     return true;
   };
+  const originalKill = child.kill.bind(child);
   child.requestWindowsAgentStop = cancel;
   child.kill = signal => signal === 0 || signal === '0' ? originalKill(signal) : cancel();
   return child;

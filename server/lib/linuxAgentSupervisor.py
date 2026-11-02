@@ -4,6 +4,7 @@ The supervisor makes itself a child subreaper, launches the agent root and
 reaps until wait() reports ECHILD. A descendant whose ancestors exit (setsid,
 double fork) is reparented here before its parent can be reaped, so ECHILD
 proves the whole tree has exited. Only then is the settled receipt written.
+A stop arrives as the server's `cancel` file or as SIGTERM/SIGHUP.
 Processes started outside the tree through IPC (systemd-run, at) are out of
 scope. Failure records carry an allowlisted stage and a numeric errno only,
 never paths, PIDs, owner nonces or command text.
@@ -95,9 +96,9 @@ def signal_tree(signum):
             os.close(descriptor)
 
 
-def drain(root):
+def drain(root, directory):
     """Reap until ECHILD; on cancellation SIGTERM the tree, then SIGKILL it."""
-    global stage
+    global stage, cancel_at
     status, terminated = None, False
     while True:
         stage = 'reap'
@@ -111,6 +112,9 @@ def drain(root):
         except ChildProcessError:
             require(status is not None)
             return status
+        # The server's durable stop request, which may predate the handlers.
+        if cancel_at is None and os.path.exists(os.path.join(directory, 'cancel')):
+            cancel_at = time.monotonic()
         if cancel_at is not None:
             stage = 'cancel'
             if time.monotonic() - cancel_at >= GRACE_SECONDS:
@@ -178,7 +182,7 @@ def main(argv):
         require(created.isdigit() and created != '0')
         stage = 'started-receipt'
         write_receipt(directory, 'started.json', {'owner': owner, 'pid': root, 'created': created})
-        status = drain(root)
+        status = drain(root, directory)
         code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
         child.returncode = code
         stage = 'settled-receipt'
@@ -195,7 +199,7 @@ def main(argv):
             # Never leave a launched tree behind; it still earns no settled proof.
             cancel_at = time.monotonic() - GRACE_SECONDS
             try:
-                drain(root)
+                drain(root, directory)
             except Exception:
                 pass
         if directory is not None:

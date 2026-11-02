@@ -454,7 +454,9 @@ descendant is reparented to it rather than escaping, and it reaps until
 `wait()` reports no children left. Only then does it write the settled receipt,
 carrying the owner nonce, root PID and `/proc/<pid>/stat` start time, through
 the same reservation, launch and started records as Windows. Every stop request,
-including a forced kill, reaches the supervisor as a cancellation: it sends the
+including a forced kill, is written as the same durable `cancel` request the
+Windows supervisor reads (SIGTERM or SIGHUP to the supervisor also cancel), so
+it survives a supervisor that has not finished starting. The supervisor sends the
 tracked tree SIGTERM, escalates to SIGKILL after five seconds (signalling each
 process through a pidfd checked against its scanned start time), and waits for
 the same empty-tree proof. Candidate recovery accepts the receipt only when it

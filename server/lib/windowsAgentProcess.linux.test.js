@@ -100,6 +100,14 @@ setTimeout(() => process.exit(3), 20000).unref();`);
     } finally { killProcessTree(child); neighbor.kill(); await Promise.all([closed, neighborClosed]); }
   }, 30000);
 
+  it('honors a stop requested before the supervisor finished starting', async () => {
+    await reserveWindowsAgentProcess(agent);
+    const { child, closed } = launch(agent, process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+    killProcessTree(child);
+    await closed;
+    expect(await readWindowsAgentSettlement(agent)).toMatchObject({ active: 0 });
+  }, 30000);
+
   it('preserves a PTY interaction and settles the tree when the terminal is closed', async () => {
     const pty = await import('node-pty');
     await reserveWindowsAgentProcess(agent);
