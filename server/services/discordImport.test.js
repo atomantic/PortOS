@@ -120,6 +120,7 @@ describe('discordMessageToCandidate', () => {
     expect(c.metadata).toMatchObject({
       messageId: '1103456789012345678',
       channelId: '900000000000000001',
+      conversationId: '900000000000000001',
       guildName: 'Dev Server',
       hasAttachments: false,
     });

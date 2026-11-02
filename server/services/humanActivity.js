@@ -445,10 +445,13 @@ const WHATSAPP_ID_TYPE_SQL = `CASE
   WHEN NULLIF(metadata->>'chatScope', '') IS NOT NULL THEN 'scope'
   ELSE 'title' END`;
 const WHATSAPP_CONVERSATION_SQL = `jsonb_build_array(${WHATSAPP_ID_TYPE_SQL}, ${WHATSAPP_RAW_ID_SQL})::text`;
+const DISCORD_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'channelId', ''), '')";
 const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVERSATION_SQL}
+  WHEN source = 'discord' THEN ${DISCORD_CONVERSATION_SQL}
   ELSE COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') END`;
 
 function conversationFilter(field, source, parameter) {
+  if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
   if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
   if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
   // Raw conversationId remains supported. An ambiguous scope/title label must
