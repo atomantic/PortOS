@@ -1061,6 +1061,7 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `catalogRedesign.js` | Shared editable redesign fields and per-field limits for catalog creative conversations. |
 
+| `releaseAttemptMembership.js` | Store-owned, append-only membership of dispatched release attempts (parse/append/peer-merge) that recovery requires and no retry reset clears. |
 | `releasePublication.js` | Validated request for forge-verified release publication milestones. |
 
 | `testCacheRetirementProof.js` | Vitest module-cache recognizers (cache tag, roots, entry names, metadata shape) for checkout ignored-payload checks. |

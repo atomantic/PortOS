@@ -2595,6 +2595,85 @@ describe('addTask — first-line dedup (source guards)', () => {
 // against the in-memory file map so the read-merge-write round-trip + write-skip
 // are covered end-to-end (the merge rules themselves are unit-tested in
 // cosTaskMerge.test.js).
+describe('release attempt membership', () => {
+  const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+  const claim = (count, stamp) => ({ status: 'in_progress', metadata: { totalSpawnCount: count,
+    claimedBy: 'fixture', claimedAt: stamp, lastSpawnedAt: stamp } });
+  const dispatch = (taskId, agentId, startedAt, count) => {
+    mock.state.agents[agentId] = { id: agentId, taskId, status: 'running', startedAt, metadata: { instanceId: 'instance-example' } };
+    return updateTask(taskId, claim(count, startedAt), 'internal', { spawnBudgetOperation: { kind: 'dispatch', agentId, startedAt } });
+  };
+  const attempt = (agentId, startedAt) => ({ agentId, startedAt, instanceId: 'instance-example' });
+
+  it('records every verified release dispatch across resets and ignores caller-supplied membership', async () => {
+    const task = await addTask({ id: 'sys-release', description: 'Release example', metadata: { analysisType: 'do-release',
+      releaseAttempts: { version: 1, complete: true, attempts: [] } } }, 'internal');
+    expect(task.metadata.releaseAttempts).toBeUndefined();
+    await dispatch(task.id, 'agent-first', 'first-start', 1);
+    await updateTask(task.id, { status: 'pending', metadata: { totalSpawnCount: undefined, releaseAttempts: undefined } }, 'internal',
+      { spawnBudgetOperation: { kind: 'reset' } });
+    await updateTask(task.id, { metadata: { releaseAttempts: { version: 1, complete: true, attempts: [] } } }, 'internal');
+    mock.state.agents['agent-first'].status = 'completed';
+    const second = await dispatch(task.id, 'agent-second', 'second-start', 1);
+    expect(second.metadata.releaseAttempts).toEqual({ version: 1, complete: true,
+      attempts: [attempt('agent-first', 'first-start'), attempt('agent-second', 'second-start')] });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual(second.metadata.releaseAttempts);
+  });
+
+  it('starts incomplete when a release task already carries earlier dispatch accounting', async () => {
+    const task = await addTask({ id: 'sys-release-legacy', description: 'Legacy release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    await updateTask(task.id, { metadata: { lastAgentId: 'agent-unrecorded' } }, 'internal');
+    const first = await dispatch(task.id, 'agent-first', 'first-start', 1);
+    expect(first.metadata.releaseAttempts).toEqual({ version: 1, complete: false, attempts: [attempt('agent-first', 'first-start')] });
+  });
+
+  it('refuses a release dispatch whose registered owner cannot be verified', async () => {
+    const task = await addTask({ id: 'sys-release-unverified', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'completed', startedAt: 'first-start' };
+    const result = await updateTask(task.id, claim(1, 'first-start'), 'internal',
+      { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } });
+    expect(result.error).toMatch(/release attempt membership/);
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toBeUndefined();
+    // An attempt that cannot be recorded (here: no instance) never runs unrecorded.
+    mock.state.agents['agent-first'] = { id: 'agent-first', taskId: task.id, status: 'running', startedAt: 'first-start' };
+    expect((await updateTask(task.id, claim(1, 'first-start'), 'internal',
+      { spawnBudgetOperation: { kind: 'dispatch', agentId: 'agent-first', startedAt: 'first-start' } })).error).toMatch(/release attempt membership/);
+    expect((await getTaskById(task.id)).status).toBe('pending');
+  });
+
+  it('does not let a peer certify an existing local task whose earlier dispatches went unrecorded', async () => {
+    const task = await addTask({ id: 'sys-release-unrecorded', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    const local = await updateTask(task.id, { metadata: { lastAgentId: 'agent-unrecorded' } }, 'internal');
+    const peer = attempt('agent-peer', 'peer-start');
+    await mergePeerTasks('internal', [{ ...local, taskType: 'internal', metadata: { ...local.metadata,
+      releaseAttempts: { version: 1, complete: true, attempts: [peer] } } }], { now: NOW });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: false, attempts: [peer] });
+  });
+
+  it('marks complete local membership incomplete when a peer copy shows unrecorded dispatches', async () => {
+    const task = await addTask({ id: 'sys-release-older-peer', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    const local = await dispatch(task.id, 'agent-first', 'first-start', 1);
+    const { releaseAttempts: _omitted, ...olderPeerMetadata } = local.metadata;
+    await mergePeerTasks('internal', [{ ...local, taskType: 'internal', metadata: { ...olderPeerMetadata, lastAgentId: 'agent-peer' } }], { now: NOW });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: false,
+      attempts: [attempt('agent-first', 'first-start')] });
+  });
+
+  it('keeps every entry through a peer merge and never lets a peer certify or reset membership', async () => {
+    const task = await addTask({ id: 'sys-release-peer', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    const local = await dispatch(task.id, 'agent-first', 'first-start', 1);
+    const peer = attempt('agent-peer', 'peer-start');
+    await mergePeerTasks('internal', [{ ...local, taskType: 'internal', metadata: { ...local.metadata,
+      releaseAttempts: { version: 1, complete: true, attempts: [peer] } } }], { now: NOW });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: true,
+      attempts: [attempt('agent-first', 'first-start'), peer] });
+    await mergePeerTasks('internal', [{ ...local, taskType: 'internal', metadata: { ...local.metadata,
+      releaseAttempts: { version: 1, complete: true, attempts: 'forged' } } }], { now: NOW });
+    expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual({ version: 1, complete: false,
+      attempts: [attempt('agent-first', 'first-start'), peer] });
+  });
+});
+
 describe('cosTaskStore.mergePeerTasks', () => {
   const NOW = Date.parse('2026-06-25T12:00:00.000Z');
   const future = (ms) => new Date(NOW + ms).toISOString();
