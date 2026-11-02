@@ -119,7 +119,12 @@ router.post('/processes/:name/action', requireHostControl, asyncHandler(async (r
 
 // GET /api/commands/processes/:name/monit - Get PM2 monit data for a process
 router.get('/processes/:name/monit', asyncHandler(async (req, res) => {
-  const processes = await pm2Service.listProcesses();
+  const { processListQuerySchema, validateRequest } = await import('../lib/validation.js');
+  const { appId } = validateRequest(processListQuerySchema, req.query);
+  const app = appId ? await (await import('../services/apps.js')).getAppById(appId) : null;
+  if (appId && !app) throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
+  const processes = await pm2Service.listProcessesStrict(app?.pm2Home || null);
+  if (processes === null) throw new ServerError('PM2 status unavailable', { status: 503, code: 'PM2_UNAVAILABLE' });
   const process = processes.find(p => p.name === req.params.name);
 
   if (!process) {
