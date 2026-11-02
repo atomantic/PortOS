@@ -395,6 +395,22 @@ describe('getProviderQuotas', () => {
     expect(result.unreportedInstances).toEqual(['Old peer']);
   });
 
+  it('reports an unavailable image-quota read separately from a disabled image backend', async () => {
+    getAllProviders.mockResolvedValue({ providers: [] });
+    getSettings.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const incomplete = await getProviderQuotas({ scope: 'instances' });
+    expect(incomplete.imageQuotaComplete).toBe(false);
+    const disabled = await getProviderQuotas({ scope: 'instances' });
+    expect(disabled.imageQuotaComplete).toBe(true);
+    getSettings.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const imageIncomplete = await getProviderQuotas({ scope: 'instances', family: 'imagegen' });
+    expect(imageIncomplete.imageQuotaComplete).toBe(false);
+    const imageDisabled = await getProviderQuotas({ scope: 'instances', family: 'imagegen' });
+    expect(imageDisabled.imageQuotaComplete).toBe(true);
+    const otherFamily = await getProviderQuotas({ scope: 'instances', family: 'grok' });
+    expect(otherFamily.imageQuotaComplete).toBeNull();
+  });
+
   it('unwraps the { providers } object shape from getAllProviders', async () => {
     // Regression: getAllProviders returns { activeProvider, providers }, not a
     // bare array — passing the object straight into resolveEnabledFamilies threw

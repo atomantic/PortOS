@@ -297,24 +297,28 @@ describe('UsagePage per-provider refresh', () => {
     api.getProviderUsage.mockResolvedValue({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] });
   });
 
-  it('keeps peer cards separate and refreshes only the local reading', async () => {
+  it('shows one shared-account card using the newest reading and refreshes the local source', async () => {
     const peerName = 'an-unbroken-peer-name-'.repeat(5);
+    const timestamp = (offset) => new Date(Date.now() + offset).toISOString();
     api.getProviderUsage.mockResolvedValue({ providers: [
-      { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } },
-      { ...card('grok', 'Grok', 40), origin: { self: false, instanceId: 'peer-a', name: peerName } },
+      { ...card('grok', 'Grok', 20), fetchedAt: timestamp(-10_000), origin: { self: true, name: 'This instance' } },
+      { ...card('grok', 'Grok', 40), fetchedAt: timestamp(-5_000), origin: { self: false, instanceId: 'peer-a', name: peerName } },
       { ...card('codex', 'Codex', 60), origin: { self: false, instanceId: 'peer-b', name: 'Peer B' } },
     ], unreportedInstances: ['Offline'] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText((text) => text.startsWith(peerName))).toHaveClass('break-words');
     expect(screen.getByText(/Quota reporting is unavailable from Offline/)).toBeInTheDocument();
+    expect(screen.getByText(/Account identity is unavailable/)).toBeInTheDocument();
     expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: 'Grok' })).toHaveLength(1);
     expect(screen.getByText('60% used')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Refresh Grok usage' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Refresh Codex usage' })).not.toBeInTheDocument();
     api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...card('grok', 'Grok', 77), origin: { self: true, name: 'This instance' } }] });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
     expect(await screen.findByText('77% used')).toBeInTheDocument();
-    expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.queryByText('40% used')).not.toBeInTheDocument();
   });
 
   it('reconciles fleet charts and quota cards when usage sync applies', async () => {
@@ -363,15 +367,239 @@ describe('UsagePage per-provider refresh', () => {
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     await screen.findByText('Grok');
     let finishFamily, finishFleet;
+    let fullReads = 0;
     api.getProviderUsage.mockImplementation(({ family }) => family === 'grok'
       ? new Promise((resolve) => { finishFamily = resolve; })
-      : new Promise((resolve) => { finishFleet = resolve; }));
+      : ++fullReads === 1 ? new Promise((resolve) => { finishFleet = resolve; })
+        : Promise.resolve({ providers: [card('grok', 'Grok', 77), card('claude', 'Claude Code', 10)] }));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
     await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
     await act(async () => finishFamily({ providers: [card('grok', 'Grok', 77)] }));
     await act(async () => finishFleet({ providers: [card('grok', 'Grok', 20), card('claude', 'Claude Code', 10)] }));
     expect(await screen.findByText('77% used')).toBeInTheDocument();
     expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('does not let a delayed full read roll back a newer peer from a family refresh', async () => {
+    const local = { ...card('grok', 'Grok', 10), fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'This instance' } };
+    const peer = (percentUsed, capturedAt) => ({ ...card('grok', 'Grok', percentUsed), fetchedAt: capturedAt,
+      origin: { self: false, instanceId: 'peer', name: 'Peer', capturedAt } });
+    const oldPeer = peer(20, '2026-01-02T00:00:00.000Z');
+    const newPeer = peer(80, '2026-01-03T00:00:00.000Z');
+    api.getProviderUsage.mockResolvedValue({ providers: [local, oldPeer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    let finishFamily, finishOldFull;
+    let fullReads = 0;
+    api.getProviderUsage.mockImplementation(({ family }) => family
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : ++fullReads === 1 ? new Promise((resolve) => { finishOldFull = resolve; })
+        : Promise.resolve({ providers: [local, newPeer] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishFamily({ providers: [local, newPeer] }));
+    expect(await screen.findByText('80% used')).toBeInTheDocument();
+    await act(async () => finishOldFull({ providers: [local, oldPeer] }));
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+  });
+
+  it('retains a failed refresh diagnostic when a follow-up read serves an older cached card', async () => {
+    const earlier = (ms) => new Date(Date.now() - ms).toISOString();
+    const local = { ...card('grok', 'Grok', 20), fetchedAt: earlier(60_000), origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    let finishFamily, finishOldFull;
+    let fullReads = 0;
+    api.getProviderUsage.mockImplementation(({ family }) => family
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : ++fullReads === 1 ? new Promise((resolve) => { finishOldFull = resolve; })
+        : Promise.resolve({ providers: [local] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    // A failed Codex-style fallback can carry telemetry older than even the
+    // retained cache; the failed attempt itself happened after both.
+    await act(async () => finishFamily({ providers: [{ ...local, limits: [], fetchedAt: earlier(120_000), error: 'Scrape failed' }] }));
+    expect(await screen.findByText(/Scrape failed/)).toBeInTheDocument();
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    await act(async () => finishOldFull({ providers: [local] }));
+    expect(screen.getByText(/Scrape failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], activity: [] }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText('No rate-limit data reported')).toBeInTheDocument();
+    expect(screen.getByText(/Scrape failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, fetchedAt: new Date().toISOString() }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await waitFor(() => expect(screen.queryByText(/Scrape failed/)).not.toBeInTheDocument());
+  });
+
+  it('retains a forced refresh error even when a quota event overtakes its response', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    let finishForced;
+    api.getProviderUsage.mockImplementation(({ refresh }) => refresh
+      ? new Promise((resolve) => { finishForced = resolve; })
+      : Promise.resolve({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await act(async () => { socket.emit('provider-quota:updated', {}); });
+    await act(async () => finishForced({ providers: [card('claude', 'Claude Code', 10),
+      { ...card('grok', 'Grok', 20), limits: [], error: 'Forced scrape failed' }] }));
+    expect(await screen.findByText(/Forced scrape failed/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
+  it('retains a forced refresh network failure after a cached read overtakes it', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    let failForced;
+    api.getProviderUsage.mockImplementation(({ refresh }) => refresh
+      ? new Promise((_, reject) => { failForced = reject; })
+      : Promise.resolve({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 20)] }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await act(async () => { socket.emit('provider-quota:updated', {}); });
+    await act(async () => failForced(new Error('synthetic network error')));
+    expect(await screen.findByText(/Couldn’t refresh all provider quotas/)).toBeInTheDocument();
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+  });
+
+  it('clears a local refresh failure when Refresh all confirms the provider was disabled', async () => {
+    const local = { ...card('grok', 'Grok', 20), origin: { self: true, name: 'This instance' } };
+    const peer = { ...card('grok', 'Grok', 40), origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Grok usage' });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, limits: [], error: 'Local scrape failed' }, peer] });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    expect(await screen.findByText(/Local scrape failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [peer] });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await waitFor(() => expect(screen.queryByText(/Local scrape failed/)).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Grok' })).toBeInTheDocument();
+  });
+
+  it('keeps an image failure when an incomplete read omits the local card', async () => {
+    const local = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
+      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
+    const peer = { ...local, origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer], imageQuotaComplete: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Image Gen usage' });
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, metrics: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
+    expect(await screen.findByText(/Local image read failed/)).toBeInTheDocument();
+    expect(screen.getAllByText('No renders')).toHaveLength(2);
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [{ ...local, metrics: [], error: 'Local image read failed' }, peer], imageQuotaComplete: false });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    expect(await screen.findByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+    expect(screen.getAllByText('No renders')).toHaveLength(2);
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: false });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    expect(await screen.findByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText(/Local image read failed/)).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [peer], imageQuotaComplete: true });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await waitFor(() => expect(screen.queryByText(/Local image read failed/)).not.toBeInTheDocument());
+    expect(screen.queryByText('Image quota status on this instance is unavailable.')).not.toBeInTheDocument();
+  });
+
+  it('keeps image failure status when another family refresh starts later', async () => {
+    const image = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
+      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
+    const grok = card('grok', 'Grok', 20);
+    api.getProviderUsage.mockResolvedValue({ providers: [image, grok], imageQuotaComplete: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Image Gen usage' });
+    let finishImage, finishGrok;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'imagegen'
+      ? new Promise((resolve) => { finishImage = resolve; })
+      : new Promise((resolve) => { finishGrok = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => finishImage({ providers: [], imageQuotaComplete: false }));
+    await act(async () => finishGrok({ providers: [grok], imageQuotaComplete: null }));
+    expect(screen.getByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('No renders')).toBeInTheDocument();
+  });
+
+  it('shows a passive image error beside the retained observation, including without a prior card', async () => {
+    const image = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
+      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [image], imageQuotaComplete: true });
+    const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('No renders')).toBeInTheDocument();
+    const failed = { ...image, metrics: [], error: 'Synthetic ledger failure' };
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [failed], imageQuotaComplete: false });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Synthetic ledger failure/)).toBeInTheDocument();
+    expect(screen.getByText('No renders')).toBeInTheDocument();
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [], imageQuotaComplete: false });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(screen.getByText(/Synthetic ledger failure/)).toBeInTheDocument();
+    unmount();
+
+    api.getProviderUsage.mockResolvedValue({ providers: [], imageQuotaComplete: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('No enabled providers report subscription usage.');
+    api.getProviderUsage.mockResolvedValueOnce({ providers: [failed], imageQuotaComplete: false });
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText(/Synthetic ledger failure/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Image Gen' })).toBeInTheDocument();
+  });
+
+  it('applies an image failure after a later full request returns no status', async () => {
+    const image = { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
+      metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }], origin: { self: true, name: 'This instance' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [image], imageQuotaComplete: true });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Refresh Image Gen usage' });
+    let finishImage;
+    api.getProviderUsage.mockImplementation(({ family }) => family === 'imagegen'
+      ? new Promise((resolve) => { finishImage = resolve; })
+      : Promise.reject(new Error('synthetic full-read failure')));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Image Gen usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    await act(async () => finishImage({ providers: [], imageQuotaComplete: false }));
+    expect(screen.getByText('Image quota status on this instance is unavailable.')).toBeInTheDocument();
+  });
+
+  it('keeps another forced failure without overwriting a newer family refresh', async () => {
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    let finishFamily, finishForced;
+    api.getProviderUsage.mockImplementation(({ refresh, family }) => family === 'grok'
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : refresh ? new Promise((resolve) => { finishForced = resolve; })
+        : Promise.resolve({ providers: [card('claude', 'Claude Code', 10), card('grok', 'Grok', 80)] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }));
+    await act(async () => finishFamily({ providers: [card('grok', 'Grok', 80)] }));
+    await act(async () => finishForced({ providers: [
+      { ...card('grok', 'Grok', 20), limits: [], error: 'Old Grok failure' },
+      { ...card('claude', 'Claude Code', 10), limits: [], error: 'Claude failure' },
+    ] }));
+    expect(await screen.findByText(/Claude failure/)).toBeInTheDocument();
+    expect(screen.queryByText(/Old Grok failure/)).not.toBeInTheDocument();
+    expect(screen.getByText('80% used')).toBeInTheDocument();
+  });
+
+  it('retains peer readings when a full read fails while a family refresh is in flight', async () => {
+    const local = { ...card('grok', 'Grok', 20), fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'This instance' } };
+    const peer = { ...card('grok', 'Grok', 40), fetchedAt: '2026-01-02T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } };
+    api.getProviderUsage.mockResolvedValue({ providers: [local, peer] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('40% used')).toBeInTheDocument();
+    let finishFamily;
+    api.getProviderUsage.mockImplementation(({ family }) => family
+      ? new Promise((resolve) => { finishFamily = resolve; })
+      : Promise.resolve({ providers: [local], federationUnavailable: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Grok usage' }));
+    await act(async () => { socket.emit('sync:progress', { phase: 'applied', category: 'usage', applied: 1 }); });
+    expect(await screen.findByText('Peer quota readings are unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+    await act(async () => finishFamily({ providers: [local, peer], federationUnavailable: false }));
+    expect(screen.getByText('40% used')).toBeInTheDocument();
+    expect(screen.getByText('Peer quota readings are unavailable.')).toBeInTheDocument();
   });
 
   it('reconciles a full reading after a concurrent family refresh fails', async () => {
@@ -504,6 +732,50 @@ describe('UsagePage federated quota readings', () => {
 
     await screen.findByText('Claude Code');
     expect(screen.queryByText(/^\d+ instances$/)).not.toBeInTheDocument();
+  });
+
+  it('keeps image blocks and counts from each source in one observations card', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { family: 'imagegen', label: 'Image Gen', supported: true, limits: [],
+        metrics: [{ key: 'imagegen-grok', label: 'Grok images', value: 'No renders' }],
+        fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: true, name: 'This instance' } },
+      { family: 'imagegen', label: 'Image Gen', supported: true,
+        limits: [{ key: 'imagegen-grok', label: 'Grok images', percentUsed: 100, percentRemaining: 0 }],
+        fetchedAt: '2026-01-02T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } },
+    ] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('100% used')).toBeInTheDocument();
+    expect(screen.getByText('No renders')).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: 'Image Gen' })).toHaveLength(1);
+    expect(screen.getByText(/not account-wide quotas or totals/)).toBeInTheDocument();
+    expect(screen.getByText(/^Peer · reported/)).toBeInTheDocument();
+  });
+
+  it('shows a newer diagnostic alongside an older meter', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { family: 'codex', label: 'Codex', supported: true, limits: [], error: 'Weekly limit reached',
+        fetchedAt: '2026-01-03T00:00:00.000Z', origin: { self: true, name: 'This instance' } },
+      { family: 'codex', label: 'Codex', supported: true,
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }],
+        fetchedAt: '2026-01-02T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } },
+    ] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.getByText(/Weekly limit reached/)).toHaveTextContent('Earlier readings may be out of date.');
+  });
+
+  it('retains local advisories when a peer supplies the newest quota', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [
+      { family: 'codex', label: 'Codex', supported: true, note: 'Local runs use a routing override.',
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 10, percentRemaining: 90 }],
+        fetchedAt: '2026-01-01T00:00:00.000Z', origin: { self: true, name: 'This instance' } },
+      { family: 'codex', label: 'Codex', supported: true,
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }],
+        fetchedAt: '2026-01-02T00:00:00.000Z', origin: { self: false, instanceId: 'peer', name: 'Peer' } },
+    ] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('20% used')).toBeInTheDocument();
+    expect(screen.getByText('This instance: Local runs use a routing override.')).toBeInTheDocument();
   });
 
   // A federated card can be filled by a peer while this machine's own scrape is
@@ -639,7 +911,7 @@ describe('arrangeQuotaCells', () => {
 
   it('collapses a shared cell to the one family of the pair that is enabled', () => {
     const cells = arrangeQuotaCells([q('grok'), q('claude')]);
-    expect(cells.map((c) => c.key)).toEqual(['self:claude', 'self:grok']);
+    expect(cells.map((c) => c.key)).toEqual(['claude', 'grok']);
   });
 
   it('renders a family it has no display preference for exactly once, in server order', () => {

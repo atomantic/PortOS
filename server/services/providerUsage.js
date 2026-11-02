@@ -804,10 +804,9 @@ async function fetchClaudeQuota({ wait = WAIT.CACHED } = {}) {
     limits: data.limits,
     activity: data.activity,
     approximate: data.approximate,
-    // The CLI's own caption is about ONE machine's sessions. It stands only
-    // until a federated peer contributes its reading — `mergeFleetQuotaCards`
-    // replaces it with what was actually combined.
-    note: data.approximate ? 'This machine only — other federated instances have not reported a reading yet.' : null,
+    // Activity is an approximation for the machine that took this reading;
+    // the peer merge can replace this note with its own combined caption.
+    note: data.approximate ? 'Activity is approximate and observed on this instance.' : null,
     fetchedAt: data.fetchedAt
   };
 }
@@ -891,7 +890,7 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
 export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
-  const { cards, families, complete } = await readProviderQuotas({ wait, family, period });
+  const { cards, families, complete, imageQuotaComplete } = await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
   // overlap. Recording is awaited rather than fired off so a caller that
@@ -920,6 +919,7 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, per
       ],
       unreportedInstances: (peerEntries || []).filter((peer) => !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
       federationUnavailable: peerEntries === null,
+      imageQuotaComplete,
     };
   }
   return mergeFleetQuotaCards(cards, peerEntries);
@@ -943,15 +943,15 @@ async function readProviderQuotas({ wait, family, period }) {
   // install rendering a spent meter its federated twin drops.
   const now = Date.now();
   const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
-  if (family && family !== IMAGE_GEN_FAMILY) return { cards: prune(familyCards), families: null, complete: null };
+  if (family && family !== IMAGE_GEN_FAMILY) return { cards: prune(familyCards), families: null, complete: null, imageQuotaComplete: null };
   const image = await fetchImageGenQuota({ period });
   const cards = prune(image.card ? [...familyCards, image.card] : familyCards);
-  if (family) return { cards, families: null, complete: null };
+  if (family) return { cards, families: null, complete: null, imageQuotaComplete: image.complete };
   const ids = familyCards.map((card) => card.family);
   if (image.card || !image.complete) ids.push(IMAGE_GEN_FAMILY);
   const complete = image.complete && cards.filter((card) => card.family !== IMAGE_GEN_FAMILY)
     .every((card) => !card.pending && !card.error && (card.supported === false || card.limits?.length || card.activity?.length || card.metrics?.length));
-  return { cards, families: ids, complete: Boolean(complete) };
+  return { cards, families: ids, complete: Boolean(complete), imageQuotaComplete: image.complete };
 }
 
 /**

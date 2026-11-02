@@ -964,11 +964,21 @@ describe('federated subscription-quota readings', () => {
     expect(Date.parse(write.capturedAt)).toBeGreaterThan(Date.parse(before));
   });
 
-  it('re-records only what changed, so a repeated read is not a new slot to pull', async () => {
+  it('publishes a new observation time without rewriting identical cached or derived reads', async () => {
     expect((await recordLocalQuotaCards([quotaCard()])).changed).toBe(true);
-    // Same reading, later clock: the claim is unchanged, so the file is not.
-    expect((await recordLocalQuotaCards([quotaCard({ fetchedAt: '2026-08-31T01:00:00.000Z' })])).changed).toBe(false);
-    expect((await recordLocalQuotaCards([quotaCard({ limits: [] })])).changed).toBe(true);
+    expect((await recordLocalQuotaCards([quotaCard()])).changed).toBe(false);
+    const later = quotaCard({ fetchedAt: '2026-08-31T01:00:00.000Z' });
+    expect((await recordLocalQuotaCards([later])).changed).toBe(true);
+    expect((await readLocalQuotaCards()).quotas[0].fetchedAt).toBe(later.fetchedAt);
+    expect((await recordLocalQuotaCards([quotaCard({ fetchedAt: later.fetchedAt, limits: [] })])).changed).toBe(true);
+
+    const image = quotaCard({ family: 'imagegen', label: 'Image Gen' });
+    expect((await recordLocalQuotaCards([image])).changed).toBe(true);
+    expect((await recordLocalQuotaCards([{ ...image, fetchedAt: later.fetchedAt }])).changed).toBe(false);
+
+    const unsupported = { family: 'grok', label: 'Grok', supported: false, limits: [], activity: [], fetchedAt: quotaCard().fetchedAt };
+    expect((await recordLocalQuotaCards([unsupported])).changed).toBe(true);
+    expect((await recordLocalQuotaCards([{ ...unsupported, fetchedAt: later.fetchedAt }])).changed).toBe(false);
   });
 
   // Codex cards are stamped with the TELEMETRY that produced them, not the
