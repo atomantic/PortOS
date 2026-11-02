@@ -17,7 +17,7 @@ const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['ligh
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
-// A prop line is "name: description"; a line without both halves is dropped.
+// A prop line is "name: description".
 const propLine = (line) => {
   const at = line.indexOf(':');
   const name = line.slice(0, at).trim();
@@ -58,7 +58,8 @@ function editorFor(item, direction, adding = false, subjects = []) {
   if (item.kind === 'props') {
     const props = direction?.props || [];
     return { list: 'One prop per line: name: exactly how it looks', values: { text: props.map((prop) => `${prop.name}: ${prop.description}`).join('\n') },
-      toEdits: (v) => ({ props: lines(v.text).map(propLine).filter(Boolean).map((prop) => {
+      validate: (v) => lines(v.text).every(propLine) ? null : 'Give every prop a name and description separated by a colon.',
+      toEdits: (v) => ({ props: lines(v.text).map(propLine).map((prop) => {
         const prior = props.find((old) => old.name.toLowerCase() === prop.name.toLowerCase());
         return prior ? { ...prop, id: prior.id, owner: prior.owner || '' } : prop;
       }) }) };
@@ -104,10 +105,16 @@ const BINDING_MISSING = {
 function ItemEditor({ editor, label, busy, onSave, onCancel }) {
   const baseId = useId();
   const [values, setValues] = useState(editor.values);
-  const set = (key, value) => setValues((old) => ({ ...old, [key]: value }));
+  const [validationError, setValidationError] = useState(null);
+  const set = (key, value) => { setValidationError(null); setValues((old) => ({ ...old, [key]: value })); };
   return (
     <form className="space-y-2 rounded border border-port-border p-2" aria-label={`Edit ${label}`}
-      onSubmit={(e) => { e.preventDefault(); onSave(editor.toEdits(values)); }}>
+      onSubmit={(e) => {
+        e.preventDefault();
+        const error = editor.validate?.(values);
+        if (error) { setValidationError(error); return; }
+        onSave(editor.toEdits(values));
+      }}>
       {editor.looks ? (
         <div className="space-y-3">
           {values.looks.map((look, index) => (
@@ -138,6 +145,7 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
             : <input id={`${baseId}-${key}`} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />}
         </label>
       ))}
+      {validationError && <p role="alert" className="text-xs text-port-warning">{validationError}</p>}
       <p className="text-[11px] text-port-text-muted">Saving re-renders this image and anything drawn from it.</p>
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={busy} className={`${buttonClass} bg-port-accent text-white border-transparent`}>Save and re-render</button>

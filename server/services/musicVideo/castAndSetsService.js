@@ -458,6 +458,15 @@ async function enqueueImage(project, stage, key) {
   };
   const settings = await deps.getSettings();
   const baseParams = await deps.imageParams(settings, stage.route, common);
+  if (item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE)) {
+    const identityId = stage.images?.[item.refKeys?.[0]]?.imageId;
+    const identityPath = identityId ? resolveGalleryImage(identityId, { mustExist: false }) : null;
+    const sent = baseParams.referenceImagePaths || [];
+    if (!identityPath || !sent.includes(identityPath) || !sent.includes(referenceImagePaths[0])) {
+      throw new ServerError('Face sheets require a renderer that can send both the angle guide and the character reference',
+        { status: 409, code: 'CAST_SETS_ROUTE_INELIGIBLE' });
+    }
+  }
   const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
   // Persist the actual styled queue input, with only served local references.
   // Never expose the absolute host paths used by the provider transport.
@@ -547,11 +556,22 @@ async function dispatchKey(projectId, key) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
-      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision });
+      // This route cannot carry the required inputs, so retrying it cannot
+      // succeed and may otherwise leave the final pending key without a wakeup.
+      const retryable = sent?.error?.code !== 'CAST_SETS_ROUTE_INELIGIBLE';
+      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision, retryable });
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
     console.warn(`⚠️ Music Video Cast & Sets ${short(projectId)} ${key} refused: ${reason}`);
+    // A refusal has no later job-completion event to wake the retry. Request
+    // another pass only for the same pending revision, without awaiting the
+    // current coalesced advance (which would wait on itself).
+    if (out.changed && out.stage?.status === 'imaging' && out.stage.revision === reserved.stage.revision
+      && out.stage.processId === PROCESS_ID && out.stage.images?.[key]?.status === 'pending') {
+      const live = advancing.get(projectId);
+      if (live) live.again = true;
+    }
     publish(projectId, out.project);
     return;
   }

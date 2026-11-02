@@ -247,15 +247,17 @@ describe('re-approving Cast & Sets', () => {
     supporting.ingredientId = 'cat-chr-manual';
     ingredients.set('cat-chr-manual', { id: 'cat-chr-manual', type: 'character', payload: { physicalDescription: 'Director-owned text' } });
     ingredients.get(leadId).payload.aliases = ['The lead'];
-    // A pre-fix legacy plate and a manually attached reference coexist.
+    // Legacy references have no ownership evidence, even when their filenames
+    // happen to appear in this subject's render history.
     media.find((row) => row.id === dinerId).metadata = undefined;
     await deps.catalogDB.attachMedia(leadId, 'manual-reference.png', 'reference', { caption: 'From Example Video' });
+    await deps.catalogDB.attachMedia(leadId, 'manual-history.png', 'reference', { caption: 'Director reference' });
     await deps.catalogDB.attachMedia(leadId, 'diner-plate.png', 'reference', { caption: 'Director reference to another subject' });
     const stage = {
       ...approvedStage,
       direction: { protagonist: { name: 'Ada', face: 'Freckles', hair: 'Short hair' }, props: [{ id: 'lantern', name: 'Lantern', description: 'New blue glass' }], cast: [{ id: 'bo', name: 'Bo', description: 'New supporting direction' }], sets: [{ id: 'diner', name: 'Night diner', description: 'New blue booths' }] },
       images: {
-        character: { status: 'done', imageId: 'ada-new.png', history: ['ada-sheet.png'] },
+        character: { status: 'done', imageId: 'ada-new.png', history: ['ada-sheet.png', 'manual-history.png'] },
         'cast:bo': { status: 'done', imageId: 'bo-new.png' },
         'set:diner': { status: 'done', imageId: 'diner-new.png', history: ['diner-plate.png'] },
       },
@@ -268,8 +270,8 @@ describe('re-approving Cast & Sets', () => {
     expect(ingredients.get(leadId).payload).toMatchObject({ physicalDescription: 'Freckles; Short hair', aliases: ['The lead'] });
     expect(ingredients.get(dinerId).payload.description).toBe('New blue booths');
     expect(ingredients.get(propId).payload.description).toBe('New blue glass');
-    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-reference.png', 'diner-plate.png', 'ada-new.png']);
-    expect(media.filter((row) => row.id === dinerId).map((row) => row.key)).toEqual(['diner-new.png']);
+    expect(media.filter((row) => row.id === leadId).map((row) => row.key)).toEqual(['manual-reference.png', 'manual-history.png', 'diner-plate.png', 'ada-new.png']);
+    expect(media.filter((row) => row.id === dinerId).map((row) => row.key)).toEqual(['diner-plate.png', 'diner-new.png']);
     expect(ingredients.get('cat-chr-manual').payload.physicalDescription).toBe('Director-owned text');
     expect(media.some((row) => row.id === 'cat-chr-manual')).toBe(false);
   });

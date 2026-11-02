@@ -353,7 +353,6 @@ async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
     }), { source: 'sync' });
     const imageId = sheets.get(subject.id);
     if (!imageId) continue;
-    const history = new Set(project.castAndSets.images?.[keys.get(subject.id)]?.history || []);
     const media = await catalogDB.listMediaForIngredient(record.id);
     const current = media.find((image) => image.kind === 'reference' && image.mediaKey === imageId);
     // Attach first: a failed replacement must leave the previous reference available.
@@ -373,10 +372,9 @@ async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
     for (const image of media) {
       const origin = image.metadata?.musicVideoCast;
       const ours = origin?.projectId === project.id && origin.subjectId === subject.id && origin.managed !== false;
-      // Per-subject render history recognizes legacy check-in references; a
-      // matching project caption alone cannot distinguish a manual attachment.
-      const legacy = !origin && history.has(image.mediaKey);
-      if (image.kind === 'reference' && image.mediaKey !== imageId && (ours || legacy)) {
+      // Neither a filename in render history nor a matching caption proves who
+      // attached a legacy reference. Preserve it unless ownership is recorded.
+      if (image.kind === 'reference' && image.mediaKey !== imageId && ours) {
         await catalogDB.detachMedia(record.id, image.mediaKey, image.kind);
       }
     }

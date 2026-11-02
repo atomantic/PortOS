@@ -242,9 +242,10 @@ export function linkCastAndSetsJob(project, key, jobId, submission = {}, now = n
  * Settle a key's render. `filename` = it landed; otherwise `error`. A job that
  * is not the key's current one (a superseded render) is ignored. A failure is
  * retried once (back to pending); the second consecutive failure stops the
- * stage `failed`. Returns `{ project, stage, changed }`.
+ * stage `failed`. A deterministic submission refusal can stop it immediately
+ * with `retryable: false`. Returns `{ project, stage, changed }`.
  */
-export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null }, now = new Date().toISOString()) {
+export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null, retryable = true }, now = new Date().toISOString()) {
   const stage = project?.castAndSets;
   const img = stage?.images?.[key];
   if (!img || img.status !== 'queued' || (jobId && img.renderQualityRetry?.jobId === jobId) || (revision != null && revision !== stage.revision)
@@ -256,13 +257,13 @@ export function settleCastAndSetsImage(project, key, { jobId = null, filename = 
   }
   const failures = (img.failures || 0) + 1;
   const reason = trimTo(String(error || 'The render failed'), MAX_REASON);
-  const next = { ...img, status: failures >= MAX_IMAGE_FAILURES ? 'failed' : 'pending', jobId: null, failures, error: reason, updatedAt: now };
+  const next = { ...img, status: !retryable || failures >= MAX_IMAGE_FAILURES ? 'failed' : 'pending', jobId: null, failures, error: reason, updatedAt: now };
   const failed = next.status === 'failed';
   return {
     ...write(project, {
       ...stage,
       images: { ...stage.images, [key]: next },
-      ...(failed ? { status: 'failed', stopReason: `The ${stage.plan?.[key]?.label || key} image failed twice: ${reason}` } : {}),
+      ...(failed ? { status: 'failed', stopReason: `The ${stage.plan?.[key]?.label || key} image ${retryable ? 'failed twice' : 'could not be queued'}: ${reason}` } : {}),
     }, now),
     changed: true,
   };

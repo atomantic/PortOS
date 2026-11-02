@@ -71,8 +71,9 @@ const sentence = (s) => {
 };
 const join = (...parts) => parts.map(sentence).filter(Boolean).join(' ');
 
-function identity(p) {
-  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');
+function identity(p, { includeSignature = true } = {}) {
+  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`,
+    includeSignature && p.signature && `signature: ${p.signature} (keep physical and worn details; carried objects belong on the prop sheet)`].filter(Boolean).join('; ');
 }
 
 /**
@@ -491,9 +492,11 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refKeys: (form ? [`set:${test.setId}`, `form:${form.id}`] : [`set:${test.setId}`, 'character', 'looks']).filter((k) => plan[k]),
       prompt: join(
         `Photorealistic music video still, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
+        // Test actions may use a prop, and legacy cards match their exact saved
+        // prompt. Keep sheet-only signature instructions out of these frames.
         form
           ? `Place the person from the ${form.label} character sheet in it (${[form.age && `${p.name || 'the protagonist'} at age ${form.age}`, form.hair && `hair: ${form.hair}`].filter(Boolean).join('; ') || form.label})`
-          : `Place the person from the character sheet in it (${identity(p)})`,
+          : `Place the person from the character sheet in it (${identity(p, { includeSignature: false })})`,
         form ? form.wardrobe && `Wearing ${form.wardrobe}` : look && `Wearing ${look.description}`,
         test.action,
         heightScaleLine(form ? `${p.name || 'the protagonist'} ${form.age ? `at age ${form.age}` : `(${form.label})`}` : p.name || 'the protagonist', form ? formHeight(form) : protagonistHeight),
