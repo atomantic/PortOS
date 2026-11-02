@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
-import { homedir } from 'os';
+import { homedir, userInfo } from 'os';
 import { tokenize } from '../../scripts/lib/sourceTokens.js';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
@@ -327,6 +327,14 @@ export function parseEcosystemConfig(content) {
   const processes = [];
   let pm2Home = null;
 
+  const currentUsername = () => {
+    try {
+      return userInfo()?.username || process.env.USERNAME || process.env.USER || 'user';
+    } catch {
+      return process.env.USERNAME || process.env.USER || 'user';
+    }
+  };
+
   // Extract PM2_HOME constant if defined (e.g., const PM2_HOME = `${require("os").homedir()}/.pm2-grace`)
   // First try template literals (backticks) which can contain nested quotes
   const templateMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*`([^`]+)`/);
@@ -334,7 +342,7 @@ export function parseEcosystemConfig(content) {
     let homePath = templateMatch[1];
     // Replace common template expressions
     homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
+    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, currentUsername());
     homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
     pm2Home = homePath;
   } else {
@@ -351,7 +359,7 @@ export function parseEcosystemConfig(content) {
         if (varTemplateMatch) {
           let homePath = varTemplateMatch[1];
           homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
+          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, currentUsername());
           pm2Home = homePath;
         }
       }
