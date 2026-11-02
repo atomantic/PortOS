@@ -58,6 +58,34 @@ it('preserves failed reads as errors and recovers on service invalidation withou
   expect(await status.getBrowserStatusSnapshot()).toMatchObject({ connected: false });
   expect(a.socket.emit).toHaveBeenCalledTimes(3);
 });
+it('rechecks update status when the observed browser reconnects, but not for ordinary page changes', async () => {
+  const { runtimeUpdateEvents } = await import('./runtimeUpdateEvents.js');
+  const changed = vi.fn();
+  runtimeUpdateEvents.on('changed', changed);
+  connect();
+  await vi.advanceTimersByTimeAsync(0);
+  getFullStatus.mockResolvedValue({ ...initial, pages: [{ id: 'example' }] });
+  await vi.advanceTimersByTimeAsync(status.BROWSER_OBSERVE_MS);
+  expect(changed).not.toHaveBeenCalled();
+  getFullStatus.mockResolvedValue({ ...initial, connected: false });
+  await vi.advanceTimersByTimeAsync(status.BROWSER_OBSERVE_MS);
+  expect(changed).toHaveBeenCalledWith({ browserChanged: true });
+  runtimeUpdateEvents.off('changed', changed);
+});
+it('invalidates update evidence when observation fails and again when the same browser recovers', async () => {
+  const { runtimeUpdateEvents } = await import('./runtimeUpdateEvents.js');
+  const changed = vi.fn();
+  runtimeUpdateEvents.on('changed', changed);
+  connect();
+  await vi.advanceTimersByTimeAsync(0);
+  getFullStatus.mockRejectedValue(new Error('unavailable'));
+  await vi.advanceTimersByTimeAsync(status.BROWSER_OBSERVE_MS);
+  expect(changed).toHaveBeenCalledTimes(1);
+  getFullStatus.mockResolvedValue(initial);
+  await vi.advanceTimersByTimeAsync(status.BROWSER_OBSERVE_MS);
+  expect(changed).toHaveBeenCalledTimes(2);
+  runtimeUpdateEvents.off('changed', changed);
+});
 it('discards a sample invalidated mid-flight, never overlaps, and restarts across a draining unsubscribe', async () => {
   let finish;
   getFullStatus.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));

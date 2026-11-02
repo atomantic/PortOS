@@ -16,7 +16,7 @@ vi.mock('../services/socket', () => ({ default: {
 } }));
 import socket from '../services/socket';
 vi.mock('../services/api', () => ({
-  getBrowserStatus: vi.fn(), getBrowserConfig: vi.fn(), updateBrowserConfig: vi.fn(),
+  getBrowserStatus: vi.fn(), getBrowserConfig: vi.fn(), updateBrowserConfig: vi.fn(), getBrowserUpdatePreflight: vi.fn(),
   launchBrowser: vi.fn(), stopBrowser: vi.fn(), restartBrowser: vi.fn(),
   getBrowserLogs: vi.fn(), navigateBrowser: vi.fn(),
   getDirectories: vi.fn(), browserDownloadUrl: vi.fn(), deleteBrowserDownload: vi.fn()
@@ -27,16 +27,28 @@ const disconnected = {
   connected: false, process: { status: 'online' }, pages: [],
   error: 'Health check returned 503', config: { headless: false }
 };
+const ticket = '00000000-0000-4000-8000-000000000001';
 
 beforeEach(() => {
   vi.clearAllMocks();
   for (const mock of Object.values(api)) mock.mockReset();
   api.getBrowserStatus.mockResolvedValue(disconnected);
+  api.getBrowserUpdatePreflight.mockResolvedValue({ state: 'current', runningVersion: '156.0.8078.74', installedVersion: '156.0.8078.74', ticket });
   api.getBrowserLogs.mockResolvedValue({ stderr: 'Chrome binary not found' });
   api.getBrowserConfig.mockResolvedValue({ cdpPort: 5556, healthPort: 5557, cdpHost: '127.0.0.1', headless: false, autoConnect: true });
 });
 
 describe('Browser recovery', () => {
+  it('warns if a restart would load an older installed browser', async () => {
+    api.getBrowserUpdatePreflight.mockResolvedValue({ state: 'downgrade-risk', runningVersion: '156.0.8078.74', installedVersion: '156.0.8078.4', ticket });
+    render(<BrowserPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    expect(await screen.findByText(/Running Chrome 156.0.8078.74; installed 156.0.8078.4/)).toBeInTheDocument();
+    expect(screen.getByText(/Installed Chrome is older/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart with older Chrome' })).toBeInTheDocument();
+    expect(api.restartBrowser).not.toHaveBeenCalled();
+  });
+
   it('exposes diagnostics and config and restores navigation after a successful restart', async () => {
     const user = userEvent.setup();
     render(<BrowserPage />);
@@ -51,9 +63,15 @@ describe('Browser recovery', () => {
     api.restartBrowser.mockResolvedValue({ connected: true });
     api.getBrowserStatus.mockResolvedValue({ ...disconnected, connected: true });
     await user.click(screen.getByRole('button', { name: 'Restart browser to reconnect' }));
+    expect(api.restartBrowser).not.toHaveBeenCalled();
+    expect(screen.getByText(/interrupts downloads and agent connections/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.restartBrowser).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Restart browser to reconnect' }));
+    await user.click(await screen.findByRole('button', { name: 'Restart browser now' }));
     expect(await screen.findByRole('textbox', { name: 'URL to open' })).toBeInTheDocument();
     expect(screen.queryByText('Chrome is not reachable')).not.toBeInTheDocument();
-    expect(api.restartBrowser).toHaveBeenCalledWith({ silent: true });
+    expect(api.restartBrowser).toHaveBeenCalledWith({ silent: true, ticket });
   });
 
   it('picks a browser executable, derives its bundle, and saves cleared defaults', async () => {
@@ -83,9 +101,50 @@ describe('Browser recovery', () => {
     api.restartBrowser.mockResolvedValue({ connected: false });
     render(<BrowserPage />);
     await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser now' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('not connected yet')));
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.getByText('Chrome is not reachable')).toBeInTheDocument();
+  });
+
+  it('reports when a restarted browser cannot be checked against the reviewed version', async () => {
+    api.restartBrowser.mockResolvedValue({ connected: true, updateVerification: { state: 'unverified' } });
+    render(<BrowserPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser now' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('could not be verified')));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('requires explicit acknowledgement when the fresh version check fails', async () => {
+    api.getBrowserUpdatePreflight.mockRejectedValue(new Error('Unavailable'));
+    api.restartBrowser.mockResolvedValue({ connected: true });
+    render(<BrowserPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    expect(await screen.findByText(/browser version could not be verified/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Restart without version verification' }));
+    expect(api.restartBrowser).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it('ignores a preflight result after cancellation', async () => {
+    let finish;
+    api.getBrowserUpdatePreflight.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<BrowserPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    expect(screen.getByRole('button', { name: 'Checking browser…' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await act(async () => finish({ state: 'current', ticket }));
+    expect(screen.queryByRole('button', { name: 'Restart browser now' })).not.toBeInTheDocument();
+    expect(api.restartBrowser).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a fallback restart after host control is refused', async () => {
+    api.getBrowserUpdatePreflight.mockRejectedValue(Object.assign(new Error('Host control requires an operator session.'), { code: 'HOST_CONTROL_FORBIDDEN' }));
+    render(<BrowserPage />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Restart browser to reconnect' }));
+    expect(await screen.findByText('Host control requires an operator session.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart unavailable' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Restart without version verification' })).not.toBeInTheDocument();
   });
 
   it('allows a failed initial status request to be retried without offering a blind launch', async () => {

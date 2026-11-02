@@ -72,6 +72,7 @@ export const executePortosUpdate = (opts) => {
 // Node.js runtime: version, newer stable/security releases, nvm, pm2 and the
 // boot script; the two actions restart PortOS through the update lifecycle.
 export const getNodeRuntimeStatus = (options) => request('/update/node-runtime', options);
+export const getBrowserUpdateStatus = (options) => request('/update/browser', options);
 export const updateNodeRuntime = (version) => request('/update/node-runtime', {
   method: 'POST',
   body: JSON.stringify({ version })
@@ -431,7 +432,10 @@ export const updateBrowserConfig = (config, options = {}) => request('/browser/c
 });
 export const launchBrowser = (options = {}) => request('/browser/launch', { method: 'POST', ...options });
 export const stopBrowser = (options = {}) => request('/browser/stop', { method: 'POST', ...options });
-export const restartBrowser = (options = {}) => request('/browser/restart', { method: 'POST', ...options });
+export const getBrowserUpdatePreflight = (options) => request('/browser/update-preflight', options);
+export const restartBrowser = ({ ticket, ...options } = {}) => request('/browser/restart', {
+  method: 'POST', ...options, ...(ticket ? { body: JSON.stringify({ ticket }) } : {}),
+});
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
 export const deleteBrowserDownload = (name, options = {}) =>
   request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE', ...options });

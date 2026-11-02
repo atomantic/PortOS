@@ -837,6 +837,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/browser/config',
   'POST /api/browser/launch',
   'POST /api/browser/restart',
+  'GET /api/browser/update-preflight',
   'POST /api/browser/stop',
   'POST /api/browser/navigate',
   'GET /api/browser/pages',

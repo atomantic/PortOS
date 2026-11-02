@@ -40,8 +40,13 @@ vi.mock('../services/browserService.js', () => ({
   getHealthStatus: vi.fn(),
   getRecentLogs: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
+vi.mock('../services/browserUpdateRestart.js', () => ({
+  prepareBrowserUpdateRestart: vi.fn(),
+  confirmBrowserUpdateRestart: vi.fn(),
+}));
 
 const browserService = await import('../services/browserService.js');
+const restartController = await import('../services/browserUpdateRestart.js');
 const router = (await import('./browser.js')).default;
 
 function makeApp() {
@@ -60,6 +65,34 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('browser restart review', () => {
+  const ticket = '00000000-0000-4000-8000-000000000001';
+
+  it('returns a fresh preflight and sends the confirmed ticket to the restart controller', async () => {
+    restartController.prepareBrowserUpdateRestart.mockResolvedValue({ state: 'current', ticket });
+    restartController.confirmBrowserUpdateRestart.mockResolvedValue({ connected: true });
+    const app = makeApp();
+    const preflight = await request(app).get('/api/browser/update-preflight');
+    expect(preflight.status).toBe(200);
+    expect(preflight.headers['cache-control']).toBe('no-store');
+    expect(preflight.body).toMatchObject({ state: 'current', ticket });
+    const result = await request(app).post('/api/browser/restart').send({ ticket });
+    expect(result.status).toBe(200);
+    expect(restartController.confirmBrowserUpdateRestart).toHaveBeenCalledWith(ticket);
+    expect(browserService.restartBrowser).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid tickets and keeps the existing manual restart API', async () => {
+    const app = makeApp();
+    expect((await request(app).post('/api/browser/restart').send({ ticket: 'invalid' })).status).toBe(400);
+    expect(restartController.confirmBrowserUpdateRestart).not.toHaveBeenCalled();
+    expect(browserService.restartBrowser).not.toHaveBeenCalled();
+    browserService.restartBrowser.mockResolvedValue({ connected: true });
+    expect((await request(app).post('/api/browser/restart').send({})).status).toBe(200);
+    expect(browserService.restartBrowser).toHaveBeenCalledOnce();
+  });
+});
 
 describe('POST /api/browser/navigate — private navigation data', () => {
   it('keeps destinations and caller headers out of logs while navigating the exact URL', async () => {

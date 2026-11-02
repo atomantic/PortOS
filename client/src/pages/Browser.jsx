@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import PageHeader from '../components/PageHeader';
 import { useSocketResource } from '../hooks/useSocketResource';
+import useMounted from '../hooks/useMounted';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
@@ -8,7 +9,7 @@ import {
   Mail, MessageSquare, Download, FolderOpen, Trash2
 } from 'lucide-react';
 import {
-  getBrowserStatus, getBrowserConfig, updateBrowserConfig,
+  getBrowserStatus, getBrowserConfig, updateBrowserConfig, getBrowserUpdatePreflight,
   launchBrowser, stopBrowser, restartBrowser,
   getBrowserLogs, navigateBrowser,
   browserDownloadUrl, deleteBrowserDownload
@@ -44,6 +45,10 @@ export default function BrowserPage() {
     useSocketResource(readStatus, { namespace: 'browser', events: STATUS_EVENTS });
   const statusError = error?.message;
   const [actionLoading, setActionLoading] = useState(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [restartPreflight, setRestartPreflight] = useState(null);
+  const restartGeneration = useRef(0);
+  const mounted = useMounted();
   const [showConfig, setShowConfig] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [showPages, setShowPages] = useState(true);
@@ -84,6 +89,12 @@ export default function BrowserPage() {
     if (result) {
       if ((action === 'launch' || action === 'restart') && !result.connected) {
         toast.error('Browser process started, but Chrome is not connected yet. Check the recovery steps below if it stays disconnected.');
+      } else if (action === 'restart' && ['restart-required', 'downgrade-risk'].includes(result.updateVerification?.state)) {
+        toast.error('The browser restarted, but its running and installed Chrome versions still differ. Review the update status.');
+      } else if (action === 'restart' && result.updateVerification?.state === 'pending') {
+        toast.success('Browser restarted; version verification is pending.');
+      } else if (action === 'restart' && result.updateVerification?.state === 'unverified') {
+        toast.error('Browser restarted, but the reviewed version could not be verified. Review Chrome update status.');
       } else {
         toast.success(`Browser ${action} successful`);
       }
@@ -92,6 +103,32 @@ export default function BrowserPage() {
     }
     setActionLoading(null);
   }, [fetchStatus, setStatus]);
+
+  const reviewRestart = useCallback(async () => {
+    const generation = ++restartGeneration.current;
+    setConfirmRestart(true);
+    setRestartPreflight(null);
+    setActionLoading('restart-preflight');
+    const observed = await getBrowserUpdatePreflight({ silent: true }).catch(error =>
+      ['HOST_CONTROL_FORBIDDEN', 'AUTH_REQUIRED'].includes(error.code)
+        ? { state: 'forbidden', message: error.message } : { state: 'unverified', ticket: null });
+    if (!mounted.current || generation !== restartGeneration.current) return;
+    setRestartPreflight(observed);
+    setActionLoading(null);
+  }, [mounted]);
+
+  const cancelRestart = () => {
+    restartGeneration.current += 1;
+    setConfirmRestart(false);
+    setRestartPreflight(null);
+    setActionLoading(null);
+  };
+
+  const confirmBrowserRestart = () => {
+    const ticket = restartPreflight?.ticket;
+    cancelRestart();
+    handleAction('restart', options => restartBrowser({ ...options, ...(ticket ? { ticket } : {}) }));
+  };
 
   const handleChromePathChange = (chromePath) => setConfigDraft(d => {
     const currentAppBundle = deriveMacAppBundle(d.chromePath);
@@ -369,7 +406,7 @@ export default function BrowserPage() {
                     Stop
                   </button>
                   <button
-                    onClick={() => handleAction('restart', restartBrowser)}
+                    onClick={reviewRestart}
                     disabled={loading || !status || actionLoading !== null}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-warning text-white rounded-lg hover:bg-port-warning/80 transition-colors disabled:opacity-50"
                   >
@@ -383,6 +420,26 @@ export default function BrowserPage() {
               )}
             </div>
           </div>
+
+          {confirmRestart && isRunning && (
+            <div role="alert" className="rounded-lg border border-port-warning/30 bg-port-warning/10 p-4 text-sm text-gray-200 space-y-3">
+              <p>Restarting closes browser tabs, interrupts downloads and agent connections, and may lose unsaved work.</p>
+              {!restartPreflight && <p>Checking the running and installed browser versions…</p>}
+              {restartPreflight?.runningVersion && restartPreflight.state !== 'configuration-mismatch' && <p>Running Chrome {restartPreflight.runningVersion}; installed {restartPreflight.installedVersion}.</p>}
+              {restartPreflight?.state === 'configuration-mismatch' && <p>The connected browser differs from the configured app; the next app and version are unverified.</p>}
+              {restartPreflight?.state === 'downgrade-risk' && <p>Installed Chrome is older than the running browser; update the installed app before restarting.</p>}
+              {restartPreflight?.state === 'forbidden' && <p>{restartPreflight.message}</p>}
+              {restartPreflight && restartPreflight.state !== 'forbidden' && !restartPreflight.ticket && <p>The browser version could not be verified. A restart may load a different or older browser.</p>}
+              <div className="flex flex-wrap gap-2">
+                <button onClick={confirmBrowserRestart} disabled={actionLoading !== null || !restartPreflight || restartPreflight.state === 'forbidden'}
+                  className="rounded-lg bg-port-warning px-3 py-1.5 text-white disabled:opacity-50">
+                  {!restartPreflight ? 'Checking browser…' : restartPreflight.state === 'forbidden' ? 'Restart unavailable' : !restartPreflight.ticket ? 'Restart without version verification'
+                    : restartPreflight.state === 'downgrade-risk' ? 'Restart with older Chrome' : 'Restart browser now'}
+                </button>
+                <button onClick={cancelRestart} className="rounded-lg border border-port-border px-3 py-1.5">Cancel</button>
+              </div>
+            </div>
+          )}
 
           {/* Status card */}
           <div className="bg-port-card border border-port-border rounded-xl p-5">

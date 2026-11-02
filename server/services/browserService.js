@@ -11,8 +11,10 @@ import { ensureDir, safeJSONParse, PATHS, readJSONFileStrict, unreadableStoreErr
 import { PORTS } from '../lib/ports.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { execPm2, listProcessesStrict } from './pm2.js';
+import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 
 const PM2_SETTLE_MS = 1500;
 const HEALTH_TIMEOUT_MS = 3000;
@@ -47,6 +49,14 @@ const DEFAULT_CONFIG = {
 
 let cachedConfig = null;
 let cachedConfigMtimeMs = null;
+let browserMutationInFlight = false;
+
+async function withBrowserMutation(action) {
+  if (browserMutationInFlight) throw new ServerError('A browser operation is already running.', { status: 409, code: 'BROWSER_OPERATION_BUSY' });
+  browserMutationInFlight = true;
+  try { return await action(); }
+  finally { browserMutationInFlight = false; }
+}
 
 // ---------- Config persistence ----------
 
@@ -55,10 +65,11 @@ async function getConfigMtimeMs() {
   return info?.isFile() ? info.mtimeMs : null;
 }
 
-export async function loadConfig() {
+export async function loadConfig({ strict = false } = {}) {
   const mtimeMs = await getConfigMtimeMs();
-  if (cachedConfig && cachedConfigMtimeMs === mtimeMs) return cachedConfig;
-  const { ok, value: parsed } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false });
+  if (!strict && cachedConfig && cachedConfigMtimeMs === mtimeMs) return cachedConfig;
+  const { ok, value: parsed } = await readJSONFileStrict(CONFIG_FILE, null, { allowArray: false, logError: !strict });
+  if (!ok && strict) throw unreadableStoreError(CONFIG_FILE);
   const config = normalizeBrowserConfig(parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG });
   // Display readers serve defaults for an unreadable file, but never cache them:
   // a repaired file must be picked up even when its mtime is unchanged.
@@ -75,34 +86,39 @@ async function assertConfigWritable() {
   if (!ok) throw unreadableStoreError(CONFIG_FILE);
 }
 
-export async function saveConfig(config) {
+async function saveConfigUnlocked(config) {
   await ensureDir(PATHS.data);
   await assertConfigWritable();
   cachedConfig = normalizeBrowserConfig({ ...DEFAULT_CONFIG, ...config });
   await atomicWrite(CONFIG_FILE, cachedConfig);
   cachedConfigMtimeMs = await getConfigMtimeMs();
+  browserEvents.emit('mutation:started');
   browserEvents.emit('config:changed', cachedConfig);
+  runtimeUpdateEvents.emit('changed', { browserChanged: true });
   return cachedConfig;
 }
 
-export async function getConfig() {
-  return loadConfig();
+export async function saveConfig(config) {
+  return withBrowserMutation(() => saveConfigUnlocked(config));
+}
+
+export async function getConfig(options) {
+  return loadConfig(options);
 }
 
 export async function updateConfig(updates) {
-  const current = await loadConfig();
-  return saveConfig({ ...current, ...updates });
+  return withBrowserMutation(async () => {
+    const current = await loadConfig();
+    return saveConfigUnlocked({ ...current, ...updates });
+  });
 }
 
 // ---------- Status / Health ----------
 
 export async function getHealthStatus({ strict = false } = {}) {
   const config = await loadConfig();
-  // Bind-all addresses are not connectable; use loopback instead
-  const connectHost = config.cdpHost === '0.0.0.0' ? '127.0.0.1'
-    : config.cdpHost === '::' ? '[::1]'
-    : config.cdpHost;
-  const healthUrl = `http://${connectHost}:${config.healthPort}/health`;
+  // The supervisor health server always listens on IPv4 loopback; CDP may use IPv6.
+  const healthUrl = `http://127.0.0.1:${config.healthPort}/health`;
 
   const response = await fetchWithTimeout(healthUrl, {}, HEALTH_TIMEOUT_MS).catch(() => null);
 
@@ -129,7 +145,8 @@ export async function getHealthStatus({ strict = false } = {}) {
   }
 
   const data = await readResponseJson(response);
-  if (strict && typeof data?.status !== 'string') throw new Error('Browser health unavailable');
+  if (strict && (typeof data?.status !== 'string' || typeof data.cdpHost !== 'string' || !data.cdpHost.trim()
+    || !Number.isInteger(data.cdpPort) || data.cdpPort < 1 || data.cdpPort > 65535 || typeof data.headless !== 'boolean')) throw new Error('Browser health unavailable');
   return {
     connected: data.status === 'healthy',
     processRunning: true,
@@ -149,6 +166,7 @@ async function pm2Action(action, args) {
   // execPm2 runs `node pm2/bin/pm2` directly. Resolving bare `pm2` through a
   // shell picks up pm2.cmd on Windows, and that cmd.exe hop opens a console
   // window out of PortOS's console-less PM2 fork — see docs/WINDOWS_CONSOLE.md.
+  browserEvents.emit('mutation:started');
   await execPm2([action, ...args]);
   console.log(`✅ Browser PM2 ${action} complete`);
 
@@ -157,20 +175,25 @@ async function pm2Action(action, args) {
 
   const status = await getHealthStatus();
   browserEvents.emit('status:changed', status);
+  runtimeUpdateEvents.emit('changed', { browserChanged: true });
   return status;
 }
 
 export async function launchBrowser() {
   // Use ecosystem file so PM2 has the full process config even after pm2 flush/delete
-  return pm2Action('start', [ECOSYSTEM_FILE, '--only', 'portos-browser']);
+  return withBrowserMutation(() => pm2Action('start', [ECOSYSTEM_FILE, '--only', 'portos-browser']));
 }
 
 export async function stopBrowser() {
-  return pm2Action('stop', ['portos-browser']);
+  return withBrowserMutation(() => pm2Action('stop', ['portos-browser']));
 }
 
-export async function restartBrowser() {
-  return pm2Action('restart', ['portos-browser']);
+export async function restartBrowser({ beforeRestart, afterRestart } = {}) {
+  return withBrowserMutation(async () => {
+    await beforeRestart?.();
+    const result = await pm2Action('restart', ['portos-browser']);
+    return afterRestart ? afterRestart(result) : result;
+  });
 }
 
 // ---------- PM2 status (process-level) ----------
