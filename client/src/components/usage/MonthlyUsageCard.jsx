@@ -16,7 +16,7 @@ export default function MonthlyUsageCard({ history: points = [], series = [], in
         Selected-period UTC calendar months across {instanceCount > 1 ? `${formatCount(instanceCount)} instances` : 'this machine'}, including Claude Code transcripts outside PortOS. The larger Claude transcript or ledger estimate is used for each day, or for the whole month when only a monthly rollup remains, to reduce overlap.
         {' '}Calendar months differ from a trailing 30-day window. Months cut by the selected range and the current month may be partial; peer history reflects its last sync. Undated legacy tokens cannot be assigned to a month. The line includes input, output and cache tokens, including estimates.
       </p>
-      {(coverage?.pricingIncomplete || coverage?.missingInstances?.length > 0 || coverage?.notSyncingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
+      {(coverage?.pricingIncomplete || coverage?.missingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
       {coverage?.pricingIncomplete && <p className="text-xs text-port-warning">Unclassified ledger usage may overlap transcript totals; its overlap cannot be determined.</p>}
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-400">
         {series.length > 0 ? series.map((provider, i) => (

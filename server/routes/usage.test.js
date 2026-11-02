@@ -106,6 +106,16 @@ describe('usage routes', () => {
     expect(response.body.imageRenders).toEqual({ incomplete: true, savedOutputs: 0 });
   });
 
+  it('keeps fleet-wide gaps separate from subscription-only completeness', async () => {
+    usage.getUsageSummary.mockReturnValue({ freeTier: { blocks: [] } });
+    getFleetUsage.mockResolvedValueOnce(fleetResult({ coverage: { instanceCount: 1, missingInstances: ['API peer'],
+      notSyncingInstances: [], incompleteMonths: [], subscriptionIncomplete: false } }));
+    const res = await request(buildApp()).get('/api/usage');
+    expect(res.body.coverage.missingInstances).toEqual(['API peer']);
+    expect(res.body.freeTier.blocksIncomplete).toBe(true);
+    expect(res.body.subscriptionSavings.costIncomplete).toBe(false);
+  });
+
   it('returns the fleet report and compares subscription-covered usage without double pricing plans', async () => {
     const all = { providers: [{ id: 'claude', free: false, models: [], tokensIn: 10, tokensOut: 20 }],
       totals: { sessions: 9, messages: 4, tokensIn: 10, tokensOut: 20, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCost: 90 } };

@@ -641,6 +641,7 @@ export * from './navManifest.js';
 export * from './noChangeCompletion.js';
 export * from './noReplaceMove.js';
 export * from './instanceFeatureRegistry.js';
+export * from './instanceSyncCategories.js';
 export * from './credentialRegistry.js';
 export * from './usageRange.js';
 export * from './subscriptionPlanTiers.js';

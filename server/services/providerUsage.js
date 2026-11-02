@@ -923,7 +923,7 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, per
           origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
         }))),
       ],
-      unreportedInstances: (peerEntries || []).filter((peer) => !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
+      unreportedInstances: (peerEntries || []).filter((peer) => peer.usageExpected !== false && !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
       federationUnavailable: peerEntries === null,
       imageQuotaComplete,
     };

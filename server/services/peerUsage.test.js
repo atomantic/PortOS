@@ -474,7 +474,120 @@ describe('fleet report', () => {
     configuredPeers = [{ instanceId: 'inst-missing', name: 'Missing', directions: ['outbound'] }];
     const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
     expect(fleet.coverage.missingInstances).toEqual(['Missing']);
+    expect(fleet.coverage.subscriptionIncomplete).toBe(true);
     expect(fleet.report.totals.sessions).toBe(2);
+  });
+
+  it('keeps saved history without expecting new reports from peers opted out of usage sync', async () => {
+    localUsage.blockEvents = [];
+    localUsage.dailyActivity['2026-08-30'].hourlyActivity = [2, ...Array(23).fill(0)];
+    const remote = usageFixture({ tokensOut: 4000 });
+    remote.dailyActivity['2026-08-30'].hourlyActivity = [2, ...Array(23).fill(0)];
+    await applyUsageRemote({ instances: {
+      saved: peerEntry({ instanceId: 'saved', name: 'Saved peer', usage: buildUsageDigest(remote) }),
+    } });
+    configuredPeers = [
+      { instanceId: 'saved', name: 'Saved peer', directions: ['outbound'], syncCategories: { usage: false } },
+      { instanceId: 'never', name: 'Never synced', directions: ['outbound'], syncCategories: { usage: false } },
+    ];
+
+    const fleet = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'anthropic', type: 'api' }] });
+    expect(fleet.report.totals).toMatchObject({ sessions: 4, tokensOut: 5000 });
+    expect(fleet.coverage).toMatchObject({ missingInstances: [], notSyncingInstances: ['Saved peer'],
+      classificationUnreported: [], transcriptUnreported: [], blockEventsUnreported: [], hourlyIncomplete: false,
+      subscriptionIncomplete: false });
+    expect(fleet.imageRenders.incomplete).toBe(false);
+    expect((await getFleetClaudeCodeModels()).pendingInstances).toEqual([]);
+    const quotas = await getFleetQuotaEntries({ includeEmpty: true });
+    expect(quotas).toEqual([expect.objectContaining({ instanceId: 'saved', quotaReported: false, usageExpected: false })]);
+  });
+
+  it('uses the effective usage category, including defaults and full-sync precedence', async () => {
+    configuredPeers = [
+      { instanceId: 'legacy', name: 'Legacy', directions: ['outbound'] },
+      { instanceId: 'master-off', name: 'Master off', directions: ['outbound'], syncEnabled: false },
+      { instanceId: 'full', name: 'Full sync', directions: ['outbound'], fullSync: true, syncCategories: { usage: false } },
+      { instanceId: 'opt-out', name: 'Opted out', directions: ['outbound'], syncCategories: { usage: false } },
+      { instanceId: 'disabled', name: 'Disabled', enabled: false, fullSync: true },
+      { instanceId: 'inbound', name: 'Inbound only', directions: ['inbound'] },
+      { instanceId: 'inbound-on', name: 'Inbound with usage', directions: ['inbound'], syncCategories: { usage: true } },
+      { instanceId: null, name: 'Disabled unprobed', enabled: false },
+      { instanceId: null, name: 'Waiting for ID', directions: ['outbound'] },
+    ];
+    const fleet = await getFleetUsage();
+    expect(fleet.coverage.missingInstances).toEqual(['Legacy', 'Master off', 'Full sync', 'Inbound with usage', 'Waiting for ID']);
+    expect((await getFleetQuotaEntries({ includeEmpty: true })).map((entry) => entry.name))
+      .toEqual(['Legacy', 'Master off', 'Full sync', 'Inbound with usage', 'Waiting for ID']);
+  });
+
+  it('still reports missing API-billed and unknown forwarded peers in fleet-wide coverage', async () => {
+    localUsage.blockEvents = [];
+    await applyUsageRemote({ instances: {
+      billed: peerEntry({ instanceId: 'billed', name: 'API peer' }),
+      forwarded: peerEntry({ instanceId: 'forwarded', name: 'Forwarded peer' }),
+    } });
+    configuredPeers = [
+      { instanceId: 'billed', name: 'API peer', directions: ['outbound'], syncCategories: { usage: true } },
+      { instanceId: 'missing-billed', name: 'Missing API peer', directions: ['outbound'] },
+    ];
+    const result = await getFleetUsage({ apiBilledInstanceIds: ['billed', 'missing-billed'] });
+    expect(result.report.totals.sessions).toBe(6);
+    expect(result.subscriptionReport.totals.sessions).toBe(4);
+    expect(result.coverage).toMatchObject({ missingInstances: ['Missing API peer'],
+      transcriptUnreported: ['API peer', 'Forwarded peer'], blockEventsUnreported: ['API peer', 'Forwarded peer'],
+      subscriptionIncomplete: false });
+    expect(result.imageRenders.incomplete).toBe(true);
+    expect((await getFleetClaudeCodeModels({ apiBilledInstanceIds: ['billed'] })).pendingInstances)
+      .toEqual(['API peer', 'Forwarded peer']);
+  });
+
+  it('expects a shared instance when any configured route still syncs its usage', async () => {
+    localUsage.blockEvents = [];
+    await applyUsageRemote({ instances: { shared: peerEntry({ instanceId: 'shared', name: 'Shared peer' }) } });
+    configuredPeers = [
+      { instanceId: 'shared', name: 'Inactive route', directions: ['outbound'], syncCategories: { usage: false } },
+      { instanceId: 'shared', name: 'Active route', directions: ['outbound'], syncCategories: { usage: true } },
+      { instanceId: 'missing', name: 'First active route', directions: ['outbound'], syncCategories: { usage: true } },
+      { instanceId: 'missing', name: 'Second active route', directions: ['outbound'], syncCategories: { usage: true } },
+    ];
+    const result = await getFleetUsage();
+    expect(result.coverage).toMatchObject({ missingInstances: ['First active route'], notSyncingInstances: [],
+      transcriptUnreported: ['Shared peer'], blockEventsUnreported: ['Shared peer'] });
+    expect(result.imageRenders.incomplete).toBe(true);
+    expect((await getFleetClaudeCodeModels()).pendingInstances).toEqual(['Shared peer']);
+    expect(await getFleetQuotaEntries({ includeEmpty: true })).toEqual([
+      expect.objectContaining({ instanceId: 'shared', usageExpected: true }),
+      expect.objectContaining({ instanceId: 'missing', name: 'First active route', usageExpected: true }),
+    ]);
+  });
+
+  it('retains genuine gaps and receipt conflicts in included historical snapshots', async () => {
+    localUsage.blockEvents = [];
+    const receipt = { id: 'a'.repeat(64), renderKey: 'b'.repeat(64), occurredAt: '2026-08-30T23:00:00.000Z', identitySource: 'codex-session', driverTotal: 12 };
+    await applyUsageRemote({ instances: {
+      saved: peerEntry({ instanceId: 'saved', name: 'Saved peer', providerClasses: null,
+        imageReceipts: { complete: true, receipts: [receipt] },
+        blockEvents: [{ providerId: 'anthropic', at: Date.parse('2026-08-30T13:00:00Z') }],
+        claudeCode: { updatedAt: '2026-08-31T00:00:00.000Z', days: { '2026-08-30': { 'claude-synthetic': { output: 20 } } } } }),
+      active: peerEntry({ instanceId: 'active', name: 'Active peer', imageReceipts: { complete: true,
+        receipts: [{ ...receipt, renderKey: 'c'.repeat(64) }] }, blockEvents: [],
+        claudeCode: { updatedAt: '2026-08-31T00:00:00.000Z', days: {} } }),
+    } });
+    configuredPeers = [{ instanceId: 'saved', name: 'Saved peer', directions: ['outbound'], syncCategories: { usage: false } }];
+    const result = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers: [{ id: 'anthropic', type: 'api' }] });
+    expect(result.coverage).toMatchObject({ pricingIncomplete: true, classificationUnreported: ['Saved peer'], hourlyIncomplete: true });
+    expect(result.blocks).toEqual([expect.objectContaining({ originName: 'Saved peer' })]);
+    expect(result.imageRenders).toMatchObject({ savedOutputs: 1, conflicts: true, incomplete: true });
+    const tokens = await getFleetClaudeCodeModels();
+    expect(tokens.instances.find((row) => row.instanceId === 'saved').totals.total).toBe(20);
+  });
+
+  it('keeps an explicitly partial saved image projection marked incomplete after opt-out', async () => {
+    await applyUsageRemote({ instances: {
+      saved: peerEntry({ instanceId: 'saved', name: 'Saved peer', imageReceipts: { complete: false, receipts: [] } }),
+    } });
+    configuredPeers = [{ instanceId: 'saved', directions: ['outbound'], syncCategories: { usage: false } }];
+    expect((await getFleetUsage()).imageRenders.incomplete).toBe(true);
   });
 
   it('uses each origin’s provider classification even when provider ids collide', async () => {
@@ -625,7 +738,11 @@ describe('fleet report', () => {
     const clipped = await getFleetUsage({ from: '2026-05-10', to: '2026-05-15', providers: [] });
     expect(clipped.totals.tokensOut).toBe(0);
     expect(clipped.coverage.incompleteMonths).toEqual(['2026-05']);
+    expect(clipped.coverage.subscriptionIncomplete).toBe(true);
     expect(clipped.monthly.history).toEqual([expect.objectContaining({ month: '2026-05', tokens: 0, partial: true })]);
+    const apiBilled = await getFleetUsage({ from: '2026-05-10', to: '2026-05-15', apiBilledInstanceIds: ['inst-peer'] });
+    expect(apiBilled.coverage.incompleteMonths).toEqual(['2026-05']);
+    expect(apiBilled.coverage.subscriptionIncomplete).toBe(false);
 
     // A window that covers the whole month still reports it.
     const whole = await getFleetUsage({ from: '2026-05-01', to: '2026-05-31', providers: [] });

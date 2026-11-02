@@ -37,6 +37,7 @@ import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
 import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
+import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 import { buildUsageDigest, buildUsageReport, getUsage, providerVolumeSinceBlock, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
@@ -600,6 +601,36 @@ function fleetHourlyActivity(sources, { from, to }) {
   return { hourly, incomplete };
 }
 
+// The billing toggle answers a different question: API-billed peers can still
+// participate in usage sync. Only an explicitly disabled peer or its effective
+// usage category removes the expectation of a fresh report. A forwarded digest
+// with no local peer configuration remains an expected source.
+async function usageParticipation() {
+  const { loadData } = await import('./instanceIdentity.js');
+  const configured = (await loadData()).peers || [];
+  const participating = configured.filter((peer) => peer.enabled !== false && resolveEffectiveCategories(peer).usage);
+  const notParticipating = configured.filter((peer) => peer.enabled === false || !resolveEffectiveCategories(peer).usage);
+  // A newly added peer can have no ID until its first probe. Never let one
+  // such opt-out suppress a different unprobed peer or a forwarded snapshot.
+  // Several configured routes can also name one instance: any active route
+  // means that instance is expected to report.
+  const activeIds = new Set(participating.map((peer) => peer.instanceId).filter(isNonBlankStr));
+  const optedOut = new Set(notParticipating.map((peer) => peer.instanceId).filter((id) => isNonBlankStr(id) && !activeIds.has(id)));
+  return { participating, notParticipating, optedOut };
+}
+
+const peerLabel = (peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance';
+
+function distinctPeerInstances(peers) {
+  const seen = new Set();
+  return peers.filter((peer) => {
+    if (!isNonBlankStr(peer.instanceId)) return true;
+    if (seen.has(peer.instanceId)) return false;
+    seen.add(peer.instanceId);
+    return true;
+  });
+}
+
 export async function getFleetUsage({ from = null, to = null, providers = [], apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
   const localIdentity = self || await readSelfIdentity();
@@ -654,24 +685,22 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
   rows.sort((a, b) => (b.self ? 1 : 0) - (a.self ? 1 : 0) || b.totals.estimatedCost - a.totals.estimatedCost);
 
   const included = rows.filter((r) => r.usesSubscriptions);
-  const { loadData } = await import('./instanceIdentity.js');
-  const configured = (await loadData()).peers || [];
+  const { participating, notParticipating, optedOut } = await usageParticipation();
   const known = new Set(sources.map((source) => source.instanceId));
-  const established = configured.filter((peer) => !peer.directions?.length || peer.directions.includes('outbound')
-    || peer.syncCategories?.usage === true || peer.fullSync === true);
-  const missingInstances = established
-    .filter((peer) => !known.has(peer.instanceId))
-    .map((peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance');
-  const withSnapshots = established.filter((peer) => known.has(peer.instanceId));
-  const { resolveEffectiveCategories } = withSnapshots.length ? await import('./instances.js') : { resolveEffectiveCategories: () => ({}) };
-  const notSyncingInstances = withSnapshots.filter((peer) => peer.enabled === false || !resolveEffectiveCategories(peer).usage)
-    .map((peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance');
-  const incompleteMonths = [...new Set(sources.flatMap(({ activity }) => {
+  const missingPeers = distinctPeerInstances(participating.filter((peer) => !known.has(peer.instanceId)));
+  const missingInstances = missingPeers.map(peerLabel);
+  const notSyncingInstances = distinctPeerInstances(notParticipating.filter((peer) => optedOut.has(peer.instanceId) && known.has(peer.instanceId))).map(peerLabel);
+  const expectedPeers = peers.filter((peer) => !optedOut.has(peer.instanceId));
+  const incompleteMonthsFor = (entries) => [...new Set(entries.flatMap(({ activity }) => {
     const months = activity.monthlyActivity || {};
     const covered = dropPartiallyCoveredMonths(months, from, to);
     return Object.keys(months).filter((month) => !covered[month]
       && (!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)));
   }))].sort();
+  const incompleteMonths = incompleteMonthsFor(sources);
+  const subscriptionSources = sources.filter((source) => !apiBilled.has(source.instanceId));
+  const subscriptionIncomplete = missingPeers.some((peer) => !apiBilled.has(peer.instanceId))
+    || incompleteMonthsFor(subscriptionSources).length > 0;
   const report = reportFor(sources);
   const hourly = fleetHourlyActivity(sources, { from, to });
   const localImage = self ? sanitizeImageReceipts(self.imageReceipts) : await stat(IMAGE_RECEIPTS_DIR).catch(() => null)
@@ -681,7 +710,13 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     ...receipt, driverTokens: receipt.driverTotal === null ? null : { reportedTotal: receipt.driverTotal, source: 'codex-cli-footer' },
   }))), { from, to });
   imageRenders.scope = 'federated-codex-saved-renders';
-  imageRenders.incomplete = imageSources.some((source) => !source?.complete) || missingInstances.length > 0 || notSyncingInstances.length > 0 || imageRenders.conflicts;
+  // A missing projection from an opted-out peer is not an expected report.
+  // A projection explicitly marked partial, or a conflict in retained data,
+  // still describes a real gap in the historical observations we include.
+  imageRenders.incomplete = !localImage?.complete
+    || expectedPeers.some((peer) => !peer.imageReceipts?.complete)
+    || peers.some((peer) => optedOut.has(peer.instanceId) && peer.imageReceipts && !peer.imageReceipts.complete)
+    || missingInstances.length > 0 || imageRenders.conflicts;
   const localBlockProjection = sanitizeBlocks(getUsage()?.blockEvents);
   const localBlocks = localBlockProjection?.map((event, index) => ({
     ...event, resetHint: str(getUsage().blockEvents.slice(-200)[index]?.resetHint, 120),
@@ -695,7 +730,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     const monthly = dropPartiallyCoveredMonths(activity.monthlyActivity, null, to);
     return [{ ...event, originName: name, volumeSince: providerVolumeSinceBlock(daily, monthly, event.providerId, day) }];
   })).sort((a, b) => b.at - a.at).slice(0, 20);
-  const subscriptionReport = reportFor(sources.filter((source) => !apiBilled.has(source.instanceId)));
+  const subscriptionReport = reportFor(subscriptionSources);
   const activity = fleetPeriodActivity(sources, { from, to });
   if (!from && !to) {
     const undated = report.totals.sessions - activity.reduce((sum, item) => sum + item.sessions, 0);
@@ -709,7 +744,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     imageRenders,
     blocks,
     firstActivityDay: earliestDay(sources.map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
-    subscriptionFirstActivityDay: earliestDay(sources.filter((source) => !apiBilled.has(source.instanceId))
+    subscriptionFirstActivityDay: earliestDay(subscriptionSources
       .map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
     activity,
     last7Days: fleetPeriodActivity(sources, { from: utcDay(Date.now() - 6 * DAY_MS), to: utcDay(Date.now()) })
@@ -719,13 +754,15 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     transcriptUpdatedAt: localTranscript?.updatedAt || null,
     hourlyActivity: hourly.hourly,
     coverage: {
-      instanceCount: sources.length, missingInstances, notSyncingInstances, incompleteMonths,
+      instanceCount: sources.length, missingInstances, notSyncingInstances, incompleteMonths, subscriptionIncomplete,
       pricingIncomplete: Boolean(report.totals.costIncomplete),
-      hourlyIncomplete: hourly.incomplete || missingInstances.length > 0 || notSyncingInstances.length > 0,
-      classificationUnreported: peers.filter((entry) => !entry.providerClasses).map((entry) => entry.name || entry.instanceId),
+      hourlyIncomplete: hourly.incomplete || missingInstances.length > 0,
+      classificationUnreported: peers.filter((entry) => !entry.providerClasses
+        && (!optedOut.has(entry.instanceId) || reportFor([{ activity: entry.usage, providerClasses: entry.providerClasses }]).totals.costIncomplete))
+        .map((entry) => entry.name || entry.instanceId),
       blockEventsUnreported: [...(!localBlockProjection ? [localIdentity?.name || 'This instance'] : []),
-        ...peers.filter((entry) => !entry.blockEvents).map((entry) => entry.name || entry.instanceId)],
-      transcriptUnreported: peers.filter((entry) => !entry.claudeCode).map((entry) => entry.name || entry.instanceId),
+        ...expectedPeers.filter((entry) => !entry.blockEvents).map((entry) => entry.name || entry.instanceId)],
+      transcriptUnreported: expectedPeers.filter((entry) => !entry.claudeCode).map((entry) => entry.name || entry.instanceId),
     },
   };
 }
@@ -1096,12 +1133,13 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
 /**
  * Fleet-wide Claude Code tokens per model, priced at API rates, for a window.
  * One row per instance that has published transcript history (this machine
- * reads its live store), plus a combined per-model list. As with `getFleetUsage`,
- * an instance the viewer marked as API-billed stays listed but does not feed the
- * combined figures. Peer rows are as fresh as the last sync (`capturedAt`).
+ * reads its live store), plus a combined per-model list. API-billed instances
+ * still contribute to fleet-wide token totals. Peer rows are as fresh as their
+ * last snapshot (`capturedAt`).
  */
 export async function getFleetClaudeCodeModels({ from = null, to = null, apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
+  const { optedOut } = await usageParticipation();
   const apiBilled = new Set(Array.isArray(apiBilledInstanceIds) ? apiBilledInstanceIds : []);
   const row = (e, isSelf) => {
     const { models, totals } = summarizeTranscriptDays(e.claudeCode.days, { from, to });
@@ -1114,7 +1152,7 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
   const combined = mergeModelRows(instances.map((i) => i.models));
   // Peers we know of that published no history (older build, or not scanned yet)
   // — named so the UI can say why they are missing rather than dropping them.
-  const pending = peers.filter((e) => !e.claudeCode).map((e) => e.name || e.instanceId);
+  const pending = peers.filter((e) => !optedOut.has(e.instanceId) && !e.claudeCode).map((e) => e.name || e.instanceId);
   return { instances, pendingInstances: pending, ...combined };
 }
 
@@ -1130,16 +1168,16 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
 export async function getFleetQuotaEntries({ excludeInstanceIds = [], includeEmpty = false } = {}) {
   const { peers } = await entriesWithSelf();
   const excluded = new Set(Array.isArray(excludeInstanceIds) ? excludeInstanceIds : []);
+  const { participating, optedOut } = includeEmpty ? await usageParticipation() : { participating: [], optedOut: new Set() };
   const entries = peers
     .filter((e) => !excluded.has(e.instanceId) && (includeEmpty || e.quotas?.length))
-    .map(({ instanceId, name, capturedAt, quotas, quotaReported }) => ({ instanceId, name, capturedAt, quotas, ...(includeEmpty ? { quotaReported } : {}) }));
+    .map(({ instanceId, name, capturedAt, quotas, quotaReported }) => ({ instanceId, name, capturedAt, quotas,
+      ...(includeEmpty ? { quotaReported, usageExpected: !optedOut.has(instanceId) } : {}) }));
   if (includeEmpty) {
-    const { loadData } = await import('./instanceIdentity.js');
     const known = new Set(entries.map((entry) => entry.instanceId));
-    for (const peer of (await loadData()).peers || []) {
+    for (const peer of distinctPeerInstances(participating)) {
       if (known.has(peer.instanceId) || excluded.has(peer.instanceId)) continue;
-      if (peer.directions?.length && !peer.directions.includes('outbound') && peer.syncCategories?.usage !== true && peer.fullSync !== true) continue;
-      entries.push({ instanceId: peer.instanceId, name: peer.name || peer.host || peer.instanceId || 'Unnamed instance', quotas: [], quotaReported: false });
+      entries.push({ instanceId: peer.instanceId, name: peerLabel(peer), quotas: [], quotaReported: false, usageExpected: true });
     }
   }
   return entries;

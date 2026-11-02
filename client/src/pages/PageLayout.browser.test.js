@@ -14,6 +14,8 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const usage = {
   totalSessions: 12, totalMessages: 120, totalTokens: { input: 12000, output: 4000 },
   last7Days: [], hourlyActivity: Array(24).fill(0), topProviders: [], topModels: [],
+  coverage: { instanceCount: 2, missingInstances: [], notSyncingInstances: ['Synthetic peer'], incompleteMonths: [],
+    classificationUnreported: [], transcriptUnreported: [] },
   report: { providers: [{ id: 'example', name: 'Example provider', sessions: 12, tokensIn: 12000, tokensOut: 4000, estimatedCost: 0.12, source: 'measured', models: [{ model: 'example-long-model-name-for-card-layout-verification', sessions: 12, tokensIn: 12000, tokensOut: 4000, estimatedCost: 0.12 }] }], totals: { estimatedCost: 0, source: 'estimate' } },
 };
 const responses = {
@@ -167,6 +169,8 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         expect(geometry.mainScrollWidth, path).toBeLessThanOrEqual(geometry.mainWidth + 1);
         expect(geometry.bodyScrollWidth, path).toBeLessThanOrEqual(geometry.bodyWidth + 1);
         if (path === '/devtools/usage') {
+          expect(await page.getByText('Usage sync is off for Synthetic peer. Their saved history remains included.').count()).toBe(1);
+          expect(await page.getByText(/Partial chart: some instance history/).count()).toBe(0);
           expect(await page.getByRole('heading', { name: 'Example codex', exact: true }).count()).toBe(1);
           expect(await page.getByText('60% used', { exact: true }).count()).toBe(1);
           expect(await page.getByText(/readings from the same provider are assumed to share an account/i).count()).toBe(1);
@@ -196,6 +200,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           await body.evaluate(el => { el.scrollTop = 0; });
         }
         if (process.env.PORTOS_LAYOUT_SCREENSHOTS) {
+          if (path === '/devtools/usage') await page.getByText('Usage sync is off for Synthetic peer. Their saved history remains included.').scrollIntoViewIfNeeded();
           await mkdir(process.env.PORTOS_LAYOUT_SCREENSHOTS, { recursive: true });
           await page.screenshot({ path: join(process.env.PORTOS_LAYOUT_SCREENSHOTS, `${path.replaceAll('/', '_')}-${width}.png`) });
         }

@@ -873,10 +873,10 @@ function InternalUsageMetrics() {
           <p>Usage from {formatCount(usage.coverage.instanceCount)} reported instance{usage.coverage.instanceCount === 1 ? '' : 's'}; peer data reflects the last sync.</p>
           {usage.coverage.instanceCount > 1 && <p>Each instance snapshot is counted once. Runs recorded independently on multiple machines cannot be deduplicated from the available aggregates.</p>}
           <p>Cost classifications use each instance&rsquo;s current provider configuration; historical configuration changes are not available.</p>
-          {usage.coverage.pricingIncomplete && <p className="text-port-warning">Some provider classifications are unavailable. API cost and savings include only classified usage and are incomplete.</p>}
+          {usage.coverage.pricingIncomplete && <p className="text-port-warning">Some provider classifications are unavailable. Fleet API cost includes only classified usage and is incomplete.</p>}
           {usage.coverage.classificationUnreported?.length > 0 && <p className="text-port-warning">Provider classifications have not been reported by {usage.coverage.classificationUnreported.join(', ')}.</p>}
           {usage.coverage.missingInstances?.length > 0 && <p className="text-port-warning">No usage snapshot from {usage.coverage.missingInstances.join(', ')}. Totals are incomplete.</p>}
-          {usage.coverage.notSyncingInstances?.length > 0 && <p className="text-port-warning">Usage sync is disabled for {usage.coverage.notSyncingInstances.join(', ')}. Their saved figures may be stale.</p>}
+          {usage.coverage.notSyncingInstances?.length > 0 && <p>Usage sync is off for {usage.coverage.notSyncingInstances.join(', ')}. Their saved history remains included.</p>}
           {usage.coverage.transcriptUnreported?.length > 0 && <p className="text-port-warning">Claude transcript history has not been reported by {usage.coverage.transcriptUnreported.join(', ')}; the monthly chart may be incomplete.</p>}
           {usage.coverage.incompleteMonths?.length > 0 && <p className="text-port-warning">Older usage is available only by month. Partial months {usage.coverage.incompleteMonths.join(', ')} are excluded; totals are incomplete.</p>}
         </div>

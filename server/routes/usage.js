@@ -39,7 +39,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const subscriptionSavings = await getSubscriptionSavings({
     report: subscriptionReport, providers, from, to, firstActivityDay: from ? null : subscriptionFirstActivityDay,
   });
-  subscriptionSavings.costIncomplete ||= Boolean(coverage.missingInstances.length || coverage.notSyncingInstances.length || coverage.incompleteMonths.length);
+  subscriptionSavings.costIncomplete ||= Boolean(coverage.subscriptionIncomplete);
   res.json({
     ...summary,
     report,
@@ -64,7 +64,7 @@ router.get('/', asyncHandler(async (req, res) => {
       ...summary.freeTier,
       providers: report.providers.filter((row) => row.free),
       blocks,
-      blocksIncomplete: coverage.blockEventsUnreported?.length > 0 || coverage.missingInstances.length > 0 || coverage.notSyncingInstances.length > 0,
+      blocksIncomplete: coverage.blockEventsUnreported?.length > 0 || coverage.missingInstances.length > 0,
     },
     imageRenders,
     monthlyHistory: monthly.history,
