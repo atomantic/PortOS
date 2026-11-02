@@ -217,10 +217,24 @@ function ecosystemAppBlocks(content) {
   // Only module-scope bindings can supply the exported literal configuration.
   // Reading unrelated objects as apps would let an example shadow the real app.
   const bindings = new Map();
+  const declarations = new Set();
   let exported = null;
   for (let i = 0; i < tokens.length; i++) {
     if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
-      bindings.set(tokens[i + 1].v, i + 3);
+      const start = i + 3;
+      const end = (matching.get(start) ?? start) + 1;
+      const next = tokens[end];
+      // Resolve only a whole initializer, never the literal prefix of an expression.
+      const continuesExpression = next?.t === 'tpl' ||
+        (next?.t === 'id' && ['in', 'instanceof'].includes(next.v)) ||
+        ['.', '?.', '[', '(', '+', '-', '*', '/', '%', '<', '>', '=', '&', '|', '^', '?'].includes(punctuation(end)) ||
+        (punctuation(end) === '!' && punctuation(end + 1) === '=');
+      const terminated = !next || [';', ',', '}'].includes(punctuation(end)) ||
+        (!continuesExpression && /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
+      if (terminated) {
+        bindings.set(tokens[i + 1].v, start);
+        declarations.add(i + 1);
+      }
     }
     if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
       exported = i + 4;
@@ -228,6 +242,30 @@ function ecosystemAppBlocks(content) {
       exported = i + 2;
     }
     i = matching.get(i) ?? i;
+  }
+  // A declaration initializer is not a reliable name after any write. Be
+  // conservative even for writes inside functions: configuration is never run.
+  const openings = new Map([...matching].map(([open, close]) => [close, open]));
+  const invalidate = index => {
+    if (tokens[index]?.t === 'id' && !declarations.has(index) &&
+        !['.', '?.'].includes(punctuation(index - 1))) bindings.delete(tokens[index].v);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (['++', '--'].includes(punctuation(i))) {
+      invalidate(i - 1);
+      invalidate(i + 1);
+    }
+    if (punctuation(i) !== '=' || ['=', '>'].includes(punctuation(i + 1)) ||
+        ['=', '!'].includes(punctuation(i - 1)) ||
+        (['<', '>'].includes(punctuation(i - 1)) && punctuation(i - 2) !== punctuation(i - 1))) continue;
+    let target = i - 1;
+    while (['+', '-', '*', '/', '%', '&', '|', '^', '?', '<', '>'].includes(punctuation(target))) target--;
+    const open = openings.get(target);
+    if (['}', ']'].includes(punctuation(target)) && open !== undefined) {
+      for (let j = open + 1; j < target; j++) invalidate(j);
+    } else {
+      invalidate(target);
+    }
   }
   const resolve = (index, seen = new Set()) => {
     const token = tokens[index];
@@ -268,8 +306,11 @@ function ecosystemAppBlocks(content) {
     const object = resolve(i);
     if (punctuation(object) === '{') {
       const name = property(object, 'name');
-      if (name && name.end === name.start + 1 && tokens[name.start]?.t === 's' && tokens[name.start].v) {
-        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: tokens[name.start].v });
+      const token = name && name.end === name.start + 1 ? tokens[resolve(name.start)] : null;
+      const value = token?.t === 's' ? token.v
+        : token?.t === 'tpl' && token.exprs.length === 0 ? token.quasis[0] : null;
+      if (value) {
+        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: value });
       }
     }
     i = expressionEnd(i, limit);
