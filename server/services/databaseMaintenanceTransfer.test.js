@@ -3,20 +3,49 @@
 // boundary and pg_dump/psql replaced by disposable stubs. No live database,
 // PM2 daemon or install data is touched.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { STUB_DUMP_COMPLETE, installDatabaseStubs } from '../test/fixtures/databaseTransferStubs.js';
+import { toBashPath as toBashPathForTest } from '../lib/bashResolver.js';
 
-const context = vi.hoisted(() => ({ root: undefined, list: null, stop: null, timed: null }));
+const context = vi.hoisted(() => ({ root: undefined, scriptRoot: undefined, bashBinary: undefined,
+  interceptDbSpawn: false, expectedDumpPath: undefined, list: null, stop: null, timed: null, spawnCalls: [] }));
+vi.mock('../lib/childProcess.js', async original => {
+  const actual = await original();
+  return { ...actual, spawn: (...args) => {
+    context.spawnCalls.push(args);
+    if (context.interceptDbSpawn && args[1]?.[0]?.endsWith('/scripts/db.sh')) {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      queueMicrotask(() => {
+        if (args[1][1] === 'export') {
+          mkdirSync(dirname(context.expectedDumpPath), { recursive: true });
+          writeFileSync(context.expectedDumpPath, STUB_DUMP_COMPLETE);
+          child.stdout.end(toBashPathForTest(context.expectedDumpPath) + '\n');
+        } else child.stdout.end('');
+        child.emit('close', 0);
+      });
+      return child;
+    }
+    return actual.spawn(...args);
+  } };
+});
+vi.mock('../lib/bashResolver.js', async original => {
+  const actual = await original();
+  return { ...actual, resolveBashBinary: () => context.bashBinary ?? actual.resolveBashBinary() };
+});
 vi.mock('../lib/paths.js', async original => {
   const actual = await original();
   return { ...actual, PATHS: new Proxy(actual.PATHS, {
     get: (target, key) => {
       if (key === 'data' && context.root) return context.root + '/data';
       if (key === 'installRoot' && context.root) return context.root;
+      if (key === 'root' && context.scriptRoot) return context.scriptRoot;
       return target[key];
     },
   }) };
@@ -62,6 +91,11 @@ beforeEach(({ onTestFailed }) => {
   writeFileSync(join(root, 'server', 'start.js'), '');
   writeFileSync(join(root, 'server', 'cos-runner', 'index.js'), '');
   context.root = root;
+  context.scriptRoot = undefined;
+  context.bashBinary = undefined;
+  context.interceptDbSpawn = false;
+  context.expectedDumpPath = undefined;
+  context.spawnCalls = [];
   onTestFailed(() => console.error(`❌ database transfer fixture failed: ${diagnostics()}`));
   journal = createDatabaseMaintenanceJournal(join(root, 'data'));
   stubs = installDatabaseStubs(root);
@@ -314,3 +348,41 @@ describe.skipIf(process.platform === 'win32')('offline database transfer', () =>
     expect(journal.read().stage).toBe('importing');
   }, 30_000);
 });
+
+it('transfers through resolved Git Bash with normalized Windows paths and matching export output', async () => {
+  const previousRoot = root;
+  root = previousRoot + '\\windows-path';
+  rmSync(previousRoot, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  mkdirSync(join(root, 'server', 'cos-runner'), { recursive: true });
+  writeFileSync(join(root, 'server', 'start.js'), '');
+  writeFileSync(join(root, 'server', 'cos-runner', 'index.js'), '');
+  context.root = root;
+  context.scriptRoot = root;
+  context.bashBinary = 'C:\\Program Files\\Git\\bin\\bash.exe';
+  context.interceptDbSpawn = true;
+  journal = createDatabaseMaintenanceJournal(join(root, 'data'));
+  stubs = installDatabaseStubs(root);
+  context.timed = (name, run) => stubs.timed(name, run);
+  rows = [
+    { name: 'portos-cos', pmId: 12, pid: 1012, status: 'online', cwd: root, script: 'server/cos-runner/index.js' },
+    { name: 'portos-server', pmId: 13, pid: 1013, status: 'online', cwd: root, script: 'server/start.js' },
+  ];
+  begin();
+  context.expectedDumpPath = dumpPath();
+
+  await expect(transfer()).resolves.toMatchObject({ imported: true, importCommitted: true });
+
+  const scriptSpawns = context.spawnCalls.filter(([, args]) => args[0].endsWith('/scripts/db.sh'));
+  expect(scriptSpawns).toHaveLength(2);
+  const [exportSpawn, importSpawn] = scriptSpawns;
+  expect(exportSpawn[0]).toBe(context.bashBinary);
+  expect(exportSpawn[1][0]).toBe(toBashPathForTest(join(root, 'scripts', 'db.sh')));
+  expect(exportSpawn[2].env.PORTOS_DUMP_DIR).toBe(toBashPathForTest(join(root, 'data', 'db-dumps')));
+  expect(exportSpawn[2].env.PORTOS_DUMP_DIR).not.toMatch(/\\/);
+  expect(importSpawn[0]).toBe(context.bashBinary);
+  expect(importSpawn[1][0]).toBe(exportSpawn[1][0]);
+  expect(importSpawn[1].at(-1)).toBe(toBashPathForTest(dumpPath()));
+  expect(importSpawn[1].at(-1)).not.toMatch(/\\/);
+  expect(stubs.invocations('psql')).toHaveLength(0);
+}, 30_000);
