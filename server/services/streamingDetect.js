@@ -386,22 +386,24 @@ export function parseEcosystemConfig(content) {
     const portsBlock = content.substring(startIdx, endIdx + 1);
 
     // Parse flat entries: KEY: 5550
-    const flatEntries = portsBlock.matchAll(/(\w+)\s*:\s*(\d+)/g);
+    const flatEntries = portsBlock.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
     for (const entry of flatEntries) {
-      portConstants[`PORTS.${entry[1]}`] = parseInt(entry[2], 10);
+      const key = entry[1] ?? entry[2] ?? entry[3] ?? entry[4];
+      portConstants[`PORTS.${key}`] = parseInt(entry[5], 10);
     }
 
     // Parse nested entries: key: { subkey: 5550 }
-    const nestedMatches = portsBlock.matchAll(/(\w+)\s*:\s*\{([^}]+)\}/g);
+    const nestedMatches = portsBlock.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*\{([^}]+)\}/g);
     for (const nestedMatch of nestedMatches) {
-      const parentKey = nestedMatch[1];
-      const nestedContent = nestedMatch[2];
+      const parentKey = nestedMatch[1] ?? nestedMatch[2] ?? nestedMatch[3] ?? nestedMatch[4];
+      const nestedContent = nestedMatch[5];
       const nestedPorts = {};
-      const subEntries = nestedContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      const subEntries = nestedContent.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
       for (const subEntry of subEntries) {
-        const port = parseInt(subEntry[2], 10);
-        portConstants[`PORTS.${parentKey}.${subEntry[1]}`] = port;
-        nestedPorts[subEntry[1]] = port;
+        const key = subEntry[1] ?? subEntry[2] ?? subEntry[3] ?? subEntry[4];
+        const port = parseInt(subEntry[5], 10);
+        portConstants[`PORTS.${parentKey}.${key}`] = port;
+        nestedPorts[key] = port;
       }
       // Also store the whole nested object for `ports: PORTS.server` references
       portConstants[`PORTS.${parentKey}`] = nestedPorts;
@@ -418,9 +420,10 @@ export function parseEcosystemConfig(content) {
     const portsObjMatch = appBlock.match(/\bports\s*:\s*\{([^}]+)\}/);
     if (portsObjMatch) {
       const portsContent = portsObjMatch[1];
-      const portEntries = portsContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      const portEntries = portsContent.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
       for (const entry of portEntries) {
-        ports[entry[1]] = parseInt(entry[2], 10);
+        const key = entry[1] ?? entry[2] ?? entry[3] ?? entry[4];
+        ports[key] = parseInt(entry[5], 10);
       }
     }
 
@@ -773,6 +776,7 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
   // the number changes (no whitespace artifact).
   const ph = 'PORT_TGT_PLACEHOLDER';
   const NUM = `${oldP}\\b`;
+  const propertyKeyPattern = (key) => `(?:"${key}"|'${key}'|\`${key}\`|(?<![\\w$-])${key}(?![\\w$-]))`;
   // An explicit ports source is what parseEcosystemConfig derives from. An
   // inline `ports: { ... }` object is rewritable in-block; a `ports: PORTS.x`
   // REFERENCE points at an external const this block can't reach, so the
@@ -827,7 +831,7 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
   const rewriteBarePort = barePortIsThisLabel && !hasPortsReference;
 
   if (label === 'api') {
-    if (hasInlinePortsObj) portsObjPats.push(`(\\bapi\\s*:\\s*)${NUM}`);  // ports: { api: N }
+    if (hasInlinePortsObj) portsObjPats.push(`(${propertyKeyPattern('api')}\\s*:\\s*)${NUM}`);  // ports: { api: N }
     if (rewriteBarePort) {
       // The env `PORT` (and its `|| N` fallback) is the runtime API port here.
       blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
@@ -844,10 +848,10 @@ function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
     // parser never read as the API port.
     if (!hasExplicitPortsSource) blockPats.push(`(\\bport\\s*:\\s*)${NUM}`); // port: N
   } else {
-    const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
+    const hasDevUiKey = new RegExp(`${propertyKeyPattern('devUi')}\\s*:\\s*\\d`).test(block);
     if (hasInlinePortsObj) {
-      portsObjPats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
-      if (label === 'devUi' && !hasDevUiKey) portsObjPats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
+      portsObjPats.push(`(${propertyKeyPattern(label === 'devUi' ? 'devUi' : 'ui')}\\s*:\\s*)${NUM}`); // exact key
+      if (label === 'devUi' && !hasDevUiKey) portsObjPats.push(`(${propertyKeyPattern('ui')}\\s*:\\s*)${NUM}`); // relabeled-from-ui source
     }
     if (!hasPortsReference) {
       // VITE_PORT/--port mirror the runtime UI/dev port: rewrite them alongside
