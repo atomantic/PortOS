@@ -19,7 +19,7 @@ const presetLabel = (look) => (isFilmLookNeutral(look) ? 'Clean' : FILM_LOOK_PRE
 export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   const projectId = project?.id;
   const sceneId = scene.sceneId;
-  const { status, live: liveByShot, markLive } = useMusicVideoShotRenders(project);
+  const { status, live: liveByShot, markLive, retry } = useMusicVideoShotRenders(project);
   const live = liveByShot[sceneId] || null;
   const [playing, setPlaying] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -86,7 +86,14 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
           )}
         </span>
       </div>
-      {status.error && <p role="status" className="break-words text-[11px] text-port-warning">{status.error.message}</p>}
+      {status.error && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p role="status" className="break-words text-[11px] text-port-warning">{status.error.message}</p>
+          <button type="button" className={BUTTON} onClick={() => retry?.()}>
+            Retry
+          </button>
+        </div>
+      )}
       {live?.state === 'failed' && live.error && <p role="alert" className="break-words text-[11px] text-port-error">{live.error}</p>}
       {playing && file && (
         // The rendered shot as the final render cuts it: film look and text, without the song.

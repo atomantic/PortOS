@@ -118,4 +118,72 @@ describe('ShotFinalRender', () => {
       vi.useRealTimers();
     }
   });
+
+  it('discards a deferred response from a previous cut, exposes a failed replacement refresh with retry, and restores readiness on retry', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirst;
+      const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
+      getMusicVideoShotRenders.mockReturnValueOnce(firstPromise);
+
+      const onChange = vi.fn();
+      const { rerender } = render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={onChange} fieldId={fieldId} />);
+
+      // Let debounce run to start the first request
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+      expect(getMusicVideoShotRenders).toHaveBeenCalledTimes(1);
+
+      // Edit the cut's inputs (e.g. filmLook changed)
+      let rejectSecond;
+      const secondPromise = new Promise((_, reject) => { rejectSecond = reject; });
+      getMusicVideoShotRenders.mockReturnValueOnce(secondPromise);
+
+      const editedProject = { ...project, filmLook: { preset: 'polaroid' } };
+      rerender(<ShotFinalRender project={editedProject} scene={editedProject.scenes[0]} onChange={onChange} fieldId={fieldId} />);
+
+      // The previous request's deferred response resolves during the replacement's 600ms debounce
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+        resolveFirst({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
+      });
+
+      // Because inputs changed, the deferred response was discarded and must not update status
+      expect(screen.queryByTestId('shot-render-state')).toBeNull();
+      expect(screen.queryByRole('button', { name: /Play/ })).toBeNull();
+
+      // Advance through the remaining debounce to start the replacement request
+      await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+      expect(getMusicVideoShotRenders).toHaveBeenCalledTimes(2);
+
+      // The replacement request fails
+      await act(async () => {
+        rejectSecond(new Error('Shot render service unavailable'));
+      });
+
+      // The failed refresh is exposed with an error notice and a retry button
+      expect(screen.getByText('Shot render service unavailable')).toBeTruthy();
+      const retryButton = screen.getByRole('button', { name: 'Retry' });
+      expect(retryButton).toBeTruthy();
+
+      // User clicks Retry; setup third request to succeed
+      getMusicVideoShotRenders.mockResolvedValueOnce({
+        available: true,
+        shots: [shot('a', 'rendered', ['a-polaroid.mp4'])],
+        ready: 1,
+        total: 1,
+      });
+
+      await act(async () => {
+        fireEvent.click(retryButton);
+      });
+      expect(getMusicVideoShotRenders).toHaveBeenCalledTimes(3);
+
+      // State is restored to Rendered with the new cut's segment
+      expect(screen.queryByText('Shot render service unavailable')).toBeNull();
+      expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendered');
+      expect(screen.getByRole('button', { name: /Play/ })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
