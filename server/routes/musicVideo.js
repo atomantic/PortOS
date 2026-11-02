@@ -35,6 +35,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoSceneSplitSchema,
+  musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
@@ -124,6 +125,8 @@ import {
   deleteScene,
   reorderProjectScenes,
   splitProjectScene,
+  previewProjectPacingRecut,
+  recutProjectToPacing,
   mergeProjectNextScene,
   mergeProjectPreviousScene,
   moveProjectSceneStart,
@@ -1704,6 +1707,15 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const updated = await reorderProjectScenes(req.params.id, sceneIds);
   res.json(updated);
+}));
+
+router.get('/:id/pacing-recut', asyncHandler(async (req, res) => {
+  res.json(await previewProjectPacingRecut(req.params.id));
+}));
+
+router.post('/:id/pacing-recut', asyncHandler(async (req, res) => {
+  const { revision } = validateRequest(musicVideoPacingRecutSchema, req.body ?? {});
+  res.json(await recutProjectToPacing(req.params.id, revision));
 }));
 
 // Split a shot its backend cannot render in one take (#8977): a performance

@@ -325,6 +325,20 @@ export async function splitProjectScene(id, sceneId, options = {}) {
   });
 }
 
+/** Read the raw record so preview and the serialized apply hash identical inputs. */
+export async function previewProjectPacingRecut(id) {
+  const { previewPacingRecut } = await import('./pacingRecut.js');
+  return previewPacingRecut(await (await selectBackend()).getProject(id));
+}
+
+export async function recutProjectToPacing(id, revision) {
+  const [{ applyPacingRecut }, { carryShotLocks }] = await Promise.all([import('./pacingRecut.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const { project, added, from } = applyPacingRecut(current, revision);
+    return { project: carryShotLocks(current, project, { from }), added };
+  });
+}
+
 /**
  * Join a scene with the next one (projectsLogic.mergeNextScene) — the inverse
  * of the split. Returns `{ project, scene }`.

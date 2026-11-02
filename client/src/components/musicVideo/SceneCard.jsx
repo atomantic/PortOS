@@ -245,6 +245,7 @@ export default function SceneCard({
     preMusic ? `before the song · ${normalizePreMusic(scene.preMusic).durationSec.toFixed(2)}s` : null,
     !preMusic && typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? `${scene.startSec.toFixed(2)}–${scene.endSec.toFixed(2)}s (${frameSpan(scene)})` : null,
     scene.beatAligned ? 'beat-aligned' : null,
+    scene.pacingCut ? 'pacing cut' : null,
     layer === 'footage' && loops && !performance ? 'loops' : null,
   ].filter(Boolean).join(' · ');
   const typeSummary = [
@@ -260,6 +261,10 @@ export default function SceneCard({
   const followsBoard = !!boardDirection && !scene.prompt?.trim();
   const promptField = (
     <div className="space-y-1">
+      {scene.beatNeedsReview && <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
+        <span>Needs its own beat — this prompt was copied from the longer shot.</span>
+        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
+      </div>}
       <textarea
         aria-label="Shot prompt"
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}

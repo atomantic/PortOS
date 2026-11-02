@@ -1122,6 +1122,8 @@ describe('create-schema parity', () => {
     startSec: 1,
     endSec: 4,
     beatAligned: true,
+    beatNeedsReview: true,
+    pacingCut: true,
     loop: true,
     sectionIndex: 2,
     lyricText: 'line one',

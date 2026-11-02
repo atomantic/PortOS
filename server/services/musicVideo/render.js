@@ -44,7 +44,7 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -375,7 +375,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
 // returned unchanged.
 //
 // `scenes` (optional) is the project's scene list — when a clip's matching
-// scene has planner section provenance or `beatAligned: true` and valid
+// scene has a pacing cut, planner section provenance or `beatAligned: true` and valid
 // `startSec`/`endSec` (persisted by
 // the BeatTimeline drag-snap arranger, #1854), that scene's saved duration is
 // honored EXACTLY instead of being re-derived from the live beat grid: the
@@ -400,9 +400,8 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     // A planned shot keeps its bounded span even when a sparse grid cannot
     // supply an on-beat cut. Beat alignment describes the cut, not ownership
     // of its timing. Section provenance is cleared when the audio changes.
-    const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
     // A measured word-gap repair owns its edit boundary independently of beats.
-    if ((scene?.beatAligned || planned || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
+    if ((sceneUsesAuthoredTiming(scene) || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
       // Keep the resolved playback in-point, including performance edits and
       // hand-set clip offsets; only the authored output span changes here.
       // A looping input may repeat to fill a span longer than its source.

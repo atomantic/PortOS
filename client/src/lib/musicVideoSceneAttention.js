@@ -9,13 +9,14 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
 export { COVERAGE_TOLERANCE_SEC } from './musicVideoLayers.js';
 
 export const SCENE_ATTENTION_LABELS = Object.freeze({
+  'beat-needs-review': 'Needs its own beat',
   'missing-frame': 'No frame',
   'missing-clip': 'No clip',
   'under-covered': 'Clip too short',
@@ -74,6 +75,7 @@ export function sceneAttention(scene, ctx = {}) {
   const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
+  if (scene.beatNeedsReview) codes.push('beat-needs-review');
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   // A code-rendered clip was made without a seed frame, so it needs none.
@@ -81,7 +83,7 @@ export function sceneAttention(scene, ctx = {}) {
   if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
-  if (layer === 'footage' && scene.beatAligned && sceneHasAuthoredSpan(scene)
+  if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
     && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
       holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;

@@ -528,6 +528,8 @@ function buildScene(input, { order }) {
     startSec: input.startSec ?? null,
     endSec: input.endSec ?? null,
     beatAligned: input.beatAligned ?? false,
+    ...(input.beatNeedsReview ? { beatNeedsReview: true } : {}),
+    ...(input.pacingCut ? { pacingCut: true } : {}),
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
     // #8964: a new shot never silently repeats its clip to fill a span — looping
@@ -744,7 +746,7 @@ export function applyStoryboardShotSync(project, plan) {
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
-const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage'];
 
@@ -900,8 +902,16 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   });
   if (!plan.ok) throw new ServerError(plan.message, { status: 400, code: plan.code });
 
+  return applySceneSplit(project, sceneId, plan.pieces);
+}
+
+/** Apply a previously planned split, shared by the single-shot and pacing actions. */
+export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip = false, needsBeat = false } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  const scene = scenes[idx];
   const now = new Date().toISOString();
-  const count = plan.pieces.length;
+  const count = plannedPieces.length;
   // Re-splitting a piece numbers it afresh rather than stacking suffixes.
   const baseLabel = (scene.label || scene.sectionLabel || `Scene ${idx + 1}`).replace(/ · \d+\/\d+$/, '');
   const pieceLabel = (i) => {
@@ -911,15 +921,19 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   const hasTimedCues = (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
   const pieceLyrics = (piece) => (hasTimedCues ? sungLyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
 
-  const pieces = plan.pieces.map((piece, i) => {
-    const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece) };
+  const grid = [...(project.audioAnalysis?.beats || []), ...(project.audioAnalysis?.downbeats || [])];
+  const onGrid = (t) => t === 0 || t === project.audioAnalysis?.durationSec
+    || grid.some((beat) => Math.abs(beat - t) <= 0.005);
+  const pieces = plannedPieces.map((piece, i) => {
+    const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece),
+      ...(needsBeat ? { pacingCut: true, beatAligned: onGrid(piece.startSec) && onGrid(piece.endSec) } : {}) };
     if (i === 0) {
       const takes = ensureSceneTakes(scene, now);
-      // A lip-synced take was generated for the old interval and the render
-      // refuses it as re-timed, so the selection is cleared (the take stays a
-      // candidate) and "Generate missing" fills it. A cutaway clip still starts
-      // where the first piece does, so it stays selected and is trimmed.
-      return isPerformanceScene(scene)
+      // The ordinary backend split clears a performance selection and leaves
+      // the take as a candidate. Pacing retains the start-aligned prefix:
+      // performanceShot's playsInSync explicitly permits shortening only its end.
+      // A cutaway clip also starts where the first piece does and is trimmed.
+      return isPerformanceScene(scene) && !preserveClip
         ? { ...scene, ...timing, takes, videoHistoryId: null }
         : { ...scene, ...timing, takes };
     }
@@ -929,6 +943,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         prompt: scene.prompt ?? '',
         framePrompt: scene.framePrompt ?? null,
         beatAligned: scene.beatAligned ?? false,
+        ...(scene.pacingCut ? { pacingCut: true } : {}),
         loop: scene.loop ?? false,
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
@@ -948,6 +963,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
     const seeded = {
       ...fresh,
       ...(scene.direction ? { direction: structuredClone(scene.direction) } : {}),
+      ...(needsBeat ? { beatNeedsReview: true } : {}),
       referenceImageId: scene.referenceImageId ?? null,
     };
     return { ...seeded, takes: ensureSceneTakes(seeded, now, 'manual') };

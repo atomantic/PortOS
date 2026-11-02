@@ -462,7 +462,7 @@ function cutPieces({ startSec, endSec, maxSec, minPieceSec, count, candidates })
     // Any cut in [lo, hi] leaves the rest coverable by `remaining - 1` pieces
     // and keeps both sides at least `minPieceSec` long.
     const lo = Math.max(cursor + minPieceSec, endSec - (remaining - 1) * maxSec);
-    const hi = Math.min(cursor + maxSec, endSec - minPieceSec);
+    const hi = Math.min(cursor + maxSec, endSec - (remaining - 1) * minPieceSec);
     const target = cursor + (endSec - cursor) / remaining;
     let best = null;
     for (const c of candidates) {
@@ -471,7 +471,7 @@ function cutPieces({ startSec, endSec, maxSec, minPieceSec, count, candidates })
     }
     clean = clean && Boolean(best?.clean);
     const at = round6(Math.min(hi, Math.max(lo, best ? best.t : target)));
-    pieces.push({ startSec: round6(cursor), endSec: at, cut: best ? CUT_KIND[best.rank] : 'even' });
+    pieces.push({ startSec: round6(cursor), endSec: at, cut: best ? best.kind || CUT_KIND[best.rank] : 'even' });
     cursor = at;
   }
   pieces.push({ startSec: round6(cursor), endSec: round6(endSec), cut: null });
@@ -517,6 +517,24 @@ export function planShotSplit({ startSec, endSec, maxSec, lyricCues, phrases, be
     if (more?.clean) chosen = more;
   }
   return { ok: true, pieces: chosen.pieces };
+}
+
+/** Split to a pacing ceiling, preferring lyric starts, then downbeats, then beats.
+ * Every piece respects both pacing bounds; refuse an impossible range rather
+ * than leave a sliver or silently exceed the ceiling. */
+export function planPacingSplit({ startSec, endSec, minSec, maxSec, lyricCues = [], downbeats = [], beats = [] }) {
+  if (!timedNumber(startSec) || !timedNumber(endSec) || !(endSec > startSec)) {
+    return { ok: false, code: 'MUSIC_VIDEO_SPLIT_UNTIMED', message: 'Set a start and end before re-cutting a shot.' };
+  }
+  const count = Math.ceil((endSec - startSec - 1e-6) / maxSec);
+  const candidates = [
+    ...lyricCues.map((cue) => ({ t: cue?.startSec, rank: 0, kind: 'lyric' })),
+    ...downbeats.map((t) => ({ t, rank: 1, kind: 'downbeat' })),
+    ...beats.map((t) => ({ t, rank: 2, kind: 'beat' })),
+  ].filter((c) => timedNumber(c.t)).map((c) => ({ ...c, clean: true }));
+  const plan = cutPieces({ startSec, endSec, minPieceSec: minSec, maxSec, count, candidates });
+  return plan ? { ok: true, pieces: plan.pieces }
+    : { ok: false, code: 'MUSIC_VIDEO_PACING_IMPOSSIBLE', message: 'This shot cannot fit both pacing bounds. Lower the minimum shot length or raise the maximum.' };
 }
 
 /**
