@@ -4,9 +4,7 @@
  * Port fields in apps.json are *derived* from ecosystem.config.cjs (the source
  * of truth PM2 reads). This module diffs a submitted port update against the
  * ACTUAL config literals and persists the change back to the ecosystem config
- * (value-keyed remap for distinct ports; per-process/label targeted rewrite for
- * shared-value ports) in ONE atomic write. Extracted verbatim from the
- * `PUT /api/apps/:id` route so the route handler stays HTTP-thin — the caller
+ * (per-process/label source-span edits) in one atomic write. The caller
  * still owns the precondition guard (`usesPm2` + path exists) and the HTTP
  * error/response mapping.
  *
@@ -39,7 +37,11 @@ export async function applyEcosystemPortEdits(existing, data) {
   // literal to rewrite": EditAppModal submits every field even on a rename, so
   // a value equal to the config's current port is a no-op echo, and a value
   // that differs is a genuine edit to persist.
-  const { processes: cfgProcs } = await parseEcosystemFromPath(existing.repoPath);
+  const { processes: cfgProcs, portsEditable } = await parseEcosystemFromPath(existing.repoPath);
+  if (portsEditable === false) {
+    const changedKeys = PORT_KEYS.filter(key => Number.isInteger(data[key]) && data[key] !== existing[key]);
+    return { persistFailed: changedKeys.length > 0, changedKeys, portCollision: null };
+  }
   // Attribute each label to the process that belongs to THIS app, not to
   // whichever process declares the label first (#7357): one ecosystem config
   // routinely describes several product surfaces, and a sibling daemon's
@@ -52,16 +54,6 @@ export async function applyEcosystemPortEdits(existing, data) {
   for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
     currentPort[key] = attributedPorts[label];
     procNameByKey[key] = procNameByLabel[label];
-  }
-  // Count current values so a value-keyed rewrite never fires on a number shared
-  // by another port field (e.g. uiPort derived from apiPort, both 6000) — that
-  // would rewrite every occurrence and clobber the field the user didn't touch.
-  // Such a value can't be split by value alone; it falls through to the
-  // per-process-label-targeted rewrite below.
-  const valueCounts = new Map();
-  for (const key of PORT_KEYS) {
-    const v = currentPort[key];
-    if (Number.isInteger(v)) valueCounts.set(v, (valueCounts.get(v) || 0) + 1);
   }
   // A port is "changed" when the submitted value differs from the config's
   // current value for that label. A field the config doesn't define has no
@@ -84,12 +76,7 @@ export async function applyEcosystemPortEdits(existing, data) {
   const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
   const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
   const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);
-  // Collision guard (#7357): never hand one process a port ANOTHER process in
-  // the same config already holds. Whatever the rewrite path — value-keyed or
-  // targeted — the result would be a correct-looking config that collides the
-  // moment PM2 restarts, so this runs BEFORE any write and rejects instead.
-  // Every edit is described by process + label here, including the value-keyed
-  // ones (which name a process for attribution but rewrite by value).
+  // Evaluate collisions against the complete proposed batch before writing.
   const portCollision = findCrossProcessPortCollision(cfgProcs, changedKeys.map(key => ({
     processName: procNameByKey[key],
     label: LABEL_BY_KEY[key],
@@ -99,45 +86,23 @@ export async function applyEcosystemPortEdits(existing, data) {
     return { persistFailed: false, uiPortOverride: uiIsDerived ? derivedUiPort : undefined, changedKeys, portCollision };
   }
 
-  const remap = [];
-  const targetedEdits = []; // shared-value keys: rewritten by process + label
-  for (const key of changedKeys) {
-    const oldPort = currentPort[key]; // guaranteed integer by the filter above
-    // Value shared with another field (can't disambiguate by value): target the
-    // specific process block + label so the edit lands on exactly the port the
-    // user touched, not every occurrence of the shared literal.
-    if (valueCounts.get(oldPort) > 1 && procNameByKey[key]) {
-      targetedEdits.push({ processName: procNameByKey[key], label: LABEL_BY_KEY[key], oldPort, newPort: data[key] });
-      continue;
-    }
-    remap.push([oldPort, data[key]]);
+  const targetedEdits = changedKeys.map(key => ({
+    processName: procNameByKey[key], label: LABEL_BY_KEY[key], oldPort: currentPort[key], newPort: data[key],
+  }));
+  // Unknown source fields must not become registry-only edits. Permit echoes
+  // of recorded values, and the established served-by-API UI derivation.
+  const unknownChange = PORT_KEYS.some(key => Number.isInteger(data[key]) &&
+    currentPort[key] === undefined && !(key === 'uiPort' && uiIsDerived) && data[key] !== existing[key]);
+  if (unknownChange) {
+    return { persistFailed: true, changedKeys, portCollision: null };
   }
-
-  // Persist the value-keyed remap (distinct ports) and the targeted edits
-  // (shared-value ports) in ONE atomic write. Doing them as two separate writes
-  // would let the value-keyed pass land on disk before a later unpersistable
-  // targeted edit forces the reject below — leaving config partially changed for
-  // a rejected request. writeEcosystemPortEdits computes both rewrites in memory
-  // and writes only when nothing is unpersistable.
   const result = changedKeys.length > 0
-    ? await writeEcosystemPortEdits(existing.repoPath, remap, targetedEdits)
-    : { changed: false, remapApplied: false, applied: [], unapplied: [] };
+    ? await writeEcosystemPortEdits(existing.repoPath, [], targetedEdits)
+    : { changed: false, unapplied: [] };
   if (result.changed) {
-    const remapMsg = result.remapApplied ? remap.map(([o, n]) => `${o}→${n}`).join(', ') : '';
-    const tgtMsg = targetedEdits.map(e => `${e.label} ${e.oldPort}→${e.newPort}`).join(', ');
-    console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${[remapMsg, tgtMsg].filter(Boolean).join(', ')} (restart the app to apply)`);
+    console.log(`🔧 Updated ${result.file} ports for ${existing.name}: ${targetedEdits.map(e => `${e.label} ${e.oldPort}→${e.newPort}`).join(', ')} (restart the app to apply)`);
   }
-
-  // Honesty gate: if the user changed a port we could NOT write to the
-  // source-of-truth config, signal a reject rather than persist a registry value
-  // PM2 will contradict (and the next refresh will revert). `remap.length &&
-  // !remapApplied` catches value-keyed pairs whose literal wasn't found;
-  // `unapplied` catches process/label edits that didn't match. On any
-  // unpersistable targeted edit the writer persists nothing, so this leaves the
-  // config untouched.
-  const valueKeyedFailed = remap.length > 0 && !result.remapApplied;
-  const targetedFailed = (result.unapplied || []).length > 0;
-  const persistFailed = changedKeys.length > 0 && (valueKeyedFailed || targetedFailed);
+  const persistFailed = changedKeys.length > 0 && (!result.changed || result.unapplied.length > 0);
 
   return {
     persistFailed,

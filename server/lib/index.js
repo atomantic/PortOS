@@ -1051,3 +1051,5 @@ export * from './musicVideoCastSetsImageEdit.js';
 export * from './imageRenderQuality.js';
 
 export * from './greyboxSequence.js';
+
+export * from './ecosystemPortEdits.js';
