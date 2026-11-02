@@ -59,8 +59,8 @@ export default function SignalManager() {
         <button disabled={busy} onClick={() => run(perform)} className="min-h-10 p-2 text-port-error">Confirm purge</button>
         <button disabled={busy} onClick={() => setConfirm(null)} className="min-h-10 p-2">Cancel</button>
       </div>}
-      <label htmlFor="signal-blocked-handles" className="block">Blocked handles (one per line)<textarea id="signal-blocked-handles" value={handles} onChange={(event) => setHandles(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
-      <label htmlFor="signal-blocked-conversations" className="block">Blocked conversation IDs (one per line)<textarea id="signal-blocked-conversations" value={conversations} onChange={(event) => setConversations(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
+      <label htmlFor="signal-blocked-handles" className="block">Blocked handles (one per line)<textarea disabled={busy} id="signal-blocked-handles" value={handles} onChange={(event) => setHandles(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
+      <label htmlFor="signal-blocked-conversations" className="block">Blocked conversation IDs (one per line)<textarea disabled={busy} id="signal-blocked-conversations" value={conversations} onChange={(event) => setConversations(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>
       <p className="text-xs text-gray-400">Saving exclusions affects future imports. Use Block and purge above to remove existing conversation history.</p>
       <button disabled={busy} onClick={() => run(async () => { const saved = await api.setSignalBlocklist({ handles: lines(handles), conversationIds: lines(conversations) }); setHandles(saved.handles.join('\n')); setConversations(saved.conversationIds.join('\n')); await load(); toast.success('Signal exclusions saved'); })} className="min-h-10 p-2 border border-port-border rounded">Save exclusions</button>
     </>}

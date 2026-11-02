@@ -47,3 +47,19 @@ it('keeps unsaved exclusions through searches and conversation refreshes', async
   expect(handles.value).toBe('+15551234567');
   expect(api.getSignalBlocklist).toHaveBeenCalledTimes(1);
 });
+
+it('locks exclusion drafts while saving so normalization cannot overwrite newer edits', async () => {
+  let finishSave;
+  api.setSignalBlocklist.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+  render(<SignalManager />);
+  fireEvent.click(screen.getByRole('button', { name: 'Manage imported data' }));
+  const handles = await screen.findByLabelText('Blocked handles (one per line)');
+  fireEvent.change(handles, { target: { value: '+1 (555) 123-4567' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save exclusions' }));
+  await waitFor(() => expect(api.setSignalBlocklist).toHaveBeenCalledTimes(1));
+  expect(handles.disabled).toBe(true);
+  expect(screen.getByLabelText('Blocked conversation IDs (one per line)').disabled).toBe(true);
+  finishSave({ handles: ['+15551234567'], conversationIds: [] });
+  await waitFor(() => expect(handles.disabled).toBe(false));
+  expect(handles.value).toBe('+15551234567');
+});
