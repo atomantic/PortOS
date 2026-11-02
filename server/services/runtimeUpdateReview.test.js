@@ -179,9 +179,13 @@ describe('runtime update review monitor', () => {
   });
 
   it('does not treat a vanished harness on PATH as a verified update', async () => {
+    vi.useFakeTimers();
     const { monitor, deps } = fixture();
     await monitor.refresh();
     deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.items().find((item) => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
+    vi.advanceTimersByTime(30 * 60 * 1000);
     await monitor.refresh();
     expect(monitor.items().find((item) => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0', unverified: true });
   });
@@ -199,16 +203,55 @@ describe('runtime update review monitor', () => {
     expect(monitor.items().find(item => item.id === 'harness:manual')).toMatchObject({ revision: '1.0.0:1.1.0' });
   });
 
-  it('keeps a retryable npm check incomplete when the harness temporarily disappears', async () => {
+  it('retries a missing npm diagnostic before treating sustained absence as a cold missing probe', async () => {
+    vi.useFakeTimers();
     const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
     await monitor.refresh();
     deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
     await monitor.refresh();
     expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
     expect(deps.save.mock.calls.at(-1)[0].find(item => item.id === 'harness:codex')).toMatchObject({ retrySoon: true, unverifiedPrevious: false });
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(true);
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
     deps.readHarnesses.mockResolvedValue([harness()]);
     await monitor.refresh();
     expect(monitor.items().find(item => item.id === 'harness:codex')).toMatchObject({ revision: '1.0.0:1.1.0' });
+  });
+
+  it('restarts the missing grace period after a different probe result', async () => {
+    vi.useFakeTimers();
+    const { monitor, deps } = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    vi.advanceTimersByTime(20 * 60 * 1000);
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'unavailable', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    deps.readHarnesses.mockResolvedValue([harness({ installed: false, probeState: 'missing', version: null, latestVersion: null })]);
+    await monitor.refresh();
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+  });
+
+  it('finishes the missing diagnostic grace period after restart', async () => {
+    vi.useFakeTimers();
+    const missing = harness({ installed: false, probeState: 'missing', version: null, latestVersion: null });
+    const first = fixture({ node: status(), harnesses: [harness({ latestVersion: null })] });
+    await first.monitor.refresh();
+    first.deps.readHarnesses.mockResolvedValue([missing]);
+    await first.monitor.refresh();
+    const cached = first.deps.save.mock.calls.at(-1)[0];
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    const second = fixture({ node: status(), harnesses: [missing], cached });
+    await second.monitor.start();
+    await vi.waitFor(() => expect(second.deps.save).toHaveBeenCalled());
+    expect(second.monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    second.monitor.stop();
   });
 
   it('clears a harness after its explicit removal is rechecked', async () => {

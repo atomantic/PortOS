@@ -12,6 +12,7 @@ const UPDATE_LINK = `/apps/${PORTOS_APP_ID}/update`;
 const CACHE_FILE = join(PATHS.data, 'cache', 'runtime-update-review.json');
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 15 * 60 * 1000;
+const MISSING_DIAGNOSTIC_GRACE_MS = 2 * RETRY_INTERVAL_MS;
 
 const row = (id, title, summary, drillTo, revision, severity = 'normal') => ({
   id, title, summary, drillTo, revision, severity,
@@ -164,11 +165,21 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
       if (removalsBeforeRead.has(harness.id)) { removedHarnesses.delete(harness.id); rows.delete(id); }
       else if (rows.has(id)) {
         const previous = rows.get(id);
-        // Script-installed diagnostics have no release comparison to retry.
-        if (previous.unverified && !previous.unverifiedPrevious && !harness.package) rows.delete(id);
-        else rows.set(id, { ...unknown(previous), retrySoon: true });
+        if (previous.unverified && !previous.unverifiedPrevious) {
+          const now = Date.now();
+          const since = Number.isFinite(previous.missingSince) && previous.missingSince <= now ? previous.missingSince : now;
+          // After sustained absence, a diagnostic with no known action is the
+          // same as a cold missing probe; it never means an update was installed.
+          if (!harness.package || now - since >= MISSING_DIAGNOSTIC_GRACE_MS) rows.delete(id);
+          else rows.set(id, { ...unknown(previous), retrySoon: true, missingSince: since });
+        } else rows.set(id, { ...unknown(previous), retrySoon: true });
       }
       continue;
+    }
+    if (rows.get(id)?.missingSince !== undefined) {
+      const previous = { ...rows.get(id) };
+      delete previous.missingSince;
+      rows.set(id, previous);
     }
     if (harness.probeState === 'unavailable' || harness.probeState === 'unprobed') {
       rows.set(id, { ...unknown(rows.get(id), row(id, `${harness.label} status unverified`, 'The installed harness could not report its version.', link, 'unverified')), retrySoon: true });
