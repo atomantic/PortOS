@@ -1102,7 +1102,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(56);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(57);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -1136,7 +1136,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   );
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 56], ['claim-issue-gitlab', 50], ['claim-issue-jira', 28]];
+    const cases = [['claim-issue', 57], ['claim-issue-gitlab', 50], ['claim-issue-jira', 28]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];
@@ -1226,6 +1226,17 @@ describe('taskPromptDefaults integrity snapshot', () => {
     // checklist a later claim follows to the next available child.
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('Part of #${EPIC}');
     expect(DEFAULT_TASK_PROMPTS['claim-issue']).toContain('## Decomposed into');
+
+    // GitHub slices also get a native sub-issue link (by REST id), and the
+    // existing-children check reads native sub-issues so a UI-split epic is not
+    // re-split. GitLab has no project-scoped equivalent and keeps text links only.
+    const github = DEFAULT_TASK_PROMPTS['claim-issue'];
+    expect(github).toContain('--paginate "repos/${REPO}/issues/${EPIC}/sub_issues"');
+    expect(github).toContain('-X POST "repos/${REPO}/issues/${EPIC}/sub_issues" -F sub_issue_id="$CHILD_ID"');
+    expect(github).toMatch(/repos\/\$\{REPO\}\/issues\/<num>" --jq \.id/);
+    expect(github).toContain('Never pass \`replace_parent\`');
+    expect(github).not.toContain('${GITHUB_HOST_SETUP}');
+    expect(DEFAULT_TASK_PROMPTS['claim-issue-gitlab']).not.toContain('sub_issues');
 
     // JIRA has no `Closes` auto-close and no assignee/label claim, so a slice is
     // claimable only when it is BOTH assigned to the caller and in the open sprint
