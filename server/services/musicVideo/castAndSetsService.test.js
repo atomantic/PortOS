@@ -1109,6 +1109,15 @@ describe('Cast & Sets per-item actions', () => {
 });
 
 
+it('makes the shipped angle guide viewable as soon as the face plan is published', async () => {
+  rmSync(join(ROOT(), 'templates', 'music-video-face-angles.png'), { force: true });
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await until(async () => (await current(project.id)).castAndSets?.plan?.expressions, 'planned face sheet');
+  expect(jobs.some((j) => keyOf(j) === 'expressions')).toBe(false);
+  expect(readFileSync(join(ROOT(), 'templates', 'music-video-face-angles.png')).subarray(1, 4).toString()).toBe('PNG');
+});
+
 it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
   onDisk('upload-face.png', 'rendered-face.png', 'board-face.png', 'pinterest-0123456789abcdef.jpg', 'old-sheet.png', 'spare-face.png');
   const project = await seed({ visualSpec: { moodBoardId: 'mb-1', references: [
