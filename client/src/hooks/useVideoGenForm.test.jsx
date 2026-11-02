@@ -266,6 +266,28 @@ describe('useVideoGenForm', () => {
     expect(result.current.buildGeneratePayload().audioFile).toBe(wav);
   });
 
+  it('clears mode-specific inputs when choosing a model from another mode', async () => {
+    const { result } = render();
+    act(() => result.current.handleModeChange('a2v'));
+    await waitFor(() => expect(result.current.modelId).toBe(LTX2.id));
+    act(() => {
+      result.current.setAudioFile(new File(['audio'], 'example.wav'));
+      result.current.pickSourceImage('example.png');
+      result.current.setPrompt('A paper bird takes flight');
+      result.current.setSteps('12');
+      result.current.setGuidanceScale('4');
+    });
+    act(() => result.current.handleModelChange(MLX.id));
+    expect(result.current.mode).toBe('text');
+    expect(result.current.modelId).toBe(MLX.id);
+    expect(result.current.audioFile).toBeNull();
+    expect(result.current.sourceImageFile).toBeNull();
+    expect(result.current.steps).toBe('');
+    expect(result.current.guidanceScale).toBe('');
+    expect(result.current.buildGeneratePayload()).toMatchObject({ modelId: MLX.id, prompt: 'A paper bird takes flight' });
+    expect(result.current.buildGeneratePayload().audioFile).toBe('');
+  });
+
   it('requires and submits both image and audio for MiniMax H3 Ref2VA', async () => {
     const { result } = render({ models: [MLX, H3_REF2VA] });
     await waitFor(() => expect(result.current.modelId).toBe(MLX.id));
