@@ -469,11 +469,27 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
   return { jobId, generationId: jobId, filename: `${jobId}.mp4`, model: prepared.effectiveModelId, mode: 'local', status, position };
 };
 
+// A Music Video shot rendered on a local reference-to-video model (FastH3 Omni) carries the
+// shot's cast sheets beside its still, as a Grok clip does, unless the request already names references.
+const withLocalCastReferences = async (body) => {
+  if (body.backend && body.backend !== 'local') return body;
+  if (!body.modelId || body.referenceImageFiles?.length || !body.musicVideo?.sceneId) return body;
+  const { listVideoModels } = await import('./generateVideo.js');
+  const model = listVideoModels().find((m) => m.id === body.modelId);
+  const total = Number(model?.maxReferenceTotal) || Infinity;
+  const limit = Math.min((Number(model?.maxReferenceImages) || 0) - 1, total - 1);
+  if (!(limit > 0)) return body;
+  const { musicVideoLocalReferenceFiles } = await import('../musicVideo/clipCastReferences.js');
+  const files = await musicVideoLocalReferenceFiles(body.musicVideo, limit);
+  return files.length ? { ...body, referenceImageFiles: files } : body;
+};
+
 const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
   const fableLoomRenderSettings = await loadFableLoomRenderSettings(body);
   if (body.musicVideo) {
     const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
     body = await applyProjectRenderPool(body);
+    body = await withLocalCastReferences(body);
   }
   let prepared;
   ({ body, prepared } = await prepareVideoSubmissionInputs(body, uploads, inputs));

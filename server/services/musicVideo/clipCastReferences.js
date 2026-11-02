@@ -24,3 +24,22 @@ export async function musicVideoClipCastReferences({ projectId, sceneId } = {}) 
     .map((ref) => ({ path: ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId), label: ref.label || '' }))
     .filter((ref) => ref.path);
 }
+
+/**
+ * Gallery files of the shot's cast sheets for a local reference-to-video model
+ * (`maxReferenceImages` counts the start frame first, so `limit` is the rest):
+ * the still opens the clip and these keep faces and wardrobe once it moves.
+ * Cast guides outside the gallery are skipped; the request names gallery files.
+ */
+export async function musicVideoLocalReferenceFiles({ projectId, sceneId } = {}, limit = 0) {
+  if (!projectId || !sceneId || limit < 1) return [];
+  const { getProject } = await import('./projects.js');
+  const project = await getProject(projectId);
+  const scene = project?.scenes?.find((entry) => entry.sceneId === sceneId);
+  if (!scene) return [];
+  const references = musicVideoConditioningReferences(project, scene, await loadSceneCastMedia(scene));
+  const files = references
+    .filter((ref) => ref.role === 'character' && !ref.panelArt && !ref.greybox && !ref.castGuide && resolveGalleryImage(ref.imageId))
+    .map((ref) => ref.imageId);
+  return [...new Set(files)].slice(0, limit);
+}
