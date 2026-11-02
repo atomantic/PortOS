@@ -9,8 +9,8 @@ const renderInputs = (project) => JSON.stringify([project?.scenes, project?.film
  * The composed final render's per-shot cache state (`GET /:id/shot-renders`):
  * read when the project's render inputs change (debounced, as edits land) and
  * when a shot render settles, plus each shot's live render from the
- * `music-video:shot-render` events. Returns `{ status, live }`, `live` keyed
- * by sceneId (`{ state, progress, error }`). Off (null) for other render styles.
+ * `music-video:shot-render` events. Returns `{ status, live, markLive, refresh, retry }`,
+ * `live` keyed by sceneId (`{ state, progress, error }`). Off (null) for other render styles.
  */
 export default function useMusicVideoShotRenders(project) {
   const projectId = project?.id;
@@ -23,15 +23,34 @@ export default function useMusicVideoShotRenders(project) {
   const refresh = useRef(null);
   refresh.current = () => {
     const ticket = ++generation.current;
-    getMusicVideoShotRenders(projectId, { silent: true })
-      .then((next) => { if (ticket === generation.current) setStatus(next); })
-      .catch(() => {});
+    return getMusicVideoShotRenders(projectId, { silent: true })
+      .then((next) => {
+        if (ticket === generation.current) setStatus(next);
+        return next;
+      })
+      .catch((err) => {
+        if (ticket === generation.current) {
+          setStatus({
+            available: true,
+            error: { message: err?.message || (typeof err === 'string' ? err : 'Failed to read shot render status') },
+            shots: [],
+            outro: null,
+            ready: 0,
+            total: 0,
+          });
+        }
+      });
   };
 
   useEffect(() => {
-    if (!projectId || !composed) { generation.current += 1; setStatus(null); return undefined; }
+    generation.current += 1;
+    setStatus(null);
+    if (!projectId || !composed) return undefined;
     const timer = setTimeout(() => refresh.current(), 600);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      generation.current += 1;
+    };
   }, [projectId, composed, inputs]);
 
   useEffect(() => {
@@ -57,5 +76,11 @@ export default function useMusicVideoShotRenders(project) {
     else delete next[sceneId];
     return next;
   });
-  return { status, live, markLive, refresh: () => refresh.current() };
+  return {
+    status,
+    live,
+    markLive,
+    refresh: () => refresh.current(),
+    retry: () => refresh.current(),
+  };
 }
