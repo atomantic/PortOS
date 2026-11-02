@@ -46,6 +46,23 @@ describe('detectGodotNativeLaunch', () => {
 });
 
 describe('parseEcosystemConfig', () => {
+  it('parses quoted keys in inline ports and nested PORTS objects', () => {
+    const content = `const PORTS = {
+  "server": { "api": 6000 },
+  'client': { 'ui': 5000 },
+};
+module.exports = { apps: [
+  { name: 'quoted-api', script: 'server.js', ports: PORTS.server },
+  { name: 'quoted-ui', script: 'vite', ports: { 'ui': 5000 } },
+] };`;
+
+    const { processes } = parseEcosystemConfig(content);
+    expect(processes.map(({ name, ports }) => [name, ports])).toEqual([
+      ['quoted-api', { api: 6000 }],
+      ['quoted-ui', { devUi: 5000 }],
+    ]);
+  });
+
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
     // Mirror the critical-mass shape: a server process that fans out IPC ports
     // to per-exchange engine processes.
@@ -365,6 +382,17 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
     expect(out).toContain('API: 5555'); // untouched
   });
 
+  it('rewrites quoted keys in PORTS constants and inline port objects', () => {
+    const content = `const PORTS = { "API": 6000, 'UI': 5000 };
+module.exports = { apps: [{ name: 'quoted-api', script: 's.js', ports: { "api": 6000 } }] };`;
+    const out = rewriteEcosystemPorts(content, [[6000, 6100], [5000, 5100]]);
+
+    expect(out).toContain('"API": 6100');
+    expect(out).toContain("'UI': 5100");
+    expect(out).toContain('"api": 6100');
+    expect(parseEcosystemConfig(out).processes[0].ports.api).toBe(6100);
+  });
+
   it('does not touch unrelated numbers that merely equal an old port', () => {
     const content = `module.exports = {
   apps: [{ name: 'x', script: 's.js', watch_delay: 1000, env: { PORT: 1000 } }]
@@ -453,6 +481,41 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it('rewrites quoted inline port keys for only the selected process', () => {
+    const content = `module.exports = { apps: [
+  { name: 'quoted-api', script: 'server.js', ports: { "api": 6000 } },
+  { name: 'other-api', script: 'other.js', ports: { 'api': 6000 } },
+] };`;
+    const edit = { processName: 'quoted-api', label: 'api', oldPort: 6000, newPort: 6100 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.unapplied).toEqual([]);
+    expect(result.content).toContain('"api": 6100');
+    expect(result.content).toContain("'api': 6000");
+    expect(parseEcosystemConfig(result.content).processes.map(({ ports }) => ports.api)).toEqual([6100, 6000]);
+  });
+
+  it('rewrites quoted ui and devUi keys while preserving other processes', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 'server.js', ports: { api: 5999 } },
+  { name: 'srv-ui', script: 'vite', ports: { "devUi": 6000 } },
+  { name: 'legacy-ui', script: 'vite', ports: { 'ui': 6001 } },
+  { name: 'other-ui', script: 'vite', ports: { 'ui': 6001 } },
+] };`;
+    const edits = [
+      { processName: 'srv-ui', label: 'devUi', oldPort: 6000, newPort: 6100 },
+      { processName: 'legacy-ui', label: 'devUi', oldPort: 6001, newPort: 6101 },
+    ];
+
+    const result = rewriteEcosystemPortsByProcess(content, edits);
+    expect(result.applied).toEqual(expect.arrayContaining(edits));
+    expect(result.unapplied).toEqual([]);
+    expect(result.content).toContain('"devUi": 6100');
+    expect(result.content).toContain("'ui': 6101");
+    expect(result.content).toContain("'ui': 6001");
+  });
+
   it('rejects unknown labels without changing UI ports or undefined keys', () => {
     const content = `module.exports = { apps: [
   { name: 'srv-ui', script: 'vite', ports: { ui: 5173 }, env: { VITE_PORT: 5173, undefined: 5173 } }
