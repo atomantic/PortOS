@@ -44,7 +44,7 @@ const ALIAS_SOURCE = `test-${nonce}-alias`;
 afterAll(async () => {
   if (dbReady) {
     await query('DELETE FROM human_activity_events WHERE source = ANY($1::text[])', [[SOURCE, ALIAS_SOURCE]]).catch(() => {});
-    await query('DELETE FROM human_activity_events WHERE dedupe_key LIKE $1', [`${nonce}-wa-%`]);
+    await query('DELETE FROM human_activity_events WHERE dedupe_key LIKE ANY($1::text[])', [[`${nonce}-wa-%`, `${nonce}-gm-%`]]);
     await close();
   }
 });
@@ -480,6 +480,11 @@ describe.skipIf(!runDb)('Message thread conversation management', () => {
     expect(convMap.get(keyAcc2ThreadA)).toBe(1);
     expect(convMap.get(JSON.stringify([account1, threadB]).replace(',', ', '))).toBe(1);
     expect(convMap.get(threadB)).toBe(1);
+
+    // Raw conversationId does not purge account-scoped threads (#14694 follow-up)
+    expect(await deleteEvents({ source: 'gmail', conversationId: threadA })).toEqual({ deleted: 0 });
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc2ThreadA })).toHaveLength(1);
 
     expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
     expect(await deleteEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toEqual({ deleted: 2 });

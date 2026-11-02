@@ -461,7 +461,7 @@ function conversationFilter(field, source, parameter) {
   if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
   if (MESSAGE_ACCOUNT_TYPES.includes(source)) {
     if (field === 'chatGuid') return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
-    return `(${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter} OR ${MESSAGE_THREAD_RAW_ID_SQL} = $${parameter})`;
+    return `(${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter} OR (NULLIF(account_id, '') IS NULL AND ${MESSAGE_THREAD_RAW_ID_SQL} = $${parameter}))`;
   }
   if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
   if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
