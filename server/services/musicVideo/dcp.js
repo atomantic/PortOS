@@ -174,7 +174,7 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
         committed = true;
         return artifact;
       } finally {
-        if (!committed && !publicationAttempted) await rm(root, { recursive: true, force: true }).catch(err => { active.markUnsettled(projectId); throw err; });
+        if (!committed && !publicationAttempted) await rm(root, { recursive: true, force: true });
       }
     };
     Promise.resolve().then(() => active.run(projectId, run)).then(artifact => {

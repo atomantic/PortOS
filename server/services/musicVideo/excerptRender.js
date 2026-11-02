@@ -373,7 +373,6 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
           return false;
         });
       if (composition) await removeCompositionScratch(jobId).catch((err) => {
-        projectExcerptRenders.markUnsettled(projectId);
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] could not remove its overlay scratch: ${err.message}`);
       });
       closeJobAfterDelay(jobs, jobId);

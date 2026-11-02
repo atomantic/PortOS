@@ -223,7 +223,7 @@ async function beginPublishKitBuild(projectId, jobId) {
         chapters: buildChapters(current),
       } } };
     })).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
-    await releaseKitFiles(staleFiles, written).catch(err => { projectBuilds.markUnsettled(projectId); throw err; });
+    await releaseKitFiles(staleFiles, written);
     return written;
   };
 
