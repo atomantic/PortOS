@@ -1,31 +1,38 @@
-/** Native Windows agent-tree settlement. Reservations and receipts stay local
- * and outlive agent-history compaction; missing proof always retains the hold. */
+/** Supervised release-agent tree settlement: a native Windows Job
+ * (`windowsAgentSupervisor.cs`) or a Linux child subreaper
+ * (`linuxAgentSupervisor.py`) writes the same reservation → started → settled
+ * records. Reservations and receipts stay local and outlive agent-history
+ * compaction; missing proof always retains the hold. */
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { PATHS } from './fileUtils.js';
-import { spawn } from './childProcess.js';
+import { execFile, spawn } from './childProcess.js';
 import { findCommandOnPath, windowsPowerShell51Path } from './processEnv.js';
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 const ownerSchema = z.object({ version: z.literal(1), agentId: idSchema, taskId: z.string(),
   startedAt: z.string().datetime(), nonce: z.string().uuid() }).strict();
 const reservationSchema = z.object({ owner: ownerSchema, executable: z.string().min(1) }).strict();
-const startedSchema = z.object({ owner: ownerSchema, pid: z.number().int().positive(), created: z.string().regex(/^[1-9][0-9]+$/) }).strict();
+// `created` is the Windows creation FILETIME or the Linux /proc start time.
+const startedSchema = z.object({ owner: ownerSchema, pid: z.number().int().positive(), created: z.string().regex(/^[1-9][0-9]*$/) }).strict();
 const receiptSchema = startedSchema.extend({ version: z.literal(1), settledAt: z.string().datetime(),
   active: z.literal(0), exitCode: z.number().int().min(0).max(0xffffffff) }).strict();
 // Diagnostic only: a supervisor failure record never substitutes for proof.
 const failureSchema = z.object({ version: z.literal(1), code: z.number().int(), stage: z.enum(['job', 'attributes', 'launch',
-  'process-times', 'started-receipt', 'accounting', 'cancel', 'root-exit', 'exit-code', 'settled-receipt']) }).strict();
+  'process-times', 'started-receipt', 'accounting', 'cancel', 'root-exit', 'exit-code', 'settled-receipt', 'subreaper', 'reap']) }).strict();
+const supervised = () => process.platform === 'win32' || process.platform === 'linux';
+const LINUX_SUPERVISOR = fileURLToPath(new URL('./linuxAgentSupervisor.py', import.meta.url));
 const directory = agentId => join(PATHS.cos, 'process-settlement', idSchema.parse(agentId));
 const unavailable = (reason, failure) => {
   // Allowlisted record/stage names and a numeric code only, so a hold can be
   // diagnosed without exposing paths, PIDs or owner nonces.
   const detail = [reason, failure && `supervisor ${failure.stage} ${failure.code}`].filter(Boolean).join('; ');
-  return Object.assign(new Error(`Windows agent process settlement is unverified${detail ? ` (${detail})` : ''}`),
+  return Object.assign(new Error(`Agent process settlement is unverified${detail ? ` (${detail})` : ''}`),
     { code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', ...(reason && { reason }), ...(failure && { supervisorStage: failure.stage, supervisorCode: failure.code }) });
 };
 let compiled;
@@ -52,12 +59,26 @@ async function supervisor() {
   return compiled;
 }
 
+/** The Linux helper needs python3 with prctl(PR_SET_CHILD_SUBREAPER) and
+ * pidfd signalling; without them the agent runs unsupervised and stays held. */
+async function linuxSupervisor() {
+  const python = findCommandOnPath('python3');
+  if (!python) return null;
+  return new Promise(resolve => {
+    execFile(python, ['-I', LINUX_SUPERVISOR, '--probe'], { timeout: 5000 }, error => resolve(error ? null : python));
+  });
+}
+
 /** Called at server-controlled registration, before any agent child exists. */
 export async function reserveWindowsAgentProcess(agent) {
-  if (process.platform !== 'win32') return;
+  if (!supervised()) return;
   const owner = ownerSchema.parse({ version: 1, agentId: agent.id, taskId: agent.taskId,
     startedAt: agent.startedAt, nonce: randomUUID() });
-  const executable = await supervisor();
+  const executable = process.platform === 'win32' ? await supervisor() : await linuxSupervisor();
+  if (!executable) {
+    console.log(`⏭️ Linux subreaper supervision unavailable for agent ${agent.id}; its release recovery stays held`);
+    return;
+  }
   await mkdir(directory(agent.id), { mode: 0o700, recursive: true });
   await writeFile(join(directory(agent.id), 'owner.json'), JSON.stringify({ owner, executable }), { flag: 'wx', mode: 0o600 });
 }
@@ -65,9 +86,9 @@ export async function reserveWindowsAgentProcess(agent) {
 /** Synchronous so PTY/child terminal listeners can attach in the spawning tick.
  * Legacy/unregistered callers retain their old launch and cannot gain proof. */
 export function prepareWindowsAgentLaunch(agentId, command, args, { cwd, env, pty = false } = {}) {
-  if (process.platform !== 'win32' || !agentId) return { command, args };
+  if (!supervised() || !agentId) return { command, args };
   if ([command, cwd, ...args].some(value => typeof value === 'string' && value.includes('\0'))) {
-    throw new TypeError('Windows agent launch contains NUL bytes');
+    throw new TypeError('Agent launch contains NUL bytes');
   }
   let reservation;
   try { reservation = reservationSchema.parse(JSON.parse(readFileSync(join(directory(agentId), 'owner.json'), 'utf8'))); }
@@ -77,11 +98,15 @@ export function prepareWindowsAgentLaunch(agentId, command, args, { cwd, env, pt
   const spec = join(directory(agentId), 'launch.json');
   // A duplicate dispatch must not create a second writer for this agent/start.
   writeFileSync(spec, JSON.stringify({ owner: reservation.owner, command: resolved, args, cwd, pty }), { flag: 'wx', mode: 0o600 });
-  return { command: reservation.executable, args: [spec], settlementDirectory: directory(agentId) };
+  return { command: reservation.executable, args: process.platform === 'win32' ? [spec] : ['-I', LINUX_SUPERVISOR, spec],
+    settlementDirectory: directory(agentId) };
 }
 
 /** Stop through the supervisor so it can persist kernel-backed settlement.
- * Lost/unreadable supervision remains a hold; PID-based fallback cannot prove it. */
+ * Lost/unreadable supervision remains a hold; PID-based fallback cannot prove it.
+ * The durable request survives a supervisor that has not started listening yet;
+ * every stop, SIGKILL included, lets the supervisor terminate, escalate and reap
+ * the tree itself, because a killed supervisor could prove nothing. */
 export function watchWindowsAgentProcess(child, launch) {
   if (!launch.settlementDirectory) return child;
   const cancel = () => {
@@ -96,7 +121,7 @@ export function watchWindowsAgentProcess(child, launch) {
 }
 
 /** Read durable server-origin launch/settlement evidence after restart. The
- * native handle/creation time, rather than a recycled PID, binds the proof. */
+ * native creation/start time, rather than a recycled PID, binds the proof. */
 export async function readWindowsAgentSettlement(agent) {
   const read = async name => JSON.parse(await readFile(join(directory(agent.id), name), 'utf8'));
   let record = 'reservation';

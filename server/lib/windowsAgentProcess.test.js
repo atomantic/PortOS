@@ -62,12 +62,12 @@ it('reports allowlisted supervisor failure diagnostics without letting them stan
   await writeFile(join(root, 'failure.json'), JSON.stringify({ version: 1, stage: 'root-exit', code: 258 }));
   const error = await readWindowsAgentSettlement(agent).catch(value => value);
   expect(error).toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED', reason: 'receipt-missing', supervisorStage: 'root-exit', supervisorCode: 258 });
-  expect(error.message).toBe('Windows agent process settlement is unverified (receipt-missing; supervisor root-exit 258)');
+  expect(error.message).toBe('Agent process settlement is unverified (receipt-missing; supervisor root-exit 258)');
   // A record outside the allowlist contributes nothing to the message.
   await writeFile(join(root, 'failure.json'), JSON.stringify({ version: 1, stage: 'example-unlisted', code: 1 }));
   const unlisted = await readWindowsAgentSettlement(agent).catch(value => value);
   expect(unlisted).not.toHaveProperty('supervisorStage');
-  expect(unlisted.message).toBe('Windows agent process settlement is unverified (receipt-missing)');
+  expect(unlisted.message).toBe('Agent process settlement is unverified (receipt-missing)');
 });
 
 async function waitForFile(file) {
