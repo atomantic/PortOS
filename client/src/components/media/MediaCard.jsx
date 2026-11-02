@@ -6,6 +6,8 @@ import MediaHostsChip from './MediaHostsChip';
 import MediaUsageChip from './MediaUsageChip';
 import MediaUsageList from './MediaUsageList';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
+import AssetReferenceActions from './AssetReferenceActions.jsx';
+import { mediaRecordRef } from './mediaDetail.js';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { loraDisplayName } from './normalize';
 import { formatBytes, formatDurationMs } from '../../utils/formatters';
@@ -325,6 +327,7 @@ function MediaCard({
         ))}
         {!hideActions && !confirmingDelete && (
           <div className="@container space-y-1.5">
+            <AssetReferenceActions assetId={mediaRecordRef(item)} url={item.filename ? downloadUrl : null} />
             {createActions.length > 0 && (
               <div role="group" aria-label="Create from this render" className="grid grid-cols-2 gap-1">
                 {createActions.map(({ key, ...action }) => (
