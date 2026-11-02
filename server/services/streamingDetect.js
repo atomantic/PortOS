@@ -321,8 +321,9 @@ function ecosystemAppBlocks(content) {
 /**
  * Extract and resolve PM2_HOME path from ecosystem config content.
  * Supports optional declaration keywords (const|let|var), handles single, double,
- * and backtick quote styles, ignores commented lines, gives declarations precedence
- * over environment properties, and expands template variables only on backtick template literals.
+ * and backtick quote styles, ignores commented lines and string literals containing
+ * assignments, gives declarations precedence over environment properties, decodes
+ * escapes in string literals, and expands template variables only on backtick template literals.
  *
  * @param {string} content
  * @param {Function} [currentUsername]
@@ -335,6 +336,63 @@ function extractPm2Home(content, currentUsername = () => {
     return process.env.USERNAME || process.env.USER || 'user';
   }
 }) {
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    tokens = null;
+  }
+
+  if (tokens) {
+    const resolveTemplate = (tok) => {
+      let result = tok.quasis[0] ?? '';
+      for (let k = 0; k < tok.exprs.length; k++) {
+        const expr = tok.exprs[k].map(t => t.v).join('');
+        if (expr === 'require(os).homedir()' || expr === 'require(node:os).homedir()' || expr === 'process.env.HOME') {
+          result += homedir();
+        } else if (expr === 'require(os).userInfo().username' || expr === 'require(node:os).userInfo().username') {
+          result += currentUsername();
+        } else {
+          result += '${' + expr + '}';
+        }
+        result += tok.quasis[k + 1] ?? '';
+      }
+      return result;
+    };
+
+    const resolveValueToken = (tok) => {
+      if (!tok) return null;
+      if (tok.t === 's') return tok.v;
+      if (tok.t === 'tpl') return resolveTemplate(tok);
+      return null;
+    };
+
+    // 1. First pass: look for declarations / assignments (PM2_HOME = ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (tok.t === 'id' && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === '=') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    // 2. Second pass: look for object properties (PM2_HOME: ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if ((tok.t === 'id' || tok.t === 's') && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === ':') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // Regex fallback if tokenization failed on malformed JS
   const comments = commentRanges(content);
   const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
 

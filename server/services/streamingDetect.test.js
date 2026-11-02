@@ -122,6 +122,21 @@ describe('parseEcosystemConfig', () => {
     `;
     expect(parseEcosystemConfig(nodeOsPrefix).pm2Home).toBe(`${homedir()}/.pm2-node-os`);
 
+    // ignores matches inside string literals
+    const stringLiteralIgnored = `
+      const desc = "Description: PM2_HOME = '/wrong/in/string'";
+      const PM2_HOME = "/actual/from/decl";
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(stringLiteralIgnored).pm2Home).toBe('/actual/from/decl');
+
+    // decodes escaped quotes in paths
+    const escapedQuotePath = `
+      const PM2_HOME = '/srv/it\\'s/pm2';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(escapedQuotePath).pm2Home).toBe("/srv/it's/pm2");
+
     // comments are ignored and declarations take precedence over env properties
     const commentAndPrecedence = `
       // PM2_HOME: '/old-commented'
