@@ -880,6 +880,24 @@ describe('reviewQueue.buildQueue', () => {
     expect(reappeared.items.find((item) => item.id === 'health:system_resource:memory')).toBeTruthy();
   });
 
+  it('prunes other sources while preserving markers for incomplete update checks', async () => {
+    const health = { actionKey: 'health.investigate:system_resource:memory', snoozedUntil: '2030-01-01T00:00:00.000Z' };
+    const update = { actionKey: 'software.update:harness:example', revision: '1.0.0:2.0.0', snoozedUntil: '2030-01-01T00:00:00.000Z' };
+    const delivery = { actionKey: 'delivery:updates:harness:example', delivery: { severity: 1, channels: { toast: 0 } } };
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([health, update, delivery]);
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [], incomplete: true });
+
+    await buildQueue({ query: { view: 'all' } });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(health);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(update);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(delivery);
+
+    runtimeUpdateReview.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [], incomplete: false });
+    await buildQueue({ query: { view: 'all' } });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(update);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(delivery);
+  });
+
   it('preserves condition identity through reorder, wording changes and severity escalation', async () => {
     const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' };
     const cpu = { id: 'system_resource:cpu', type: 'system_resource', severity: 'high', title: 'High CPU', detail: 'cpu', link: '/apps' };

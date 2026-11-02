@@ -1533,6 +1533,7 @@ async function readQueueTriageForProjection({
   currentItems = [],
   pruneOrphans = false,
   preserveTriageActionKinds = [],
+  preserveTriageSources = [],
 } = {}) {
   const entries = await reviewQueueTriageStore.listReviewQueueTriage();
   if (!Array.isArray(entries)) return [];
@@ -1542,6 +1543,7 @@ async function readQueueTriageForProjection({
     if (!entry.dismissed) scheduleQueueClockInvalidation(Date.parse(entry.snoozedUntil));
   }
   const preservedKinds = new Set(preserveTriageActionKinds);
+  const preservedSources = new Set(preserveTriageSources);
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
     : null;
@@ -1560,7 +1562,7 @@ async function readQueueTriageForProjection({
       ? entry.actionKey.startsWith('delivery:') ? entry.actionKey.slice('delivery:'.length) : null
       : null;
     const orphaned = currentKeys && (
-      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId))
+      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId) && !preservedSources.has(deliveryId.split(':')[0]))
       || (!entry.delivery && !currentKeys.has(key) && !preservedKinds.has(actionKind))
     );
     if (unused || orphaned) removableKeys.add(key);
@@ -1614,13 +1616,18 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
 
   let items = deduplicateItems(results.flatMap((result) => result.items));
   if (applyTriageState) {
-    const sourceReadComplete = results.every((result) => result.error === null && !result.truncation && !result.incomplete);
-    const preserveTriageActionKinds = results.flatMap((result) => result.preserveTriageActionKinds || []);
+    const sourceReadComplete = results.every((result) => result.error === null && !result.truncation);
+    const preserveTriageActionKinds = results.flatMap((result) => [
+      ...(result.preserveTriageActionKinds || []),
+      ...(result.incomplete && ACTION_KINDS[result.source] ? [ACTION_KINDS[result.source]] : []),
+    ]);
+    const preserveTriageSources = results.filter((result) => result.incomplete).map((result) => result.source);
     const triageEntries = await readQueueTriageForProjection({
       now: clock,
       currentItems: items,
       pruneOrphans: sourceReadComplete && (view === null || view === 'all'),
       preserveTriageActionKinds,
+      preserveTriageSources,
     });
     items = applyQueueTriage(items, triageEntries, clock, { includeSnoozed: view === 'snoozed' });
   }

@@ -124,6 +124,47 @@ describe('runtime update review monitor', () => {
     second.monitor.stop();
   });
 
+  it('reports and retries failed source reads even when the cached rows do not change', async () => {
+    vi.useFakeTimers();
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.start();
+    await vi.waitFor(() => expect(deps.save).toHaveBeenCalled());
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    deps.notify.mockClear();
+    deps.readHarnesses.mockRejectedValue(new Error('offline'));
+    runtimeUpdateEvents.emit('changed');
+    await vi.waitFor(() => expect(deps.notify).toHaveBeenCalled());
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+    const calls = deps.readHarnesses.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    expect(deps.readHarnesses).toHaveBeenCalledTimes(calls + 1);
+    deps.readHarnesses.mockResolvedValue([manual]);
+    runtimeUpdateEvents.emit('changed');
+    await vi.waitFor(() => expect(monitor.snapshot().incomplete).toBe(false));
+    monitor.stop();
+  });
+
+  it('reports a failed runtime read when its only cached observation is an upstream pm2 release', async () => {
+    const { monitor, deps } = fixture({ node: status({ pm2: { latest: '7.2.0' } }), harnesses: [] });
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: false });
+    deps.readRuntime.mockRejectedValue(new Error('offline'));
+    await monitor.refresh();
+    expect(monitor.snapshot()).toMatchObject({ items: [], incomplete: true });
+  });
+
+  it('retries a harness probe failure after an unsupported release comparison', async () => {
+    const manual = harness({ id: 'manual', package: null, latestVersion: null });
+    const { monitor, deps } = fixture({ node: status(), harnesses: [manual] });
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(false);
+    deps.readHarnesses.mockResolvedValue([harness({ id: 'manual', package: null, probeState: 'unavailable', installed: false, version: null, latestVersion: null })]);
+    await monitor.refresh();
+    expect(monitor.snapshot().incomplete).toBe(true);
+    expect(deps.save.mock.calls.at(-1)[0].find(item => item.id === 'harness:manual')).toMatchObject({ retrySoon: true, unverifiedPrevious: false });
+  });
+
   it('keeps pm2 alerts when the terminal CLI or startup configuration cannot be read', async () => {
     const { monitor, deps } = fixture();
     await monitor.refresh();

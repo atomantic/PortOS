@@ -162,11 +162,11 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
     // changed PATH. It is not proof that a previous update was installed.
     if (harness.probeState === 'missing') {
       if (removalsBeforeRead.has(harness.id)) { removedHarnesses.delete(harness.id); rows.delete(id); }
-      else if (rows.has(id)) rows.set(id, unknown(rows.get(id)));
+      else if (rows.has(id)) rows.set(id, { ...unknown(rows.get(id)), retrySoon: true });
       continue;
     }
     if (harness.probeState === 'unavailable' || harness.probeState === 'unprobed') {
-      rows.set(id, unknown(rows.get(id), row(id, `${harness.label} status unverified`, 'The installed harness could not report its version.', link, 'unverified')));
+      rows.set(id, { ...unknown(rows.get(id), row(id, `${harness.label} status unverified`, 'The installed harness could not report its version.', link, 'unverified')), retrySoon: true });
       continue;
     }
     if (!harness.installed) { rows.delete(id); continue; }
@@ -179,7 +179,7 @@ function reconcileHarnesses(rows, harnesses, removedHarnesses, removalsBeforeRea
       rows.set(id, row(id, `${harness.label} update available`, `Installed ${harness.version}; latest ${harness.latestVersion}. Review the harness updater before updating.`, link, `${harness.version}:${harness.latestVersion}`));
     } else rows.delete(id);
   }
-  for (const id of priorIds) rows.set(id, unknown(rows.get(id)));
+  for (const id of priorIds) rows.set(id, { ...unknown(rows.get(id)), retrySoon: true });
 }
 
 /** One refresh at a time; a mutation during a refresh forces another observation. */
@@ -190,6 +190,7 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
   let started = false;
   let ready = false;
   let checked = false;
+  let sourceReadIncomplete = false;
   let timer = null;
   const removedHarnesses = new Set();
   // Unknown checks and a newer upstream pm2 release are diagnostic. Keep them
@@ -203,7 +204,7 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
   const snapshot = () => ({
     items: items(),
     // An unsupported comparison is not a failed check and cannot be retried.
-    incomplete: !checked || [...rows.values()].some((entry) => entry.id !== 'pm2-upstream' && entry.unverified && entry.retrySoon !== false),
+    incomplete: !checked || sourceReadIncomplete || [...rows.values()].some((entry) => entry.id !== 'pm2-upstream' && entry.unverified && entry.retrySoon !== false),
   });
   const refresh = () => {
     if (inflight) { again = true; return inflight; }
@@ -211,13 +212,17 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
       do {
         again = false;
         const before = [...rows.values()];
+        const previousReadIncomplete = sourceReadIncomplete;
         const removalsBeforeRead = new Set(removedHarnesses);
         const [runtime, harnesses] = await Promise.allSettled([Promise.resolve().then(readRuntime), Promise.resolve().then(readHarnesses)]);
-        reconcileRuntime(rows, runtime.status === 'fulfilled' ? runtime.value : null);
-        reconcileHarnesses(rows, harnesses.status === 'fulfilled' ? harnesses.value : null, removedHarnesses, removalsBeforeRead);
+        const runtimeValue = runtime.status === 'fulfilled' ? runtime.value : null;
+        const harnessValues = harnesses.status === 'fulfilled' ? harnesses.value : null;
+        sourceReadIncomplete = !runtimeValue?.node?.version || !runtimeValue?.pm2 || !Array.isArray(harnessValues);
+        reconcileRuntime(rows, runtimeValue);
+        reconcileHarnesses(rows, harnessValues, removedHarnesses, removalsBeforeRead);
         const wasChecked = checked;
         checked = true;
-        if (!wasChecked || !isDeepStrictEqual(before, [...rows.values()])) {
+        if (!wasChecked || previousReadIncomplete !== sourceReadIncomplete || !isDeepStrictEqual(before, [...rows.values()])) {
           notify();
           await save([...rows.values()]).catch((error) => console.error(`❌ Runtime update cache write failed: ${error.message}`));
         }
@@ -229,7 +234,8 @@ function createRuntimeUpdateReviewMonitor({ readRuntime, readHarnesses, notify, 
     refresh().catch((error) => console.error(`❌ Runtime update check failed: ${error.message}`)).finally(() => {
       if (!started) return;
       clearTimeout(timer);
-      timer = setTimeout(tick, [...rows.values()].some((entry) => entry.unverified && entry.retrySoon !== false) ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
+      const retry = sourceReadIncomplete || [...rows.values()].some((entry) => entry.unverified && entry.retrySoon !== false);
+      timer = setTimeout(tick, retry ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
       timer.unref?.();
     });
   };
