@@ -53,17 +53,18 @@ function contextFor(content) {
     }
   }
   const protectedNodes = new Set();
-  const resolve = (node, seen = new Set()) => {
+  const resolve = (node, seen = new Set(), onRead = null) => {
     if (!node || seen.has(node)) return null;
     seen.add(node);
+    onRead?.(node);
     if (node.type === 'Identifier') {
       const binding = bindings.get(node.name);
       if (binding?.start > node.start && binding.type !== 'FunctionDeclaration') return null;
-      return resolve(binding, seen);
+      return resolve(binding, seen, onRead);
     }
     if (['MemberExpression', 'OptionalMemberExpression'].includes(node.type)) {
       const key = !node.computed || node.property.type === 'StringLiteral' ? keyOf(node.property) : null;
-      return key === null ? null : resolve(object(node.object, seen)?.get(key), seen);
+      return key === null ? null : resolve(object(node.object, seen)?.get(key), seen, onRead);
     }
     return node;
   };
@@ -131,8 +132,7 @@ function contextFor(content) {
 }
 
 function portSource(node, context, track = true) {
-  if (track && node) context.portReads.add(node);
-  const resolved = context.resolve(node);
+  const resolved = context.resolve(node, new Set(), track ? part => context.portReads.add(part) : null);
   if (!resolved) return null;
   if (resolved.type === 'LogicalExpression' && ['||', '??'].includes(resolved.operator)) {
     const left = context.scalar(resolved.left);
@@ -154,13 +154,12 @@ function portSource(node, context, track = true) {
 }
 
 function argsSource(node, context, content) {
-  if (node) context.portReads.add(node);
-  const resolved = context.resolve(node);
+  const resolved = context.resolve(node, new Set(), part => context.portReads.add(part));
   const value = context.scalar(node);
   if (typeof value === 'string' && ['StringLiteral', 'TemplateLiteral'].includes(resolved.type)) {
-    // Escaped strings cannot be mapped from cooked text back to source offsets.
+    // Keep offsets exact and avoid treating quoted argument text as flags.
     const raw = content.slice(resolved.start + 1, resolved.end - 1);
-    if (raw !== value) return null;
+    if (raw !== value || /['"`\\]/.test(raw)) return null;
     if ([...raw.matchAll(/(?:^|\s)--port(?:\s+|=)/g)].length !== 1) return null;
     const match = /(?:^|\s)--port(?:\s+|=)(\d+)(?=\s|$)/.exec(raw);
     if (match) {
@@ -173,7 +172,7 @@ function argsSource(node, context, content) {
     if (resolved.expressions.some(expression => context.scalar(expression) === undefined)) return null;
     const rendered = resolved.quasis.map((quasi, index) => quasi.value.cooked +
       (index < resolved.expressions.length ? context.scalar(resolved.expressions[index]) : '')).join('');
-    if ([...rendered.matchAll(/(?:^|\s)--port(?:\s+|=)/g)].length !== 1) return null;
+    if (/['"`\\]/.test(rendered) || [...rendered.matchAll(/(?:^|\s)--port(?:\s+|=)/g)].length !== 1) return null;
     for (let index = 0; index < resolved.expressions.length; index++) {
       if (/--port(?:\s+|=)$/.test(resolved.quasis[index].value.cooked) &&
           (/^(?:\s)/.test(resolved.quasis[index + 1].value.cooked) ||
@@ -225,7 +224,10 @@ function processInfo(node, context, content) {
   for (const [key, values] of env) {
     const label = envLabel(key);
     for (const source of values) add(label, source, !explicit?.size);
-    if (values.some(source => source === null)) sources.set(label, [null]);
+    if (values.some(source => source === null)) {
+      if (!sources.has(label)) sources.set(label, []);
+      sources.get(label).push(null);
+    }
     if (!explicit?.size && values.at(-1) === null) delete ports[label];
   }
   const args = argsSource(fields.get('args'), context, content);
@@ -340,7 +342,7 @@ export function analyzeEcosystemPorts(content) {
         if (proc.usesVite && proc.ports.ui && !proc.ports.devUi) {
           proc.ports.devUi = proc.ports.ui;
           delete proc.ports.ui;
-          proc.sources.set('devUi', proc.sources.get('ui'));
+          proc.sources.set('devUi', [...(proc.sources.get('devUi') || []), ...(proc.sources.get('ui') || [])]);
           proc.sources.delete('ui');
         }
       }

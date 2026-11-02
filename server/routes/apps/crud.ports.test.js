@@ -190,6 +190,40 @@ module.exports = { apps: [{ name: NAME, env: { PORT: 7000 } }] };`);
     await expectRefused(before, { apiPort: 7100 });
   });
 
+  it('retains shared default ownership when another environment is dynamic', async () => {
+    const before = await fixture(`const PORT = 7000; module.exports = { apps: [
+      { name: 'example-server', env: { PORT } },
+      { name: 'other-server', env: { PORT }, env_production: { PORT: dynamicPort() } }
+    ] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it('retains DEV_UI_PORT sources when relabeling a Vite UI port', async () => {
+    const content = `module.exports = { apps: [
+      { name: 'example-server', env: { PORT: 7000 } },
+      { name: 'example-ui', ports: { ui: 7001 }, args: 'vite', env: { DEV_UI_PORT: 7001 } }
+    ] };`;
+    await fixture(content, { devUiPort: 7001, pm2ProcessNames: ['example-server', 'example-ui'] });
+    expect((await update({ devUiPort: 7101 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replaceAll('7001', '7101'));
+  });
+
+  it('refuses quoted port-shaped argument text instead of rewriting unrelated notes', async () => {
+    const before = await fixture(`module.exports = { apps: [{ name: 'example-server', ports: { api: 7000 }, args: '--note " --port 7000 "' }] };`);
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
+  it('follows intermediate constant references while still protecting unrelated consumers', async () => {
+    const content = `const P = 7000; const PORTS = { API: P };
+module.exports = { apps: [{ name: 'example-server', env: { PORT: PORTS.API } }] };`;
+    await fixture(content);
+    expect((await update({ apiPort: 7100 })).status).toBe(200);
+    expect(await readFile(configPath, 'utf8')).toBe(content.replace('P = 7000', 'P = 7100'));
+    invalidateCache();
+    const before = await fixture(content.replace("name: 'example-server'", "name: 'example-server', metadata: { value: P }"));
+    await expectRefused(before, { apiPort: 7100 });
+  });
+
   it('refuses opaque imported spreads without executing them', async () => {
     const before = await fixture(`const extra = require('./missing-helper.cjs');
 module.exports = { apps: [{ name: 'example-server', env: { PORT: 7000 }, ...extra() }] };`);
