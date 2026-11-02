@@ -218,6 +218,7 @@ describe('mapCodexQuota', () => {
     expect(quota.note).toContain('2026-01-02T00:00:00Z');
     expect(quota.note).toContain('~/.codex/config.toml overrides Codex model routing');
     expect(quota.note).not.toMatch(/https?:\/\//);
+    expect(quota.routingOverridden).toBe(true);
     expect(quota.limits).toHaveLength(2);
 
     const clean = mapCodexQuota(SAMPLE_RATE_LIMITS, '2026-01-02T00:00:00Z', {
@@ -225,6 +226,7 @@ describe('mapCodexQuota', () => {
       routingOverridden: false,
     });
     expect(clean.note).not.toContain('config.toml');
+    expect(clean.routingOverridden).toBeUndefined();
   });
 
   it('renders a fully-spent window as a 100%-used meter, not an empty card', () => {
@@ -256,12 +258,15 @@ describe('mapCodexQuota', () => {
   it('names the reached limit type when the payload reports one', () => {
     const quota = mapCodexQuota({ ...CREDITS_ONLY_RATE_LIMITS, rate_limit_reached_type: 'weekly' }, null, { now: SAMPLE_NOW });
     expect(quota.error).toContain('weekly');
+    expect(quota.quotaStatus).toBe('limit_reached');
+    expect(quota.quotaScope).toBe('week');
   });
 
   it('says the windows have reset when every reported window expired', () => {
     const quota = mapCodexQuota(SAMPLE_RATE_LIMITS, null, { now: Date.parse('2026-02-01T00:00:00Z') });
     expect(quota.limits).toHaveLength(0);
     expect(quota.error).toContain('has since reset');
+    expect(quota.quotaStatus).toBe('expired');
   });
 });
 
@@ -390,7 +395,7 @@ describe('getProviderQuotas', () => {
     const result = await getProviderQuotas({ scope: 'instances' });
     expect(getFleetQuotaEntries).toHaveBeenCalledWith({ includeEmpty: true });
     expect(result.providers).toHaveLength(2);
-    expect(result.providers[0]).toMatchObject({ origin: { instanceId: 'a' }, limits: [], error: expect.stringMatching(/since reset/) });
+    expect(result.providers[0]).toMatchObject({ origin: { instanceId: 'a' }, limits: [], quotaStatus: 'expired', error: expect.stringMatching(/since reset/) });
     expect(result.providers[1]).toMatchObject({ origin: { instanceId: 'b' }, activity: [{ requests: 2 }] });
     expect(result.unreportedInstances).toEqual(['Old peer']);
   });
@@ -1033,6 +1038,7 @@ describe('Codex explicit quota refresh', () => {
     getCodexAccountReadiness.mockResolvedValue({ rateLimits: null });
     const [fallback] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
     expect(fallback.note).toContain('Live Codex quota refresh unavailable');
+    expect(fallback.refreshUnavailable).toBe(true);
     getCodexAccountReadiness.mockClear();
     await getProviderQuotas({ family: 'codex', wait: 'never' });
     expect(getCodexAccountReadiness).not.toHaveBeenCalled();

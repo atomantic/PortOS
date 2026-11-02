@@ -32,7 +32,7 @@ export function StatTile({ label, value, detail }) {
   );
 }
 
-export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true }) {
+export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true, showSource = true }) {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
 
   const hasPeriods = Boolean(
@@ -113,14 +113,14 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
       {quota.pending && (
         <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-gray-400">
           <BrailleSpinner />
-          <span>Reading this machine&apos;s usage…</span>
+          <span>{showSource ? "Reading this machine's usage…" : 'Reading quota…'}</span>
         </div>
       )}
 
       {quota.limits?.length > 0 && (
         <div>
           {quota.limits.map((limit) => (
-            <UsageMeter key={limit.key} limit={limit} />
+            <UsageMeter key={limit.key} limit={limit} showSource={showSource} />
           ))}
         </div>
       )}

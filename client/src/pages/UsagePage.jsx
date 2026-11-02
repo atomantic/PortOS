@@ -2,7 +2,7 @@ import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, Network, BarChart3 } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3 } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -28,6 +28,9 @@ const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 const FLEET_SYNC_EVENTS = ['sync:progress'];
 const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
 const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
+const refreshDiagnostic = (card) => ({ ...card,
+  ...(card.refreshUnavailable ? { error: 'Live quota refresh was unavailable; displayed readings may be out of date.', quotaStatus: undefined, quotaScope: undefined } : {}),
+  refreshAttemptAt: new Date().toISOString() });
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -55,27 +58,26 @@ function agyRepairLine(agy) {
   return agy.note ? `${added} ${agy.note}` : added;
 }
 
-// Name the instances that supplied readings without presenting their quota
-// observations as separate allowances or summing them.
-function FleetSourcesPill({ fleet }) {
-  if (!fleet || fleet.count < 2) return null;
-  const describe = (i) => `${i.self ? 'this machine' : (i.name || i.instanceId)}${i.self || !i.fetchedAt ? '' : ` (read ${timeAgo(i.fetchedAt, 'time unavailable')})`}`;
-  return (
-    <Pill tone="context" size="xs" icon={Network} className="hidden sm:inline-flex shrink-0" title={fleet.instances.map(describe).join(' · ')}>
-      {fleet.count} instances
-    </Pill>
-  );
-}
-
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
 function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshError, imageReadError }) {
-  const diagnostics = quota.observations ? [] : [...(quota.diagnostics || [])];
-  for (const error of [refreshError, imageReadError].filter(Boolean)) {
-    const sameLocalError = (card) => card.origin?.self !== false && card.error === error.error;
-    if (!sameLocalError(quota) && !diagnostics.some(sameLocalError)
-      && !quota.observations?.some(sameLocalError)) diagnostics.push(error);
+  const issueText = (issue) => {
+    if (!issue?.error || issue.quotaStatus === 'expired') return null;
+    if (issue.quotaStatus === 'limit_reached') {
+      const at = Date.parse(issue.fetchedAt);
+      const window = issue.quotaScope && quota.limits?.find((limit) => limit.key === issue.quotaScope);
+      const readAt = Date.parse(window?.readAt);
+      if (Number.isFinite(at) && Number.isFinite(readAt) && at <= readAt) return null;
+      return issue.error;
+    }
+    return issue.error;
+  };
+  let diagnostics = [...new Set([quota.providerIssue, refreshError, imageReadError].map(issueText).filter(Boolean))];
+  const bodyQuota = { ...quota, note: null };
+  if (!quota.imageRefusals && !quota.limits?.length && diagnostics.length) {
+    bodyQuota.error = diagnostics[0];
+    diagnostics = diagnostics.slice(1);
   }
   return (
     <div className="min-w-0 bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
@@ -87,7 +89,6 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshErro
           {quota.plan && quota.plan !== 'unknown' && (
             <Pill tone="context" size="xs" className="hidden sm:inline-flex">{quota.plan}</Pill>
           )}
-          <FleetSourcesPill fleet={quota.fleet} />
           {/* Per-card refresh: every family's reading is its own multi-second
               CLI/TUI scrape, so re-reading one provider must not respawn all
               of them. The button is a 44px touch target around the small
@@ -108,29 +109,18 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshErro
         </div>
       </div>
 
-      {quota.observations ? (
+      {quota.imageRefusals ? (
         <div className="space-y-3">
-          <p className="text-xs text-gray-500">Image limits and counts are observations from each instance, not account-wide quotas or totals.</p>
-          {quota.observations.map((observation, index) => (
-            <div key={observation.origin?.instanceId || `self-${index}`}>
-              <p className="text-xs text-gray-400 mb-1 break-words">{observation.origin?.name || 'This instance'}{observation.fetchedAt ? ` · reported ${timeAgo(observation.fetchedAt, 'time unavailable')}` : ' · report time unavailable'}</p>
-              <ProviderQuotaBody quota={observation} />
-            </div>
-          ))}
+          <p className="text-xs text-gray-500">Image providers do not report a quota meter.</p>
+          {quota.imageRefusals.map(([key, refusal]) => <p key={key} className="text-xs text-port-warning break-words">{refusal.label || key}: refusal observed · {refusal.fetchedAt ? `reported ${timeAgo(refusal.fetchedAt, 'time unavailable')}` : 'report time unavailable'}; current availability may have changed.</p>)}
         </div>
       ) : (
         <>
-          {quota.origin && <p className="text-xs text-gray-400 mb-2 break-words">{quota.origin.name || 'This instance'}{quota.fetchedAt ? ` · read ${timeAgo(quota.fetchedAt, 'time unavailable')}` : ' · reading time unavailable'}{quota.mixedReadings ? ' · some windows use earlier reports' : ''}</p>}
-          <ProviderQuotaBody quota={quota} />
-          {quota.activity?.length > 0 && <p className="mt-2 text-xs text-gray-500">Activity is observed on the selected instance and is not a fleet total.</p>}
-          {quota.localAdvisories?.map((note, index) => <p key={index} className="mt-2 text-xs text-gray-500 break-words">This instance: {note}</p>)}
+          <ProviderQuotaBody quota={bodyQuota} showActivity={false} showNote={false} showSource={false} />
+          {quota.routingOverridden && <p className="mt-2 text-xs text-gray-500">Model routing may bypass this quota.</p>}
         </>
       )}
-      {diagnostics.map((diagnostic, index) => (
-        <p key={diagnostic.origin?.instanceId || `self-${index}`} className="mt-2 text-xs text-port-warning break-words">
-          {diagnostic.refreshAttemptAt ? 'Last refresh on this instance' : (diagnostic.origin?.name || 'This instance')}{diagnostic.refreshAttemptAt || diagnostic.fetchedAt ? ` · ${timeAgo(diagnostic.refreshAttemptAt || diagnostic.fetchedAt, 'time unavailable')}` : ' · time unavailable'}: {diagnostic.error} Earlier readings may be out of date.
-        </p>
-      ))}
+      {diagnostics.map((diagnostic) => <p key={diagnostic} className="mt-2 text-xs text-port-warning break-words">{diagnostic}</p>)}
     </div>
   );
 }
@@ -226,7 +216,7 @@ function ProviderQuotaSection() {
           if (!changedFamilies.has(family) && !localFamilies.has(family) && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
         }
         for (const card of localCards.filter((item) => !changedFamilies.has(item.family))) {
-          if (card.error) next[card.family] = { ...card, refreshAttemptAt: new Date().toISOString() };
+          if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card);
           else if (resolvesQuotaRefresh(card)) delete next[card.family];
         }
         return next;
@@ -293,7 +283,7 @@ function ProviderQuotaSection() {
       setQuotas((prev) => mergeRefreshedFamily(prev, result.providers, family, { fullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable }));
       setRefreshErrors((previous) => {
         const next = { ...previous };
-        if (local?.error) next[family] = { ...local, refreshAttemptAt: new Date().toISOString() };
+        if (local?.error || local?.refreshUnavailable) next[family] = refreshDiagnostic(local);
         else if ((!local && !localUnavailable) || resolvesQuotaRefresh(local)) delete next[family];
         return next;
       });
@@ -336,10 +326,9 @@ function ProviderQuotaSection() {
         </button>
       </div>
 
-      <p className="text-xs text-gray-500">Account identity is unavailable, so readings from the same provider are assumed to share an account, including on API-billed instances. The latest available reading for each quota window is shown; allowances are not added. Refresh reads this instance only.</p>
-      {coverage?.federationUnavailable && <p className="text-xs text-port-warning">Peer quota readings are unavailable.</p>}
-      {coverage?.unreportedInstances?.length > 0 && <p className="text-xs text-port-warning">Quota reporting is unavailable from {coverage.unreportedInstances.join(', ')}.</p>}
-      {imageQuotaComplete === false && <p className="text-xs text-port-warning">Image quota status on this instance is unavailable.</p>}
+      <p className="text-xs text-gray-500">Readings from the same provider are assumed to share an account. The latest available reading for each quota window is shown; allowances are not added.</p>
+      {coverage?.federationUnavailable && !quotas?.some((card) => card.limits?.length) && <p className="text-xs text-port-warning">Some quota data is unavailable.</p>}
+      {imageQuotaComplete === false && <p className="text-xs text-port-warning">Image quota status is unavailable.</p>}
       {error && quotas && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh quota readings; retained readings may be stale.</p>}
       {refreshAllError && !error && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh all provider quotas; retained readings may be stale.</p>}
 
