@@ -398,6 +398,15 @@ function useSongFrames(audioRef, apply) {
   }, [audioRef, apply]);
 }
 
+// Keep shot selection on the same clock as its motion, without rendering the
+// whole preview every frame. timeupdate still refreshes the transport readout.
+function useShotClock(audioRef, scenes, setTime) {
+  const syncShot = useCallback((t) => {
+    setTime((current) => shotAt(scenes, current) === shotAt(scenes, t) ? current : t);
+  }, [scenes, setTime]);
+  useSongFrames(audioRef, syncShot);
+}
+
 function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec }) {
   const ref = useRef(null);
   const sequence = useMemo(() => scenePhotoSequence(scene, { fps, beats }), [scene, fps, beats]);
@@ -507,6 +516,7 @@ function useColdOpen({ project, songRef }) {
   const plan = useMemo(() => coldOpenPlan(project), [project]);
   const scenes = useMemo(() => plan.map(({ scene, startSec, endSec }) => ({ ...scene, startSec, endSec })), [plan]);
   const seconds = plan.length ? plan[plan.length - 1].endSec : 0;
+  useShotClock(audioRef, scenes, setTime);
   // The mix follows the shots' lengths, sound and playback (speed, in-point, reverse, performance
   // edit); the whole shot is the key, and the server returns its cached WAV when nothing it uses changed.
   const mixKey = JSON.stringify(plan.map(({ scene, preMusic }) => [scene, preMusic]));
@@ -599,6 +609,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   // The song's shots; shots before the song play on the cold open's clock (useColdOpen).
   const scenes = useMemo(() => songScenes(project), [project]);
+  useShotClock(audioRef, scenes, setTime);
   const layered = isLayeredComposition(project);
   // The first footage source sets the composed render's frame rate, even when the current shot is a still.
   const lead = scenes.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
