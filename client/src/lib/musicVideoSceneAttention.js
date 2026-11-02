@@ -16,6 +16,7 @@ import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 export { COVERAGE_TOLERANCE_SEC } from './musicVideoLayers.js';
 
 export const SCENE_ATTENTION_LABELS = Object.freeze({
+  'beat-needs-review': 'Needs its own beat',
   'missing-frame': 'No frame',
   'missing-clip': 'No clip',
   'under-covered': 'Clip too short',
@@ -74,6 +75,7 @@ export function sceneAttention(scene, ctx = {}) {
   const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
+  if (scene.beatNeedsReview) codes.push('beat-needs-review');
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   // A code-rendered clip was made without a seed frame, so it needs none.

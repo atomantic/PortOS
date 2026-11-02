@@ -156,6 +156,10 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/reorder`, {
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
+export const previewMusicVideoPacingRecut = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/pacing-recut`, options);
+export const recutMusicVideoToPacing = (id, revision, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/pacing-recut`, { method: 'POST', body: JSON.stringify({ revision }), ...options });
 // Split a shot its backend cannot render in one take on lyric/phrase
 // boundaries (#8977) → { project, scenes }. `backend` omitted = project pin.
 // `atSec` cuts it in two at that song time instead.

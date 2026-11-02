@@ -208,3 +208,17 @@ describe('BoardStage ending', () => {
   });
 });
 
+
+describe('Board pacing beat review', () => {
+  it('flags copied prompts on the board and lets the director mark the beat ready beside its prompt', () => {
+    const scenes = [scene(1, { beatNeedsReview: true, prompt: 'Walk into the room' })];
+    const editSceneLocal = vi.fn();
+    const saveScene = vi.fn();
+    renderBoard(board(scenes, { activeSceneId: 's1', editSceneLocal, saveScene }));
+    expect(screen.getByRole('button', { name: 'Needs attention (1)' })).toBeTruthy();
+    expect(screen.getByText('Needs its own beat — this prompt was copied from the longer shot.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark beat ready' }));
+    expect(editSceneLocal).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
+    expect(saveScene).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
+  });
+});

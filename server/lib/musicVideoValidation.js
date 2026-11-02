@@ -1747,6 +1747,7 @@ export const musicVideoSceneCreateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  beatNeedsReview: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
@@ -1790,6 +1791,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  beatNeedsReview: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
@@ -1832,6 +1834,8 @@ export const musicVideoSceneSplitSchema = z.object({
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
+
+export const musicVideoPacingRecutSchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 // Move where a shot starts; the shot before it ends there too, so the cut moves and nothing gaps or overlaps.
 export const musicVideoSceneStartSchema = z.object({

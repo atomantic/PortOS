@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, X } from 'lucide-react';
 import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
+import PacingRecutPanel from '../PacingRecutPanel.jsx';
 import SceneCard from '../SceneCard.jsx';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
@@ -180,9 +181,10 @@ export default function BoardStage({ board }) {
   }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
-      <div id="mv-scene-board" className="flex items-center justify-between">
+      <div id="mv-scene-board" className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">Scene board</h3>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <PacingRecutPanel key={project.id} project={project} disabled={locked || videoSettings.saving} onApplied={board.replaceProject} />
           <ContactSheetButton onOpen={board.openContactSheet} />
           <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
             <Plus size={15} /> Add scene

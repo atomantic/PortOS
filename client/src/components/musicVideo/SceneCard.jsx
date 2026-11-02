@@ -260,6 +260,10 @@ export default function SceneCard({
   const followsBoard = !!boardDirection && !scene.prompt?.trim();
   const promptField = (
     <div className="space-y-1">
+      {scene.beatNeedsReview && <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
+        <span>Needs its own beat — this prompt was copied from the longer shot.</span>
+        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
+      </div>}
       <textarea
         aria-label="Shot prompt"
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}

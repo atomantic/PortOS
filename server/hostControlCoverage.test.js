@@ -862,6 +862,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/media-pool/add', RECORDS],
   ['POST /api/music-video/:id/media-pool/delete', REMOVES_RECORD],
   ['POST /api/music-video/:id/media-pool/import', RECORDS],
+  // Deterministic timing/record edits only; does not queue media or a provider.
+  ['POST /api/music-video/:id/pacing-recut', RECORDS],
   ['PATCH /api/music-video/:id/media-pool/marks', RECORDS],
   ['PUT /api/music-video/:id/production-review', RECORDS],
   ['POST /api/music-video/:id/production-review/alignment', HANDLER_GATED],
