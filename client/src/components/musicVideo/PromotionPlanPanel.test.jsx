@@ -52,4 +52,25 @@ describe('PromotionPlanPanel', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: /Plan again/ })).not.toBeDisabled();
   });
+
+  it('disables planning until the saved plan has loaded, then reveals the Plan again action', async () => {
+    let resolvePlan;
+    const planPromise = new Promise((resolve) => { resolvePlan = resolve; });
+    getMusicVideoPromotionPlan.mockReturnValue(planPromise);
+
+    renderPanel();
+
+    const planButton = screen.getByRole('button', { name: /Plan promotion/ });
+    expect(planButton).toBeDisabled();
+    fireEvent.click(planButton);
+    expect(planMusicVideoPromotion).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePlan({ steps: [{ id: 't9', title: 'Answer replies', dueAt: '2026-10-07T16:30:00.000Z' }] });
+    });
+
+    expect(await screen.findByRole('link', { name: 'Answer replies' })).toBeTruthy();
+    const planAgainButton = screen.getByRole('button', { name: /Plan again/ });
+    expect(planAgainButton).not.toBeDisabled();
+  });
 });
