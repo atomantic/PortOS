@@ -7,6 +7,7 @@ import BeeperAttachment from './BeeperAttachment';
 import BeeperPersonPicker from './BeeperPersonPicker';
 import BeeperCreatePersonForm from './BeeperCreatePersonForm';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import ListLoadError from '../../ui/ListLoadError';
 import { decodeHtmlEntities, parseMessageBody } from '../../../lib/beeperMessageBody';
 import { formatBytes } from '../../../utils/formatters';
 
@@ -476,6 +477,9 @@ export default function BeeperThread({
   draft,
   onDraftChange,
   outboxEntries = [],
+  outboxLoadState = 'ready',
+  outboxLoadError = null,
+  onRetryOutbox,
   sending = false,
   confirmation = null,
   onSend,
@@ -828,6 +832,9 @@ export default function BeeperThread({
 
         {error && <p role="alert" className="py-2 text-center text-xs text-port-error">{error}</p>}
 
+        {outboxLoadState === 'error' && <ListLoadError what="pending and failed sends" error={outboxLoadError} onRetry={onRetryOutbox} />}
+        {outboxLoadState === 'loading' && <p role="status" className="py-2 text-center text-xs text-gray-500">Loading pending sends…</p>}
+
         {loading && ordered.length === 0 && (
           <p className="py-6 text-center text-xs text-gray-500">Loading messages…</p>
         )}
@@ -837,7 +844,7 @@ export default function BeeperThread({
             `visibleOutbox` too: the very first message to a brand-new,
             genuinely-empty conversation is itself a pending outbox row, and
             that is not "no messages mirrored yet" either. */}
-        {!loading && !error && ordered.length === 0 && visibleOutbox.length === 0 && (
+        {!loading && !error && outboxLoadState === 'ready' && ordered.length === 0 && visibleOutbox.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
             <p className="text-sm text-gray-300">No messages mirrored yet</p>
             <p className="max-w-sm text-[11px] text-gray-500">

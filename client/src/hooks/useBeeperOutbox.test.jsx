@@ -60,6 +60,34 @@ describe('useBeeperOutbox', () => {
   });
   afterEach(cleanup);
 
+  it('does not let a read started before a send hide the new pending row', async () => {
+    let finishOldRead;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...ENTRY, state: 'awaiting-confirmation' }] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await act(async () => result.current.submit(ENTRY.body));
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+    await act(async () => finishOldRead({ entries: [] }));
+    await waitFor(() => expect(listOutboxEntries).toHaveBeenCalledTimes(2));
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+  });
+
+  it('restarts an interrupted outbox read after checking delivery', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishOldRead;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    reconcileOutboxEntry.mockResolvedValueOnce({ ...pending, state: 'sent' });
+    act(() => { void result.current.refresh(); });
+    await act(async () => result.current.reconcile(pending));
+    await act(async () => finishOldRead({ entries: [pending] }));
+    expect(result.current).toMatchObject({ loadState: 'ready', entries: [{ ...pending, state: 'sent' }] });
+    expect(listOutboxEntries).toHaveBeenCalledTimes(3);
+  });
+
   it('checks delivery in place without sending or clearing the composer, and ignores a late result from another chat', async () => {
     const pending = { ...ENTRY, state: 'awaiting-confirmation', errorCode: 'DELIVERY_UNCONFIRMED' };
     listOutboxEntries.mockResolvedValue({ entries: [pending] });
