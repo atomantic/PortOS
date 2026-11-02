@@ -725,6 +725,36 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     expect(createInboxLog).toHaveBeenCalledWith(expect.not.objectContaining({ ai: expect.anything() }));
   });
 
+  it('waits for outgoing capture transcription and filing before attaching a call', async () => {
+    let finishTranscription;
+    let finishFiling;
+    transcribe.mockImplementationOnce(() => new Promise(resolve => { finishTranscription = resolve; }));
+    appendJournal.mockImplementationOnce(() => new Promise(resolve => { finishFiling = resolve; }));
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    for (let i = 0; i < 14; i += 1) socket.fire('voice:call:audio', { pcm: loudFrame() });
+    for (let i = 0; i < 36; i += 1) socket.fire('voice:call:audio', { pcm: silentFrame() });
+    await flushMicrotasks();
+    expect(transcribe).toHaveBeenCalledTimes(1);
+
+    const stopping = socket.fire('voice:capture:stop');
+    const attaching = socket.fire('voice:call:attach');
+    await flushMicrotasks();
+    expect(getCallState().hostAttached).toBe(false);
+    finishTranscription({ text: 'Keep this final utterance.', latencyMs: 1 });
+    await flushMicrotasks();
+    expect(appendJournal).toHaveBeenCalledTimes(1);
+    expect(getCallState().hostAttached).toBe(false);
+    finishFiling({});
+    await Promise.all([stopping, attaching]);
+
+    expect(getCaptureState()).toMatchObject({ active: false, hostAttached: false });
+    expect(getCallState().hostAttached).toBe(true);
+    expect(createInboxLog).toHaveBeenCalledWith(expect.objectContaining({ capturedText: expect.stringContaining('Keep this final utterance.') }));
+    expect(socket.emitted.filter(frame => frame.event === 'voice:call:state').some(frame => frame.payload.error)).toBe(false);
+  });
+
   it('ignores voice:call:audio on a tab that never attached either host', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
@@ -1023,4 +1053,74 @@ describe('voice:call:audio does not run a turn unless the call is up', () => {
     expect(runTurn).toHaveBeenCalledTimes(1);
     expect(getCallState().state).toBe('listening');
   });
+});
+
+
+describe('voice host startup cancellation', () => {
+  beforeEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+  });
+  afterEach(() => {
+    __resetCallSession();
+    __resetCaptureSession();
+  });
+
+  it.each([
+    ['voice:call:attach', 'voice:call:detach', getCallState],
+    ['voice:call:attach', 'disconnect', getCallState],
+    ['voice:capture:start', 'voice:capture:stop', getCaptureState],
+    ['voice:capture:start', 'disconnect', getCaptureState],
+  ])('does not resume %s after %s during the enabled check', async (startEvent, cancelEvent, getState) => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const starting = host.fire(startEvent);
+    await host.fire(cancelEvent);
+    finishConfig({ enabled: true });
+    await starting;
+
+    expect(getState()).toMatchObject({ hostAttached: false, active: false });
+  });
+
+  it.each([
+    ['voice:call:attach', 'voice:capture:start', getCallState, getCaptureState],
+    ['voice:capture:start', 'voice:call:attach', getCaptureState, getCallState],
+  ])('keeps %s superseded by %s during configuration loading', async (oldEvent, newEvent, oldState, newState) => {
+    let finishConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise(resolve => { finishConfig = resolve; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const starting = host.fire(oldEvent);
+    await host.fire(newEvent);
+    finishConfig({ enabled: true });
+    await starting;
+
+    expect(oldState().hostAttached).toBe(false);
+    expect(newState().hostAttached).toBe(true);
+  });
+
+
+  it.each([
+    ['voice:call:attach', 'disabled', getCallState],
+    ['voice:call:attach', 'rejected', getCallState],
+    ['voice:capture:start', 'disabled', getCaptureState],
+    ['voice:capture:start', 'rejected', getCaptureState],
+  ])('drops a superseded %s configuration result when %s', async (event, outcome, getState) => {
+    let finishConfig;
+    let failConfig;
+    getVoiceConfig.mockImplementationOnce(() => new Promise((resolve, reject) => { finishConfig = resolve; failConfig = reject; }));
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    const oldStartup = host.fire(event);
+    await host.fire(event);
+    if (outcome === 'disabled') finishConfig({ enabled: false });
+    else failConfig(new Error('old config read failed'));
+    await oldStartup;
+
+    expect(host.emitted.filter(frame => frame.event === 'voice:error')).toEqual([]);
+    expect(getState().hostAttached).toBe(true);
+  });
+
 });
