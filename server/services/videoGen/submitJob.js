@@ -472,8 +472,9 @@ const submitLocalLane = async ({ body, prepared, localPerformanceParams, enqueue
 // A Music Video shot rendered on a local reference-to-video model (FastH3 Omni) carries the
 // shot's cast sheets beside its still, as a Grok clip does, unless the request already names references.
 const withLocalCastReferences = async (body) => {
-  // Peer transport does not carry extra references yet, so a peer-routed shot keeps its still only.
-  if ((body.backend && body.backend !== 'local') || body.mediaProviderPeerId) return body;
+  // Only a request already routed to this Mac: an inherited hosted backend stays hosted, and
+  // peer transport does not carry extra references yet.
+  if (body.backend !== 'local' || body.mediaProviderPeerId) return body;
   if (body.referenceImageFiles?.length || !body.musicVideo?.sceneId) return body;
   const { listVideoModels, defaultVideoModelId } = await import('./local.js');
   const [{ getSettings }, { captureSystemCapabilities }] = await Promise.all([import('../settings.js'), import('../../lib/systemCapabilities.js')]);
