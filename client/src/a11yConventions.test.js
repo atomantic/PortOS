@@ -3603,7 +3603,7 @@ describe('a11y conventions', () => {
       const pads = axis === 'h' ? ['py', 'pt', 'pb'] : ['px', 'pl', 'pr'];
       let explicit = 0;
       let all = 0;
-      const side = { a: 0, b: 0 };
+      const side = { a: null, b: null };
       for (const t of tokens) {
         const coarse = /^pointer-coarse:(?:min-)?(?:size|[hw])-(.+)$/.exec(t);
         if (coarse && (sizeOf(coarse[1]) ?? 0) >= MIN_TOUCH_PX) {
@@ -3624,12 +3624,11 @@ describe('a11y conventions', () => {
         m = new RegExp(`^(?:${pads[2]})-(.+)$`).exec(t);
         if (m) side.b = sizeOf(m[1]) ?? 0;
       }
-      const padding = side.a || side.b ? side.a + side.b : all * 2;
+      const padding = (side.a ?? all) + (side.b ?? all);
       return Math.max(explicit, icon + padding);
     };
     const reachesTouchSize = (cls, icon) => {
       const tokens = cls.split(/\s+/).filter(Boolean);
-      if (tokens.some((t) => /^(?:flex-1|self-stretch|grow)$/.test(t))) return true;
       return axisPx(tokens, 'h', icon) >= MIN_TOUCH_PX && axisPx(tokens, 'w', icon) >= MIN_TOUCH_PX;
     };
     const literalClass = (tag) => {
@@ -3663,6 +3662,8 @@ describe('a11y conventions', () => {
     expect(probe('<button aria-label="Remove" className="min-h-[44px] min-w-[44px]"><X size={14} /></button>')).toBe(0);
     expect(probe('<button aria-label="Remove" className="h-11 w-11"><X size={14} /></button>')).toBe(0);
     expect(probe('<button aria-label="Remove" className="p-3"><X size={20} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="p-3 px-0"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="flex-1"><X size={14} /></button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="sm:min-h-[44px] sm:min-w-[44px]"><X size={14} /></button>')).toBe(1);
 
     const offenders = trackedJsxFiles().flatMap((file) => offendersIn(file, rawSourceOf(file)));
