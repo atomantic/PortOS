@@ -47,6 +47,7 @@ import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
 import { isOutsideMusicVideoReference, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
+import { peopleLightLine } from '../../lib/musicVideoSnapshotLight.js';
 import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
@@ -498,6 +499,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         heightScaleLine(form ? `${p.name || 'the protagonist'} ${form.age ? `at age ${form.age}` : `(${form.label})`}` : p.name || 'the protagonist', form ? formHeight(form) : protagonistHeight),
         era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
+        // A test frame puts a person into a plate: lit apart from it, they read as pasted in.
+        // Judged on the look this frame uses (an era's own look overrides the project's).
+        peopleLightLine([testLook || style], { always: true }),
         // A dated age with no look of its own shares the project look; an undated
         // (older) one follows its sheet, whose description may carry the stock.
         testLook ? `Look: ${testLook}` : form && !form.era ? `Match the color, film stock and grain of the ${form.label} character sheet` : style && `Look: ${style}`,

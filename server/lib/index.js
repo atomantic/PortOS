@@ -924,6 +924,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoProductionMedium.js';
 export * from './musicVideoShotPrompt.js';
+export * from './musicVideoSnapshotLight.js';
 
 export * from './musicVideoMediumPlan.js';
 export * from './musicVideoFinishedOutside.js';

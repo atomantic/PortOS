@@ -16,6 +16,7 @@ import { shotCameraPrompt } from './cameraMovements.js';
 import { shotActionPrompt } from './musicVideoActionContract.js';
 import { approximateMotionCues } from './musicVideoShotTiming.js';
 import { productionMediumAddition } from './musicVideoProductionMedium.js';
+import { peopleLightLine } from './musicVideoSnapshotLight.js';
 import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 import { storyboardPanelShotText } from './storyboardRecipe.js';
 
@@ -208,6 +209,7 @@ function composeFrameModelInput(project, scene, {
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
     productionMediumAddition(project),
+    addition('people-light', 'Lighting on people', peopleLightLine([project?.concept?.style, musicVideoDirectorLook(project)])),
   ].filter(Boolean);
   const lookText = look.map((item) => item.text).join(', ');
   // The storyboard leads on its own lines, ahead of the long look blocks.

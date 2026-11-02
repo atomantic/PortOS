@@ -122,3 +122,25 @@ describe('Cast & Sets set plates', () => {
     expect(prompt).not.toContain('couple');
   });
 });
+
+describe('Cast & Sets test frames', () => {
+  const tests = [{ setId: 'street', look: 'TEE', action: 'Renee coasts past on her bike', caption: 'hands off' }];
+
+  it('lights the person by the plate so they never read as pasted in', () => {
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, look: 'Glossy anamorphic cinema', tests });
+    expect(plan['test:1'].prompt).toContain('People are lit only by the light already in the place');
+  });
+
+  it('allows badly lit people when the look is amateur snapshots or home video', () => {
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, look: 'Faded consumer snapshots, harsh pop-up flash, VHS-C chroma bleed', tests });
+    expect(plan['test:1'].prompt).toContain('Authentic amateur snapshot lighting');
+    expect(plan['test:1'].prompt).toContain('often underexposed, unevenly lit or half in shadow');
+  });
+
+  it('judges the light on the look the frame uses, so an era set with a polished look overrides an amateur project look', () => {
+    const sets = [{ ...DIRECTION.sets[0], era: '2026', look: 'Polished digital cinema, crisp and clean' }];
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, sets, look: 'Faded VHS home video', tests });
+    expect(plan['test:1'].prompt).toContain('People are lit only by the light already in the place');
+    expect(plan['test:1'].prompt).not.toContain('Authentic amateur snapshot lighting');
+  });
+});
