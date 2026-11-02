@@ -51,7 +51,8 @@ vi.mock('./github.js', () => ({ execGh: async args => {
     return JSON.stringify(fixture.promotions || (fixture.pr?.state === 'open' ? [fixture.pr] : []));
   }
   if (query.endsWith('/git/matching-refs/tags/v1.2.3')) return JSON.stringify(fixture.tags);
-  if (query.endsWith('/actions/workflows/release.yml/runs?branch=release&per_page=100')) return JSON.stringify({ workflow_runs: fixture.runs });
+  const runs = query.match(/\/actions\/workflows\/release\.yml\/runs\?status=([a-z_]+)&per_page=1$/);
+  if (runs) return JSON.stringify({ total_count: fixture.runs.filter(run => run.status === runs[1]).length });
   if (query.includes('/pulls?')) return JSON.stringify(fixture.pr ? [fixture.pr] : []);
   if (query.endsWith('/pulls/12')) return JSON.stringify(fixture.pr);
     if (query.endsWith('/git/ref/heads/release')) return JSON.stringify({ ref: 'refs/heads/release', object: { type: 'commit', sha: fixture.releaseBase } });
@@ -323,8 +324,9 @@ for (const [name, reason, change] of [
     fixture.promotions = [{ number: 13, head: { ref: 'codex/release-agent-other', repo: { full_name: 'example/repo' } } }];
   }],
   ['version tag already present', 'candidate-release-tag-present', () => { fixture.tags = [{ ref: 'refs/tags/v1.2.3' }]; }],
-  ['release workflow re-run in progress', 'candidate-release-workflow-active', () => {
-    fixture.runs = [{ id: 1, status: 'in_progress', conclusion: null, run_attempt: 2 }];
+  ['older release workflow re-run in progress', 'candidate-release-workflow-active', () => {
+    fixture.runs = [...Array.from({ length: 150 }, (_, id) => ({ id: id + 2, status: 'completed' })),
+      { id: 1, status: 'in_progress', run_attempt: 2 }];
   }],
   ['unknown review receipt version', 'candidate-review-identity-conflict', async () => {
     const receipt = JSON.parse(await readFile(reviewPath, 'utf8'));
@@ -436,8 +438,8 @@ test('serializes same-successor retries and refuses review drift during verifica
   const saved = structuredClone(fixture.disk);
   fixture.forgeReads = 0;
   fixture.forgeHook = async () => {
-    // Read 6 opens the second inspection; the first made five forge reads.
-    if (fixture.forgeReads === 6) await writeFile(reviewPath, JSON.stringify({ ...JSON.parse(await readFile(reviewPath, 'utf8')), status: 'clean' }));
+    // Read 10 opens the second inspection; the first made nine forge reads.
+    if (fixture.forgeReads === 10) await writeFile(reviewPath, JSON.stringify({ ...JSON.parse(await readFile(reviewPath, 'utf8')), status: 'clean' }));
   };
   expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-evidence-changed' });
   expect(fixture.state).toEqual(saved);

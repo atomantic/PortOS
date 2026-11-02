@@ -138,6 +138,8 @@ export async function readReleaseBaseTip({ api }) {
   return base.ref === 'refs/heads/release' && base.object?.type === 'commit' ? base.object.sha : null;
 }
 
+const UNFINISHED_RUN_STATUSES = ['queued', 'in_progress', 'waiting', 'requested', 'pending'];
+
 /** Publication activity this candidate's own PR cannot explain: another open
  * promotion, the version tag before promotion, or an unfinished release
  * workflow run (including a re-run of an earlier one). Any of these may be a
@@ -150,8 +152,12 @@ async function publicationFence({ origin, api }, checkout, candidate, published)
     const tags = await api(`git/matching-refs/tags/v${candidate.version}`);
     if (!Array.isArray(tags) || tags.some(row => row?.ref === `refs/tags/v${candidate.version}`)) refuse('candidate-release-tag-present');
   }
-  const { workflow_runs: runs } = await api('actions/workflows/release.yml/runs?branch=release&per_page=100');
-  if (!Array.isArray(runs) || runs.some(run => run?.status !== 'completed')) refuse('candidate-release-workflow-active');
+  // A re-run keeps its original creation order, so a newest-runs page can miss
+  // it. Each unfinished status's total count covers the whole history.
+  for (const status of UNFINISHED_RUN_STATUSES) {
+    const { total_count: count } = await api(`actions/workflows/release.yml/runs?status=${status}&per_page=1`);
+    if (count !== 0) refuse('candidate-release-workflow-active');
+  }
 }
 
 async function publicationSnapshot(checkout, candidate) {

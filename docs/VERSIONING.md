@@ -157,7 +157,7 @@ publication instead of opening another PR. Recovery also holds while the forge
 shows publication activity the candidate's own PR cannot explain: another open
 promotion PR into `release` (`candidate-publication-ambiguous`), the version
 tag already present before promotion (`candidate-release-tag-present`), or an
-unfinished `release.yml` run on `release`, such as a re-run
+unfinished `release.yml` run anywhere in its history, such as a re-run
 (`candidate-release-workflow-active`). Any of these may be a second publication
 in flight. An inline publication retains the
 same task and transfers both its candidate and synchronization checkout through
