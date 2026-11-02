@@ -4,11 +4,15 @@
  * snapshot or home-video look is allowed, even expected, to light people badly.
  */
 const AMATEUR_LOOK = /\b(snapshots?|home[- ]?video|home movies?|camcorders?|vhs(?:-c)?|super[- ]?8|found[- ]footage|polaroids?|instamatic|disposable cameras?|point[- ]and[- ]shoot|amateur|pop-?up flash)\b/i;
+// A clause that names what the look avoids ("avoid VHS", "no camcorder grain") is not the look.
+const EXCLUSION = /\b(avoid\w*|no|not|never|without|exclud\w*|instead of|rather than)\b/i;
 
-export const SCENE_LIGHT_ON_PEOPLE = 'People are lit only by the light already in the place, with the same exposure, color cast, grain and softness as their surroundings; never studio-lit, rim-lit or brighter and cleaner than the room';
-export const AMATEUR_SNAPSHOT_LIGHT = 'Authentic amateur snapshot lighting: people are lit only by the scene\'s own light or the camera\'s flash, often underexposed, unevenly lit or half in shadow, never studio-lit, rim-lit or brighter and cleaner than their surroundings';
+export const SCENE_LIGHT_ON_PEOPLE = 'People are lit only by the light already in the place, with the same exposure, color cast, grain and softness as their surroundings; add no studio, rim or other light the place does not have, and never make them brighter or cleaner than the room';
+export const AMATEUR_SNAPSHOT_LIGHT = 'Authentic amateur snapshot lighting: people are lit only by the scene\'s own light or the camera\'s flash, often underexposed, unevenly lit or half in shadow; add no studio, rim or other light the place does not have, and never make them brighter or cleaner than their surroundings';
 
-export const isAmateurLook = (...texts) => texts.some((text) => AMATEUR_LOOK.test(String(text || '')));
+const positiveClauses = (text) => String(text || '').split(/[.;,\n]/).filter((clause) => !EXCLUSION.test(clause));
+
+export const isAmateurLook = (...texts) => texts.some((text) => positiveClauses(text).some((clause) => AMATEUR_LOOK.test(clause)));
 
 /** The lighting line for a frame with people: '' unless the look is amateur, unless `always`. */
 export function peopleLightLine(lookTexts, { always = false } = {}) {

@@ -500,7 +500,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
         // A test frame puts a person into a plate: lit apart from it, they read as pasted in.
-        peopleLightLine([testLook, style, project?.concept?.style], { always: true }),
+        // Judged on the look this frame uses (an era's own look overrides the project's).
+        peopleLightLine([testLook || style], { always: true }),
         // A dated age with no look of its own shares the project look; an undated
         // (older) one follows its sheet, whose description may carry the stock.
         testLook ? `Look: ${testLook}` : form && !form.era ? `Match the color, film stock and grain of the ${form.label} character sheet` : style && `Look: ${style}`,
