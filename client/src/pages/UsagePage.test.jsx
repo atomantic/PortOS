@@ -664,15 +664,28 @@ describe('UsagePage per-provider refresh', () => {
     expect(screen.queryByText('80% used')).not.toBeInTheDocument();
   });
 
-  it('caps a reset timeout beyond the browser maximum', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+  it('caps a distant reset timer and re-arms it until the window expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-02T00:00:00.000Z'));
     const timeout = vi.spyOn(globalThis, 'setTimeout');
+    const maxDelay = 2_147_483_647;
+    const resetDelay = 3_000_000_000;
     const local = { ...card('grok', 'Grok', 20), limits: [{ ...card('grok', 'Grok', 20).limits[0],
-      resetsAt: new Date(Date.now() + 3_000_000_000).toISOString() }], origin: { self: true } };
+      resetsAt: new Date(Date.now() + resetDelay).toISOString() }], origin: { self: true } };
     api.getProviderUsage.mockResolvedValue({ providers: [local] });
     const { unmount } = render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    await screen.findByText('20% used');
-    expect(timeout).toHaveBeenCalledWith(expect.any(Function), 2_147_483_647);
+    // Wait for the resolved API calls and React's effects before inspecting the timer.
+    await act(async () => {});
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(timeout).toHaveBeenCalledWith(expect.any(Function), maxDelay);
+    await act(async () => { await vi.advanceTimersByTimeAsync(maxDelay); });
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    expect(timeout).toHaveBeenCalledWith(expect.any(Function), resetDelay - maxDelay);
+    await act(async () => { await vi.advanceTimersByTimeAsync(resetDelay - maxDelay - 1); });
+    expect(screen.getByText('20% used')).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.queryByText('20% used')).not.toBeInTheDocument();
+    expect(screen.getByText(/last available quota reading has expired/i)).toBeInTheDocument();
     unmount();
   });
 
