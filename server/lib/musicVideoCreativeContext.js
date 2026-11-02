@@ -8,7 +8,9 @@ const BIBLE_HEADER = 'Production bible (use the subjects relevant to this shot; 
 // street or a bathroom), so it is labelled look-only wherever it is included.
 export const MOOD_BOARD_LOOK_LABEL = 'Mood board look (palette, lighting and texture only; never its locations, objects or poses)';
 
-const PERSON = /\b(she|he|her|hers|him|his|they|them|their|woman|women|man|men|girl|boy|person|people|figure|figures|silhouette|someone|somebody|protagonist|character|singer|drummer|dancer)\b/i;
+// No they/them/their: set prose uses them for objects ("counters with their menu
+// boards"), and dropping that sentence emptied a food court plate into a gas station.
+const PERSON = /\b(she|he|her|hers|him|his|woman|women|man|men|girl|girls|boy|boys|couple|teens?|kids?|child|children|person|people|figure|figures|silhouette|someone|somebody|protagonist|character|singer|drummer|dancer)\b/i;
 
 /**
  * `text` without the sentences or `;` clauses that describe a person (or

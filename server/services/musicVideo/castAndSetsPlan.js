@@ -60,6 +60,9 @@ export { CAST_SETS_SUBJECT_PREFIX };
 // Only the medium is fixed; the look (film stock, light, texture) comes from
 // the project's own mood board / style via `direction.look`.
 const PHOTO = 'photorealistic, editorial photography';
+// Stacked, interlocked or piled look-alike objects are where image models fuse
+// geometry (chairs molded into a table), and every shot on the set copies it.
+const PLAUSIBLE_SET = 'Keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects';
 const sentence = (s) => {
   const t = String(s || '').trim();
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
@@ -454,6 +457,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         eraLine(set.era),
         plateLight && `Lighting: ${plateLight}`,
         setLook && `Look: ${setLook}`,
+        PLAUSIBLE_SET,
         'Photorealistic music video location still',
         note(key),
       ),
