@@ -54,6 +54,10 @@ export const proposeMusicVideoStory = (id, body, options = {}) => request(`/musi
 export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Research and seed (#14822): 202 { status: 'running' }; the result arrives as `music-video:scene-research`.
+export const startMusicVideoSceneResearch = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/research-seed`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const applyMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/apply`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

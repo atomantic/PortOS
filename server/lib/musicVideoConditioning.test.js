@@ -186,3 +186,15 @@ describe('musicVideoReferenceCapacity', () => {
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'mflux' } })).toBe(0);
   });
 });
+
+describe('musicVideoConditioningReferences with research photos (#14822)', () => {
+  const research = (n) => ({ id: `mvr-research-r${n}`, imageId: `research-${n}.png`, subject: 'Example Breed', pageUrl: 'https://example.com/photo' });
+  // Uniquely catches researched subject photos losing their lead to the automatic set, or escaping the renderer cap.
+  it('leads with the shot\'s research photos as subject references, within the renderer\'s cap', () => {
+    const scene = { researchReferences: [research(1), research(2), research(3)] };
+    const refs = musicVideoConditioningReferences(project(authored), scene, null, null, { limit: 4 });
+    expect(ids(refs)).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
+    expect(refs[0]).toMatchObject({ role: 'subject', label: 'Example Breed', research: true });
+    expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set', 'mvr-research-r2'] }))).toEqual(['set.png', 'research-2.png']);
+  });
+});

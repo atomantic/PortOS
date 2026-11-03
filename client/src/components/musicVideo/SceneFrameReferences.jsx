@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import MediaImage from '../MediaImage';
 
@@ -25,7 +25,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
+  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
   // The selected greybox is added separately and is not one of the saved picks.
   const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });

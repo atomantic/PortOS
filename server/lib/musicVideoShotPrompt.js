@@ -156,6 +156,9 @@ function musicVideoReferenceMapText(references = []) {
     if (ref.role === 'character') {
       return [`Reference image ${n} is ${label}: this exact person. Match their face, hair, skin, build and age exactly${note ? ` (${note})` : ''}; never blend their face with anyone else's.`];
     }
+    if (ref.role === 'subject') {
+      return [`Reference image ${n} is a real photo of ${label}: the subject in the shot looks exactly like it (shape, proportions, coat or surface, colours and markings). Take only the subject, never its background, framing or light.`];
+    }
     if (ref.role === 'set') return [`Reference image ${n} is the set reference "${label}": use its place, period and light.`];
     if (ref.role === 'prop') return [`Reference image ${n} is the prop sheet: every object from it that appears in the shot looks exactly as shown there${note ? ` (${note})` : ''}. Never show the sheet itself, its captions or its backdrop.`];
     if (ref.role === 'wardrobe') return [`Reference image ${n} is the wardrobe sheet "${label}": dress the people exactly as shown there.`];

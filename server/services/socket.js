@@ -345,6 +345,8 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
   // A scene render failed (or its recorded failure cleared) — #10154.
   { emitter: musicVideoEvents, event: 'scene-failure', channel: 'music-video:scene-failure' },
+  // Research and seed for a shot started, imported its photos, or found none (#14822).
+  { emitter: musicVideoEvents, event: 'scene-research', channel: 'music-video:scene-research' },
   { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
   // A fully-autonomous run (prompt → lyrics → Suno song → video) advancing.
