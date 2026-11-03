@@ -7,7 +7,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
-import { isCodexSubscriptionProvider } from '../../lib/providerModels.js';
+import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from '../../lib/codexAccount.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
 import { effectiveModelAccess, scopeModelsByAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
@@ -68,7 +68,12 @@ async function readyCodexReviewer() {
   if (!candidates.length) return null;
   const { getProviderPrerequisiteReadinessMap } = await import('../providerPrerequisites.js');
   const readiness = await getProviderPrerequisiteReadinessMap(configured, { candidates }).catch(() => ({}));
-  return candidates.find((entry) => readiness[entry.id]?.status === 'ready') || null;
+  const installed = candidates.find((entry) => readiness[entry.id]?.status === 'ready');
+  if (!installed) return null;
+  // That map only peeks at the account cache, which is cold after a restart; this user-started run reads it.
+  const { getCodexAccountReadiness } = await import('../codexAppServer.js');
+  const account = await getCodexAccountReadiness().catch(() => null);
+  return account?.status === CODEX_ACCOUNT_STATUS.ready ? installed : null;
 }
 
 export async function resolvePlateReviewer(reviewer = {}) {
