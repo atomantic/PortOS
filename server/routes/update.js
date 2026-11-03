@@ -206,6 +206,13 @@ router.get('/node-runtime', asyncHandler(async (req, res) => {
   res.json(await getNodeRuntimeStatus());
 }));
 
+// GET /api/update/software — every additional component PortOS manages, for
+// Settings › Software. Read-only; actions go to each component's own endpoint.
+router.get('/software', asyncHandler(async (req, res) => {
+  const { getSoftwareInventory } = await import('../services/softwareInventory.js');
+  res.json(await getSoftwareInventory({ fresh: req.query.fresh === '1' }));
+}));
+
 // GET /api/update/browser — the periodically observed managed Chrome version.
 router.get('/browser', asyncHandler(async (req, res) => {
   const { getBrowserUpdateSnapshot } = await import('../services/runtimeUpdateReview.js');
