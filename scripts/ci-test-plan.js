@@ -587,12 +587,16 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
 );
 
-// Three narrow CI jobs observe a small, enumerable input set, so a pull request
-// that touches none of it skips them (non-PR and release-base runs are forced
-// full and always run all three). Each gate is the head tree's static import
-// closure of the job's entry points, computed per run so it cannot drift from
-// a hand-kept list, plus the non-module inputs named by the pattern. ci.yml is
-// in both patterns so a workflow edit proves the job still runs.
+// The narrow CI jobs below observe a small, enumerable input set, so a pull
+// request that touches none of it skips them (non-PR and release-base runs are
+// forced full and always run every one). A gate takes one of two forms:
+// - the head tree's static import closure of the job's entry points, computed
+//   per run so it cannot drift from a hand-kept list, plus the non-module
+//   inputs named by the job's pattern (prompt-history, linux-containment,
+//   supercollider-live, docker-containment-live);
+// - an explicit path list alone, when the closure would select the job on most
+//   diffs (macos-native; see its note).
+// Every pattern names ci.yml so a workflow edit proves the job still runs.
 export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
 // The guard reads git history of data.reference/prompts/stages and imports the
 // migrations that declare prompt hashes. The whole migrations directory is
