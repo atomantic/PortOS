@@ -295,9 +295,10 @@ describe('Image Gen Routes', () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
   });
 
-  it('sends further references after the edited image and refuses one replaced after review', async () => {
+  it('sends a catalog image-reference file after the edited image and refuses one replaced after review', async () => {
     await fileUtils.ensureDir(fileUtils.PATHS.images);
-    const extra = pathJoin(fileUtils.PATHS.images, 'quick-edit-place.png');
+    await fileUtils.ensureDir(fileUtils.PATHS.imageRefs);
+    const extra = pathJoin(fileUtils.PATHS.imageRefs, 'quick-edit-place.png');
     await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-subject.png'), 'subject bytes');
     await writeFile(extra, 'place bytes');
     const body = { prompt: 'Put her in the rink from image 2', quickEdit: true, referenceImageFiles: ['quick-edit-subject.png', 'quick-edit-place.png'] };
@@ -313,6 +314,7 @@ describe('Image Gen Routes', () => {
     const sent = await request(app).post('/api/image-gen/generate').send(reviewed);
     expect(sent.status).toBe(200);
     expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map(p => p.split(/[/\\]/).pop())).toEqual(['quick-edit-subject.png', 'quick-edit-place.png']);
+    expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths[1]).toBe(extra);
     await writeFile(extra, 'replacement bytes');
     const stale = await request(app).post('/api/image-gen/generate').send(reviewed);
     expect(stale.status).toBe(409);
