@@ -79,6 +79,17 @@ describe('Cast & Sets vision transport contract', () => {
     expect(prompt).toContain('Respect details explicitly requested or supported by the story');
   });
 
+  // Uniquely catches the #14811 failure modes: a local model fencing its JSON, and thinking models running past the 120 s cap.
+  it('reads a fenced local reply and asks the reviewer not to think on either look', async () => {
+    const local = { provider: { id: 'ollama', type: 'api', timeout: 1000, thinking: true }, model: 'vision-model' };
+    runner.runPromptThroughProvider.mockClear()
+      .mockResolvedValueOnce({ ...response('pass', 'fail'), text: `\`\`\`json\n${response('pass', 'fail').text}\n\`\`\``, provider: local.provider })
+      .mockResolvedValueOnce({ text: 'Verdict:\n```json\n{"confirmed":false,"note":"The stool stands apart."}\n```', provider: local.provider, model: local.model });
+    expect(await reviewCastSetsImage({ inputs, reviewer: local })).toMatchObject({ verdict: 'unreviewed', advisory: true });
+    for (const [call] of runner.runPromptThroughProvider.mock.calls) expect(call.provider).toEqual({ ...local.provider, thinking: false });
+    expect(runner.runPromptThroughProvider.mock.calls[0][0].prompt).toContain('{"id":"subject","status":"pass|fail|unverified"');
+  });
+
   it('refuses incomplete evidence and an unexpected execution provider instead of accepting text-only confidence', async () => {
     runner.runPromptThroughProvider.mockResolvedValueOnce({ ...response(), text: '{"checks":[]}' });
     await expect(reviewCastSetsImage({ inputs, reviewer })).rejects.toThrow('incomplete inspection');

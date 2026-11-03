@@ -14,6 +14,15 @@ import { isSameOllamaDaemon } from '../../lib/ollamaContext.js';
 import { isVisionModel } from '../../lib/localModelHeuristics.js';
 import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../../lib/musicVideoPlateEvidence.js';
 
+// Scored on a hand-labeled 16-image set (#14811): Qwen3.8 27B made no false
+// render-quality fails, Gemma 4 31B three, Gemma 3 27B three. Ollama's tag order
+// otherwise decides, which picked the worst one. MLX builds crashed on image input.
+const VISION_REVIEWER_PREFERENCE = [/qwen3\.8/i, /gemma-?4/i];
+const visionReviewerRank = (id) => {
+  const family = VISION_REVIEWER_PREFERENCE.findIndex((pattern) => pattern.test(id));
+  return (/mlx/i.test(id) ? VISION_REVIEWER_PREFERENCE.length + 1 : 0) + (family === -1 ? VISION_REVIEWER_PREFERENCE.length : family);
+};
+
 // The managed daemon's metadata says whether its actual model can see an image.
 // Do not use that inventory for a different Ollama server, or guess when the
 // daemon cannot report capabilities. A caller-pinned model is never replaced.
@@ -22,17 +31,22 @@ async function resolveOllamaVisionModel(provider, selectedModel, pinned) {
   const ollama = await import('../ollamaManager.js');
   if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), ollama.getBaseUrl())) return selectedModel;
   const capabilities = await ollama.getModelCapabilities(selectedModel).catch(() => null);
-  if (!Array.isArray(capabilities) || capabilities.length === 0 || isVisionModel({ id: selectedModel, capabilities })) return selectedModel;
+  if (!Array.isArray(capabilities) || capabilities.length === 0) return selectedModel;
+  const selectedSees = isVisionModel({ id: selectedModel, capabilities });
 
+  // An unpinned default, even one that can see, gives way to a better-ranked installed vision model.
   if (!pinned) {
     const installed = await ollama.getInstalledModels().catch(() => []);
-    const permitted = scopeModelsByAccess(installed.map((item) => item.id), effectiveModelAccess(provider));
+    const permitted = scopeModelsByAccess(installed.map((item) => item.id), effectiveModelAccess(provider))
+      .map((id, index) => ({ id, index })).sort((a, b) => visionReviewerRank(a.id) - visionReviewerRank(b.id) || a.index - b.index).map(({ id }) => id);
     for (const id of permitted) {
+      if (selectedSees && visionReviewerRank(id) >= visionReviewerRank(selectedModel)) break;
       if (id === selectedModel) continue;
       const candidate = await ollama.getModelCapabilities(id).catch(() => null);
       if (Array.isArray(candidate) && candidate.length > 0 && isVisionModel({ id, capabilities: candidate })) return id;
     }
   }
+  if (selectedSees) return selectedModel;
   throw new ServerError(
     `Ollama model "${selectedModel}" cannot inspect images. Choose an installed vision-capable model for the reviewer.`,
     { status: 422, code: 'VISION_MODEL_UNSUPPORTED' },

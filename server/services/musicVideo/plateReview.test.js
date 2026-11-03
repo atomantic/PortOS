@@ -82,6 +82,22 @@ describe('plate evidence admission', () => {
     await expect(resolvePlateReviewer({})).rejects.toMatchObject({ code: 'VISION_MODEL_UNSUPPORTED' });
   });
 
+  // Uniquely catches tag order choosing the weakest installed vision model (#14811).
+  it('prefers the vision models that scored best over Ollama tag order, and non-MLX builds', async () => {
+    const api = { id: 'ollama', type: 'api', enabled: true, endpoint: 'http://localhost:11434/v1', defaultModel: 'text-model' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [api] });
+    ollama.getModelCapabilities.mockImplementation(async (id) => id === 'text-model' ? ['completion'] : ['completion', 'vision']);
+    ollama.getInstalledModels.mockResolvedValue([{ id: 'gemma3:27b' }, { id: 'gemma4:31b' }, { id: 'qwen3.8:27b-mlx' }, { id: 'hf.co/example/Qwen3.8-27B-GGUF:Q8' }]);
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'hf.co/example/Qwen3.8-27B-GGUF:Q8' });
+    ollama.getInstalledModels.mockResolvedValue([{ id: 'gemma3:27b' }, { id: 'qwen3.8:27b-mlx' }, { id: 'gemma4:31b' }]);
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'gemma4:31b' });
+
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [{ ...api, defaultModel: 'gemma3:27b' }] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'gemma4:31b' });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { ...api, defaultModel: 'gemma3:27b' }, selectedModel: 'gemma3:27b' });
+    expect(await resolvePlateReviewer({ providerId: 'ollama', model: 'gemma3:27b' })).toMatchObject({ model: 'gemma3:27b' });
+  });
+
   it('keeps unknown capability and a different Ollama daemon unchanged', async () => {
     const api = { id: 'ollama', type: 'api', enabled: true, endpoint: 'http://localhost:11434/v1', defaultModel: 'text-model' };
     providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [api] });
