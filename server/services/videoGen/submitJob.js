@@ -377,9 +377,12 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     : null;
   // A Music Video shot animated on Grok carries its cast sheets beside the still,
   // so people stay recognizable once the clip moves past the opening frame.
-  const castReferences = backend === VIDEO_GEN_MODE.GROK && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
+  const musicVideoReferences = backend === VIDEO_GEN_MODE.GROK && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipCastReferences(body.musicVideo)
     : [];
+  // Caller-uploaded reference images (staged by the Grok lane) follow any Music
+  // Video sheets, in upload order. Only a Grok render with a source frame uses them.
+  const castReferences = [...musicVideoReferences, ...(backend === VIDEO_GEN_MODE.GROK && sourceImagePath ? prepared.castReferences || [] : [])];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
     mode: backend,

@@ -30,7 +30,7 @@ import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { REFERENCE_AUDIO_FIELDS } from './requestFields.js';
+import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_IMAGES, videoReferenceImageSlots } from './requestFields.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -91,6 +91,24 @@ export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
   return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models.',
     { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+}
+
+/**
+ * Extra reference images (`referenceImage1..3` + `referenceLabel1..3`) condition
+ * a Grok image-to-video render beside its source frame. Any other lane or a
+ * request with no source frame would drop them silently, so each is refused with a 400 instead. The caller owns cleanup.
+ */
+export function referenceImageUploadsError({ backend, body, uploads = {} }) {
+  const slots = videoReferenceImageSlots(uploads, body);
+  const orphanLabel = VIDEO_REFERENCE_IMAGE_FIELDS.slice(0, MAX_VIDEO_REFERENCE_IMAGES)
+    .findIndex((field, i) => String(body[`referenceLabel${i + 1}`] ?? '').trim() && !uploads[field]);
+  if (!slots.length && orphanLabel < 0) return null;
+  const refuse = (message, code) => new ServerError(message, { status: 400, code });
+  if (orphanLabel >= 0) return refuse(`referenceLabel${orphanLabel + 1} needs a matching referenceImage${orphanLabel + 1} upload.`, 'VIDEO_REFERENCE_LABEL_ORPHANED');
+  if (slots.length > MAX_VIDEO_REFERENCE_IMAGES) return refuse(`At most ${MAX_VIDEO_REFERENCE_IMAGES} reference images are supported (referenceImage1..${MAX_VIDEO_REFERENCE_IMAGES}).`, 'VIDEO_REFERENCE_IMAGES_TOO_MANY');
+  if (backend !== VIDEO_GEN_MODE.GROK) return refuse('referenceImage uploads are only used by the Grok backend.', 'VIDEO_REFERENCE_IMAGES_GROK_ONLY');
+  if (!uploads.sourceImage && !body.sourceImageFile) return refuse('referenceImage uploads need a source image (sourceImage) to animate.', 'VIDEO_REFERENCE_IMAGES_NEED_SOURCE');
+  return null;
 }
 
 async function validateMiniMaxH3SpeedParams(model, params, settings) {
@@ -357,6 +375,11 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     await cleanupMultipartTemp(uploads);
     throw guidanceError;
   }
+  const referenceUploadsError = referenceImageUploadsError({ backend, body, uploads });
+  if (referenceUploadsError) {
+    await cleanupMultipartTemp(uploads);
+    throw referenceUploadsError;
+  }
   const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
   if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
     await cleanupMultipartTemp(uploads);
@@ -523,7 +546,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 // try/catch so a permission/disk failure here still cleans up the
 // multipart temp uploads instead of leaking them in the OS temp dir.
 async function ensureUploadsDir({ uploads, cleanupStaged }) {
-  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
+  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || VIDEO_REFERENCE_IMAGE_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
   try {
     await ensureDir(PATHS.uploads);
   } catch (err) {

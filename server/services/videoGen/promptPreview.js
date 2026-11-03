@@ -13,13 +13,13 @@ import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.j
 import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
-import { hostedReferenceInputsError, resolveRequestedVideoBackend } from './prepareParams.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS } from './requestFields.js';
+import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, videoReferenceImageSlots } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 
-export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
+export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
 
 const asWritten = (body, extra = {}) => ({
@@ -64,6 +64,9 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   // A storyboard panel and its references, named by gallery path as the render names them.
   const guidance = resolveStoryboardGuidanceInputs(body, { lenient: true });
 
+  const referenceUploadsError = referenceImageUploadsError({ backend, body, uploads });
+  if (referenceUploadsError) throw referenceUploadsError;
+
   if (backend === VIDEO_GEN_MODE.GROK) {
     let castReferences = [];
     if (body.musicVideo) {
@@ -84,6 +87,9 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       promptAdditions = [...promptAdditions, ...additions];
       if (!guidance.guidanceImagePath) castReferences = await musicVideoClipCastReferences(body.musicVideo);
     }
+    // Uploaded reference images follow, named in place of their staged paths.
+    castReferences = [...castReferences, ...videoReferenceImageSlots(uploads, body)
+      .map(({ field, label }) => ({ path: `(uploaded ${field})`, label }))];
     return { backend, ...grokVideoSentPrompt({
       prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,

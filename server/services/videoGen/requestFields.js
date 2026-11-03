@@ -26,6 +26,22 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
 // streaming parser keeps one file per field name, so N clips need N names.
 export const REFERENCE_AUDIO_FIELDS = Object.freeze(['referenceAudio0', 'referenceAudio1', 'referenceAudio2']);
 
+// Extra reference images that ride beside a Grok image-to-video source frame
+// (Grok's reference_to_video tool). Indexed multipart slots `referenceImage1..N`,
+// each with an optional `referenceLabelN` text field describing what it shows.
+// The parser also accepts one slot past the maximum so an over-limit request is
+// refused with a clear error instead of the extra file being silently dropped.
+export const MAX_VIDEO_REFERENCE_IMAGES = 3;
+export const MAX_VIDEO_REFERENCE_LABEL_LENGTH = 120;
+export const VIDEO_REFERENCE_IMAGE_FIELDS = Object.freeze(
+  Array.from({ length: MAX_VIDEO_REFERENCE_IMAGES + 1 }, (_, i) => `referenceImage${i + 1}`),
+);
+
+/** The uploaded reference images in slot order, each with its trimmed label. */
+export const videoReferenceImageSlots = (uploads = {}, body = {}) => VIDEO_REFERENCE_IMAGE_FIELDS
+  .map((field, i) => ({ field, file: uploads[field], label: String(body[`referenceLabel${i + 1}`] ?? '').trim() }))
+  .filter((slot) => slot.file);
+
 export const VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES = Object.freeze(
   Object.values(VIDEO_GEN_LOCAL_ONLY_FIELDS),
 );

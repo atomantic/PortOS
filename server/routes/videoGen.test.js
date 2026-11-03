@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'path';
@@ -1219,6 +1219,87 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('POST / — extra reference images on a Grok image-to-video request', () => {
+    const upload = (fieldname, name) => ({ fieldname, path: `/tmp/upload-${name}`, originalname: name, mimetype: 'image/png', size: 1024 });
+    const source = upload('sourceImage', 'frame.png');
+    const refs = [upload('referenceImage1', 'subject.png'), upload('referenceImage2', 'vehicle.png'), upload('referenceImage3', 'prop.png'), upload('referenceImage4', 'extra.png')];
+    const unlinkedPaths = () => unlink.mock.calls.map(([p]) => p);
+    const durableUnlinks = () => unlinkedPaths().filter((p) => /^[\\/]mock[\\/]uploads[\\/]/.test(p));
+    const post = (body) => request(app).post('/api/video-gen/').send({ backend: 'grok', prompt: 'the subject walks forward', mode: 'image', ...body });
+    const allowGrok = async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true, grokPath: '/opt/grok' } } });
+    };
+    afterEach(async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockImplementation(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } }));
+    });
+
+    it('queues the uploads as castReferences in slot order with their labels, owned by the job', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[1], refs[0]);
+      const r = await post({ referenceLabel1: 'the subject - front view', referenceLabel2: '  a red vehicle  ' });
+      expect(r.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      const durable = () => expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-reference-[^\\/]+\.png$/);
+      expect(params.castReferences).toEqual([
+        { path: durable(), label: 'the subject - front view' },
+        { path: durable(), label: 'a red vehicle' },
+      ]);
+      expect(params.uploadedTempPaths).toEqual(params.castReferences.map((ref) => ref.path));
+      expect(params.uploadedTempPath).toBe(params.sourceImagePath);
+      // Slot 1 was staged before slot 2 regardless of the order the parts arrived in.
+      expect(copyFile.mock.calls.filter(([from]) => from !== source.path).map(([from]) => from))
+        .toEqual([refs[0].path, refs[1].path]);
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([refs[0].path, refs[1].path]));
+      expect(durableUnlinks()).toEqual([]);
+    });
+
+    it('defaults a missing label to empty', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[0]);
+      const r = await post({});
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params.castReferences).toEqual([expect.objectContaining({ label: '' })]);
+    });
+
+    it.each([
+      ['a non-grok backend', { backend: 'local' }, [source, refs[0]], 'VIDEO_REFERENCE_IMAGES_GROK_ONLY'],
+      ['no source image', {}, [refs[0]], 'VIDEO_REFERENCE_IMAGES_NEED_SOURCE'],
+      ['more than three references', {}, [source, ...refs], 'VIDEO_REFERENCE_IMAGES_TOO_MANY'],
+      ['a label with no image', { referenceLabel2: 'orphan' }, [source, refs[0]], 'VIDEO_REFERENCE_LABEL_ORPHANED'],
+    ])('rejects %s with a 400 and removes every upload the parser wrote', async (_name, extra, uploads, code) => {
+      await allowGrok();
+      setPendingUpload(...uploads);
+      const r = await post(extra);
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe(code);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining(uploads.map((file) => file.path)));
+    });
+
+    it('removes the uploads when the body fails validation (label too long)', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[0]);
+      const r = await post({ referenceLabel1: 'x'.repeat(121) });
+      expect(r.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([source.path, refs[0].path]));
+    });
+
+    it('unlinks every staged copy when a later reference fails to stage', async () => {
+      await allowGrok();
+      copyFile.mockImplementationOnce(async () => {}).mockImplementationOnce(async () => {}).mockRejectedValueOnce(new Error('ENOSPC'));
+      setPendingUpload(source, refs[0], refs[1]);
+      const r = await post({});
+      expect(r.status).toBe(500);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(new Set(durableUnlinks()).size).toBe(3);
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([source.path, refs[0].path, refs[1].path]));
+    });
+  });
+
   describe('POST /prompt-preview (#11317)', () => {
     const settings = {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
@@ -1251,6 +1332,20 @@ describe('videoGen routes', () => {
       expect(r.body.promptAdditions[1].text).toContain('[prompt]');
       expect(r.body.promptAdditions[1].text).not.toContain('a fox running');
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('previews the reference_to_video prompt for held reference images and refuses them off Grok', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValue(settings);
+      const held = { backend: 'grok', prompt: 'the subject turns', previewUploads: ['sourceImage', 'referenceImage1'], referenceLabel1: 'the subject - front view' };
+      const ok = await request(app).post('/api/video-gen/prompt-preview').send(held);
+      expect(ok.status).toBe(200);
+      expect(ok.body.sentPrompt).toContain('reference_to_video');
+      expect(ok.body.sentPrompt).toContain('<IMAGE_1> shows how the subject looks');
+      const refused = await request(app).post('/api/video-gen/prompt-preview').send({ ...held, backend: 'local' });
+      expect(refused.status).toBe(400);
+      expect(refused.body.code).toBe('VIDEO_REFERENCE_IMAGES_GROK_ONLY');
+      getSettings.mockImplementation(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } }));
     });
 
     it('previews the Grok shot prompt and cast inputs that the queued render sends', async () => {
