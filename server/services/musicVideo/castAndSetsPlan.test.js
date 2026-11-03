@@ -84,6 +84,11 @@ describe('Cast & Sets face sheets', () => {
     expect(plan['face:kevin']).toMatchObject({ kind: 'face', deps: ['cast:kevin'], refKeys: ['cast:kevin'], label: 'Kevin face sheet' });
     expect(plan['face:kevin'].prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT');
     expect(plan['face:kevin'].prompt).toContain('nothing held in the hands');
+    // The labeled angle guide must not contradict the sheet's "no text" (#14795).
+    for (const key of ['expressions', 'face:kevin']) {
+      expect(plan[key].prompt).toContain('no text');
+      expect(plan[key].prompt).toContain('Never copy the template\'s drawing style, grey skin, arrows or text labels');
+    }
     expect(noteImageKeys('kevin face sheet', plan)).toEqual(['face:kevin']);
   });
 

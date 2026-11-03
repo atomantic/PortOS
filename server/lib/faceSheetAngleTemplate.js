@@ -1,6 +1,6 @@
 /** Fixed visual directions for face sheets. Left/right mean the image, never the subject. */
 export const FACE_SHEET_ANGLE_TEMPLATE = 'music-video-face-angles.png';
-export const FACE_SHEET_TEMPLATE_INSTRUCTION = "Reference image 1 is ONLY an angle/layout guide: its top row fixes the five angles; its bottom row is placeholder moods, so use the mood count and layout specified below. Follow each grey head's nose and yellow arrow. LEFT faces image-left; RIGHT faces image-right. Left-facing and right-facing panels are mirror opposites. Never copy the template's drawing style, grey skin or arrows; use the person's identity from the remaining references";
+export const FACE_SHEET_TEMPLATE_INSTRUCTION = "Reference image 1 is ONLY an angle/layout guide: its top row fixes the five angles; its bottom row is placeholder moods, so use the mood count and layout specified below. Follow each grey head's nose and yellow arrow. LEFT faces image-left; RIGHT faces image-right. Left-facing and right-facing panels are mirror opposites. Never copy the template's drawing style, grey skin, arrows or text labels into the sheet; use the person's identity from the remaining references";
 
 const angles = [
   { label: 'FRONT', turn: 0, profile: false },
