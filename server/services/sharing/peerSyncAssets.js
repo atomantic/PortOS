@@ -663,6 +663,8 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
     ...(Array.isArray(project?.styleReferences) ? project.styleReferences : []).map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
     // The cameo roster's photos, stills and variants (#14821).
     ...musicVideoCameoImageIds(project),
+    // A shot's Research and seed photos (#14822).
+    ...scenes.flatMap((s) => (Array.isArray(s?.researchReferences) ? s.researchReferences : []).map((r) => r?.imageId)).filter(isStr),
   ])];
   if (imageNames.length) {
     const entries = imageNames.map(imageAssetReference);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -184,5 +184,19 @@ describe('musicVideoReferenceCapacity', () => {
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux3' } })).toBe(10);
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'flux2' } })).toBe(4);
     expect(musicVideoReferenceCapacity('local', { localModel: { runner: 'mflux' } })).toBe(0);
+  });
+});
+
+describe('musicVideoConditioningReferences with research photos (#14822)', () => {
+  const research = (n) => ({ id: `mvr-research-r${n}`, imageId: `research-${n}.png`, subject: 'Example Breed', pageUrl: 'https://example.com/photo' });
+  // Uniquely catches researched subject photos losing their lead to the automatic set, or escaping the renderer cap.
+  it('leads with the shot\'s research photos as subject references, within the renderer\'s cap', () => {
+    const scene = { researchReferences: [research(1), research(2), research(3)] };
+    const refs = musicVideoConditioningReferences(project(authored), scene, null, null, { limit: 4 });
+    expect(ids(refs)).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
+    expect(refs[0]).toMatchObject({ role: 'subject', label: 'Example Breed', research: true });
+    expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set', 'mvr-research-r2'] }))).toEqual(['set.png', 'research-2.png']);
+    // On Auto a clip also keeps the subject photos, beside the identities.
+    expect(ids(musicVideoClipConditioningReferences(project(authored), scene))).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
   });
 });

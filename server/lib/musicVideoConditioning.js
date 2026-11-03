@@ -13,6 +13,8 @@ import { musicVideoCameoReferences } from './musicVideoCameos.js';
  * Flagging a reference adds a candidate, never a separate fixed render quota.
  */
 export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
+/** Research photos one shot holds (scene.researchReferences, #14822). */
+export const MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT = 6;
 
 // The Grok CLI does not expose its underlying video-model id. Seven references
 // is supported by both the older Imagine model and the newer 1.5 model.
@@ -170,21 +172,36 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
  * (or without a variant) the result is the automatic set alone.
  */
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
+  const research = musicVideoResearchReferences(scene);
   // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
   const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)];
   const panel = musicVideoPanelArtReferences(scene);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...guides, ...panel, ...musicVideoReferenceChoices(project)];
+    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project)];
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }
   const automatic = automaticConditioningReferences(project, scene, limit);
-  const chosen = guides.length ? [...guides, ...automatic] : automatic;
+  // Researched photos of the shot's subject lead: they are what the shot must show accurately.
+  const chosen = [...research, ...guides, ...automatic];
   const unique = chosen.filter((ref, i) => chosen.findIndex((r) => r.imageId === ref.imageId) === i);
   if (!panel.length) return unique.slice(0, limit);
   // The storyboard panel keeps a slot; identities fill the rest.
   return [...unique.filter((ref) => ref.imageId !== panel[0].imageId).slice(0, Math.max(0, limit - 1)), ...panel];
+}
+
+/**
+ * The real photos a shot's Research and seed step imported (#14822), as
+ * references labelled with the director's own subject text. Their source
+ * links stay on the record for the director; only the image is sent.
+ */
+export function musicVideoResearchReferences(scene) {
+  if (!Array.isArray(scene?.researchReferences)) return [];
+  return scene.researchReferences
+    .filter((ref) => typeof ref?.id === 'string' && typeof ref.imageId === 'string' && SENDABLE_REFERENCE_FILE.test(ref.imageId))
+    .map((ref) => ({ id: ref.id, imageId: ref.imageId, role: 'subject', label: String(ref.subject || 'Subject').slice(0, 120), research: true,
+      sourceUrl: ref.sourceUrl || null, pageUrl: ref.pageUrl || null }));
 }
 
 /**
@@ -290,14 +307,14 @@ export function musicVideoClipConditioningReferences(project, scene, castMedia =
   const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
   return musicVideoConditioningReferences(project, source, castMedia)
     .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
-      && (explicit || ref.role === 'character'))
+      && (explicit || ref.role === 'character' || ref.role === 'subject'))
     .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)
     .slice(0, Math.max(0, limit));
 }
 
 /** References that may be selected independently for a clip. */
 export function musicVideoClipReferenceChoices(project, scene, castMedia = null) {
-  return [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
+  return [...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
 }
 
 /** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */

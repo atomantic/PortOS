@@ -3,13 +3,14 @@ import { useSearchParams } from 'react-router';
 import { ImagePlus, Trash2, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import StageSection from './StageSection.jsx';
+import ResearchSeedForm from './ResearchSeedForm.jsx';
 import toast from '../ui/Toast';
 import { formatCount } from '../../utils/formatters.js';
 import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_VARIANTS, musicVideoCameoCoverage } from '../../../../server/lib/musicVideoCameos.js';
 import { parseCameoLines } from '../../lib/musicVideoCameos.js';
 import {
   addMusicVideoCameoReferences, addMusicVideoCameoVariant, createMusicVideoCameos, deleteMusicVideoCameo,
-  deleteMusicVideoCameoVariant, linkMusicVideoCameoShots, removeMusicVideoCameoReference, unlinkMusicVideoCameoShots,
+  deleteMusicVideoCameoVariant, linkMusicVideoCameoShots, removeMusicVideoCameoReference, startMusicVideoCameoResearch, unlinkMusicVideoCameoShots,
   updateMusicVideoCameo, updateMusicVideoCameoVariant,
 } from '../../services/apiMusicVideo.js';
 
@@ -160,6 +161,12 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
             ))}
           </ul>
         ) : <p className="text-[11px] text-port-text-muted">Photos of the real cameo. Every linked shot's frame renders send them as references.</p>}
+        <ResearchSeedForm projectId={project.id} match={{ cameoId: cameo.cameoId }} disabled={disabled}
+          start={(body) => startMusicVideoCameoResearch(project.id, cameo.cameoId, body, { silent: true })}
+          onSaved={(saved) => onApply({ cameos: saved.cameos || [], scenes: saved.scenes || [], updatedAt: saved.updatedAt })}
+          room={MUSIC_VIDEO_CAMEO_MAX_REFERENCES - (cameo.references || []).length} defaultSubject={cameo.name || ''}
+          intro="PortOS adds them to this cameo's reference photos."
+          limitNote={`A cameo keeps up to ${MUSIC_VIDEO_CAMEO_MAX_REFERENCES} reference photos. Remove one to research more.`} />
       </div>
 
       <div className="space-y-1">

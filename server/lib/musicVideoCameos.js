@@ -159,7 +159,7 @@ export function musicVideoCameoReferences(project, scene) {
     .map((r, i) => ({
       id: `mvr-cameo-${cameo.cameoId}-${i}`.slice(0, 128),
       imageId: r.imageId,
-      role: 'character',
+      role: 'subject',
       label: `${name} · photo ${i + 1}`.slice(0, 120),
       cameoReference: true,
     }));

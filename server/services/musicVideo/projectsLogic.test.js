@@ -1130,6 +1130,7 @@ describe('create-schema parity', () => {
     visualIntent: 'calm',
     frameReferenceIds: ['ref-a', 'ref-b'],
     clipReferenceIds: ['ref-b'],
+    researchReferences: [{ id: 'mvr-research-r1', imageId: 'upload-r1.png', subject: 'Example Breed', pageUrl: 'https://example.com/r1' }],
     characterVariant: { ingredientId: 'cat-chr-x', age: 7 },
     camera: { move: 'slow-dolly-in' },
     visualLayer: 'still',

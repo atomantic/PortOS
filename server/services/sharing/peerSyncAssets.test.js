@@ -130,6 +130,14 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toContainEqual({ filename: 'track-1.wav', kind: 'music', sha256: sha(bytes) });
   });
 
+  // Uniquely catches a shot's Research and seed photo staying behind when the project syncs to a peer.
+  it('bundles a photo used only by a shot\'s research references (#14822)', async () => {
+    const bytes = Buffer.from('research-photo');
+    writeImage('upload-research.png', bytes);
+    const manifest = await buildMusicVideoAssetManifest({ scenes: [{ sceneId: 's1', researchReferences: [{ id: 'mvr-research-a1', imageId: 'upload-research.png', subject: 'Example Breed' }] }] });
+    expect(manifest).toContainEqual({ filename: 'upload-research.png', kind: 'image', sha256: sha(bytes) });
+  });
+
   it('retains the historical source audio after a timing revision', async () => {
     const bytes = Buffer.from('historical-audio');
     writeMusic('previous.wav', bytes);

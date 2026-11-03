@@ -548,6 +548,7 @@ function buildScene(input, { order }) {
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
     ...(input.clipReferenceIds ? { clipReferenceIds: input.clipReferenceIds } : {}),
+    ...(input.researchReferences?.length ? { researchReferences: input.researchReferences } : {}),
     ...(input.setReference ? { setReference: input.setReference } : {}),
     ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
@@ -757,7 +758,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage',
   'cameoId', 'cameoVariantId', 'cameoLabel'];
 
 /**

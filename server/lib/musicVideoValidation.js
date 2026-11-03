@@ -11,6 +11,8 @@ import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
+import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './musicVideoConditioning.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -703,6 +705,30 @@ export const musicVideoPreMusicSchema = z.object({
   layers: z.array(musicVideoPreMusicLayerSchema).max(PRE_MUSIC_LAYER_LIMIT).optional(),
 }).strict();
 
+// #14822: a real photo of the shot's subject a research agent found and PortOS
+// downloaded into the gallery. `pageUrl` is the page it came from, `sourceUrl`
+// the image file; both are shown to the director and never sent to a model.
+const httpUrl = z.string().trim().max(2000).url().refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL');
+const musicVideoResearchReferenceSchema = z.object({
+  id: z.string().regex(/^mvr-research-[A-Za-z0-9-]{1,40}$/, 'Invalid research reference id'),
+  imageId: z.string().min(1).max(256).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'must be a gallery image basename'),
+  subject: z.string().trim().min(1).max(200),
+  sourceUrl: httpUrl.nullable().optional(),
+  pageUrl: httpUrl.nullable().optional(),
+  addedAt: z.string().max(64).optional(),
+}).strict();
+
+// Start Research and seed for one shot: the subject to photograph and the agent that searches.
+export const musicVideoResearchSeedSchema = z.object({
+  subject: z.string().trim().min(2).max(200),
+  count: z.number().int().min(1).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).optional(),
+  providerId: z.string().trim().min(1).max(256),
+  model: z.string().trim().max(256).optional(),
+  effort: z.string().trim().max(32).optional(),
+  executionOptions: executionOptionsSchema.optional(),
+  preview: z.boolean().optional(),
+}).strict();
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
 const sceneLayerFields = {
@@ -711,6 +737,8 @@ const sceneLayerFields = {
   frameReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
   // Independent clip picks; null/absent retains the legacy automatic cast set.
   clipReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
+  // #14822: researched photos of the shot's subject, offered first among its frame references.
+  researchReferences: z.array(musicVideoResearchReferenceSchema).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
