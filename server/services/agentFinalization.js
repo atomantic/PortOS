@@ -37,7 +37,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
-import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { getAgent, getAgentRecord, getAgents, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
@@ -63,7 +63,7 @@ import {
   mergeOutcomeReview,
   taskObjective,
 } from '../lib/goalFidelity.js';
-import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '../lib/goalFidelityFollowUp.js';
+import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies, isGoalFidelityInvestigation, overturnedInvestigatedFinding } from '../lib/goalFidelityFollowUp.js';
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
@@ -949,6 +949,12 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!objective) return claimFlow
     ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
     : noFidelityVerdict();
+  if (isGoalFidelityInvestigation(task)) {
+    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgents().catch(() => []) });
+    if (overturned) {
+      return fidelityNotJudged(`This investigation overturned the goal-fidelity finding (${overturned.gap}); its diff is not judged against the investigated objective.`);
+    }
+  }
 
   // Retain the actual compared commits for an investigator on another checkout.
   // Pin before reading the diff so a moving HEAD cannot misattribute the review.
