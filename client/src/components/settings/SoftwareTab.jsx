@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ArrowUpCircle, ChevronRight, Package, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -6,6 +6,7 @@ import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailedState from '../ui/LoadFailedState';
 import * as api from '../../services/api';
+import socket from '../../services/socket';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { usePortosRestartWatch } from '../../hooks/usePortosRestartWatch';
 import { formatDateTime } from '../../utils/formatters';
@@ -56,6 +57,7 @@ function SoftwareRow({ row, pending, onAction }) {
           <span className="text-sm font-medium text-white">{row.name}</span>
           <Pill tone={state.tone} size="xs">{state.label}</Pill>
           <Versions row={row} />
+          {row.busy && <Pill tone="warning" size="xs">{row.busy}</Pill>}
         </div>
         {row.summary && <p className="text-xs text-gray-400 break-words">{row.summary}</p>}
       </div>
@@ -98,6 +100,32 @@ export default function SoftwareTab() {
   const [pending, setPending] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  // A Node/pm2 job that answered `started` without a restart keeps running on
+  // the server; it ends with `portos:node-runtime:changed` reason job-finished,
+  // preceded by `portos:update:error` when it failed.
+  const [backgroundJob, setBackgroundJob] = useState(null);
+  const jobRef = useRef(null);
+  useEffect(() => { jobRef.current = backgroundJob; }, [backgroundJob]);
+  useEffect(() => {
+    const onError = ({ message } = {}) => {
+      if (!jobRef.current) return;
+      toast.error(`${jobRef.current.name} update failed${message ? `: ${message}` : ''}`);
+      jobRef.current = null;
+      setBackgroundJob(null);
+    };
+    const onChanged = ({ reason } = {}) => {
+      if (reason !== 'job-finished' || !jobRef.current) return;
+      toast.success(`${jobRef.current.name} updated`);
+      jobRef.current = null;
+      setBackgroundJob(null);
+    };
+    socket.on('portos:update:error', onError);
+    socket.on('portos:node-runtime:changed', onChanged);
+    return () => {
+      socket.off('portos:update:error', onError);
+      socket.off('portos:node-runtime:changed', onChanged);
+    };
+  }, []);
   const { captureBaseline } = usePortosRestartWatch({
     active: restarting,
     onRestart: () => setRestarting(false),
@@ -121,7 +149,12 @@ export default function SoftwareTab() {
     }
     const result = await launch(row.action).catch(() => null);
     if (!result || result.restart === false) setRestarting(false);
-    if (result && !row.action.restarts) toast.success(`${row.name} updated`);
+    if (result?.started && result.restart === false) {
+      jobRef.current = { id: row.id, name: row.name };
+      setBackgroundJob(jobRef.current);
+    } else if (result && !row.action.restarts) {
+      toast.success(`${row.name} updated`);
+    }
     setPending(null);
     refetch();
   };
@@ -171,7 +204,7 @@ export default function SoftwareTab() {
         <section key={group} className="overflow-hidden rounded-lg border border-port-border bg-port-card">
           <h3 className="border-b border-port-border px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-400">{group}</h3>
           <ul className="divide-y divide-port-border/60">
-            {rows.map((row) => <SoftwareRow key={row.id} row={row} pending={pending} onAction={runAction} />)}
+            {rows.map((row) => <SoftwareRow key={row.id} row={row} pending={pending ?? backgroundJob?.id ?? null} onAction={runAction} />)}
           </ul>
         </section>
       ))}

@@ -44,6 +44,13 @@ describe('runtime rows', () => {
     expect(nodeRows(runtime({ releases: null, releasesError: 'offline' }))[0]).toMatchObject({ state: 'unknown', summary: 'offline' });
   });
 
+  it('withholds Node and pm2 actions while one of their jobs is running', () => {
+    const rows = nodeRows(runtime({ job: { kind: 'pm2-update' }, pm2: { ...runtime().pm2, cliBehind: true },
+      releases: { latestInLine: { version: 'v26.13.0' }, offers: [{ version: 'v26.13.0' }] } }));
+    expect(rows[0]).toMatchObject({ busy: 'pm2 update running', action: null });
+    expect(rows[2]).toMatchObject({ state: 'attention', busy: 'pm2 update running', action: null });
+  });
+
   it('offers a pm2 sync that says whether it restarts PortOS', () => {
     const [, , pm2] = nodeRows(runtime({ pm2: { ...runtime().pm2, daemon: { pm2Version: '7.0.0' }, daemonStale: true } }));
     expect(pm2).toMatchObject({ state: 'attention', version: '7.0.0', latest: '7.1.0', action: { kind: 'pm2-sync', restarts: true } });

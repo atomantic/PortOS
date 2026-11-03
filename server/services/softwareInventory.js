@@ -29,7 +29,7 @@ const SOFTWARE_GROUPS = Object.freeze([
 
 
 const entry = (fields) => ({
-  installed: null, version: null, latest: null, summary: null, action: null, home: null, ...fields,
+  installed: null, version: null, latest: null, summary: null, action: null, busy: null, home: null, ...fields,
 });
 
 const unknownRow = (id, name, group, home, error) => entry({
@@ -46,6 +46,8 @@ const withTimeout = (promise, ms) => {
 
 function nodeRows(runtime) {
   const { node, nvm, pm2, releases } = runtime;
+  // One Node/pm2 job runs at a time; while it does, neither row offers an action.
+  const busy = runtime.job ? `${runtime.job.kind === 'pm2-update' ? 'pm2' : 'Node'} update running` : null;
   const offer = releases?.offers?.[0] || null;
   const security = node.securityBaseline?.compliant === false || releases?.securityUpdate === true;
   const nodeState = !releases ? 'unknown'
@@ -60,7 +62,8 @@ function nodeRows(runtime) {
       : node.inSupportedRange === false ? `Outside the supported range ${node.supportedRange}.`
         : security ? 'A security release is available for this Node line.'
           : node.pinned ? 'PortOS is pinned to this Node.' : null,
-    action: runtime.canUpdate && offer && nodeState !== 'current'
+    busy,
+    action: !busy && runtime.canUpdate && offer && nodeState !== 'current'
       ? { kind: 'node-update', label: `Update to ${offer.version}`, version: offer.version, restarts: true }
       : null,
   });
@@ -83,7 +86,8 @@ function nodeRows(runtime) {
       `daemon ${pm2.daemon?.pm2Version || 'unknown'}`,
       pm2.latest && pm2.shipped && compareHarnessVersions(pm2.shipped, pm2.latest) === -1 && `npm has ${pm2.latest}; it arrives with a PortOS release`,
     ].filter(Boolean).join(', ') + '.',
-    action: pm2Behind
+    busy,
+    action: !busy && pm2Behind
       ? { kind: 'pm2-sync', label: pm2.daemonStale ? 'Sync pm2 (restarts PortOS)' : 'Sync terminal pm2', restarts: Boolean(pm2.daemonStale) }
       : null,
   });
