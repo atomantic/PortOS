@@ -102,13 +102,18 @@ export function resolveVocalStemPath(project) {
   return safe;
 }
 
+const songChanged = () => new ServerError('The project\'s song changed while the vocal stem was being made. Make or upload it again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+
 const audioSourceKey = (project) => `${project?.trackId ?? ''}\u0000${project?.uploadedAudioFilename ?? ''}`;
 
 /**
  * Attach an uploaded vocal stem to a project after checking its timebase
  * against the current master. The temp upload is always removed.
  */
-export async function attachVocalStem(projectId, { tempPath, originalName, derived = false }) {
+export async function attachVocalStem(projectId, { tempPath, originalName, sourcePath = null }) {
+  // A stem demucs split from `sourcePath` is derived only from that file; a
+  // track whose audio was replaced mid-separation must not adopt it.
+  const derived = Boolean(sourcePath);
   try {
     const project = await requireProject(projectId);
     // Before the probe: ffmpeg would follow a playlist posing as audio.
@@ -116,6 +121,7 @@ export async function attachVocalStem(projectId, { tempPath, originalName, deriv
     // Lazy: render.js pulls the whole render pipeline.
     const { resolveMasterAudioPath } = await import('./render.js');
     const masterPath = await resolveMasterAudioPath(project);
+    if (derived && basename(sourcePath) !== basename(masterPath)) throw songChanged();
     if (!derived) {
       const [songSec, stemSec] = await Promise.all([probeVideoDuration(masterPath), probeVideoDuration(tempPath)]);
       assertVocalStemTimebase(stemSec, songSec);
@@ -124,10 +130,13 @@ export async function attachVocalStem(projectId, { tempPath, originalName, deriv
       const { filename } = await importUploadedTrack(tempPath, originalName);
       // The song may have been swapped while the files were probed; a stem
       // checked against the old master must not land on the new one.
+      // A linked track's audio can also be replaced in place, under the same trackId.
       const current = await getProject(projectId);
-      if (!current || audioSourceKey(current) !== audioSourceKey(project)) {
+      const currentMaster = current && audioSourceKey(current) === audioSourceKey(project)
+        ? await resolveMasterAudioPath(current).catch(() => null) : null;
+      if (!currentMaster || basename(currentMaster) !== basename(masterPath)) {
         await unlink(join(PATHS.music, filename)).catch(() => {});
-        throw new ServerError('The project\'s song changed while the vocal stem was uploading. Upload it again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+        throw songChanged();
       }
       return updateProject(projectId, {
         vocalStemFilename: filename,

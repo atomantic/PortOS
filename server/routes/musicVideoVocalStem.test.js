@@ -220,6 +220,23 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'attaching' }));
   }, 20000);
 
+  it('does not attach a stem split from a linked track\'s audio that was replaced during separation', async () => {
+    const tracks = await import('../services/tracks/index.js');
+    const track = await tracks.createTrack({ title: 'Example Song', audioFilename: 'song.wav' });
+    const linked = await projects.createProject({ name: 'Linked Video', trackId: track.id });
+    demucsDouble();
+    const separate = runStreamingCommand.getMockImplementation();
+    runStreamingCommand.mockImplementation(async (bin, args, onLine) => {
+      // A new take lands on the same track while demucs works on the old one.
+      if (args[1] === 'demucs') await tracks.updateTrack(track.id, { audioFilename: 'other-song.wav' });
+      return separate(bin, args, onLine);
+    });
+    const before = libraryFiles();
+    await expect(separateProjectVocals(linked.id)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
+    expect((await projects.getProject(linked.id)).vocalStemFilename).toBeUndefined();
+    expect(libraryFiles()).toEqual(before);
+  }, 20000);
+
   it('404s for a missing project and 400s for a project with no song, before any job starts', async () => {
     demucsDouble();
     const missing = await request(app).post('/api/music-video/mv-missing/vocal-stem/separate').send({});

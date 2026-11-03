@@ -246,7 +246,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
         throw new ServerError('The project\'s song changed while the vocals were separating. Run Separate vocals again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
       }
       progress({ stage: 'attaching', percent: 100 });
-      const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project), derived: true });
+      const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project), sourcePath: audioPath });
       console.log(`✅ Vocal separation ${shortId(jobId)} attached ${updated?.vocalStemFilename} to ${projectId}`);
       broadcastSse(job, { type: 'complete', project: updated });
       return { project: updated };
