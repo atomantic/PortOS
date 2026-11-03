@@ -20,6 +20,7 @@ const EMPTY = {
   playbackReason: '',
   playbackResync: 0,
   playbackResyncReason: '',
+  unsupportedEffects: [],
 };
 
 const PRESENTATION_MAX_PENDING = 2;
@@ -401,6 +402,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
         height: Number(payload.height) || 0,
         audioStatus: payload.audio || 'none',
         playback: capable,
+        unsupportedEffects: Array.isArray(payload.unsupportedEffects) ? payload.unsupportedEffects : [],
       }));
       // A reconnect opens at time zero; restore the current scrub/playhead
       // position using the new session, including seeks made while offline.

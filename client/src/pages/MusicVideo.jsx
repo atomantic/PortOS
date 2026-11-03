@@ -1819,6 +1819,7 @@ function ProjectWorkspace({
                 expanded={dockExpanded}
                 onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
                 onEditShot={editShot}
+                onProject={replaceProject}
               />,
             )}
           >

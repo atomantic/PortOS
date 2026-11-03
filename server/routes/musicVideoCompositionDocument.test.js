@@ -29,6 +29,7 @@ const { createSession } = await import('../services/auth.js');
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const { unsupportedDocumentEffects } = await import('../services/musicVideo/compositionDocument.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
 
 const appFor = (address = '127.0.0.1') => {
@@ -237,10 +238,13 @@ describe('music-video composition documents', () => {
     const preview = `/api/music-video/${project.id}/composition/document/preview`;
     const unsupported = await request(app).get(preview);
     expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
-    expect(unsupported.body.error).toMatch(/Update the layered engine/);
+    expect(unsupported.body.error).toMatch(/in-shot glitches.*Update the layered engine/);
+    // The live preview plays anyway and names the shot it draws without its effect.
+    expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual([{ sceneId: 'a', effects: ['glitch'] }]);
     const upgraded = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
     expect(upgraded.body.changed).toBe(true);
     expect((await request(app).get(preview)).status).toBe(200);
+    expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual([]);
   });
 
   it('only blocks a document for effect frames inside the song', async () => {
