@@ -18,6 +18,7 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 // Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
 // passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
 const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+const supersededUpdates = new Set();
 
 /**
  * Launch the PortOS update script (git pull to latest).
@@ -54,16 +55,19 @@ const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
  */
 export const launchUpdate = (tag, emit, options = {}) => withUpdateControlLock(() => launchUpdateLocked(tag, emit, options));
 
-async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
+async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
+  automatic = false, acknowledgeInterruption = false,
   admission = maintenance, supervisorAbsent = processAbsent, monitorIntervalMs = 5000,
   supervisorSnapshot = async () => (await import('./maintenanceProcessInventory.js')).snapshotMaintenanceProcesses() } = {}) {
+  let ticket = null;
+  const emit = (...args) => { if (!ticket || !supersededUpdates.has(ticket)) report(...args); };
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
   const pinnedNode = resolvePinnedNodeInterpreter();
   const cmd = peerExecution ? (isWindows ? 'powershell' : 'bash') : (pinnedNode || process.execPath);
   const args = peerExecution
     ? (isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH])
-    : [join(PATHS.root, 'scripts', 'deferred-update.mjs')];
+    : [join(PATHS.root, 'scripts', 'deferred-update.mjs'), ...(automatic ? ['--automatic'] : acknowledgeInterruption ? ['--interrupt'] : [])];
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
@@ -85,6 +89,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
   if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
   else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
   delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
+  delete childEnv.PORTOS_UPDATE_INTERRUPT;
   delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
   delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
@@ -129,7 +134,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
   const previous = admission.deferredUpdate.operation();
   const waiting = previous?.phase === 'waiting' && !previous.childPid && !previous.holdId;
   const alreadyObserved = previous && isUpdateControlTracked(join(legacyControlDir, previous.id));
-  if ((previousRunning && !waiting) || alreadyObserved) {
+  if ((previousRunning && !waiting) || (alreadyObserved && (!waiting || automatic))) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
       version: targetVersion,
@@ -143,7 +148,6 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
 
   if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
-  let ticket = null;
   if (!peerExecution) await reconcileReusedLaunch(admission, supervisorSnapshot);
   try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true }); }
   catch (error) {
@@ -152,6 +156,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
     emit('starting', 'error', errorMessage);
     return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
   }
+  if (previous && waiting && alreadyObserved && !automatic) supersededUpdates.add(previous.id);
   if (ticket) childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID = ticket;
   const controlDir = ticket ? join(legacyControlDir, ticket) : legacyControlDir;
   const untrackControl = trackUpdateControl(controlDir);
@@ -209,7 +214,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
       const completion = watchSupervisor({ admission, ticket, child, completion: new Promise(() => {}), emit, targetVersion, observedAt, expectedExecutable: cmd,
         absent: supervisorAbsent, snapshot: supervisorSnapshot, intervalMs: monitorIntervalMs,
         beginFinalization: () => true, untrackControl });
-      return { started: true, completion, supervisorPid: outcome.ownerPid };
+      return { started: true, completion: completion.finally(() => supersededUpdates.delete(ticket)), supervisorPid: outcome.ownerPid };
     }
   }
 
@@ -224,6 +229,11 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
 
     const settleClaimedTicket = async () => {
       if (!ticket) return false;
+      if (supersededUpdates.has(ticket)) {
+        finalizing = true;
+        resolve({ success: false, superseded: true, interrupted: true });
+        return true;
+      }
       let outcome;
       try { outcome = admission.deferredUpdate.cancelLaunch(ticket); }
       catch (error) {
@@ -374,7 +384,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
       ignoreLateEvents = true;
       return true;
     }, untrackControl }) : completion;
-  return { started: true, completion: observed, supervisorPid: child.pid };
+  return { started: true, completion: observed.finally(() => supersededUpdates.delete(ticket)), supervisorPid: child.pid };
 }
 
 function watchSupervisor({ admission, ticket, child, completion, emit, targetVersion, observedAt, expectedExecutable, absent, snapshot, intervalMs, beginFinalization, untrackControl }) {
@@ -385,6 +395,14 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
     const poll = async () => {
       if (done) return;
       try {
+        if (supersededUpdates.has(ticket)) {
+          if (!beginFinalization()) return;
+          try { await child.stopTailing?.(); }
+          catch (error) { console.warn(`⚠️ Could not stop superseded update log tailing: ${error.message}`); }
+          untrackControl();
+          finish({ success: false, superseded: true, interrupted: true });
+          return;
+        }
         const pending = admission.deferredUpdate.launch();
         let gone = absent(child.pid);
         if (!gone) {

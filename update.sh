@@ -7,11 +7,11 @@ trap '' PIPE
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
-# The supervisor acquires the shared hold only after existing workflows settle.
+# The supervisor serializes installation; acknowledged manual updates stop work before source changes.
 if [ -n "${PORTOS_PEER_UPDATE_OPERATION_ID:-}" ]; then
   node scripts/deferred-update.mjs --peer-enter "$PORTOS_PEER_UPDATE_OPERATION_ID"
 elif [ -z "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
-  exec node scripts/deferred-update.mjs
+  exec node scripts/deferred-update.mjs "$@"
 else
   node scripts/deferred-update.mjs --enter "$PORTOS_DEFERRED_UPDATE_ID" "$$"
 fi
@@ -135,6 +135,111 @@ repair_stale_submodules() {
   fi
   run git submodule update --init --recursive
 }
+
+# Headless-install guard. From the `pm2-stop` step below until the closing
+# `pm2 start` succeeds, PortOS's PM2 entries are DELETED — the install has no
+# server. Every step in between (npm install, setup-db, migrations, the client
+# build) can fail, and `set -e` would then exit with the apps still deleted and
+# nothing left running to notice: the "update deleted portos-server and it never
+# came back" failure. #5976 made this script SURVIVE pm2's tree-kill; it did not
+# cover the script exiting on its own. So trap the exit and put the apps back.
+#
+# Starting the pulled tree after a failed install can crash-loop, but a
+# crash-looping app the user can see beats a silently headless machine — and the
+# recovery only ever runs on a path that was already leaving PortOS down.
+PM2_APPS_DOWN=0
+PRODUCTION_PM2_APPS='portos-server,portos-cos,portos-autofixer,portos-autofixer-ui,portos-browser'
+
+# Which pm2 the recovery can actually reach. It CANNOT assume this checkout's
+# own copy: `safe_install .` wipes root node_modules whenever the pulled update
+# touched root package.json — which every release does, since the version bump
+# lives there — and pm2 is a ROOT dependency. So on the most likely failure of
+# all (both npm install attempts fail: offline, registry 5xx, ENOSPC) the
+# checkout's pm2 is already gone by the time the trap runs, and a hardcoded
+# ./node_modules/pm2/bin/pm2 would make the recovery a no-op exactly when it is
+# needed most. Prefer the local copy, fall back to a pm2 on PATH, then to npx at
+# the version package.json pins. Any pm2 CLI can drive the already-running
+# daemon, so a version difference is fine for a recovery.
+PM2_CMD=()
+resolve_pm2_cmd() {
+  if [ -f "$ROOT_DIR/node_modules/pm2/bin/pm2" ]; then
+    PM2_CMD=(node "$ROOT_DIR/node_modules/pm2/bin/pm2")
+  elif command -v pm2 >/dev/null 2>&1; then
+    PM2_CMD=(pm2)
+  else
+    local pinned
+    pinned=$(node -e 'const d=require("./package.json").dependencies||{}; process.stdout.write(typeof d.pm2 === "string" ? d.pm2 : "")' 2>/dev/null || echo "")
+    if [ -n "$pinned" ]; then
+      PM2_CMD=(npx --yes "pm2@$pinned")
+    else
+      PM2_CMD=(npx --yes pm2)
+    fi
+  fi
+}
+
+restore_pm2_apps_on_exit() {
+  local status=$?
+  # Disarm every trap, not just EXIT: a second signal (Ctrl-C twice, an
+  # escalating killer) arriving while the recovery's own `pm2 start` and health
+  # probe are running would otherwise abort it mid-flight and leave the install
+  # headless — exactly the state this function exists to prevent.
+  trap - EXIT TERM INT HUP
+  if [ "$PM2_APPS_DOWN" = "1" ]; then
+    PM2_APPS_DOWN=0
+    resolve_pm2_cmd
+    log "⚠️  Update is exiting (status $status) with PortOS's apps deleted — restarting them so the install isn't left headless."
+    step "restart" "running" "Update failed — restarting PortOS so it isn't left down..."
+    # `pm2 start` exiting 0 is not proof the server came back (same reason the
+    # verify step below exists) — and this path starts a HALF-INSTALLED tree, so
+    # a start that exits 0 and then crash-loops is the likely case here, not the
+    # edge case. Never claim a recovery the health probe doesn't confirm.
+    if run "${PM2_CMD[@]}" start ecosystem.config.cjs --only "$PRODUCTION_PM2_APPS" && run node scripts/verify-server-health.js; then
+      run "${PM2_CMD[@]}" save || true
+      step "restart" "warning" "Update failed, but PortOS was restarted"
+      log "✅ PortOS is answering /api/system/health again after the failed update."
+    else
+      step "restart" "error" "Update failed and PortOS is DOWN"
+      log "❌ PortOS is not answering /api/system/health."
+      # Name the pm2 that actually exists — the checkout's copy may be the thing
+      # a failed install just deleted, so printing it would be a dead-end hint.
+      log "    Recover with: ${PM2_CMD[*]} start ecosystem.config.cjs --only $PRODUCTION_PM2_APPS"
+    fi
+    # Recovery must never turn a failed update into a reported success.
+    if [ "$status" -eq 0 ]; then status=1; fi
+  fi
+  exit "$status"
+}
+trap restore_pm2_apps_on_exit EXIT
+# Turn a fatal signal into an ordinary exit so the EXIT trap above still runs
+# (bash does not run an EXIT trap for an untrapped fatal signal).
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+stop_portos_apps() {
+  if [ "$PM2_APPS_DOWN" = "1" ]; then return; fi
+# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
+# tears down the daemon and stops EVERY other project's apps on this machine.
+# The daemon itself is left alone here; whether it also needs an in-place reload
+# is decided in the restart step below, against the freshly installed pm2.
+step "pm2-stop" "running" "Stopping PortOS apps..."
+# Arm the latch BEFORE the delete, not after: bash runs a pending signal trap
+# only between statements, so a TERM arriving while `pm2 delete` is still
+# running would otherwise reach the EXIT trap with the latch still 0 and skip
+# the recovery — the exact window the signal traps exist for. Recovering apps
+# that were never deleted is a harmless no-op restart on an already-failing path.
+PM2_APPS_DOWN=1
+run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
+run node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || true
+step "pm2-stop" "done" "Apps stopped"
+log ""
+
+}
+
+if [ "${PORTOS_UPDATE_INTERRUPT:-}" = "1" ]; then
+  stop_portos_apps
+  node scripts/deferred-update.mjs --stopped "$PORTOS_DEFERRED_UPDATE_ID"
+fi
 
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
@@ -285,101 +390,7 @@ fi
 step "runtime-preflight" "done" "Node.js runtime supported"
 log ""
 
-# Headless-install guard. From the `pm2-stop` step below until the closing
-# `pm2 start` succeeds, PortOS's PM2 entries are DELETED — the install has no
-# server. Every step in between (npm install, setup-db, migrations, the client
-# build) can fail, and `set -e` would then exit with the apps still deleted and
-# nothing left running to notice: the "update deleted portos-server and it never
-# came back" failure. #5976 made this script SURVIVE pm2's tree-kill; it did not
-# cover the script exiting on its own. So trap the exit and put the apps back.
-#
-# Starting the pulled tree after a failed install can crash-loop, but a
-# crash-looping app the user can see beats a silently headless machine — and the
-# recovery only ever runs on a path that was already leaving PortOS down.
-PM2_APPS_DOWN=0
-PRODUCTION_PM2_APPS='portos-server,portos-cos,portos-autofixer,portos-autofixer-ui,portos-browser'
-
-# Which pm2 the recovery can actually reach. It CANNOT assume this checkout's
-# own copy: `safe_install .` wipes root node_modules whenever the pulled update
-# touched root package.json — which every release does, since the version bump
-# lives there — and pm2 is a ROOT dependency. So on the most likely failure of
-# all (both npm install attempts fail: offline, registry 5xx, ENOSPC) the
-# checkout's pm2 is already gone by the time the trap runs, and a hardcoded
-# ./node_modules/pm2/bin/pm2 would make the recovery a no-op exactly when it is
-# needed most. Prefer the local copy, fall back to a pm2 on PATH, then to npx at
-# the version package.json pins. Any pm2 CLI can drive the already-running
-# daemon, so a version difference is fine for a recovery.
-PM2_CMD=()
-resolve_pm2_cmd() {
-  if [ -f "$ROOT_DIR/node_modules/pm2/bin/pm2" ]; then
-    PM2_CMD=(node "$ROOT_DIR/node_modules/pm2/bin/pm2")
-  elif command -v pm2 >/dev/null 2>&1; then
-    PM2_CMD=(pm2)
-  else
-    local pinned
-    pinned=$(node -e 'const d=require("./package.json").dependencies||{}; process.stdout.write(typeof d.pm2 === "string" ? d.pm2 : "")' 2>/dev/null || echo "")
-    if [ -n "$pinned" ]; then
-      PM2_CMD=(npx --yes "pm2@$pinned")
-    else
-      PM2_CMD=(npx --yes pm2)
-    fi
-  fi
-}
-
-restore_pm2_apps_on_exit() {
-  local status=$?
-  # Disarm every trap, not just EXIT: a second signal (Ctrl-C twice, an
-  # escalating killer) arriving while the recovery's own `pm2 start` and health
-  # probe are running would otherwise abort it mid-flight and leave the install
-  # headless — exactly the state this function exists to prevent.
-  trap - EXIT TERM INT HUP
-  if [ "$PM2_APPS_DOWN" = "1" ]; then
-    PM2_APPS_DOWN=0
-    resolve_pm2_cmd
-    log "⚠️  Update is exiting (status $status) with PortOS's apps deleted — restarting them so the install isn't left headless."
-    step "restart" "running" "Update failed — restarting PortOS so it isn't left down..."
-    # `pm2 start` exiting 0 is not proof the server came back (same reason the
-    # verify step below exists) — and this path starts a HALF-INSTALLED tree, so
-    # a start that exits 0 and then crash-loops is the likely case here, not the
-    # edge case. Never claim a recovery the health probe doesn't confirm.
-    if run "${PM2_CMD[@]}" start ecosystem.config.cjs --only "$PRODUCTION_PM2_APPS" && run node scripts/verify-server-health.js; then
-      run "${PM2_CMD[@]}" save || true
-      step "restart" "warning" "Update failed, but PortOS was restarted"
-      log "✅ PortOS is answering /api/system/health again after the failed update."
-    else
-      step "restart" "error" "Update failed and PortOS is DOWN"
-      log "❌ PortOS is not answering /api/system/health."
-      # Name the pm2 that actually exists — the checkout's copy may be the thing
-      # a failed install just deleted, so printing it would be a dead-end hint.
-      log "    Recover with: ${PM2_CMD[*]} start ecosystem.config.cjs --only $PRODUCTION_PM2_APPS"
-    fi
-    # Recovery must never turn a failed update into a reported success.
-    if [ "$status" -eq 0 ]; then status=1; fi
-  fi
-  exit "$status"
-}
-trap restore_pm2_apps_on_exit EXIT
-# Turn a fatal signal into an ordinary exit so the EXIT trap above still runs
-# (bash does not run an EXIT trap for an untrapped fatal signal).
-trap 'exit 143' TERM
-trap 'exit 130' INT
-trap 'exit 129' HUP
-
-# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
-# tears down the daemon and stops EVERY other project's apps on this machine.
-# The daemon itself is left alone here; whether it also needs an in-place reload
-# is decided in the restart step below, against the freshly installed pm2.
-step "pm2-stop" "running" "Stopping PortOS apps..."
-# Arm the latch BEFORE the delete, not after: bash runs a pending signal trap
-# only between statements, so a TERM arriving while `pm2 delete` is still
-# running would otherwise reach the EXIT trap with the latch still 0 and skip
-# the recovery — the exact window the signal traps exist for. Recovering apps
-# that were never deleted is a harmless no-op restart on an already-failing path.
-PM2_APPS_DOWN=1
-run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
-run node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || true
-step "pm2-stop" "done" "Apps stopped"
-log ""
+stop_portos_apps
 
 # Update dependencies with retry logic
 step "npm-install" "running" "Installing all dependencies..."

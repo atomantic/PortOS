@@ -6,7 +6,7 @@ Set-Location $RootDir
 if ($env:PORTOS_PEER_UPDATE_OPERATION_ID) {
     & node scripts/deferred-update.mjs --peer-enter $env:PORTOS_PEER_UPDATE_OPERATION_ID
 } elseif (-not $env:PORTOS_DEFERRED_UPDATE_ID) {
-    & node scripts/deferred-update.mjs
+    & node scripts/deferred-update.mjs @args
     exit $LASTEXITCODE
 } else {
     & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
@@ -282,6 +282,31 @@ function Repair-StaleSubmodules {
     return $LASTEXITCODE -eq 0
 }
 
+function Stop-PortosApps {
+    if ($script:Pm2AppsDown) { return }
+# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
+# tears down the daemon and stops EVERY other project's apps on this machine.
+# The daemon itself is left alone here; whether it also needs an in-place reload
+# is decided in the restart step below, against the freshly installed pm2.
+Step "pm2-stop" "running" "Stopping PortOS apps..."
+# Arm the latch BEFORE the delete (see update.sh) so an interruption during the
+# delete itself still reaches the recovery.
+$script:Pm2AppsDown = $true
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
+$global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
+$global:LASTEXITCODE = 0
+Step "pm2-stop" "done" "Apps stopped"
+Write-SafeHost ""
+
+}
+
+if ($env:PORTOS_UPDATE_INTERRUPT -eq "1") {
+    Stop-PortosApps
+    & node scripts/deferred-update.mjs --stopped $env:PORTOS_DEFERRED_UPDATE_ID
+    if ($LASTEXITCODE -ne 0) { Stop-UpdateScript 1 }
+}
+
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
@@ -471,20 +496,7 @@ if (Test-Path "scripts/checkNodeVersion.js") {
 Step "runtime-preflight" "done" "Node.js runtime supported"
 Write-SafeHost ""
 
-# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
-# tears down the daemon and stops EVERY other project's apps on this machine.
-# The daemon itself is left alone here; whether it also needs an in-place reload
-# is decided in the restart step below, against the freshly installed pm2.
-Step "pm2-stop" "running" "Stopping PortOS apps..."
-# Arm the latch BEFORE the delete (see update.sh) so an interruption during the
-# delete itself still reaches the recovery.
-$script:Pm2AppsDown = $true
-Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
-$global:LASTEXITCODE = 0
-Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
-$global:LASTEXITCODE = 0
-Step "pm2-stop" "done" "Apps stopped"
-Write-SafeHost ""
+Stop-PortosApps
 
 # Update dependencies with retry logic
 Step "npm-install" "running" "Installing all dependencies..."

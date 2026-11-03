@@ -6,8 +6,35 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { recordedMediaChildIds } from '../../server/lib/mediaRecoveryActivity.js';
+import { PORTS } from '../../server/lib/ports.js';
+import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 
 const runFile = promisify(execFile);
+
+/** Attribute a still-bound service to its PID, without guessing from a cwd. */
+export async function portosServiceListeners(root, { platform = process.platform, env = process.env, run = runFile } = {}) {
+  const dotenv = parseEnvFile(join(root, '.env'));
+  const ports = new Set([Number(env.PORT || dotenv.PORT || PORTS.API), resolveHttpMirrorPort({ env, dotenv }), PORTS.CDP_HEALTH, PORTS.AUTOFIXER, PORTS.AUTOFIXER_UI]);
+  const runner = new URL(env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL || `http://127.0.0.1:${PORTS.COS}`);
+  if (['127.0.0.1', 'localhost', '[::1]'].includes(runner.hostname)) ports.add(Number(runner.port || (runner.protocol === 'https:' ? 443 : 80)));
+  if (platform === 'win32') {
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Get-NetTCPConnection -State Listen -ErrorAction Stop | Select-Object LocalPort,OwningProcess | ConvertTo-Json -Compress'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+    const value = stdout.trim() ? JSON.parse(stdout.replace(/^\uFEFF/, '')) : [];
+    return (Array.isArray(value) ? value : [value]).filter(row => ports.has(Number(row.LocalPort)))
+      .map(row => ({ pid: Number(row.OwningProcess), port: Number(row.LocalPort) }));
+  }
+  const { stdout } = await run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fpn'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 });
+  const listeners = []; let pid;
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1));
+    else if (line.startsWith('n')) {
+      const port = Number(/:(\d+)$/.exec(line)?.[1]);
+      if (Number.isSafeInteger(pid) && ports.has(port)) listeners.push({ pid, port });
+    }
+  }
+  return listeners;
+}
 
 export const observedDatabaseRestoreProcess = (rows, selfPid = process.pid) => rows.some(row =>
   row.pid !== selfPid && !String(row.state ?? '').startsWith('Z')

@@ -32,6 +32,7 @@ const syncForkSchema = z.object({
 });
 
 const executeSchema = z.object({
+  acknowledgeInterruption: z.boolean().optional(),
   acknowledgeFork: z.boolean().optional(),
   acknowledgePersistentMindImageBackup: z.boolean().optional(),
   // Reconcile a half-updated install (issue #1779): run update.sh to pull +
@@ -182,7 +183,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork, acknowledgePersistentMindImageBackup, reconcile } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, acknowledgePersistentMindImageBackup, acknowledgeInterruption, reconcile } = validateRequest(executeSchema, req.body || {});
 
   // Every refusal, the update lock, and the fire-and-forget launch live in
   // `portosSelfUpdate` — shared with App Management's Git tab so both entry
@@ -192,6 +193,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
     io: req.app.get('io'),
     acknowledgeFork,
     acknowledgePersistentMindImageBackup,
+    acknowledgeInterruption,
     mode: reconcile ? 'reconcile' : 'release',
   });
 

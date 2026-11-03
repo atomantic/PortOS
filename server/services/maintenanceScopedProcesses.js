@@ -15,6 +15,15 @@ const CLI = /(?:^|[\s/\\'"=])(?:claude|codex|gemini|grok|agy|antigravity|opencod
 const APP_CHILD = /(?:^|[\s/\\'"=])(?:git|npm|npx|pnpm|yarn|bun)(?:[\s./\\'"-]|$)|\b(?:update\.(?:sh|ps1)|deploy\.sh)\b/i;
 const OWN_SERVICES = /[\\/]server[\\/](?:start\.js|cos-runner[\\/]index\.js)|[\\/]browser[\\/]server\.js|[\\/]autofixer[\\/](?:server|ui)\.js/i;
 const SAFE_ID = /^[a-z0-9][a-z0-9-]{0,200}$/i;
+const executable = value => basename(String(value ?? '').replaceAll('\\', '/')).toLowerCase();
+function codexService(command) {
+  let args = parseCommandArgs(String(command ?? '').trim());
+  if (/^cmd(?:\.exe)?$/.test(executable(args[0])) && args[1]?.toLowerCase() === '/c') args = args.slice(2);
+  if (/^node(?:js|\.exe)?$/.test(executable(args[0])) && executable(args[1]) === 'codex.js') args = args.slice(1);
+  if (!/^codex(?:\.exe|\.cmd|\.js)?$/.test(executable(args[0])) || args[1] !== 'app-server') return null;
+  if (args.includes('--managed-daemon') || (args.length === 4 && args[2] === 'daemon' && args[3] === 'pid-update-loop')) return 'shared';
+  return args.length === 2 ? 'stdio' : null;
+}
 
 async function readRun(data, id) {
   if (!SAFE_ID.test(id)) return null;
@@ -85,8 +94,20 @@ const inside = (cwd, workspace) => {
 
 export async function assertNoScopedLegacyProcesses(operations, processes, { data, codeRoot, loadApp, loadAgent = async () => null,
   loadProvider = async () => null, loadRun = id => readRun(data, id),
-  loadJob = id => readJob(data, id), probeCwds = cwdByPid, selfPid = process.pid, updatePid = null, platform = process.platform } = {}) {
+  loadJob = id => readJob(data, id), probeCwds = cwdByPid, selfPid = process.pid, updatePid = null,
+  idleProviderServices = false, platform = process.platform } = {}) {
   const limitations = [];
+  const byPid = new Map(processes.map(proc => [proc.pid, proc]));
+  const ownedStdio = proc => {
+    if (codexService(proc.command) !== 'stdio' || !codeRoot) return false;
+    let parent = byPid.get(proc.ppid);
+    if (parent && codexService(parent.command) === 'stdio') parent = byPid.get(parent.ppid);
+    const [binary, script] = parseCommandArgs(String(parent?.command ?? '').trim());
+    return /^node(?:js|\.exe)?$/.test(executable(binary)) && isAbsolute(script ?? '')
+      && ['start.js', 'index.js'].some(name => resolve(script) === resolve(codeRoot, 'server', name));
+  };
+  if (!idleProviderServices && processes.some(ownedStdio))
+    throw Object.assign(new Error('The older runtime cannot report all provider calls. Use an acknowledged manual update to restart it.'), { code: 'MAINTENANCE_STALE' });
   const providerPattern = async id => {
     const provider = id ? await loadProvider(id).catch(() => null) : null;
     const custom = providerCommandPattern(provider?.command);
@@ -142,7 +163,6 @@ export async function assertNoScopedLegacyProcesses(operations, processes, { dat
   const relevant = (proc, scope) => scope.pattern.test(proc.command ?? '')
     && (!Number.isFinite(proc.startedAt) || !Number.isFinite(Date.parse(scope.op.startedAt))
       || proc.startedAt >= Date.parse(scope.op.startedAt) - 2000);
-  const byPid = new Map(processes.map(proc => [proc.pid, proc]));
   const descendedFrom = (proc, op) => {
     const seen = new Set();
     let parent = proc.ppid;
@@ -177,10 +197,13 @@ export async function assertNoScopedLegacyProcesses(operations, processes, { dat
       current = parent;
     }
   };
-  if (candidates.some(proc => scopes.some(scope => relevant(proc, scope)
-    && (descendedFrom(proc, scope.op) || (cwd.has(proc.pid) && (scope.root
-      ? inside(cwd.get(proc.pid), scope.root) : hasHashedAncestor(cwd.get(proc.pid), scope.rootHash)))
-      || (scope.root && hasRoot(String(proc.command ?? ''), scope.root))))))
+  if (candidates.some(proc => scopes.some(scope => {
+    if (!relevant(proc, scope)) return false;
+    if (descendedFrom(proc, scope.op)) return true;
+    if (ownedStdio(proc) || codexService(proc.command) === 'shared') return false;
+    if (cwd.has(proc.pid) && (scope.root ? inside(cwd.get(proc.pid), scope.root) : hasHashedAncestor(cwd.get(proc.pid), scope.rootHash))) return true;
+    return scope.root && hasRoot(String(proc.command ?? ''), scope.root);
+  })))
     throw Object.assign(new Error('A process associated with an inspected workspace is still running.'), { code: 'MAINTENANCE_STALE' });
   return [...new Set(limitations)];
 }

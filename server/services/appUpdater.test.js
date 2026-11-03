@@ -202,12 +202,14 @@ describe('managed app updates', () => {
     // happened. No `io`: App Management renders the run from `onStep`, and
     // mirroring the same frames onto portos:update:* would double the fan-out.
     expect(mock.startPortosSelfUpdate).toHaveBeenCalledWith({
+      automatic: false, acknowledgeInterruption: false,
       acknowledgeFork: true,
       acknowledgePersistentMindImageBackup: false,
       preflightAlreadyRun: true,
       mode: 'refresh',
       onStep: emit,
     });
+    expect(mock.updateDefaultBranch).not.toHaveBeenCalled();
     expect(mock.spawn).not.toHaveBeenCalled();
     // Never "done": the script is still running, and claiming completion is
     // what let the Git tab clear its progress row mid-update.

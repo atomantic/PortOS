@@ -1,3 +1,7 @@
+vi.mock('./activeProcessing.js', () => ({ getSystemActivity: vi.fn(async () => ({
+  jobs: [], agents: { trusted: true, active: 0, queued: 0 }, mind: { trusted: true, thinking: false, queued: 0 },
+  llm: { trusted: true, active: 0 }, extras: { imageTo3d: [] }, appOperations: [], renders: [], backup: { inProgress: false },
+})) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The release and reconcile modes are already driven end-to-end through

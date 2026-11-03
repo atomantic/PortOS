@@ -66,6 +66,7 @@ export async function checkActivity(update, operations) {
   const segments = recordedMediaChildIds(listJobs()).map(resource => ({ kind: 'media', resource }));
   await assertNoObservedReservationProcesses([...operations, ...segments], PATHS.installRoot, async () => processes);
   const limitations = await assertNoScopedLegacyProcesses(operations, processes, { data: PATHS.data, codeRoot: PATHS.root,
+    idleProviderServices: activity.llm.directCallsTracked === true,
     updatePid: update.ownerPid,
     loadAgent: async id => agents[agentOps.findIndex(op => op.resource === id)]
       ?? owners[runnerOps.findIndex(op => op.resource === id)] ?? null,

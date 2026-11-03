@@ -4,6 +4,40 @@ How PortOS notices a new release and updates itself. PortOS is distributed softw
 
 Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
 
+## Manual and automatic updates
+
+Manual Update and Reconcile actions stay available while work is running. When
+work is active or cannot be verified, PortOS explains that restarting PortOS and
+Chrome can interrupt agents, renders and provider calls. **Update now and interrupt
+active work** explicitly accepts that risk. Saved state and queued jobs remain;
+interrupted work is never reported as successful. Fork and image-backup
+acknowledgments remain separate and are preserved when retrying.
+
+For terminal updates, run `bash update.sh` or `./update.ps1`. If work or stale
+reservations prevent an idle update, an interactive terminal offers a warning;
+a noninteractive invocation exits with an actionable message. Use
+`bash update.sh --interrupt`, `./update.ps1 --interrupt`, or
+`npm run update -- --interrupt` to explicitly continue. This also recovers an
+older/offline runtime whose activity API cannot report every provider call.
+
+Automatic callers use `--automatic`. They wait for actual running work, while
+queued durable jobs remain queued across restart. The scheduler passes this
+policy explicitly; an automatic waiting owner does not prevent an acknowledged
+manual continuation. Missing activity instrumentation never counts as proof of
+idleness.
+
+Acknowledged continuation closes intake, gracefully stops PortOS before any git
+or dependency changes, and records absent/reused-owner reservations as
+`interrupted` with unknown output completeness. Positively observed live work
+retains its ownership evidence. Boot uses normal interrupted-media recovery:
+owned orphan videos are reaped and failed, remote jobs reconcile, and surviving
+trainers reattach. Unrelated desktop daemons are untouched.
+
+A live installer, database restore/cutover, or dirty/divergent source still
+prevents conflicting changes. A surviving directly launched PortOS runtime is
+named with its PID and must be stopped before retrying. Update failures after
+shutdown use the existing service-restart recovery and still report failure.
+
 ## Release polling always targets upstream
 
 The release-notification poll **always queries the upstream `atomantic/PortOS`** repo, so a user running from a fork still sees new upstream versions. The constants come from `server/lib/gitRemote.js` (`UPSTREAM_OWNER`, `UPSTREAM_REPO`, `UPSTREAM_FULL_NAME`) — do not re-hardcode the upstream slug anywhere else.

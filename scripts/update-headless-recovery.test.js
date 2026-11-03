@@ -447,10 +447,13 @@ describe('update.ps1 headless-install guard', () => {
     expect(returns.every(line => /^return\s+@\(/.test(line))).toBe(true);
   });
 
-  it('runs the target Node gate before the PM2 delete and any install', () => {
+  it('runs the target Node gate before the ordinary PM2 stop call and any install', () => {
     const gate = lineOf('if (Test-Path "scripts/checkNodeVersion.js")');
     expect(gate).toBeGreaterThan(-1);
-    expect(gate).toBeLessThan(lineOf('pm2 delete ecosystem.config.cjs --silent'));
+    const ordinaryStop = ps1.findIndex((line, index) => index > gate && line.trim() === 'Stop-PortosApps');
+    expect(ordinaryStop).toBeGreaterThan(gate);
+    const earlyStop = ps1.findIndex(line => line.trim() === 'Stop-PortosApps');
+    expect(ps1.slice(earlyStop - 1, earlyStop + 1).join('\n')).toContain('PORTOS_UPDATE_INTERRUPT');
     expect(gate).toBeLessThan(lineOf('Safe-Install -Dir "."'));
     expect(ps1.slice(gate, gate + 40).join('\n')).toContain('Stop-UpdateScript 1');
   });

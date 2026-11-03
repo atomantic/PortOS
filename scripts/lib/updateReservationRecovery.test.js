@@ -28,7 +28,7 @@ const listen = async handler => {
   return `http://127.0.0.1:${server.address().port}`;
 };
 const idle = () => ({ jobs: [], agents: { trusted: true, active: 0, queued: 0 },
-  mind: { trusted: true, thinking: false }, llm: { trusted: true, active: 0 },
+  mind: { trusted: true, thinking: false }, llm: { trusted: true, active: 0, directCallsTracked: true },
   extras: { imageTo3d: [] }, appOperations: [], renders: [], update: { inProgress: false }, backup: { inProgress: false } });
 
 async function fixture({ stale = true, authenticated = false } = {}) {

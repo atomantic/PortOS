@@ -34,6 +34,38 @@ describe('active processing snapshot', () => {
     deps.backupRunning.mockReturnValue(false);
   });
 
+  it('counts a direct Codex subscription call outside the toolkit and rejects a new call behind the update fence', async () => {
+    deps.jobs.mockReturnValue([]); deps.models.mockResolvedValue([]); deps.tasks.mockResolvedValue([]); deps.agents.mockResolvedValue([]);
+    const codex = await import('./codexAppServer.js');
+    let complete;
+    const turn = vi.spyOn(codex, 'runCodexTextTurn').mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const { callProviderAISimple } = await import('./aiProvider.js');
+    const { maintenance } = await import('../lib/maintenanceAdmission.js');
+    const provider = { id: 'codex', type: 'cli', command: 'codex', textTransport: 'codex-app-server',
+      textTransportEnabled: true, textTransportReadRiskAcknowledged: true };
+    const call = callProviderAISimple(provider, 'example', 'Example text');
+    let hold;
+    try {
+      await vi.waitFor(() => expect(turn).toHaveBeenCalledOnce());
+      const { getSystemActivity } = await import('./activeProcessing.js');
+      const snapshot = await getSystemActivity();
+      expect(await deps.runCount.mock.results.at(-1).value).toBe(0);
+      expect(snapshot.llm).toMatchObject({ trusted: true, active: 1, directCallsTracked: true });
+      expect(snapshot.activity.idle).toBe(false);
+      expect(maintenance.operations()).toContainEqual(expect.objectContaining({ kind: 'api-run', pid: process.pid }));
+      ({ hold } = maintenance.begin({ owner: 'manual-update', reason: 'Update' }));
+      await expect(callProviderAISimple(provider, 'example', 'New text')).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(turn).toHaveBeenCalledOnce();
+      complete({ text: 'Done', usage: {} });
+      await call;
+      expect((await getSystemActivity()).llm.active).toBe(0);
+    } finally {
+      complete?.({ text: 'Done', usage: {} }); await call;
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      turn.mockRestore();
+    }
+  });
+
   it('reports sanitized audio work, GPU utilization, and non-media extras', async () => {
     deps.capability.mockResolvedValue({ status: 'available', gpus: [{ name: 'Example GPU', vramMib: 24000 }] });
     deps.utilization.mockResolvedValue({ status: 'available', gpus: [{ name: 'Example GPU', utilizationPercent: 44, memoryUsedMib: 1000, memoryTotalMib: 24000 }] });

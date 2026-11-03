@@ -23,6 +23,8 @@ import { resolveBenchWaitMs, resolveProviderBench } from '../lib/providerCooldow
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { withCreativeLatitude } from '../lib/creativeLatitude.js';
+import { randomUUID } from 'node:crypto';
+import { beginDirectProviderCall } from '../lib/providerCallActivity.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 /**
@@ -486,6 +488,14 @@ const reportedResetsAt = (readiness) => {
  * so the beam's thickness can track tokens/sec.
  */
 export async function callProviderAISimple(provider, model, prompt, options = {}) {
+  const end = beginDirectProviderCall();
+  try {
+    const { maintenance } = await import('../lib/maintenanceAdmission.js');
+    return await maintenance.run('api-run', randomUUID(), () => callProviderAISimpleImpl(provider, model, prompt, options), { continuation: true });
+  } finally { end(); }
+}
+
+async function callProviderAISimpleImpl(provider, model, prompt, options = {}) {
   const {
     temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath, background, creative,
     // A JSON Schema the answer must match. Only the Codex subscription transport

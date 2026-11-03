@@ -14,6 +14,7 @@ vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('../services/appDeployer.js', () => ({ runDeployFlow: vi.fn() }));
 vi.mock('../services/updatePreflight.js', () => ({
   checkPortosUpdatePreflight: vi.fn(async () => {}),
+  checkManualUpdateActivity: vi.fn(async () => {}),
 }));
 vi.mock('../services/appUpdater.js', () => ({ updateApp: vi.fn() }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn() }));
@@ -299,6 +300,22 @@ describe('app socket handlers', () => {
   });
 
   describe('PortOS self-update handoff', () => {
+    it('lets a manual Git update replace a handed-off waiting automatic operation', async () => {
+      const done = deferred();
+      const waiting = maintenance.deferredUpdate.request();
+      appUpdater.updateApp.mockResolvedValueOnce({ success: true, selfUpdateStarted: true,
+        supervisorPid: waiting.ownerPid, completion: done.promise, steps: [] })
+        .mockResolvedValueOnce({ success: true, steps: [] });
+      const client = connect(bus);
+      try {
+        await client.fire('app:update', { appId: PORTOS_APP_ID });
+        expect(appUpdater.updateApp).toHaveBeenCalledTimes(1);
+        await client.fire('app:update', { appId: PORTOS_APP_ID, acknowledgeInterruption: true });
+        expect(appUpdater.updateApp).toHaveBeenCalledTimes(2);
+        expect(client.events('app:update:error')).toHaveLength(0);
+        done.resolve({ success: false, superseded: true });
+      } finally { done.resolve({ success: false }); maintenance.deferredUpdate.finish(waiting.id, false); }
+    });
     it('reports a successful handoff despite a history failure and removes its row when the updater exits', async () => {
       const done = deferred();
       const { maintenance } = await import('../lib/maintenanceAdmission.js');
@@ -365,7 +382,8 @@ describe('app socket handlers', () => {
       expect(appUpdater.updateApp).toHaveBeenCalledWith(
         APPS['app-a'],
         expect.any(Function),
-        { syncFork: false, acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
+        { syncFork: false, automatic: false, acknowledgeInterruption: false,
+        acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
       );
     });
   });

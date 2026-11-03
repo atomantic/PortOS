@@ -2106,6 +2106,39 @@ describe('mediaJobQueue', () => {
     expect(cleanupInterruptedSharingCopy).toHaveBeenCalledWith(id);
   });
 
+  it.each([true, false])('manual update recovery: training survivor=%s is observed or failed, never left indefinitely running', async survives => {
+    const id = '00000000-0000-4000-8000-000000000304';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'training', status: 'running',
+      queuedAt: '2026-04-30T10:00:00.000Z', params: { runId: 'training-example' } }] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Update acknowledged', owner: 'manual-update' });
+    try {
+      await importFresh(); stubs.hasSurvivingTrainer.mockResolvedValue(survives);
+      await mediaJobQueue.initMediaJobQueue();
+      if (survives) {
+        await waitFor(() => expect(stubs.runTraining).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, reattach: true })));
+      } else {
+        expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+        expect(stubs.runTraining).not.toHaveBeenCalled();
+      }
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
+  it('manual update recovery fails an interrupted local video and leaves queued work queued', async () => {
+    const video = '00000000-0000-4000-8000-000000000305', queued = '00000000-0000-4000-8000-000000000306';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [
+      { id: video, kind: 'video', status: 'running', params: {} }, { id: queued, kind: 'image', status: 'queued', params: {} },
+    ] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Update acknowledged', owner: 'manual-update' });
+    try {
+      await importFresh(); await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(video)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+      expect(mediaJobQueue.getJob(queued).status).toBe('queued');
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
   it('boot recovery: a running job under a maintenance hold is archived with its inputs, never failed or replayed', async () => {
     const id = '00000000-0000-4000-8000-000000000103';
     const uploads = join(tempDataDir, 'uploads');

@@ -82,6 +82,7 @@ export const registerAppHandlers = (socket, io) => {
         appId: data.appId,
         syncFork: data.syncFork === true,
         acknowledgeFork: data.acknowledgeFork === true,
+        acknowledgeInterruption: data.acknowledgeInterruption === true,
         acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
       });
       if (outcome.ok) return;
