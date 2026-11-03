@@ -268,6 +268,7 @@ export default function BoardStage({ board }) {
               storyboardId={project.storyboardId || null}
               storyboardShot={panelOf(scene)}
               onStoryboardBoard={setStoryboard}
+              onApplyCameos={board.applyCameos}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
               stepShot={stepShot}

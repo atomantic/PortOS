@@ -141,7 +141,7 @@ export default function SceneCard({
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
-  storyboardId = null, storyboardShot = null, onStoryboardBoard = null,
+  storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -568,7 +568,7 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} />
+          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onApplyCameos={onApplyCameos} />
         </div>
         {/* Clip: the picture and its takes, Render, the motion prompt and where it renders, then other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
