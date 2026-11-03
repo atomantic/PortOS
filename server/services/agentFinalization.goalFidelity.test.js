@@ -43,6 +43,7 @@ const completeAgentMock = vi.fn();
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: vi.fn(async () => null),
+  getAgents: vi.fn(async () => []),
   updateAgent: vi.fn(async () => null),
   completeAgent: (...args) => completeAgentMock(...args),
 }));
@@ -106,7 +107,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh, findPullRequestForBranch, getPullRequestState } from './github.js';
 import { execGlab } from './gitlab.js';
 import { resolveForgeForRepo } from './git.js';
-import { getAgentRecord } from './cosAgentLifecycle.js';
+import { getAgentRecord, getAgents } from './cosAgentLifecycle.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -307,6 +308,48 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(review.objectiveScreenshots).toEqual(screenshots);
     expect(review.diff).toBe(diff);
     expect(completion()).toMatchObject({ success: true });
+  });
+
+  describe('investigation of a goal-fidelity finding', () => {
+    const task = {
+      id: 'investigate-example', taskType: 'internal',
+      description: '[Auto] Investigate goal-fidelity fix-first: Refresh the example catalog',
+      metadata: {
+        isInvestigation: 'true',
+        investigationFingerprint: 'goal-fidelity:internal:example-app/refresh-the-example-catalog',
+        affectedTasks: ['original-example'],
+      },
+    };
+    const investigatedRun = (id, checkedAt, overturned = null) => ({
+      id, taskId: 'original-example',
+      result: { goalFidelity: { verdict: 'fix-first', checkedAt, ...(overturned ? { overturned } : {}) } },
+    });
+    const stamp = { gap: 'other', calibrationTaskId: 'calibration-example', at: '2026-01-01T00:05:00Z' };
+    beforeEach(() => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['catalog refresh'] }));
+    });
+
+    // The regression: the investigator disproved the finding, shipped a one-line
+    // accuracy fix, and that diff was judged against the embedded objective —
+    // re-raising the disproved finding and re-dispatching the investigation.
+    it('does not judge an investigation whose finding was overturned', async () => {
+      getAgents.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp)]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    it('still judges an investigation of a newer finding that nothing overturned', async () => {
+      getAgents.mockResolvedValue([
+        investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp),
+        investigatedRun('agent-retry', '2026-01-02T00:00:00Z'),
+      ]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledTimes(1);
+      expect(completion()).toMatchObject({ success: false, goalFidelity: { verdict: 'rethink' } });
+    });
   });
 
   describe('forge-side PR remediation whose only diff is a test CI repair', () => {

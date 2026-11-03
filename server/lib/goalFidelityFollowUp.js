@@ -157,6 +157,38 @@ export function goalFidelityFingerprint(task) {
   return `${GOAL_FIDELITY_FINGERPRINT_CATEGORY}:${task?.taskType || 'task'}:${scope || 'none'}`;
 }
 
+/** Is this task an investigation of a goal-fidelity finding? */
+export function isGoalFidelityInvestigation(task) {
+  const fingerprint = task?.metadata?.investigationFingerprint;
+  return typeof fingerprint === 'string' && fingerprint.startsWith(`${GOAL_FIDELITY_FINGERPRINT_CATEGORY}:`);
+}
+
+/**
+ * The overturn stamp on the finding a goal-fidelity investigation is about, or
+ * `null` while that finding stands.
+ *
+ * Such a task's description embeds the investigated task's objective. Once the
+ * finding is disproved (`goalFidelity.overturned`, stamped on the investigated
+ * runs by the calibration report), the investigation's deliverable is that
+ * verdict and any diff it also shipped is incidental. Grading that diff against
+ * the embedded objective re-raises the disproved finding and re-dispatches the
+ * investigation. Only the LATEST judged run counts, so a newer, unoverturned
+ * finding on the same task keeps its investigation judged.
+ *
+ * @param {{ task: object, agents: object[] }} args
+ * @returns {{ gap: string, calibrationTaskId: string, at: string }|null}
+ */
+export function overturnedInvestigatedFinding({ task, agents }) {
+  if (!isGoalFidelityInvestigation(task) || !Array.isArray(agents)) return null;
+  const affected = Array.isArray(task.metadata.affectedTasks) ? task.metadata.affectedTasks : [];
+  const judgedAt = agent => Date.parse(agent?.result?.goalFidelity?.checkedAt || agent?.completedAt) || 0;
+  const latest = agents
+    .filter(agent => (affected.includes(agent?.taskId) || affected.includes(agent?.metadata?.taskId))
+      && ['fix-first', 'rethink'].includes(agent?.result?.goalFidelity?.verdict))
+    .reduce((newest, agent) => (!newest || judgedAt(agent) > judgedAt(newest) ? agent : newest), null);
+  return latest?.result?.goalFidelity?.overturned || null;
+}
+
 /**
  * The exact string the dedup looks for in an existing issue's body.
  *
