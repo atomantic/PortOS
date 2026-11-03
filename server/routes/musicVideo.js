@@ -37,6 +37,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoSceneSplitSchema,
+  musicVideoLyricCutSchema,
   musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
   musicVideoPlanRequestSchema,
@@ -128,6 +129,7 @@ import {
   deleteScene,
   reorderProjectScenes,
   splitProjectScene,
+  cutProjectScenesOnLyrics,
   previewProjectPacingRecut,
   recutProjectToPacing,
   mergeProjectNextScene,
@@ -1783,6 +1785,12 @@ router.post('/:id/pacing-recut', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
   const { backend, atSec } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend, atSec }));
+}));
+
+// Cut the board on sung words: one shot per phrase or per word over the chosen lyric lines (#14820).
+router.post('/:id/scenes/cut-on-lyrics', asyncHandler(async (req, res) => {
+  const { cueIds, mode } = validateRequest(musicVideoLyricCutSchema, req.body ?? {});
+  res.json(await cutProjectScenesOnLyrics(req.params.id, { cueIds, mode }));
 }));
 
 // Merge a scene with the next one — the inverse of split.

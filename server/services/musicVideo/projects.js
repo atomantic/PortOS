@@ -325,6 +325,15 @@ export async function splitProjectScene(id, sceneId, options = {}) {
   });
 }
 
+/** Cut shots on sung words over the chosen lyric lines (projectsLogic.cutScenesOnLyricWords, #14820). */
+export async function cutProjectScenesOnLyrics(id, options) {
+  const [{ cutScenesOnLyricWords }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const { project, scenes, skipped, from } = cutScenesOnLyricWords(current, options);
+    return { project: carryShotLocks(current, project, { from }), scenes, skipped };
+  });
+}
+
 /** Read the raw record so preview and the serialized apply hash identical inputs. */
 export async function previewProjectPacingRecut(id) {
   const { previewPacingRecut } = await import('./pacingRecut.js');

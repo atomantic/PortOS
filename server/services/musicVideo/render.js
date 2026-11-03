@@ -44,7 +44,7 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideoLayers.js';
 import { assertSongAudioCurrent } from '../../lib/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -409,7 +409,8 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
       // Insufficient coverage for a non-looping shot is refused before render
       // (#8964), using the preserved playable duration in sourceSec.
       const inSec = clip.inSec || 0;
-      const spanSec = Math.max(minClipSec, scene.endSec - scene.startSec);
+      // A cut on a sung word may be shorter than the floor; it plays exactly its span (#14820).
+      const spanSec = scene.wordCut ? scene.endSec - scene.startSec : Math.max(minClipSec, scene.endSec - scene.startSec);
       running += spanSec;
       return { ...clip, inSec, outSec: inSec + spanSec, duration: spanSec };
     }
@@ -922,7 +923,8 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   const composed = project.composition?.mode === 'composed';
   // The cold open (shots marked before the song) is cut on its own clock; the
   // song's pipeline below never sees those shots.
-  const song = withSongScenesOnly(project);
+  const songOnly = withSongScenesOnly(project);
+  const song = { ...songOnly, scenes: wordTimedScenes(songOnly) };
   const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
   const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);

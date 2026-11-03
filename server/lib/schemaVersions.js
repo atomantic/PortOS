@@ -849,7 +849,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // exceed eight. Older peers reject or truncate those expanded arrays.
   // v41 = pacing re-cut pieces carry beatNeedsReview/pacingCut; older scene writers drop them.
   // Optional, no backfill: absent means no pending beat review or pacing-owned timing.
-  musicVideoProjects: 41,
+  // v42 = shots cut on sung words (`scene.lyricAnchor`, `wordCutBoard`) and the
+  // project's `lyricAnchorSync` note; a v41 strict scene schema rejects them and its
+  // writers drop them. Optional, no backfill: absent is an ordinary hand-timed shot.
+  musicVideoProjects: 42,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

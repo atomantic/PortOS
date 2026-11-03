@@ -25,6 +25,7 @@ import {
   updateMusicVideoScene,
   deleteMusicVideoScene,
   splitMusicVideoScene,
+  cutMusicVideoScenesOnLyrics,
   mergeMusicVideoNextScene, mergeMusicVideoPreviousScene,
   moveMusicVideoSceneStart,
   reorderMusicVideoScenes,
@@ -153,6 +154,9 @@ const STAGE_VIEWS = {
 
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
+// Word-anchored shots follow their words on the server when lyric timing changes (#14820), so take their new spans.
+const wordAnchoredShots = (project) => ((project?.scenes || []).some((scene) => scene.lyricAnchor)
+  ? { scenes: project.scenes, productionReview: project.productionReview, lyricAnchorSync: project.lyricAnchorSync ?? null } : {});
 const loadTracks = () => listTracks({ silent: true });
 const loadUniverses = () => listUniverseNames({ silent: true });
 
@@ -366,7 +370,7 @@ export default function MusicVideo() {
   const reloadProject = (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
   const lyricAlign = useMusicVideoLyricAlign({
     onAligned: (projectId, project) => {
-      patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
+      patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, ...wordAnchoredShots(project), updatedAt: project.updatedAt });
       if (retimingAfterReplace.current.delete(projectId)) reloadProject(projectId);
     },
   });
@@ -1137,7 +1141,7 @@ function ProjectWorkspace({
       .then((saved) => {
         if (applyComposition) patchProject(projectId, { composition: saved.composition });
         // The server moves markers with their cues when lines are removed or merged.
-        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers });
+        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
       })
       .catch((err) => toast.error(err?.message || 'Failed to save changes'))
       .finally(() => setCompositionSavePending((count) => count - 1));
@@ -1261,6 +1265,14 @@ function ProjectWorkspace({
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };
+
+  // Cut the board on sung words over a run of lyric lines (#14820).
+  const handleCutOnLyrics = ({ cueIds, mode }) => cutMusicVideoScenesOnLyrics(selected.id, { cueIds, mode }, { silent: true })
+    .then(({ project, scenes, skipped }) => {
+      replaceProject(project);
+      toast.success(`Cut ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: outside a shot or too close to a cut)` : ''}`);
+    })
+    .catch((err) => toast.error(err?.message || 'Failed to cut on the lyric words'));
 
   // Join a scene with the next one (the inverse of the split above).
   const handleMergeNextScene = (sceneId, backend) => {
@@ -1654,6 +1666,7 @@ function ProjectWorkspace({
     onAddScene: handleAddScene,
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
+    onCutOnLyrics: handleCutOnLyrics,
     onMergeNextScene: handleMergeNextScene,
     onMergePreviousScene: handleMergePreviousScene,
     onMoveSceneStart: handleMoveSceneStart,

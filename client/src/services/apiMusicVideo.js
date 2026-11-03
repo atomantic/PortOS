@@ -179,6 +179,12 @@ export const splitMusicVideoScene = (id, sceneId, backend, { atSec = null, ...op
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
     method: 'POST', body: JSON.stringify({ ...(backend ? { backend } : {}), ...(atSec != null ? { atSec } : {}) }), ...options,
   });
+// Cut the board on sung words over the chosen lyric lines (#14820) → { project, scenes, skipped }.
+// `mode` is 'phrase' (one shot per comma phrase) or 'word'.
+export const cutMusicVideoScenesOnLyrics = (id, { cueIds, mode }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/cut-on-lyrics`, {
+    method: 'POST', body: JSON.stringify({ cueIds, mode }), ...options,
+  });
 // Join a scene with the next one, the inverse of split → { project, scene }.
 export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/merge-next`, {

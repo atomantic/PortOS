@@ -10,7 +10,7 @@ import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { lyricCueSpan } from './timedText.js';
-import { cuesSungWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { coldOpenScenes, songScenes } from '../../lib/musicVideoColdOpen.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
@@ -628,6 +628,21 @@ const BOARD_SHOT_FIELDS = ['action', 'staging', 'transition'];
 const DOCUMENT_SHOT_FIELDS = ['action', 'staging', 'camera', 'transition'];
 
 /**
+ * A shot cut on a sung word (#14820) whose start is no longer on that word: the
+ * word lost its timing, or it moved (a Board shot follows on its own unless the
+ * move was blocked; a document shot's time lives in its manifest).
+ */
+function wordAnchorProblem(shot, cues, documentShots) {
+  if (!shot?.lyricAnchor) return null;
+  const name = shot.label || shot.id || 'A shot';
+  const onset = lyricAnchorOnset(cues, shot.lyricAnchor);
+  if (!onset) return `${name} is cut on a lyric word that has no timing now. Align the words again or cut it again.`;
+  if (!(Math.abs(onset.startSec - shot.startSec) > 1 / 48)) return null;
+  const fix = documentShots ? 'Update its start in the shot manifest and import it again.' : 'Move its start, or cut it on the words again.';
+  return `${name} starts at ${shot.startSec.toFixed(2)}s, but "${onset.text}" is sung at ${onset.startSec.toFixed(2)}s. ${fix}`;
+}
+
+/**
  * Every shot's open work: the timing or storyboard fields it is missing
  * (`incompleteShots`), and lyric anchors that disagree with the lines sung over it
  * (`lyricAnchors`, with both sides so the checklist can show and fix them), each
@@ -654,6 +669,8 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
       if (!documentShots) lyricAnchors.push({ sceneId: scene.sceneId, sung: sung.map(c => c.text),
         anchored: (shot?.lyricCueIds || []).map(id => cues.find(c => c.id === id)?.text).filter(Boolean) });
     }
+    const wordProblem = wordAnchorProblem(scene, cues, documentShots);
+    if (wordProblem) problems.push(wordProblem);
   }
   return { problems, incompleteShots, lyricAnchors };
 }

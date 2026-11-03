@@ -475,10 +475,16 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   { width, height, fps, frames, durationSec }, song: { durationSec, bpm, beats,
   downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
   label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
-  cardColor, textZone, lyricRole, lyricSize, lyricText, direction, media: { kind, src, inSec, outSec, fps,
+  cardColor, textZone, lyricRole, lyricSize, lyricText, lyricAnchor?, direction, media: { kind, src, inSec, outSec, fps,
   width, height } | null }], titleCard: { position, windows: [{ startSec, endSec }] }
   | null, textCues, composition: { mode, style, posterSec, overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
+  A shot cut on a sung word carries `lyricAnchor: { cueId, wordIndex,
+  wordCount, onsetSec, text }`: the words it was cut on and where they are
+  sung now (`onsetSec` is null when they lost their timing), so a composition
+  can key a reveal to that word. Document shot manifests accept the same
+  `lyricAnchor: { cueId, wordIndex, wordCount? }` on a shot, and the
+  storyboard check names a shot whose start is no longer on its word.
   A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
   seeks `media.inSec + (t - startSec)`. The live preview bridges the original
   bytes instead: its `media` keeps source-time `inSec`/`outSec` and adds
