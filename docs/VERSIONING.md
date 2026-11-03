@@ -413,7 +413,7 @@ The outbox keeps the original reviewer policy, publication ancestry and retained
 physical checkout seeds. It never transfers checkout authority. The owner
 uses the procedure below and ordinary delivery, admission and retirement recovery.
 Task CRUD cannot delete a synchronization task directly. Deleting one from the
-task list (or `DELETE /api/cos/tasks/<id>`) is the owner's decision to abandon
+task list (or `DELETE /api/cos/tasks/:id`) is the owner's decision to abandon
 it: the route records the operator reset below with an empty checkout list unless
 synchronization is already verified or reset, then removes the row. The outbox
 keeps the publication receipt, and the reset refuses while a release or
