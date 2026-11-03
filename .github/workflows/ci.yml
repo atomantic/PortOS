@@ -1372,12 +1372,47 @@ jobs:
           node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
-      # server/.npmrc pins ignore-scripts=true; the PTY cases need node-pty's
-      # native addon, which the trusted rebuild builds.
+
+      # Same cache, stamp and rebuild contract as the server and windows-server
+      # jobs (see them for why each condition reads the stamp). The PTY cases
+      # need node-pty's native addon, which only the trusted rebuild builds.
+      - name: Cache server node_modules
+        id: server-modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: server/node_modules
+          key: server-modules-${{ runner.os }}-${{ runner.arch }}-node26-${{ hashFiles('server/package-lock.json', 'server/package.json', 'server/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      - name: Check the restored node_modules was rebuilt
+        id: server-modules-usable
+        if: steps.server-modules.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: node scripts/trusted-rebuild-stamp.js check server
+
       - name: Install server dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        run: npm ci --prefix server
+
+      - name: Rebuild trusted native dependencies
+        if: steps.server-modules-usable.outcome != 'success'
+        shell: bash
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: |
-          npm ci --prefix server
           node scripts/trusted-rebuilds.js server
+          node scripts/trusted-rebuild-stamp.js write server
+
+      - name: Cache Vitest transform artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            server/.cache/vitest
+            server/.cache/vitest-db
+          key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'scripts/vitestCiPool.js') }}-macos-native
+          restore-keys: |
+            vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+            vitest-server-${{ runner.os }}-
+
       # The supervisor bootstraps a single-use launchd job; without a domain
       # that accepts it every release agent stays held. Fail here, by name,
       # instead of as an opaque assertion inside the suite.
