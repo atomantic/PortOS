@@ -138,6 +138,7 @@ describe('systemCapabilities', () => {
       minMemoryGb: 48,
     });
     expect(hardwareRequirementsForLocalLlm({ key: 'qwen3.8-27b' })).toMatchObject({ minMemoryGb: 32 });
+    expect(hardwareRequirementsForLocalLlm({ key: 'gpt-oss-120b' })).toMatchObject({ minMemoryGb: 96 });
     expect(hardwareRequirementsForLocalLlm({ key: 'qwen3.5-122b-a10b' })).toMatchObject({ minMemoryGb: 96 });
     expect(hardwareRequirementsForProvider({ id: 'provider', vllmBacked: true })).toMatchObject({
       platforms: ['linux', 'win32'],
