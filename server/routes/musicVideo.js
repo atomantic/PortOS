@@ -44,6 +44,7 @@ import {
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
+  musicVideoSongPrepareSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
   musicVideoHandoffImportSchema,
@@ -285,7 +286,9 @@ async function presentProjectForRead(project) {
     current = await reconcileInterruptedYoutubeThumbnail(project);
   }
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
-  return { ...presented, productionReadiness: productionReadiness(presented) };
+  // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
+  const { projectSongAudioChange } = await import('../services/musicVideo/songAudio.js');
+  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange: await projectSongAudioChange(presented) };
 }
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -622,8 +625,16 @@ router.post('/:id/song-style/suno', asyncHandler(async (req, res) => {
 // analyze the song if it has no analysis and start word alignment when the
 // lines were never aligned. Returns the project and the alignment job to follow.
 router.post('/:id/song/prepare', asyncHandler(async (req, res) => {
+  const { refresh } = validateRequest(musicVideoSongPrepareSchema, req.body ?? {});
   const { autoPrepareSong } = await import('../services/musicVideo/songAutoPrepare.js');
-  res.json(await autoPrepareSong(req.params.id));
+  res.json(await autoPrepareSong(req.params.id, { refresh }));
+}));
+
+// The director keeps the old beat grid and lyric timing against a replaced take
+// (#14793): the recorded basis moves to the current audio, nothing is re-derived.
+router.post('/:id/song/keep-timing', asyncHandler(async (req, res) => {
+  const { keepSongTiming } = await import('../services/musicVideo/songAudio.js');
+  res.json(await presentProjectForRead(await keepSongTiming(req.params.id)));
 }));
 
 // The lyric timing playthrough: the aligned words drawn by the shipped template over a

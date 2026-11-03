@@ -752,6 +752,9 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
     expect(screen.getByText('approved · stale')).toBeInTheDocument();
     expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
+    // Nothing is revertible: the only ways out are the Keep approved and Rebuild buttons shown (#14796).
+    expect(screen.queryByRole('button', { name: /^Revert/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Rebuild' })).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
     expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
   });

@@ -85,7 +85,7 @@ describe('harness routes', () => {
     expect((await request(app).post(`/api/harnesses/review-update?${query}`)).status).toBe(200);
     expect(reference.takeHarnessUpdateTicket).toHaveBeenCalledWith('opencode', '00000000-0000-4000-8000-000000000001', '1.2.3', '1.2.4');
     expect(stream.streamHarnessAction).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
-      runtime: 'opencode', action: 'update', requireIdle: true, expectedVersion: '1.2.3',
+      runtime: 'opencode', action: 'update', requireSupervisor: true, expectedVersion: '1.2.3',
       reviewed: { candidate: '1.2.4', identity: { path: '/fixture/cli' } },
     });
     stream.streamHarnessAction.mockClear();

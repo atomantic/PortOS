@@ -132,8 +132,27 @@ export function deriveAttentionItems(project, { generatingSceneIds = null, draft
       detail: 'Reattach to watch its progress or cancel it.',
     });
   }
+  const songAudio = songAudioItem(project);
+  if (songAudio) items.push(songAudio);
   const stale = staleApprovalItem(project, readiness, stage);
   return [...items, ...parkedRunItems(project, headerAction, readiness), ...(stale ? [stale] : [])];
+}
+
+// The linked track's audio was replaced after the beat grid or lyric timing was made (#14793).
+// `project.songAudioChange` comes from the server, the only side that can read the track's file.
+function songAudioItem(project) {
+  const change = project.songAudioChange;
+  if (!change) return null;
+  const what = change.analysisStale && change.lyricsStale ? 'The beat grid and lyric timing' : change.analysisStale ? 'The beat grid' : 'The lyric timing';
+  return {
+    id: 'song-audio',
+    kind: 'song-audio',
+    tone: 'warn',
+    title: 'The song audio was replaced',
+    detail: `${what} came from the earlier file. Re-analyze and re-time to match the new audio, or keep the old timing. Renders wait for your choice.`,
+    projectId: project.id,
+    openTo: 'setup',
+  };
 }
 
 // Approvals in the order they are given, with the tab (and editor) each is re-given on.

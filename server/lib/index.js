@@ -964,6 +964,7 @@ export * from './scheduleExecutionFieldsValidation.js';
 export * from './codeAnimationSound.js';
 
 export * from './musicVideoMediaPolicy.js';
+export * from './musicVideoSongAudio.js';
 export * from './musicVideoSummary.js';
 export * from './sandboxDelegation.js';
 

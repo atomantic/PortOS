@@ -488,6 +488,8 @@ export function applyProjectPatch(project, patch) {
     // it against the new master would sing the wrong words (#8977).
     ...(project.vocalStemFilename ? CLEARED_VOCAL_STEM : {}),
     performanceConditioningSource: 'master',
+    // Lyric timing belonged to the old audio; its recorded basis goes with it (#14793).
+    ...(project.lyricTimingMasterFilename ? { lyricTimingMasterFilename: null } : {}),
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,
