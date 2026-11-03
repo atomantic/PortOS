@@ -407,6 +407,7 @@ describe('StoryboardDetail', () => {
     api.getStoryboardMakeEmpty.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
     renderAt('/storyboards/sb-1');
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    await waitFor(() => expect(socketMock.on).toHaveBeenCalledWith('storyboard:make-batch', expect.any(Function)));
     const onBatch = socketMock.on.mock.calls.findLast(([event]) => event === 'storyboard:make-batch')[1];
     act(() => onBatch({ storyboardId: 'sb-1', status: 'done', total: 2, done: 2, failed: 0 }));
     await act(async () => { answer({ batch: { storyboardId: 'sb-1', status: 'running', total: 2, done: 1, failed: 0 }, panelCount: 0, steps: [] }); });
@@ -421,6 +422,7 @@ describe('StoryboardDetail', () => {
     api.getStoryboardMakeEmpty.mockImplementation(() => new Promise((resolve) => { answers.push(resolve); }));
     renderAt('/storyboards/sb-1');
     expect(await screen.findByRole('button', { name: 'Make empty panels' })).toBeInTheDocument();
+    await waitFor(() => expect(socketMock.on).toHaveBeenCalledWith('storyboard:make-batch', expect.any(Function)));
     const onConnect = socketMock.on.mock.calls.filter(([event]) => event === 'connect').map(([, fn]) => fn);
     act(() => { for (const fn of onConnect) fn(); });
     const [opening, reconnect] = answers;
