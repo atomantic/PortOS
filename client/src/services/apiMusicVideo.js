@@ -122,7 +122,12 @@ export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/
 });
 // Analyze a newly attached song and start aligning never-aligned lyrics.
 // Resolves `{ project, analyzed, alignJobId }`; follow the job with the align events URL.
-export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+// `refresh` also redoes the analysis and lyric timing that predate a take replaced in place (#14793).
+export const prepareMusicVideoSong = (id, { refresh = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+  method: 'POST', ...(refresh ? { body: JSON.stringify({ refresh: true }) } : {}), ...options,
+});
+// Keep the old beat grid and lyric timing against a replaced take; resolves the presented project.
+export const keepMusicVideoSongTiming = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/keep-timing`, {
   method: 'POST', ...options,
 });
 // The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).

@@ -472,6 +472,12 @@ export const musicVideoLyricsAlignSchema = z.object({
   retimeSong: z.boolean().optional(),
 }).strict();
 
+// Prepare the song after a track arrives; `refresh` redoes the analysis and lyric
+// timing that predate a replaced take (#14793).
+export const musicVideoSongPrepareSchema = z.object({
+  refresh: z.boolean().optional(),
+}).strict();
+
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
 
 // A composed render lays timed text cues over the cut footage; `concat` (and a
@@ -1925,6 +1931,8 @@ export const musicVideoSongFeaturesSchema = z.object({
 export const musicVideoAudioAnalysisSchema = z.object({
   // Shape version: absent = 1 (pre feature track), 2 = carries `features`.
   version: z.number().int().min(1).optional(),
+  // The master audio file this was derived from (#14793); absent on older records.
+  masterFilename: z.string().min(1).max(260).optional(),
   features: musicVideoSongFeaturesSchema.nullable().optional(),
   bpm: z.number().nullable(),
   beats: z.array(z.number()),

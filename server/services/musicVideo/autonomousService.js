@@ -1581,6 +1581,7 @@ async function assertBriefVideoModelsCapable(tools, models) {
 // The song fields a reused song brings along: the audio, its analysis and the
 // timed lyrics. Never the source's look, cast, scenes, storyboard or treatment.
 const REUSED_SONG_FIELDS = ['audioAnalysis', 'midiTranscription', 'lyricCues', 'lyricMarkers', 'phrases',
+  'lyricTimingMasterFilename',
   'vocalStemFilename', 'vocalStemMasterFilename', 'vocalStemDerived', 'performanceConditioningSource', 'lyricAlignSource', 'lyricAlignSilentWords'];
 
 /** The song an autonomous run reuses from another project, or a 4xx naming why it cannot. */

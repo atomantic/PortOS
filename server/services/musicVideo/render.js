@@ -28,7 +28,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -45,6 +45,7 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { assertSongAudioCurrent } from '../../lib/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -911,6 +912,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const audioPath = await resolveMasterAudioPath(project);
+  assertSongAudioCurrent(project, basename(audioPath));
   // #8977/#9266: refuse a performance take whose scene was re-timed or whose
   // sung window changed in the current master. A draft shows a cutaway instead.
   if (draft) project = await withDraftPerformanceFallbacks(project, audioPath, { decode });
@@ -1030,6 +1032,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
+  assertSongAudioCurrent(project, basename(audioPath));
   if (renderer.performanceTakes) {
     assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);

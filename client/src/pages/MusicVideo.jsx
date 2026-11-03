@@ -19,6 +19,7 @@ import {
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
   prepareMusicVideoSong,
+  keepMusicVideoSongTiming,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
@@ -358,17 +359,27 @@ export default function MusicVideo() {
   const separation = useMusicVideoVocalSeparation({
     onSeparated: (projectId, project) => patchProject(projectId, separatedStemPatch(project)),
   });
+  // Projects whose director chose "Re-analyze & re-time" (#14793): once their alignment lands, the
+  // server re-derives whether the song's timing still predates its audio.
+  const retimingAfterReplace = useRef(new Set());
+  const reloadProject = (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
   const lyricAlign = useMusicVideoLyricAlign({
-    onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
+    onAligned: (projectId, project) => {
+      patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
+      if (retimingAfterReplace.current.delete(projectId)) reloadProject(projectId);
+    },
   });
   // A track attached or lyrics imported: analyze the song and align never-aligned
   // lines on the server, then follow the alignment here (the Song step shows it).
-  const prepareSong = (projectId) => {
+  const prepareSong = (projectId, { refresh = false } = {}) => {
     setAnalyzing(true);
-    return prepareMusicVideoSong(projectId, { silent: true })
+    if (refresh) retimingAfterReplace.current.add(projectId);
+    return prepareMusicVideoSong(projectId, { silent: true, ...(refresh ? { refresh } : {}) })
       .then(({ project, analyzed, alignJobId }) => {
         if (analyzed) patchProject(projectId, { audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
         if (alignJobId) lyricAlign.attach(alignJobId, projectId);
+        // A re-analysis with nothing to re-time is done; the aligned callback covers the rest.
+        else if (refresh) { retimingAfterReplace.current.delete(projectId); reloadProject(projectId); }
       })
       .catch((err) => toast.error(err?.message || 'Could not analyze the song'))
       .finally(() => setAnalyzing(false));
@@ -1792,6 +1803,8 @@ function ProjectWorkspace({
                   onResumeProduction: (runId, opts) => production.resume(runId, opts),
                   onKeepApproval: keepApproval,
                   onRevertApproval: productionReview.revert,
+                  onRefreshSong: () => prepareSong(selected.id, { refresh: true }),
+                  onKeepSongTiming: () => keepMusicVideoSongTiming(selected.id).then(replaceProject),
                 }}
               />
             )}

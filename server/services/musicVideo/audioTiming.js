@@ -136,6 +136,7 @@ export async function applyAudioTiming(id, { basis, ...input }) {
     return { project: { ...next, scenes: preview.scenes.map((scene) => ({ ...scene, beatAligned: false, sectionIndex: null })),
       audioAnalysis: preview.analysis, status: 'analyzed', renderHistoryId: null,
       midiTranscription: null, ...CLEARED_VOCAL_STEM, performanceConditioningSource: 'master',
+      lyricTimingMasterFilename: preview.analysis.masterFilename || null,
       lyricCues: mapTimed(current.lyricCues, preview.intervals), phrases: mapTimed(current.phrases, preview.intervals),
       ...(current.composition ? { composition: { ...next.composition, posterSec: null, textCues: mapTimed(current.composition.textCues, preview.intervals) } } : {}),
       audioTimingRevisions: [...(current.audioTimingRevisions || []), revision] }, revision, alreadyApplied: false };
