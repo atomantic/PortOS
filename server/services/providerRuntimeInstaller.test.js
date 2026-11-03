@@ -3,7 +3,7 @@ import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 
 // The npm-prefix probe shells out; the PATH-adoption contract itself is covered
 // by lib/npmGlobalBin.test.js.
-const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null) }));
+const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null), inspectNpmGlobalCommand: vi.fn() }));
 vi.mock('../lib/npmGlobalBin.js', () => npmGlobalBin);
 
 import {

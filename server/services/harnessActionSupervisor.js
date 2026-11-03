@@ -129,6 +129,7 @@ export async function runHarnessActionSupervisor(input, { admission = maintenanc
   admission.harnessActions.verify(owner.id, supervisorPid);
   signal?.throwIfAborted();
   const child = launch(row.id, { action: owner.action, detached: false,
+    ...(owner.action === 'uninstall' ? { uninstallTarget: input.uninstallTarget } : {}),
     ...(input.reviewed ? { verifiedCommand: input.reviewed.identity.path } : {}) });
   if (!child) throw new Error('The harness action is unavailable.');
   let outputFailed = false;
@@ -159,10 +160,12 @@ async function readInput() {
 
 if (isDirectlyInvoked(import.meta.url)) {
   const shutdown = installHarnessActionShutdown();
-  readInput().then(input => runHarnessActionSupervisor(input, { signal: shutdown.signal })).then(code => { process.exitCode = code; }).catch(() => {
+  readInput().then(input => runHarnessActionSupervisor(input, { signal: shutdown.signal })).then(code => { process.exitCode = code; }).catch(error => {
     // Spawn failures can include an account-specific executable path. The
     // parent reports the failure without exposing internal path evidence.
-    if (!shutdown.signal.aborted) console.error('❌ Harness action could not start or complete.');
+    if (!shutdown.signal.aborted) console.error(error?.code === 'UNVERIFIED_NPM_UNINSTALL'
+      ? '❌ The executable or npm package changed. Refresh and try again.'
+      : '❌ Harness action could not start or complete.');
     process.exitCode = 1;
   }).finally(shutdown.close);
 }

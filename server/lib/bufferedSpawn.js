@@ -1,8 +1,8 @@
 import { spawn, ChildProcess } from './childProcess.js';
-import { resolveWindowsExecutable, prepareWindowsSafeSpawn } from './aiToolkit/internal/windowsSafeSpawn.js';
+import { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch } from './aiToolkit/internal/windowsSafeSpawn.js';
 
 // Keep the host's public API while sharing the toolkit's self-contained leaf.
-export { resolveWindowsExecutable, prepareWindowsSafeSpawn };
+export { resolveWindowsExecutable, prepareWindowsSafeSpawn, resolveCmdShimLaunch };
 import { withSpawnCwdEnv } from './spawnCwd.js';
 
 /**

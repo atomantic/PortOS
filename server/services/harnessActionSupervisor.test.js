@@ -82,6 +82,18 @@ describe('harness action supervisor', () => {
     expect(await result).toBe(0);
   });
 
+  it('carries private uninstall evidence to the final launcher', async () => {
+    const { child, deps } = fixture();
+    const uninstallOwner = { ...owner, action: 'uninstall' };
+    const uninstallTarget = { prefix: '/fixture/npm-prefix', executable: '/fixture/npm-prefix/bin/opencode' };
+    deps.admission.harnessActions.operation = () => uninstallOwner;
+    const result = runHarnessActionSupervisor({ ownerId: owner.id, runtime: owner.runtime, action: 'uninstall', uninstallTarget }, deps);
+    await vi.waitFor(() => expect(deps.launch).toHaveBeenCalledOnce());
+    expect(deps.launch).toHaveBeenCalledWith('opencode', { action: 'uninstall', detached: false, uninstallTarget });
+    child.stdout.end(); child.stderr.end(); child.emit('close', 0);
+    expect(await result).toBe(0);
+  });
+
   it('starts a group-leader wrapper and passes review evidence only through its private stdin', () => {
     const child = { stdin: new PassThrough() };
     const spawnImpl = vi.fn(() => child);
