@@ -547,8 +547,8 @@ describe('Cast & Sets per-image actions', () => {
     const Page = () => {
       const [value, setValue] = useState(sheet('review'));
       const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
-        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} /></MemoryRouter>;
     };
     render(<Page />);
     expect(screen.getByText(/Built before your latest story, cast guide/)).toBeInTheDocument();
@@ -583,8 +583,8 @@ describe('Cast & Sets per-image actions', () => {
       const [value, setValue] = useState(initial);
       selectProject = setValue;
       const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
-        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} /></MemoryRouter>;
     };
     render(<Page initial={sheet('approved')} />);
     expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
@@ -713,7 +713,7 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const Page = () => {
       const [current, setCurrent] = useState(value);
       const actions = useMusicVideoCastAndSets({ project: current, replaceProject: setCurrent });
-      return <CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS, ...board }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS, ...board }} /></MemoryRouter>;
     };
     return render(<Page />);
   };
@@ -813,7 +813,7 @@ describe('Cast & Sets stage before any check-in exists', () => {
   it('leaves Build to the checklist and keeps only Skip, wired to the skip action', async () => {
     const start = vi.fn();
     const skip = vi.fn();
-    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    render(<MemoryRouter><CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} /></MemoryRouter>);
     // The step's checklist and header already offer Build; a second copy here only repeated it.
     expect(screen.queryByRole('button', { name: 'Build cast & sets' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Skip cast & sets' }));
@@ -824,7 +824,7 @@ describe('Cast & Sets stage before any check-in exists', () => {
   it('says which style is empty and counts references and style images apart', () => {
     const project = { id: 'example-project', audioAnalysis: { sections: [{}] }, concept: { prompt: 'p', style: '', songStyle: 'synthwave' },
       visualSpec: { references: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, styleReferences: Array.from({ length: 15 }, (_, i) => ({ id: `s${i}` })) };
-    render(<CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    render(<MemoryRouter><CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} /></MemoryRouter>);
     expect(screen.getByText(/No visual style yet · Song style set · 3 references · 15 style images/)).toBeInTheDocument();
   });
 });
