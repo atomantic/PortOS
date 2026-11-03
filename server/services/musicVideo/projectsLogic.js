@@ -1136,7 +1136,7 @@ export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {})
     const cut = anchors.get(scene.sceneId);
     return cut ? { ...scene, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : scene;
   });
-  next = carryStoryboardApproval(project, touch(next, { scenes }), 'Cut shots on lyric words');
+  next = carryStoryboardApproval(project, touch(next, { scenes, wordCutBoard: true }), 'Cut shots on lyric words');
   return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from };
 }
 

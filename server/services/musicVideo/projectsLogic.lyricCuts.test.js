@@ -109,7 +109,7 @@ describe('word cuts in the render plan', () => {
   const render = async (project) => {
     const { beatSnapClips } = await import('./render.js');
     const { wordTimedScenes } = await import('../../lib/musicVideoLayers.js');
-    const scenes = wordTimedScenes(project.scenes.slice().sort((a, b) => a.startSec - b.startSec));
+    const scenes = wordTimedScenes(project, project.scenes.slice().sort((a, b) => a.startSec - b.startSec));
     return durations(beatSnapClips(scenes.map((s) => ({ sceneId: s.sceneId, inSec: 0, outSec: 5, duration: 5 })), [], { scenes }));
   };
   const board = (spans, words) => addScenes(applyProjectPatch(buildProjectRecord({ name: 'Fast' }, { id: 'mv-3', now: 'n' }),
@@ -134,5 +134,16 @@ describe('word cuts in the render plan', () => {
     expect(await render(split)).toEqual([1, 1, 2]);
     const ids = split.scenes.map((s) => s.sceneId);
     expect(await render(reorderScenes(split, [ids[1], ids[0], ids[2]]))).toEqual([1, 1, 2]);
+  });
+
+  // Catches a hand retime of the last anchored cut handing the board back to natural clip lengths.
+  it('keeps exact spans after the last word anchor is retimed away', async () => {
+    const cut = cutScenesOnLyricWords(board([[0, 2]], [0.5]), { cueIds: ['f'], mode: 'word' }).project;
+    const word = cut.scenes.find((s) => s.lyricAnchor);
+    const intro = cut.scenes.find((s) => !s.lyricAnchor);
+    let moved = applySceneUpdate(cut, word.sceneId, { startSec: 0.6 }).project;
+    moved = applySceneUpdate(moved, intro.sceneId, { endSec: 0.6 }).project;
+    expect(moved.scenes.some((s) => s.lyricAnchor)).toBe(false);
+    expect(await render(moved)).toEqual([0.6, 1.4]);
   });
 });

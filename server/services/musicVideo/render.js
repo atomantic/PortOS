@@ -924,7 +924,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   // The cold open (shots marked before the song) is cut on its own clock; the
   // song's pipeline below never sees those shots.
   const songOnly = withSongScenesOnly(project);
-  const song = { ...songOnly, scenes: wordTimedScenes(songOnly.scenes) };
+  const song = { ...songOnly, scenes: wordTimedScenes(songOnly) };
   const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
   const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
