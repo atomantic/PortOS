@@ -50,7 +50,7 @@ describe('Research and seed imports', () => {
       { imageUrl: 'http://example.org/two.png', pageUrl: 'javascript:alert(1)' }, { imageUrl: 'https://example.com/three.jpg' },
     ])}` }));
     const settled = settle();
-    await startSceneResearch('mv-1', 's1', { subject: 'Example Breed', count: 2, providerId: 'api' });
+    await startSceneResearch('mv-1', 's1', { subject: 'Example Breed', count: 2, providerId: 'claude' }, { hasHostControl: true });
     expect(await settled).toMatchObject({ status: 'done', added: 2 });
     expect(store.project.scenes[0].researchReferences).toEqual([
       expect.objectContaining({ imageId: 'upload-1.png', sourceUrl: 'https://example.com/one.jpg', pageUrl: 'https://example.com/one' }),
@@ -65,6 +65,14 @@ describe('Research and seed imports', () => {
 });
 
 describe('startSceneResearch', () => {
+  // Uniquely catches a direct API model, which has no search tool, being sent off to guess photo URLs.
+  it('refuses a direct API model before running it', async () => {
+    deps.run = vi.fn();
+    await expect(startSceneResearch('mv-1', 's1', { subject: 'Example Breed', providerId: 'api' }, { hasHostControl: true }))
+      .rejects.toMatchObject({ status: 422, code: 'RESEARCH_NEEDS_WEB_SEARCH' });
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
   it('refuses a tool-running CLI agent without host control', async () => {
     await expect(startSceneResearch('mv-1', 's1', { subject: 'Example Breed', providerId: 'claude' }, { hasHostControl: false }))
       .rejects.toMatchObject({ status: 403, code: 'HOST_CONTROL_FORBIDDEN' });

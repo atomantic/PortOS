@@ -33,6 +33,10 @@ export default function SceneResearchSeed({ project, scene, onEditLocal, onSave,
   const [sent, setSent] = useState(null);
   const flight = useRef(false);
   const room = MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT - refs.length;
+  // Only an agent CLI can search the web; a direct API model would guess photo URLs.
+  const searchProviders = (llm.providers || []).filter((p) => p?.type !== 'api');
+  const apiPicked = (llm.providers || []).find((p) => p?.id === llm.selectedProviderId)?.type === 'api';
+  const providerId = apiPicked ? '' : llm.selectedProviderId;
   const fieldId = `mv-research-${scene.sceneId}`;
 
   useEffect(() => {
@@ -49,11 +53,11 @@ export default function SceneResearchSeed({ project, scene, onEditLocal, onSave,
   }, [project.id, scene.sceneId, onEditLocal]);
 
   const run = async (preview = false) => {
-    if (flight.current || disabled || subject.trim().length < 2 || !llm.selectedProviderId) return;
+    if (flight.current || disabled || subject.trim().length < 2 || !providerId) return;
     flight.current = true;
     if (!preview) setStatus('running');
     const result = await startMusicVideoSceneResearch(project.id, scene.sceneId, {
-      subject: subject.trim(), count: Math.min(count, Math.max(room, 1)), providerId: llm.selectedProviderId,
+      subject: subject.trim(), count: Math.min(count, Math.max(room, 1)), providerId,
       model: llm.selectedModel || undefined, effort: effort || undefined, executionOptions, preview,
     }, { silent: true }).catch((err) => { setStatus(preview ? null : { error: err?.message || 'Could not start research.' }); return null; });
     flight.current = false;
@@ -103,7 +107,7 @@ export default function SceneResearchSeed({ project, scene, onEditLocal, onSave,
       )}
       {open && (
         <section aria-label="Research and seed settings" className="space-y-2 rounded border border-port-border p-2">
-          <p className="text-xs text-port-text-muted">An agent searches the web for real photos of the subject; PortOS downloads them onto this shot, where they lead its references. Each keeps a link to where it came from.</p>
+          <p className="text-xs text-port-text-muted">An agent CLI that can search the web (Claude Code, Codex, Gemini, Grok) looks for real photos of the subject; PortOS downloads them onto this shot, where they lead its references. Each keeps a link to where it came from.</p>
           <label htmlFor={`${fieldId}-subject`} className="block text-xs text-port-text-muted">Subject
             <input id={`${fieldId}-subject`} value={subject} maxLength={200} onChange={(e) => setSubject(e.target.value)} disabled={running}
               placeholder="For example: Bernedoodle (Bernese Mountain Dog × Poodle), adult"
@@ -115,15 +119,15 @@ export default function SceneResearchSeed({ project, scene, onEditLocal, onSave,
               {COUNTS.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
-          <ProviderModelSelector providers={llm.providers} selectedProviderId={llm.selectedProviderId} selectedModel={llm.selectedModel}
+          <ProviderModelSelector providers={searchProviders} emptyProviderOption="Pick an agent that can search the web" selectedProviderId={providerId} selectedModel={llm.selectedModel}
             availableModels={llm.availableModels} onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); setExecutionOptions({}); }} onModelChange={llm.setSelectedModel}
             effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
             loading={llm.loading} disabled={running || disabled} />
           <div className="flex flex-wrap gap-2">
-            <button type="button" className={BUTTON} disabled={running || disabled || room < 1 || subject.trim().length < 2 || !llm.selectedProviderId} onClick={() => run()}>
+            <button type="button" className={BUTTON} disabled={running || disabled || room < 1 || subject.trim().length < 2 || !providerId} onClick={() => run()}>
               <Search size={14} aria-hidden="true" /> {running ? 'Researching…' : 'Find photos'}
             </button>
-            <button type="button" className={BUTTON} disabled={running || disabled || subject.trim().length < 2 || !llm.selectedProviderId} onClick={() => run(true)}>Preview prompt</button>
+            <button type="button" className={BUTTON} disabled={running || disabled || subject.trim().length < 2 || !providerId} onClick={() => run(true)}>Preview prompt</button>
             <button type="button" className={BUTTON} onClick={() => setOpen(false)}>Close</button>
           </div>
           {room < 1 && <p className="text-xs text-port-text-muted">This shot holds {MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT} research photos. Drop one to research more.</p>}

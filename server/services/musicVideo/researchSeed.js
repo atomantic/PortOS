@@ -103,8 +103,12 @@ async function resolveResearchProvider({ providerId, model }, hasHostControl) {
   if (!provider || provider.id !== providerId || provider.enabled === false) {
     throw new ServerError('The selected provider is unavailable.', { status: 400, code: 'NO_PROVIDER' });
   }
-  // The agent runs with its tools (web search), so a CLI agent needs host control.
-  if (provider.type !== PROVIDER_TYPES.API && hasHostControl !== true) {
+  // A direct API run is a bare chat completion with no search tool: it could only guess URLs.
+  if (provider.type === PROVIDER_TYPES.API) {
+    throw new ServerError(`Provider '${provider.id}' is a direct API model with no web search. Pick an agent CLI that can search the web, such as Claude Code, Codex, Gemini or Grok.`, { status: 422, code: 'RESEARCH_NEEDS_WEB_SEARCH' });
+  }
+  // The agent runs with its tools (web search), so it needs host control.
+  if (hasHostControl !== true) {
     throw new ServerError(`Provider '${provider.id}' searches the web with its tools, so research needs host control: an operator session, or a local connection when no password is set.`, { status: 403, code: 'HOST_CONTROL_FORBIDDEN' });
   }
   return { provider, selectedModel };
