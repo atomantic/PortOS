@@ -61,9 +61,24 @@ describe('plate evidence admission', () => {
     expect(await resolvePlateReviewer({ providerId: api.id, model: 'pinned-model' })).toMatchObject({ model: 'pinned-model' });
     await expect(resolvePlateReviewer({ providerId: 'missing', model: 'pinned-model' })).rejects.toThrow('selected plate reviewer is unavailable');
     runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'cli', type: 'cli', enabled: true }, selectedModel: 'm' });
-    await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/vision API reviewer/);
+    await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/No enabled vision reviewer/);
     providers.getAllProviders.mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, { ...api, enabled: false }] });
-    await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision API reviewer is configured');
+    await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision reviewer is configured');
+  });
+
+  // Uniquely catches the default falling back to a local reviewer that caught 0 of 16 real defects (#14814) while Codex is set up.
+  it('defaults to Codex on its subscription, never a local-runtime Codex or a tool-capable CLI', async () => {
+    const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
+    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true, defaultModel: 'codex-model' };
+    const localCodex = { id: 'codex-ollama', type: 'cli', command: 'codex', enabled: true, ollamaBacked: true, defaultModel: 'local-model' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [localCodex, api, codex] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: codex, model: 'codex-model', costUsd: null });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [localCodex, api, { ...codex, enabled: false }] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: localCodex, selectedModel: 'local-model' });
+    await expect(resolvePlateReviewer({ providerId: 'codex-ollama' })).rejects.toThrow(/No enabled vision reviewer/);
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'claude', type: 'cli', command: 'claude', enabled: true }, selectedModel: 'm' });
+    await expect(resolvePlateReviewer({ providerId: 'claude' })).rejects.toThrow(/No enabled vision reviewer/);
   });
 
   it('uses a verified local vision model for an unpinned text-only default and refuses a pinned text-only reviewer', async () => {
