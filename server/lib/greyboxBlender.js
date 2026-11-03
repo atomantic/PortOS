@@ -194,9 +194,7 @@ scene.render.image_settings.color_mode = 'RGB'
 scene.render.image_settings.color_depth = '8'
 scene.render.resolution_percentage = 100
 
-bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'blockout.blend'))
-rendered = []
-for shot_id in job['shotIds']:
+def use_shot(shot_id):
     cam, shot = camera_by_shot[shot_id]
     w, h = (float(v) for v in shot.get('aspect', '16:9').split(':'))
     edge = job['longEdge']
@@ -204,6 +202,13 @@ for shot_id in job['shotIds']:
     scene.render.resolution_x = width - width % 2
     scene.render.resolution_y = height - height % 2
     scene.camera = cam
+
+# The downloaded scene opens ready to render from the first chosen camera.
+use_shot(job['shotIds'][0])
+bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'blockout.blend'))
+rendered = []
+for shot_id in job['shotIds']:
+    use_shot(shot_id)
     scene.render.filepath = os.path.join(out, 'shot-%s.png' % shot_id)
     started = time.time()
     bpy.ops.render.render(write_still=True)

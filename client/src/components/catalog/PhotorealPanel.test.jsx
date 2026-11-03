@@ -39,9 +39,23 @@ describe('PhotorealPanel', () => {
 
     await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'other-place', job: { state: 'done' } }));
     expect(onRendered).not.toHaveBeenCalled();
-    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { state: 'done', engine: 'cycles', shotIds: ['wide'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } }));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-1', state: 'done', engine: 'cycles', shotIds: ['wide'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } }));
     expect(onRendered).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/GPU \(METAL\)/)).toBeInTheDocument();
+  });
+
+  it('keeps a finish frame that arrives before the start response', async () => {
+    const onRendered = vi.fn();
+    show({ onRendered });
+    await screen.findByRole('link', { name: /Download .blend/ });
+    let respond;
+    startCatalogPhotorealRender.mockImplementation(() => new Promise((resolve) => { respond = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Render 2 cameras' }));
+    await waitFor(() => expect(respond).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-9', state: 'done', engine: 'eevee', shotIds: ['wide', 'booth'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } }));
+    await act(async () => respond({ id: 'pr-9', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], startedAt: new Date().toISOString() }));
+    expect(onRendered).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
   });
 
   it('sets the newest render as the camera photo plate on the saved greybox', async () => {

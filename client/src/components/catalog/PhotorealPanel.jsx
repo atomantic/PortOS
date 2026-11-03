@@ -56,7 +56,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [samples, setSamples] = useState(() => readPrefs()?.samples ?? null);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
-  const lastJobState = useRef(null);
+  // Jobs this panel watched run (or started); only their finish reloads or toasts.
+  const watched = useRef(new Set());
+  const startingRef = useRef(false);
   const job = status?.job || null;
   const running = job?.state === 'running';
   const engineInfo = ENGINES.find((e) => e.id === engine);
@@ -77,9 +79,10 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
   // A finished render attaches images and replaces the .blend: reload both.
   useEffect(() => {
-    const previous = lastJobState.current;
-    lastJobState.current = job?.state || null;
-    if (previous !== 'running' || !job || job.state === 'running') return;
+    if (!job) return undefined;
+    if (job.state === 'running') { watched.current.add(job.id); return undefined; }
+    // A worker can finish before the start response arrives; that frame is ours too.
+    if (!watched.current.delete(job.id) && !startingRef.current) return undefined;
     let active = true;
     if (job.state === 'done') {
       onRendered?.();
@@ -113,10 +116,13 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const render = async () => {
     if (!chosen.length || running || starting) return;
     setStarting(true);
+    startingRef.current = true;
     const started = await startCatalogPhotorealRender(record.id, { shotIds: chosen, engine, samples: sampleValue }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
+    startingRef.current = false;
     setStarting(false);
-    if (started) setStatus((cur) => ({ ...(cur || {}), job: started }));
+    // Keep a finish frame for this job that beat the response here.
+    if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };
 
   const setPlate = async (shot, mediaKey) => {
