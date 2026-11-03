@@ -552,6 +552,7 @@ const generateBodySchema = z.object({
       songAudio: z.boolean().optional(),
       // Refuse if the saved shot no longer matches the mode the board priced.
       expectedShot: z.enum(['cutaway', 'lipsync', 'music']).optional(),
+      expectedClipReferenceFiles: z.array(z.string().min(1).max(512)).max(MAX_REFERENCE_IMAGE_FILES).optional(),
       // The shot card's Whole sung line: a performance take's song slice covers
       // the full lyric line the shot sits in; its edit points still frame the shot.
       wholeLine: z.boolean().optional(),

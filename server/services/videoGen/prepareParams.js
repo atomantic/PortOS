@@ -763,7 +763,7 @@ async function prepareVideoReferences({
   const hasRequestedReferences = body.referenceImageFiles?.length || body.referenceVideoIds?.length
     || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
   let referenceImagePaths = null;
-  if (body.musicVideo?.sceneId && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
+  if (body.musicVideo?.sceneId && !body.musicVideo.clipReferencesDisabled && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
     const totalLimit = Number(effectiveModel?.maxReferenceTotal) || Infinity;
     const limit = Math.min(extraReferenceImageLimit(effectiveModel), totalLimit - 1);
     if (limit > 0) {

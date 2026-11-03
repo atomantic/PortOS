@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
 const guide = (mediaKey, age, extra = {}) => ({ mediaKey, kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z', library: { variant: { age }, guide: true }, ...extra });
@@ -15,6 +16,16 @@ const authored = [
 ];
 const castMedia = { [CAST_ID]: [guide('adult.png', 27), guide('child.png', 7), guide('teen.png', 17)] };
 const ids = (refs) => refs.map((ref) => ref.imageId);
+
+it('uses the selected video model\'s real extra-image capacity', () => {
+  expect(musicVideoClipReferenceCapacity('grok')).toBe(7);
+  expect(musicVideoClipReferenceCapacity('local', { maxReferenceImages: 9, maxReferenceTotal: 5 })).toBe(4);
+  expect(musicVideoClipReferenceCapacity('local', { id: 'ltx25' })).toBe(0);
+  expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('minimax/h3-max/reference-to-video'))).toBe(9);
+  expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('bytedance/seedance-2.5/reference-to-video'))).toBe(16);
+  expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('fal-ai/minimax/hailuo-02/standard/image-to-video'))).toBe(0);
+  expect(musicVideoClipReferenceCapacity('runway')).toBe(0);
+});
 
 describe('musicVideoConditioningReferences with Casting guides', () => {
   it('leads with age-compatible guides, then fills from the project references', () => {

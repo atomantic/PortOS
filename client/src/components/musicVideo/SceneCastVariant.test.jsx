@@ -41,6 +41,13 @@ describe('a shot\'s Cast guides picker', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, frameReferenceIds: ['r1'] });
   });
 
+  it('also removes old-variant clip guides while preserving other clip picks', () => {
+    const onSave = vi.fn();
+    render(<SceneCastVariant project={project} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-x' }, clipReferenceIds: ['bike', 'mvr-guide-a.png'] }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.change(screen.getByLabelText('Era'), { target: { value: 'teen' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { characterVariant: { ingredientId: 'cat-chr-x', era: 'teen' }, clipReferenceIds: ['bike'] });
+  });
+
   // Uniquely catches a guide-only pick turning into [] (an explicit "send nothing") on a variant change.
   it('returns a guide-only pick to Auto when the variant changes or is cleared', () => {
     const onSave = vi.fn();

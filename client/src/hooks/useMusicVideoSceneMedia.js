@@ -456,6 +456,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(hostedPerformance ? { songAudio: false } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
+        ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })

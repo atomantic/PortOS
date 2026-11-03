@@ -958,6 +958,37 @@ describe('hosted inputs', () => {
     expect(JSON.stringify(posted)).not.toContain('data:');
   });
 
+  it('sends a Music Video start frame and named clip references together to H3', async () => {
+    const [frame, rider, bike] = ['start', 'rider', 'bike'].map((name) => join(TEST_ROOT, `${name}.png`));
+    await Promise.all([frame, rider, bike].map((path) => writeFile(path, 'png')));
+    const model = 'minimax/h3-max/reference-to-video';
+    let posted = null;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (url.startsWith('https://rest.fal.ai/storage/upload/initiate')) {
+        const { file_name: name } = JSON.parse(opts.body);
+        return jsonResponse({ upload_url: `https://upload.example.com/${name}`, file_url: `https://cdn.example.com/${name}` });
+      }
+      if (url.startsWith('https://upload.example.com/')) return { ok: true, status: 200 };
+      if (url === `https://queue.fal.run/${model}`) {
+        posted = JSON.parse(opts.body);
+        return jsonResponse({ request_id: 'req-clip', status_url: 'https://queue.fal.run/s', response_url: 'https://queue.fal.run/r' });
+      }
+      if (url === 'https://queue.fal.run/s') return jsonResponse({ status: 'COMPLETED' });
+      if (url === 'https://queue.fal.run/r') return jsonResponse({ video: { url: 'https://cdn.fal.ai/clip.mp4' } });
+      if (url === 'https://cdn.fal.ai/clip.mp4') return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('mp4')).buffer };
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: model, prompt: 'Reveal the rider', duration: 5,
+      sourceImagePath: frame, referenceImagePaths: [rider, bike], clipReferenceLabels: [{ label: 'Rider' }, { label: 'Bike', role: 'prop' }],
+      musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posted.image_url).toMatch(/-start\.png$/);
+    expect(posted.reference_image_urls).toEqual([expect.stringMatching(/-reference-1\.png$/), expect.stringMatching(/-reference-2\.png$/)]);
+    expect(posted.prompt).toContain('Image 1 is the reference for Rider. Image 2 is the reference for Bike.');
+    const [entry] = await loadHistory();
+    expect(entry).toMatchObject({ sentPrompt: posted.prompt, clipReferenceFiles: ['rider.png', 'bike.png'] });
+  });
+
   it('sends a storyboard panel as @Image1 guidance beside its references, never as a start frame', async () => {
     const [panel, cast] = [join(TEST_ROOT, 'panel.png'), join(TEST_ROOT, 'cast.png')];
     await writeFile(panel, 'png'); await writeFile(cast, 'png');

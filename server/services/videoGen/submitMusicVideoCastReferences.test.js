@@ -34,6 +34,7 @@ vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (b
 vi.mock('../musicVideo/clipCastReferences.js', () => ({
   musicVideoLocalReferencePaths: m.localReferences,
   musicVideoClipCastReferences: m.hostedReferences,
+  musicVideoClipReferences: m.hostedReferences,
 }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: async () => null }));
 vi.mock('../musicVideo/submissionGuards.js', () => ({ applyMusicVideoSubmissionGuards: async () => [] }));
@@ -48,7 +49,7 @@ const body = (extra = {}) => ({ prompt: 'A dancer turns', mode: 'image', sourceI
 beforeEach(() => {
   vi.clearAllMocks();
   m.settings = { imageGen: { local: { pythonPath: '/example/python' }, grok: { enabled: true, grokPath: '/example/grok' } },
-    videoGen: { defaultModelId: 'omni' } };
+    videoGen: { defaultModelId: 'omni', fal: { apiKey: 'test-key' } } };
   m.localReferences.mockImplementation(async (_tag, limit, { excludePath } = {}) => ['/mock/images/still.png', '/mock/images/lead.png', '/mock/images/guest.png']
     .filter((path) => path !== excludePath).slice(0, limit));
   m.hostedReferences.mockResolvedValue([]);
@@ -111,10 +112,41 @@ describe('Music Video cast references at video submission', () => {
     expect(m.copy.mock.calls.map(([from]) => from)).toEqual(['/tmp/one.png', '/tmp/two.png']);
   });
 
+  it('refuses a combined Grok reference set beyond the supported limit before queuing', async () => {
+    m.hostedReferences.mockResolvedValue(Array.from({ length: 7 }, (_, i) => ({ path: `/mock/images/${i}.png`, label: `Person ${i}` })));
+    const referenceImage1 = { path: '/tmp/one.png', originalname: 'one.png' };
+    await expect(submitVideoGenJob(body({ backend: 'grok' }), { referenceImage1 }))
+      .rejects.toMatchObject({ code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
+    expect(m.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('queues a fal reference model with its pinned frame and the selected reference images', async () => {
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/rider.png', label: 'Rider' }, { path: '/mock/images/bike.png', label: 'Bike', role: 'prop' }]);
+    await submitVideoGenJob(body({ backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video', falDuration: 5 }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, 9, { excludePath: '/mock/images/still.png' });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+      sourceImagePath: '/mock/images/still.png',
+      referenceImagePaths: ['/mock/images/rider.png', '/mock/images/bike.png'],
+      clipReferenceLabels: [{ label: 'Rider' }, { label: 'Bike', role: 'prop' }],
+    });
+  });
+
+  it('does not claim extra references for a fal model that cannot accept them', async () => {
+    await submitVideoGenJob(body({ backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 6 }), {});
+    expect(m.hostedReferences).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
+  });
+
   it('keeps a chained local shot renderable without adding incompatible references', async () => {
     await submitVideoGenJob(body({ backend: 'local', chunks: 2 }), {});
     expect(m.localReferences).not.toHaveBeenCalled();
     expect(m.enqueue.mock.calls[0][0].params).toMatchObject({ chunks: 2 });
+    expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
+  });
+
+  it('does not inject local reference paths when a peer-capable pool disabled them', async () => {
+    await submitVideoGenJob(body({ backend: 'local', musicVideo: { ...tag, clipReferencesDisabled: true } }), {});
+    expect(m.localReferences).not.toHaveBeenCalled();
     expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
   });
 

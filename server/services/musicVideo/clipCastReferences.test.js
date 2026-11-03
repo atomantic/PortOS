@@ -36,10 +36,30 @@ describe('musicVideoClipCastReferences', () => {
     ]);
   });
 
-  it('drops a sheet whose file is gone', async () => {
+  it('refuses a clip instead of silently dropping a missing sheet', async () => {
     const scene = { sceneId: 's1', sectionIndex: 0, prompt: 'Guest walks past' };
     getProject.mockResolvedValue(project(scene, REFS.map((ref) => (ref.id === 'mvr-cs-cast-guest' ? { ...ref, imageId: 'gone.png' } : ref))));
-    expect((await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).map((ref) => ref.label)).toEqual(['Lead — character sheet']);
+    await expect(musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' }))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
+  });
+
+  it('uses independent clip selections, including a set, without changing the frame picks', async () => {
+    const scene = { sceneId: 's1', frameReferenceIds: ['mvr-cs-character'], clipReferenceIds: ['mvr-cs-set-plaza', 'mvr-cs-cast-guest'] };
+    getProject.mockResolvedValue(project(scene, REFS));
+    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([
+      { path: '/gallery/plaza.png', label: 'Plaza', role: 'set' },
+      { path: '/gallery/guest.png', label: 'Guest — cast sheet' },
+    ]);
+    expect(await musicVideoLocalReferencePaths({ projectId: 'mv-1', sceneId: 's1' }, 1)).toEqual(['/gallery/plaza.png']);
+    scene.clipReferenceIds = [];
+    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([]);
+    expect(scene.frameReferenceIds).toEqual(['mvr-cs-character']);
+  });
+
+  it('refuses a deleted explicit selection', async () => {
+    getProject.mockResolvedValue(project({ sceneId: 's1', clipReferenceIds: ['removed-ref'] }, REFS));
+    await expect(musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' }))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
   });
 
   it('returns none for an untagged clip or a scene that is gone', async () => {
@@ -87,6 +107,7 @@ describe('musicVideoLocalReferencePaths', () => {
       mediaKey: 'gone.png', kind: 'reference', createdAt: '2026-01-01T00:00:00.000Z',
       library: { guide: true, variant: { age: 7 } },
     }] });
-    expect(await musicVideoLocalReferencePaths({ projectId: 'mv-1', sceneId: 'shot-example' }, 1)).toEqual(['/gallery/lead.png']);
+    await expect(musicVideoLocalReferencePaths({ projectId: 'mv-1', sceneId: 'shot-example' }, 1))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
   });
 });
