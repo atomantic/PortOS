@@ -2010,7 +2010,7 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
     expect(stage.images['set:lab'].imageId).not.toBe(original);
     expect(stage.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', providerId: api.id, model: api.defaultModel,
       discrepancy: 'Rendering defect: A stool is fused into the bench.' });
-    expect(vision).toHaveBeenLastCalledWith(expect.objectContaining({ provider: api, model: api.defaultModel, toolFree: true, allowFallback: false }));
+    expect(vision).toHaveBeenLastCalledWith(expect.objectContaining({ provider: { ...api, thinking: false }, model: api.defaultModel, toolFree: true, allowFallback: false }));
   });
 
   it('flags the wrong location and populated empty plate, then accepts only an explicit exact-image acknowledgement', async () => {
