@@ -1127,6 +1127,7 @@ describe('create-schema parity', () => {
     loop: true,
     sectionIndex: 2,
     lyricText: 'line one',
+    lyricAnchor: { cueId: 'lc-1', wordIndex: 0, wordCount: 2 },
     visualIntent: 'calm',
     frameReferenceIds: ['ref-a', 'ref-b'],
     clipReferenceIds: ['ref-b'],

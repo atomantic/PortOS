@@ -4,6 +4,7 @@ import StageSection from './StageSection.jsx';
 import { PlanActions } from './ProjectActionGroups.jsx';
 import ShotPacingFields from './ShotPacingFields.jsx';
 import PlanShotList from './PlanShotList.jsx';
+import LyricWordCutPanel from './LyricWordCutPanel.jsx';
 
 /**
  * Shot timing on Shots, folded under the board: the shot list read against the
@@ -24,6 +25,12 @@ export default function ShotTimingTools({ board }) {
           <PlanActions project={project} busy={busy} onPlan={board.onPlan} onAutoArrange={board.onAutoArrange} />
           <ShotPacingFields project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
         </fieldset>
+        {project.composition?.mode !== 'document' && (
+          <fieldset disabled={locked} className="min-w-0">
+            <LyricWordCutPanel key={`lyric-cut-${project.id}`} project={project} onCut={board.onCutOnLyrics}
+              onDismissSync={() => { board.editProjectLocal({ lyricAnchorSync: null }); board.saveProjectFields({ lyricAnchorSync: null }); }} />
+          </fieldset>
+        )}
         {project.audioAnalysis && scenes.length > 0 && (
           <fieldset disabled={locked} className="min-w-0 space-y-1">
             <h4 className="text-sm font-medium">Beat timeline</h4>

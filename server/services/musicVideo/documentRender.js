@@ -43,6 +43,7 @@ import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
+import { lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
 import { documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
@@ -211,6 +212,13 @@ function sceneDirection(project, sceneId) {
   return { mode, route, focalSubject, framing, typographyRole, emphasis, transitionIn, transitionOut };
 }
 
+/** `{ cueId, wordIndex, wordCount, onsetSec, text }` for a word-anchored shot (onset null when the word is untimed). */
+function sceneLyricAnchor(project, scene) {
+  const anchor = scene.lyricAnchor;
+  const onset = lyricAnchorOnset(project?.lyricCues, anchor);
+  return { cueId: anchor.cueId, wordIndex: anchor.wordIndex, wordCount: anchor.wordCount || 1, onsetSec: onset?.startSec ?? null, text: onset?.text ?? null };
+}
+
 /**
  * The `window.PORTOS_MV` payload (pure). `media` is resolveSceneMedia's map;
  * `frame` is `{ width, height }`; `clock` is documentRenderClock's result.
@@ -245,6 +253,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         lyricRole: MUSIC_VIDEO_LYRIC_ROLES.includes(scene.lyricRole) ? scene.lyricRole : null,
         lyricSize: MUSIC_VIDEO_LYRIC_SIZES.includes(scene.lyricSize) ? scene.lyricSize : null,
         lyricText: typeof scene.lyricText === 'string' ? scene.lyricText : null,
+        // #14820: the sung word the shot is cut on and where it is sung now, for reveals keyed to it.
+        ...(scene.lyricAnchor?.cueId ? { lyricAnchor: sceneLyricAnchor(project, scene) } : {}),
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),
         // #14821: the roster cameo the shot shows, so a page can label a placeholder until its still exists.

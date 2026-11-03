@@ -924,6 +924,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/scenes/:sceneId/merge-next', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/merge-previous', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/research-seed', HANDLER_GATED],
+  ['POST /api/music-video/:id/scenes/cut-on-lyrics', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/split', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/start', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/swap-frames', RECORDS],

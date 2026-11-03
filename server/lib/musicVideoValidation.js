@@ -1700,6 +1700,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   storyboardReopenedAt: z.string().datetime().nullable().optional(),
   // Keep the shots 1:1 with the linked storyboard's panels after each board edit (lib/storyboardShotSync.js).
   storyboardSync: z.boolean().optional(),
+  // Dismiss the note of shots that followed their words after re-alignment (#14820).
+  lyricAnchorSync: z.null().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server
@@ -1719,6 +1721,13 @@ export const musicVideoProjectCloneSchema = z.object({
   variant: z.enum(['revision', 'video-generation']).optional(),
 }).strict();
 
+// #14820: the sung word (or phrase) a shot was cut on; its start follows that word's onset.
+export const musicVideoLyricAnchorSchema = z.object({
+  cueId: z.string().min(1).max(64),
+  wordIndex: z.number().int().min(0).max(1000),
+  wordCount: z.number().int().min(1).max(200).optional(),
+}).strict();
+
 // Review content is editable; approval records are server-owned and never PATCHable.
 export const musicVideoProductionDraftSchema = z.object({
   storyboardSource: z.enum(['board', 'document']).optional(),
@@ -1732,6 +1741,7 @@ export const musicVideoProductionDraftSchema = z.object({
   storyboard: z.array(z.object({
     id: z.string().max(64).optional(), startSec: timedSec, endSec: timedSec,
     sceneId: z.string().max(64).nullable(), lyricCueIds: z.array(z.string().max(64)).max(2000),
+    lyricAnchor: musicVideoLyricAnchorSchema.optional(),
     action: z.string().max(4000), staging: z.string().max(4000),
     camera: z.string().max(4000), transition: z.string().max(4000),
   }).strict()).max(2000),
@@ -1805,6 +1815,7 @@ export const musicVideoSceneCreateSchema = z.object({
   loop: z.boolean().optional(),
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
+  lyricAnchor: musicVideoLyricAnchorSchema.nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
   // #8977: `performance` = a lip-synced singer that must follow the master
@@ -1850,6 +1861,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   loop: z.boolean().optional(),
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
+  lyricAnchor: musicVideoLyricAnchorSchema.nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
   // #8977: `performance` = a lip-synced singer that must follow the master
@@ -1944,6 +1956,12 @@ export const musicVideoSceneSplitSchema = z.object({
   backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
+}).strict();
+
+// Cut shots on sung words (#14820): one shot per phrase or per word over the chosen lyric lines.
+export const musicVideoLyricCutSchema = z.object({
+  cueIds: z.array(z.string().min(1).max(64)).min(1).max(2000),
+  mode: z.enum(['phrase', 'word']),
 }).strict();
 
 export const musicVideoPacingRecutSchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
