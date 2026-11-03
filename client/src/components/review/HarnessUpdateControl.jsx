@@ -73,7 +73,7 @@ export default function HarnessUpdateControl({ harness, warningDays, onWarningDa
       {warningDays > 0 && <p className="text-port-warning">The actual updater target and its publication age are unknown; this is a warning about the npm reference only.</p>}
       <p>Age does not prove a release is safe. Waiting may leave security issues exposed. The vendor updater may install a different version.</p>
       {warningDays > 0 && <p>If you believe a security issue is urgent, you can choose to update now.</p>}
-      <p>PortOS checks its known work and holds new PortOS work during the update. It cannot detect other terminal sessions or processes that leave the updater's process group. Make sure those sessions are idle.</p>
+      <p>Agents already running keep the version they started with. New agents use the update once it finishes.</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => setConfirming(false)} className="rounded border border-port-border px-3 py-2">Wait</button>
         {warningDays > 0 && <button type="button" onClick={() => onUpdate({ ...harness, ticket: reference.ticket })} disabled={disabled || changed}

@@ -30,11 +30,6 @@ const installer = vi.hoisted(() => ({
   RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
 vi.mock('./providerRuntimeInstaller.js', () => installer);
-const activity = vi.hoisted(() => ({ countActiveCosAgents: vi.fn() }));
-vi.mock('./updatePreflight.js', () => activity);
-const records = vi.hoisted(() => ({ readAgentsStateForSafetyCheck: vi.fn() }));
-vi.mock('./cosState.js', () => records);
-vi.mock('./cosAgentLifecycle.js', () => ({ isLiveAgentRecord: agent => Boolean(agent) && agent.status !== 'completed' }));
 const gate = vi.hoisted(() => ({ status: vi.fn(), active: null, harnessActions: { reserve: vi.fn(), finish: vi.fn(), operation: vi.fn() } }));
 vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: gate }));
 const settlement = vi.hoisted(() => ({ processAbsent: vi.fn() }));
@@ -43,10 +38,6 @@ const supervisor = vi.hoisted(() => ({ spawnHarnessActionSupervisor: vi.fn() }))
 vi.mock('./harnessActionSupervisor.js', () => supervisor);
 const group = vi.hoisted(() => ({ isSupervisorOnly: vi.fn() }));
 vi.mock('./harnessProcessGroup.js', () => group);
-const runner = vi.hoisted(() => ({ getActiveAgentsFromRunner: vi.fn() }));
-vi.mock('./cosRunnerClient.js', () => runner);
-const recovery = vi.hoisted(() => ({ checkHarnessActionRecovery: vi.fn() }));
-vi.mock('./harnessActionRecovery.js', () => recovery);
 const reference = vi.hoisted(() => ({ matchesHarnessUpdateTicket: vi.fn() }));
 vi.mock('./harnessUpdateReference.js', () => reference);
 const review = vi.hoisted(() => ({ getRuntimeUpdateReviewSnapshot: vi.fn() }));
@@ -76,7 +67,7 @@ const app = () => {
   const server = express();
   server.post('/action', (req, res, next) => {
     streamHarnessAction(req, res, { runtime: req.query.runtime, action: req.query.action,
-      ...(req.query.requireIdle === '1' ? { requireIdle: true, reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } } : {}),
+      ...(req.query.requireSupervisor === '1' ? { requireSupervisor: true, reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } } : {}),
       ...(req.query.expectedVersion ? { expectedVersion: req.query.expectedVersion } : {}) }).catch(next);
   });
   server.use(errorMiddleware);
@@ -101,27 +92,18 @@ beforeEach(() => {
   installer.getProviderRuntime.mockImplementation((id) => RUNTIMES[id] || null);
   installer.describeRuntimeInstall.mockImplementation((id, action) => `${id} ${action}`);
   installer.buildRuntimeActionCommand.mockImplementation((id) => (RUNTIMES[id] ? { command: id, args: [] } : null));
-  activity.countActiveCosAgents.mockResolvedValue(0);
-  records.readAgentsStateForSafetyCheck.mockResolvedValue({ trusted: true, agents: {} });
   gate.active = null;
-  gate.harnessActions.reserve.mockImplementation(({ exclusive }) => {
-    gate.active = { id: 'fixture-owner', holdId: exclusive ? 'fixture-hold' : null, holdRevision: exclusive ? 1 : null };
+  gate.harnessActions.reserve.mockImplementation(() => {
+    gate.active = { id: 'fixture-owner', holdId: null, holdRevision: null };
     return gate.active;
   });
   gate.harnessActions.finish.mockImplementation(() => {
-    const held = Boolean(gate.active?.holdId);
-    const overlap = gate.active?.overlap === true;
     gate.active = null;
-    return { held, overlap };
+    return { held: false, overlap: false };
   });
   gate.harnessActions.operation.mockImplementation(() => gate.active);
-  gate.status.mockImplementation(() => gate.active?.holdId
-    ? { state: 'draining', hold: { id: gate.active.holdId, revision: gate.active.holdRevision }, blockers: [{ kind: 'harness-action' }] }
-    : { state: 'normal', blockers: [] });
   settlement.processAbsent.mockReturnValue(true);
   group.isSupervisorOnly.mockResolvedValue(true);
-  runner.getActiveAgentsFromRunner.mockResolvedValue([]);
-  recovery.checkHarnessActionRecovery.mockResolvedValue(undefined);
   reference.matchesHarnessUpdateTicket.mockResolvedValue(true);
   review.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ id: 'harness:opencode', harnessUpdate: {
     installedVersion: '1.18.27', candidateVersion: '1.19.0', updatable: true,
@@ -226,21 +208,21 @@ describe('streamHarnessAction — uninstall', () => {
 });
 
 describe('streamHarnessAction — guards', () => {
-  it.skipIf(!supervised)('does not update over active or unreadable PortOS agent work', async () => {
+  // A running agent keeps the executable it already opened, so PortOS work must
+  // not hold an update hostage (and no hold may pause new work for it).
+  it.skipIf(!supervised)('updates without waiting for or holding PortOS work', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    activity.countActiveCosAgents.mockResolvedValueOnce(1).mockRejectedValueOnce(new Error('unavailable'));
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('PortOS work is active or starting');
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('Could not check active PortOS work');
-    expect(launch).not.toHaveBeenCalled();
+    await runAction('runtime=opencode&action=update');
+    expect(gate.harnessActions.reserve).toHaveBeenCalledWith({ runtime: 'opencode', action: 'update' });
+    expectLaunch('opencode', 'update');
   });
 
-  it.skipIf(!supervised)('also refuses a Harnesses-page update while PortOS work is active', async () => {
+  it.skipIf(!supervised)('explains a refusal while PortOS updates itself or another harness action runs', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    activity.countActiveCosAgents.mockResolvedValueOnce(1);
+    gate.harnessActions.reserve.mockImplementationOnce(() => { throw Object.assign(new Error('held'), { code: 'MAINTENANCE_HELD' }); });
     const response = await request(app()).post('/action?runtime=opencode&action=update');
-    expect(response.text).toContain('PortOS work is active or starting');
+    expect(response.text).toContain('A PortOS update, maintenance pause, or another harness action is in progress');
     expect(launch).not.toHaveBeenCalled();
-    expect(gate.harnessActions.reserve).toHaveBeenCalledWith({ runtime: 'opencode', action: 'update', exclusive: true });
   });
 
   it.skipIf(!supervised)('distinguishes an unavailable journal from ordinary busy work', async () => {
@@ -251,53 +233,35 @@ describe('streamHarnessAction — guards', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it.skipIf(!supervised)('refuses an unreachable or malformed runner inventory before launching', async () => {
+  it.skipIf(!supervised)('releases its reservation when the client disconnects during the review recheck', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    runner.getActiveAgentsFromRunner.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ agents: [] });
-    for (let i = 0; i < 2; i += 1) {
-      expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('The CoS runner could not be checked');
-    }
-    expect(launch).not.toHaveBeenCalled();
-    expect(gate.harnessActions.finish).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() => expect(recovery.checkHarnessActionRecovery).toHaveBeenCalledTimes(2));
-  });
-
-  it.skipIf(!supervised)('releases a starting hold when a preflight read times out or the client disconnects', async () => {
-    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    activity.countActiveCosAgents.mockImplementation(() => new Promise(() => {}));
-    const res = new EventEmitter();
-    res.writableEnded = false;
-    res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', preflightTimeoutMs: 30 });
-    expect(res.write.mock.calls.flat().join('')).toContain('Checking PortOS work timed out');
-    expect(gate.harnessActions.finish).toHaveBeenCalledOnce();
-    expect(launch).not.toHaveBeenCalled();
-    gate.harnessActions.finish.mockClear();
+    reference.matchesHarnessUpdateTicket.mockImplementationOnce(() => new Promise(() => {}));
     const disconnected = new EventEmitter();
     disconnected.writableEnded = false;
     disconnected.writeHead = vi.fn(); disconnected.write = vi.fn(); disconnected.end = vi.fn(() => { disconnected.writableEnded = true; });
-    const pending = streamHarnessAction({}, disconnected, { runtime: 'opencode', action: 'update', preflightTimeoutMs: 5000 });
-    await vi.waitFor(() => expect(gate.harnessActions.reserve).toHaveBeenCalledTimes(2));
+    const pending = streamHarnessAction({}, disconnected, { runtime: 'opencode', action: 'update', requireSupervisor: true,
+      expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } }, preflightTimeoutMs: 5000 });
+    await vi.waitFor(() => expect(gate.harnessActions.reserve).toHaveBeenCalledOnce());
     disconnected.emit('close');
     await pending;
     expect(gate.harnessActions.finish).toHaveBeenCalledOnce();
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it.skipIf(!supervised)('releases a starting hold when the review recheck does not finish', async () => {
+  it.skipIf(!supervised)('releases its reservation when the review recheck does not finish', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
     reference.matchesHarnessUpdateTicket.mockImplementationOnce(() => new Promise(() => {}));
     const res = new EventEmitter();
     res.writableEnded = false;
     res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireIdle: true,
+    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireSupervisor: true,
       expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } }, preflightTimeoutMs: 30 });
     expect(res.write.mock.calls.flat().join('')).toContain('review could not be checked in time');
     expect(gate.harnessActions.finish).toHaveBeenCalledOnce();
     expect(launch).not.toHaveBeenCalled();
   });
 
-  it.skipIf(!supervised)('retains the hold after cancellation while a descendant remains in the group', async () => {
+  it.skipIf(!supervised)('retains the reservation after cancellation while a descendant remains in the group', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
     settlement.processAbsent.mockReturnValue(false);
     const child = makeChild();
@@ -305,34 +269,21 @@ describe('streamHarnessAction — guards', () => {
     const res = new EventEmitter();
     res.writableEnded = false;
     res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireIdle: true,
+    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireSupervisor: true,
       expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } });
     res.emit('close');
     expect(installer.stopRuntimeInstaller).toHaveBeenCalledWith(child);
     child.stdout.end(); child.stderr.end(); child.emit('close', 1);
     await vi.waitFor(() => expect(settlement.processAbsent).toHaveBeenCalledWith(-123));
     expect(gate.harnessActions.finish).not.toHaveBeenCalled();
-    expect(recovery.checkHarnessActionRecovery).not.toHaveBeenCalled();
     settlement.processAbsent.mockReturnValue(true);
     await vi.waitFor(() => expect(gate.harnessActions.finish).toHaveBeenCalledWith('fixture-owner', 123), { timeout: 2000 });
-    await vi.waitFor(() => expect(recovery.checkHarnessActionRecovery).toHaveBeenCalledOnce());
-  });
-
-  it.skipIf(!supervised)('also refuses when persisted agents or maintenance blockers indicate work', async () => {
-    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    records.readAgentsStateForSafetyCheck.mockResolvedValueOnce({ trusted: true, agents: { a: { status: 'running' } } });
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('PortOS work is active');
-    records.readAgentsStateForSafetyCheck.mockResolvedValueOnce({ trusted: true, agents: { a: { status: 'paused' } } });
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('Paused agents still count as work');
-    gate.status.mockReturnValue({ state: 'draining', hold: { id: 'fixture-hold', revision: 1 }, blockers: [{ kind: 'harness-action' }, { kind: 'media' }] });
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1')).text).toContain('Could not check active PortOS work');
-    expect(launch).not.toHaveBeenCalled();
   });
 
   it.skipIf(!supervised)('does not disclose the reviewed executable path in a startup failure', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
     launch.mockImplementationOnce(() => { throw Object.assign(new Error('spawn /fixture/opencode denied'), { code: 'EACCES' }); });
-    const response = await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    const response = await request(app()).post('/action?runtime=opencode&action=update&requireSupervisor=1&expectedVersion=1.18.27');
     expect(response.text).toContain('EACCES');
     expect(response.text).not.toContain('/fixture/opencode');
   });
@@ -340,13 +291,13 @@ describe('streamHarnessAction — guards', () => {
   it.skipIf(!supervised)('rechecks candidate and executable and passes the review to the supervisor', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
     reference.matchesHarnessUpdateTicket.mockResolvedValueOnce(false);
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27')).text).toContain('review, executable, or active work changed');
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireSupervisor=1&expectedVersion=1.18.27')).text).toContain('review or executable changed');
     review.getRuntimeUpdateReviewSnapshot.mockReturnValueOnce({ items: [{ id: 'harness:opencode', harnessUpdate: {
       installedVersion: '1.18.27', candidateVersion: '1.19.1', updatable: true,
     } }] });
-    expect((await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27')).text).toContain('review, executable, or active work changed');
+    expect((await request(app()).post('/action?runtime=opencode&action=update&requireSupervisor=1&expectedVersion=1.18.27')).text).toContain('review or executable changed');
     expect(launch).not.toHaveBeenCalled();
-    await runAction('runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    await runAction('runtime=opencode&action=update&requireSupervisor=1&expectedVersion=1.18.27');
     expect(launch).toHaveBeenCalledWith(expect.objectContaining({ runtime: 'opencode', action: 'update', reviewed: {
       candidate: '1.19.0', identity: { path: '/fixture/opencode' },
     } }));
@@ -359,7 +310,7 @@ describe('streamHarnessAction — guards', () => {
     const res = new EventEmitter();
     res.writableEnded = false;
     res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireIdle: true,
+    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireSupervisor: true,
       expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } });
     review.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ id: 'harness:opencode', harnessUpdate: {
       installedVersion: '1.18.27', candidateVersion: '1.19.1', updatable: true,
@@ -379,7 +330,7 @@ describe('streamHarnessAction — guards', () => {
     const res = new EventEmitter();
     res.writableEnded = false;
     res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireIdle: true,
+    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireSupervisor: true,
       expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } });
     child.emit('message', { type: 'harness-action-ready', ownerId: 'fixture-owner' });
     await vi.waitFor(() => expect(child.send).toHaveBeenCalledWith({ type: 'harness-action-go', ownerId: 'fixture-owner' }, expect.any(Function)));
@@ -397,7 +348,7 @@ describe('streamHarnessAction — guards', () => {
     const res = new EventEmitter();
     res.writableEnded = false;
     res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireIdle: true,
+    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update', requireSupervisor: true,
       expectedVersion: '1.18.27', reviewed: { candidate: '1.19.0', identity: { path: '/fixture/opencode' } } });
     let resolveProof;
     reference.matchesHarnessUpdateTicket.mockImplementationOnce(() => new Promise(resolve => { resolveProof = resolve; }));
@@ -450,46 +401,9 @@ describe('streamHarnessAction — guards', () => {
     await vi.waitFor(() => expect(gate.harnessActions.finish).toHaveBeenCalledWith('fixture-owner', 123));
   });
 
-  it.skipIf(!supervised)('stops a running updater when existing PortOS work is recovered', async () => {
-    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    const child = makeChild();
-    launch.mockReturnValueOnce(child);
-    const res = new EventEmitter();
-    res.writableEnded = false;
-    res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update' });
-    child.emit('message', { type: 'harness-action-ready', ownerId: 'fixture-owner' });
-    await vi.waitFor(() => expect(child.send).toHaveBeenCalledOnce());
-    gate.active.overlap = true;
-    gate.active.invalidated = true;
-    await vi.waitFor(() => expect(installer.stopRuntimeInstaller).toHaveBeenCalledWith(child), { timeout: 2000 });
-    expect(res.write.mock.calls.flat().join('')).toContain('recovered existing work');
-    child.emit('exit', 1);
-    child.stdout.end(); child.stderr.end(); child.emit('close', 1);
-    await vi.waitFor(() => expect(gate.harnessActions.finish).toHaveBeenCalled());
-  });
-
-  it.skipIf(!supervised)('stops a running updater when maintenance state becomes unreadable', async () => {
-    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
-    const child = makeChild();
-    launch.mockReturnValueOnce(child);
-    const res = new EventEmitter();
-    res.writableEnded = false;
-    res.writeHead = vi.fn(); res.write = vi.fn(); res.end = vi.fn(() => { res.writableEnded = true; });
-    await streamHarnessAction({}, res, { runtime: 'opencode', action: 'update' });
-    child.emit('message', { type: 'harness-action-ready', ownerId: 'fixture-owner' });
-    await vi.waitFor(() => expect(child.send).toHaveBeenCalledOnce());
-    gate.harnessActions.operation.mockImplementation(() => { throw new Error('unavailable'); });
-    await vi.waitFor(() => expect(installer.stopRuntimeInstaller).toHaveBeenCalledWith(child), { timeout: 2000 });
-    expect(res.write.mock.calls.flat().join('')).toContain('Maintenance state became unavailable or changed');
-    child.emit('exit', 1);
-    child.stdout.end(); child.stderr.end(); child.emit('close', 1);
-    await vi.waitFor(() => expect(gate.harnessActions.finish).toHaveBeenCalled());
-  });
-
   it('refuses a stale inline update when the installed version changed', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode', { version: '1.19.0' }));
-    const response = await request(app()).post('/action?runtime=opencode&action=update&requireIdle=1&expectedVersion=1.18.27');
+    const response = await request(app()).post('/action?runtime=opencode&action=update&requireSupervisor=1&expectedVersion=1.18.27');
     expect(response.text).toContain('version changed');
     expect(launch).not.toHaveBeenCalled();
   });

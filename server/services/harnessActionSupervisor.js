@@ -116,8 +116,7 @@ export async function runHarnessActionSupervisor(input, { admission = maintenanc
   signal?.throwIfAborted();
   const row = runtimeFor(input?.runtime);
   const owner = admission.harnessActions.operation();
-  if (!row || !owner || owner.id !== input?.ownerId || owner.runtime !== row.id || owner.action !== input?.action
-    || (input?.reviewed && !owner.holdId)) throw new Error('Harness action ownership is unavailable.');
+  if (!row || !owner || owner.id !== input?.ownerId || owner.runtime !== row.id || owner.action !== input?.action) throw new Error('Harness action ownership is unavailable.');
   if (input.reviewed && !await matchesReview(row, input.reviewed)) throw new Error('The reviewed executable or ticket changed.');
   signal?.throwIfAborted();
   admission.harnessActions.enter(owner.id, supervisorPid);

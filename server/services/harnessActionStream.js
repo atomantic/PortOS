@@ -94,7 +94,7 @@ export const HARNESS_ACTION_COPY = Object.freeze({
  * @param {import('express').Response} res
  * @param {{runtime: unknown, action?: string}} params
  */
-export async function streamHarnessAction(req, res, { runtime: runtimeId, action = 'install', requireIdle = false,
+export async function streamHarnessAction(req, res, { runtime: runtimeId, action = 'install', requireSupervisor = false,
   expectedVersion = null, reviewed = null, preflightTimeoutMs = 15_000 }) {
   if (!RUNTIME_ACTIONS.includes(action)) {
     throw new ServerError('Unknown harness action', { status: 400, code: 'UNKNOWN_HARNESS_ACTION', context: { action: String(action || '') } });
@@ -133,7 +133,6 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   let supervisorExited = false;
   let reservation = null;
   let owner = null;
-  let overlapDetected = false;
   let cancelPending = null;
   const boundedRead = promise => new Promise(resolve => {
     let active = true;
@@ -152,17 +151,13 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   });
   const releaseOwner = async pid => {
     if (!owner) return true;
-    let result;
     try {
-      result = maintenance.harnessActions.finish(owner.id, pid || null);
+      maintenance.harnessActions.finish(owner.id, pid || null);
     } catch (err) {
       console.error(`❌ Harness action settlement needs recovery: ${err.message}`);
       return false;
     }
-    overlapDetected ||= result.overlap === true;
     owner = null;
-    if (result.held) void import('./harnessActionRecovery.js').then(({ checkHarnessActionRecovery }) => checkHarnessActionRecovery())
-      .catch(err => console.error(`❌ Harness update could not wake deferred work: ${err.message}`));
     return true;
   };
   const releaseOrRetry = async pid => {
@@ -183,14 +178,6 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
       retry();
     }
     return released;
-  };
-  const holdIsIdle = view => {
-    try {
-      const current = maintenance.harnessActions.operation();
-      return current?.id === owner?.id && current.invalidated !== true && view.state !== 'unavailable' && view.hold?.id === owner?.holdId
-        && view.hold?.revision === owner?.holdRevision && Array.isArray(view.blockers)
-        && view.blockers.length === 1 && view.blockers[0].kind === 'harness-action';
-    } catch { return false; }
   };
 
   // Register before the availability probe. If the modal closes while the probe
@@ -240,66 +227,43 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   // directory.
   reservation = {};
   actionInFlight = reservation;
-  const protectWork = CAN_SUPERVISE && action === 'update';
-  if (requireIdle && !CAN_SUPERVISE) {
+  if (requireSupervisor && !CAN_SUPERVISE) {
     actionInFlight = null;
     send({ type: 'error', message: 'Protected inline harness updates are unavailable on this platform.' });
     return safeEnd();
   }
+  // Updates do not wait for PortOS work. A running agent keeps the executable
+  // it already opened (POSIX keeps a replaced file's inode alive, and Claude
+  // Code's native updater installs side by side and swaps a symlink), so the
+  // only exposure is an agent that starts during the brief write — it fails to
+  // launch and can be retried. Blocking every harness update on any agent cost
+  // far more than that. The reservation below still refuses during a PortOS
+  // self-update, a maintenance pause, or another harness action.
   if (CAN_SUPERVISE) {
-    try { owner = maintenance.harnessActions.reserve({ runtime: row.id, action, exclusive: protectWork }); }
+    try { owner = maintenance.harnessActions.reserve({ runtime: row.id, action }); }
     catch (err) {
       if (actionInFlight === reservation) actionInFlight = null;
       send({ type: 'error', message: err?.code === 'MAINTENANCE_HELD'
-        ? 'PortOS work or another maintenance action is active. Wait for it to finish before retrying.'
+        ? 'A PortOS update, maintenance pause, or another harness action is in progress. Wait for it to finish before retrying.'
         : 'Maintenance state is unavailable or changed. Review maintenance status and recovery before retrying.' });
       return safeEnd();
     }
   }
-  if (protectWork) {
-    send({ type: 'stage', stage: 'preflight', message: 'Checking known PortOS work before updating. New PortOS work is held during the update.' });
-    const preflight = await boundedRead(Promise.all([
-      import('./updatePreflight.js').then(({ countActiveCosAgents }) => countActiveCosAgents()).catch(() => null),
-      import('./cosState.js').then(({ readAgentsStateForSafetyCheck }) => readAgentsStateForSafetyCheck()).catch(() => null),
-      import('./cosAgentLifecycle.js').then(module => module.isLiveAgentRecord).catch(() => null),
-      import('./cosRunnerClient.js').then(({ getActiveAgentsFromRunner }) => getActiveAgentsFromRunner()).catch(() => null),
-    ]));
-    const [count, records, isLiveAgentRecord, runner] = preflight || [];
-    const view = maintenance.status();
-    const trusted = records?.trusted === true && records.agents && typeof records.agents === 'object' && !Array.isArray(records.agents)
-      && typeof isLiveAgentRecord === 'function' && Number.isSafeInteger(count) && count >= 0 && Array.isArray(runner)
-      && holdIsIdle(view);
-    const liveRecord = trusted && Object.values(records.agents).some(agent => !agent || isLiveAgentRecord(agent));
-    const pausedRecord = trusted && Object.values(records.agents).some(agent => agent?.status === 'paused');
-    const busy = count > 0 || runner?.length > 0 || liveRecord;
-    if (clientGone || !trusted || busy) {
-      const released = await releaseOrRetry(null);
-      if (actionInFlight === reservation) actionInFlight = null;
-      if (!clientGone) send({ type: 'error', message: !released
-        ? 'The harness action could not release its maintenance hold. Review maintenance status before continuing.'
-        : !preflight ? 'Checking PortOS work timed out. Try again when its status is available.'
-          : !Array.isArray(runner) ? 'The CoS runner could not be checked. Restore the runner before retrying; it may still have active agents.'
-          : !trusted
-        ? 'Could not check active PortOS work. Try again when its status is available.'
-        : pausedRecord ? 'Paused agents still count as work. Resume and finish them before updating a harness.'
-          : 'PortOS work is active or starting. Wait for it to finish before updating a harness.' });
-      return safeEnd();
-    }
-    const proof = reviewed ? await boundedRead(Promise.all([
+  if (reviewed) {
+    const proof = await boundedRead(Promise.all([
       import('./harnessUpdateReference.js').then(({ matchesHarnessUpdateTicket }) => matchesHarnessUpdateTicket(row, reviewed)).catch(() => false),
       import('./runtimeUpdateReview.js').then(({ getRuntimeUpdateReviewSnapshot }) => getRuntimeUpdateReviewSnapshot()).catch(() => null),
-    ])) : [true, null];
+    ]));
     const [matches, current] = proof || [];
     const currentRow = current?.items?.find(item => item.id === `harness:${row.id}` && !item.unverified);
-    const finalView = maintenance.status();
-    if (clientGone || !matches || (reviewed && (!currentRow?.harnessUpdate?.updatable
+    if (clientGone || !matches || !currentRow?.harnessUpdate?.updatable
       || currentRow.harnessUpdate.installedVersion !== expectedVersion
-      || currentRow.harnessUpdate.candidateVersion !== reviewed.candidate)) || !holdIsIdle(finalView)) {
+      || currentRow.harnessUpdate.candidateVersion !== reviewed.candidate) {
       const released = await releaseOrRetry(null);
       if (actionInFlight === reservation) actionInFlight = null;
       if (!clientGone) send({ type: 'error', message: released
-        ? !proof && reviewed ? 'The harness review could not be checked in time. Refresh the update card before retrying.'
-          : 'The harness review, executable, or active work changed. Refresh the update card before retrying.'
+        ? !proof ? 'The harness review could not be checked in time. Refresh the update card before retrying.'
+          : 'The harness review or executable changed. Refresh the update card before retrying.'
         : 'The harness action could not release its maintenance hold. Review maintenance status before continuing.' });
       return safeEnd();
     }
@@ -336,8 +300,6 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   if (CAN_SUPERVISE) {
     let readySeen = false;
     let draining = false;
-    let workWatch = null;
-    child.once('close', () => { if (workWatch) clearInterval(workWatch); });
     const refuse = () => {
       if (!supervisorExited && child.exitCode == null && child.signalCode == null) stopRuntimeInstaller(child);
       if (!clientGone && !finished) {
@@ -379,25 +341,7 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
           if (!matches || !item?.harnessUpdate?.updatable || item.harnessUpdate.installedVersion !== expectedVersion
             || item.harnessUpdate.candidateVersion !== reviewed.candidate) return refuse();
         }
-        if (clientGone || finished || actionInFlight !== child || !owner || !child.connected
-          || (protectWork && !holdIsIdle(maintenance.status()))) return refuse();
-        if (protectWork) {
-          workWatch = setInterval(() => {
-            if (clientGone || finished || supervisorExited || !owner) return;
-            let current;
-            try { current = maintenance.harnessActions.operation(); } catch { current = null; }
-            if (current?.id === owner.id && !current.invalidated) return;
-            overlapDetected ||= current?.overlap === true;
-            if (child.exitCode == null && child.signalCode == null) stopRuntimeInstaller(child);
-            finished = true;
-            emit({ type: 'error', message: current?.overlap
-              ? 'PortOS recovered existing work during the update. The updater is stopping; check that work before retrying.'
-              : current?.invalidated ? 'PortOS recovered existing work before the updater could start. Wait for that work before retrying.'
-                : 'Maintenance state became unavailable or changed. The updater is stopping; review maintenance status before retrying.' });
-            safeEnd();
-          }, 500);
-          workWatch.unref?.();
-        }
+        if (clientGone || finished || actionInFlight !== child || !owner || !child.connected) return refuse();
         child.send({ type: 'harness-action-go', ownerId: owner.id }, error => { if (error) refuse(); });
       })().catch(refuse);
     });
@@ -439,11 +383,6 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
       }
       if (actionInFlight === child) actionInFlight = null;
       if (finished || clientGone) return;
-      if (overlapDetected) {
-        finished = true;
-        emit({ type: 'error', message: 'PortOS recovered existing work during the update. Check that work before retrying.' });
-        return safeEnd();
-      }
       finished = true;
       // The post-action PATH check is deliberately stronger than the exit code.
       // A successful write whose bin directory is absent from PM2's PATH would
