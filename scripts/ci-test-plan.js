@@ -656,7 +656,7 @@ export const MACOS_NATIVE_TESTS = [
 ];
 // The supervision path itself, the dependency manifests and Vitest harness the
 // job installs and loads, and ci.yml so a workflow edit proves the job runs.
-export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null

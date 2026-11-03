@@ -768,7 +768,7 @@ recovery suite's closure reaches most of the server. On a pull request the
 `server/services/releaseCandidateSettlement.js`, the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
 `scripts/vitestTempRootSetup.js`), the install inputs
-(`server/package.json`, `server/package-lock.json`,
+(`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
 `scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
 `release` always run it. It is part of `CI Gate`; a skipped run passes.
 
