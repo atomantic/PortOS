@@ -289,6 +289,12 @@ describe('CompositionPreviewPlayer', () => {
     expect(opens()).toHaveLength(1);
     rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...scenes[0], glitches: [{ atSec: 0.5, style: 'light-leak' }] }] }} audioUrl={null} />);
     await waitFor(() => expect(opens()).toHaveLength(2));
+    // Adding a still's starting reference can make its end-frame effect eligible.
+    const still = { sceneId: 'a', startSec: 0, endSec: 2, visualLayer: 'still', imageEffect: { type: 'end-frame' }, endImageId: 'end.png', glitches: [{ atSec: 0.5, style: 'light-leak' }] };
+    rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [still] }} audioUrl={null} />);
+    await waitFor(() => expect(opens()).toHaveLength(3));
+    rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...still, referenceImageId: 'start.png' }] }} audioUrl={null} />);
+    await waitFor(() => expect(opens()).toHaveLength(4));
   });
 
   it('plays without effects an older engine cannot draw, names those shots, and updates the engine in one tap', async () => {
