@@ -24,8 +24,8 @@ export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server
  * Whether a CLI-type provider can read an image file (its CLI accepts a
  * vision attachment). The client's own take on `isVisionCapableCliProvider`
  * in server/lib/localModelHeuristics.js: keyed on the command basename so a
- * path-configured Claude or Codex still qualifies here, where the server
- * matches the bare command exactly. API providers return false; use
+ * path-configured Claude or Codex still qualifies, as on the server.
+ * API providers return false; use
  * `visionLocalModelFilter` for their model lists.
  * @param {{type?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
