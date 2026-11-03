@@ -24,6 +24,8 @@ describe('app operations and deferred update admission', () => {
     const snapshot = listActiveAppOperations();
     expect(isSoleDeferredUpdateAppOperation(snapshot, 12345)).toBe(false);
     await handOffAppOperation(operation, 12345);
+    expect(listActiveAppOperations()[0]).not.toHaveProperty('deferredUpdateOwnerPid');
+    expect(listActiveAppOperations({ includeUpdateOwnership: true })[0]).toMatchObject({ deferredUpdateOwnerPid: 12345 });
     expect(isSoleDeferredUpdateAppOperation(snapshot, 12345)).toBe(true);
     expect(isSoleDeferredUpdateAppOperation(snapshot, 99999)).toBe(false);
     expect(isSoleDeferredUpdateAppOperation([{ ...snapshot[0], startedAt: -1 }], 12345)).toBe(false);

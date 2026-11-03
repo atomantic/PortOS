@@ -9,7 +9,7 @@ import { createMaintenanceJournal, maintenanceError, syncMaintenanceDirectory } 
 import { createDeferredUpdateAdmission, processAbsent, reconcileReusedLaunch } from '../server/lib/maintenanceDeferredUpdate.js';
 import * as fs from 'node:fs';
 import { legacyLauncherGroups, legacyProcessCwds, observedDatabaseRestoreProcess, observedLegacyUpdate, observedLocalMediaProcesses, snapshotLegacyProcesses } from './lib/legacyUpdateActivity.mjs';
-import { isCompletedLocalClaim, remoteMediaRecoveryPending } from '../server/lib/mediaRecoveryActivity.js';
+import { isCompletedLocalClaim, isEmptyLegacyMediaJob, remoteMediaRecoveryPending } from '../server/lib/mediaRecoveryActivity.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const journal = createMaintenanceJournal();
@@ -27,9 +27,9 @@ const savedMediaJobs = admission => {
     const stat = fs.lstatSync(path);
     if (!stat.isFile() || stat.size > 32 * 1024 * 1024) throw new Error('Invalid saved media inventory');
     const snapshot = JSON.parse(fs.readFileSync(path, 'utf8'));
-    if (!snapshot || !Array.isArray(snapshot.jobs) || snapshot.jobs.some(job => !job || typeof job !== 'object'
+    if (!snapshot || !Array.isArray(snapshot.jobs) || snapshot.jobs.filter(job => !isEmptyLegacyMediaJob(job)).some(job => !job || typeof job !== 'object'
       || !['queued', 'running', 'completed', 'failed', 'canceled'].includes(job.status))) throw new Error('Invalid saved media inventory');
-    return snapshot.jobs;
+    return snapshot.jobs.filter(job => !isEmptyLegacyMediaJob(job));
   } catch (error) {
     if (error.code === 'ENOENT') return [];
     throw error;
@@ -83,7 +83,7 @@ export function legacyHeavyClaimPending(admission, processes, absent = processAb
 export async function runDeferredUpdate({ admission = maintenance, launch = spawn, cwd = root,
   platform = process.platform, wait = () => delay(1000), absent = processAbsent, launchId = process.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID,
   legacySnapshot = snapshotLegacyProcesses, legacyCwds = legacyProcessCwds, legacyGroups = legacyLauncherGroups,
-  signal, emit = message => console.log(message), legacyRunning } = {}) {
+  signal, emit = message => console.log(message), legacyRunning, recoverReservations } = {}) {
   let reportedLegacyLimit = false;
   const heavyObservation = {};
   const checkLegacy = legacyRunning ?? (async () => {
@@ -112,12 +112,34 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   });
   await reconcileReusedLaunch(admission, () => legacySnapshot(platform));
   admission.deferredUpdate.reconcile();
-  const operation = launchId ? admission.deferredUpdate.claimLaunch(launchId) : admission.deferredUpdate.request();
+  const operation = launchId ? admission.deferredUpdate.claimLaunch(launchId) : admission.deferredUpdate.request({ recoverWaiting: true });
   let childStarted = false;
+  let recovery, recoveryMessage;
   try {
     emit('STEP:waiting:running:Waiting for admitted work to finish saving and cleanup');
     for (;;) {
-      const externalWorkPending = await checkLegacy();
+      signal?.throwIfAborted();
+      let recoveryBlocked = false;
+      if (admission === maintenance || recoverReservations) {
+        try {
+          if (recoverReservations) await recoverReservations();
+          else {
+            recovery ??= await import('./lib/updateReservationRecovery.mjs').then(module => module.createUpdateReservationRecovery({
+              directory: admission.directory, root: cwd, signal,
+            }));
+            const receipt = await recovery.run();
+            if (receipt) emit(`STEP:waiting:running:Recovered ${receipt.request.operations.length} inactive work reservations`);
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          recoveryBlocked = true;
+          if (error.message !== recoveryMessage) {
+            recoveryMessage = error.message;
+            emit(`STEP:waiting:running:Recovery is waiting: ${error.message}`);
+          }
+        }
+      }
+      const externalWorkPending = recoveryBlocked || await checkLegacy();
       const heavyPath = join(admission.directory, '..', 'heavy-local-job.claim.json');
       const processes = fs.existsSync(heavyPath) ? await legacySnapshot(platform) : [];
       const acquired = admission.deferredUpdate.acquire(operation.id, {
@@ -137,6 +159,8 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       await wait();
     }
     signal?.throwIfAborted();
+    await recovery?.close();
+    recovery = null;
     emit('STEP:waiting:done:Install idle; update admission acquired');
     const windows = platform === 'win32';
     const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(cwd, 'update.ps1')] : [join(cwd, 'update.sh')];
@@ -171,6 +195,8 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     // remains held for the process-group reconciler instead of timing out.
     if (!childStarted || err.code === 'ENOENT' || err.code === 'EACCES') admission.deferredUpdate.finish(operation.id, false);
     throw err;
+  } finally {
+    await recovery?.close();
   }
 }
 

@@ -79,12 +79,28 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     state.operations = state.operations.filter(op => op.id !== operation.id);
     return result;
   };
+  // Retrying an update may have newer recovery code than the live supervisor.
+  // Its waiting fence is transferable; acquire() changes phase under this same
+  // lock before a child can start. A starting/running owner is never replaced.
+  const replaceWaiting = (state, nextId) => {
+    const previous = inspect(state);
+    if (!previous) return null;
+    if (previous.phase !== 'waiting' || previous.childPid || previous.holdId || state.hold || state.exclusive) stale();
+    const receipt = join(directory, `update-handoff-${nextId}.json`);
+    const fd = io.openSync(receipt, 'wx', 0o600);
+    try { io.writeFileSync(fd, JSON.stringify({ version: 1, previous, successorId: nextId,
+      disposition: 'waiting-update-replaced', at: new Date(now()).toISOString() }) + '\n'); io.fsyncSync(fd); }
+    finally { io.closeSync(fd); }
+    syncDirectory(directory, io);
+    settle(state, previous, false, true);
+    return previous.requestedAt;
+  };
   const operation = () => inspect(read());
   const launch = () => read().operations.find(op => op.kind === 'deferred-update-launch') ?? null;
   const get = () => ({ operation: operation(), result: readResult() });
   const reconcile = ({ absent = processAbsent, platform = process.platform, obsoleteLaunch = null } = {}) => {
     const pending = launch();
-    const pendingChild = pending?.resource ? JSON.parse(pending.resource).childPid : null;
+    const pendingChild = pending?.resource ? JSON.parse(pending.resource).childPid ?? null : null;
     if (pendingChild !== null && !pid(pendingChild)) throw error('MAINTENANCE_UNAVAILABLE', 'Invalid deferred update launch identity.');
     if (pending && (absent(pending.pid) || (pendingChild && absent(pendingChild))
       || (obsoleteLaunch && JSON.stringify(pending) === JSON.stringify(obsoleteLaunch)))) transaction(state => {
@@ -104,22 +120,26 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     });
     return get();
   };
-  const request = () => transaction(state => {
-    if (inspect(state) || state.operations.some(op => op.kind === 'deferred-update-launch')) stale();
+  const request = ({ recoverWaiting = false } = {}) => transaction(state => {
+    if ((!recoverWaiting && inspect(state)) || state.operations.some(op => op.kind === 'deferred-update-launch')) stale();
     if (state.operations.some(op => ['harness-action', 'harness-action-wake'].includes(op.kind)))
       throw error('MAINTENANCE_HELD', 'A harness action is still running or finishing.');
-    const operation = { id: makeId(), ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: new Date(now()).toISOString() };
+    const id = makeId();
+    const requestedAt = recoverWaiting ? replaceWaiting(state, id) : null;
+    const operation = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: requestedAt ?? new Date(now()).toISOString() };
     save(state, operation);
     return { ...operation };
   });
   // A launch ticket allows a timed-out parent to cancel a late supervisor
   // before it mutates the install. Claim and cancellation share the journal.
-  const reserveLaunch = () => {
+  const reserveLaunch = ({ recoverWaiting = false } = {}) => {
     reconcile();
     return transaction(state => {
-      if (state.hold || state.exclusive || inspect(state)
+      if (state.hold || state.exclusive || (!recoverWaiting && inspect(state))
         || state.operations.some(op => ['deferred-update-launch', 'harness-action', 'harness-action-wake'].includes(op.kind))) stale();
-      const ticket = { id: makeId(), kind: 'deferred-update-launch', resource: '', pid: process.pid,
+      const id = makeId();
+      const requestedAt = recoverWaiting ? replaceWaiting(state, id) : null;
+      const ticket = { id, kind: 'deferred-update-launch', resource: requestedAt ? JSON.stringify({ requestedAt }) : '', pid: process.pid,
         startedAt: new Date(now()).toISOString() };
       state.operations.push(ticket);
       return ticket.id;
@@ -129,7 +149,9 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     const index = state.operations.findIndex(op => op.id === id && op.kind === 'deferred-update-launch');
     if (index < 0 || inspect(state)) stale();
     const [ticket] = state.operations.splice(index, 1);
-    const claimed = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: ticket.startedAt };
+    const requestedAt = ticket.resource ? JSON.parse(ticket.resource).requestedAt : null;
+    if (requestedAt != null && !date(requestedAt)) stale();
+    const claimed = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: requestedAt ?? ticket.startedAt };
     save(state, claimed);
     return { ...claimed };
   });
@@ -137,7 +159,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (!pid(childPid)) throw error('MAINTENANCE_STALE', 'Invalid update supervisor identity.');
     const pending = state.operations.find(op => op.id === id && op.kind === 'deferred-update-launch' && op.pid === process.pid);
     if (!pending) return false;
-    pending.resource = JSON.stringify({ childPid });
+    pending.resource = JSON.stringify({ ...(pending.resource ? JSON.parse(pending.resource) : {}), childPid });
     return true;
   });
   const cancelLaunch = id => transaction(state => {

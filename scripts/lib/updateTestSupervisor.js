@@ -16,9 +16,10 @@ export function installUpdateTestSupervisor(repo, { standalone = false } = {}) {
       const target = join(repo, relative(sourceRoot, source));
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, text);
-      for (const match of text.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) copyModule(resolve(dirname(source), match[1]));
+      for (const match of text.matchAll(/^\s*(?:import|export)\s+[^;]*?from\s+['"](\.[^'"]+)['"]/gm)) copyModule(resolve(dirname(source), match[1]));
     };
     copyModule(join(sourceRoot, 'scripts/deferred-update.mjs'));
+    copyModule(join(sourceRoot, 'scripts/lib/updateReservationRecovery.mjs'));
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ type: 'module' }));
     return;
   }

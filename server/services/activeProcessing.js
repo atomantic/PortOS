@@ -129,7 +129,7 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
  * nvidia-smi and reads Ollama residency. Neither feeds the verdict.
  * The HTTP inspector opts into cached residency; safety checks omit it.
  */
-export async function getSystemActivity({ includeOllama = false } = {}) {
+export async function getSystemActivity({ includeOllama = false, includeUpdateOwnership = false } = {}) {
   const [jobs, models, pendingTaskIds, agents, mindState, llmState, backupInProgress, ollama] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     // `null` = the read FAILED, distinct from `[]` = read fine, nothing
@@ -171,8 +171,10 @@ export async function getSystemActivity({ includeOllama = false } = {}) {
     // An App Management update/standardize holds a checkout and restarts PM2
     // processes — activity in exactly the sense that matters to a caller
     // deciding whether it may restart the install.
-    appOperations: listActiveAppOperations(),
-    update: { inProgress: isUpdateInProgress() },
+    appOperations: listActiveAppOperations({ includeUpdateOwnership }),
+    // Handoff identity stays on the local activity inspector, outside the
+    // processing/health snapshots that peers persist automatically.
+    update: { inProgress: isUpdateInProgress(), ...(includeUpdateOwnership ? { handoffTracking: true } : {}) },
     // Final renders, draft excerpts and shot renders run their own ffmpeg and
     // browsers outside the media queue; an in-process count, no I/O.
     renders: listActiveRenders(),

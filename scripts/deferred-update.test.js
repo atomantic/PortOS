@@ -31,6 +31,71 @@ const completedLaunch = admission => (_command, _args, options) => {
 };
 
 describe('deferred update admission', () => {
+  it('waits on positively observed legacy activity even when no work reservation remains', async () => {
+    const { admission } = fixture();
+    let active = true;
+    const launch = vi.fn(completedLaunch(admission));
+    const recoverReservations = vi.fn(async () => {
+      if (active) throw new Error('PortOS has running work');
+    });
+    const wait = vi.fn(async () => { expect(launch).not.toHaveBeenCalled(); active = false; });
+    await expect(runDeferredUpdate({ admission, launch, wait, recoverReservations,
+      legacyRunning: async () => false, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(recoverReservations).toHaveBeenCalledTimes(2);
+  });
+
+  it('hands a childless waiting owner to new scripts and preserves its interrupted history', () => {
+    const { root, admission } = fixture();
+    const previous = admission.deferredUpdate.request();
+    const next = admission.deferredUpdate.request({ recoverWaiting: true });
+    expect(next.id).not.toBe(previous.id);
+    expect(next.requestedAt).toBe(previous.requestedAt);
+    expect(() => admission.deferredUpdate.acquire(previous.id)).toThrow(/ownership changed/);
+    expect(() => admission.deferredUpdate.finish(previous.id, false)).toThrow(/ownership changed/);
+    expect(admission.deferredUpdate.operation()).toEqual(next);
+    expect(admission.deferredUpdate.get().result).toMatchObject({ id: previous.id, success: false, interrupted: true });
+    expect(JSON.parse(readFileSync(join(root, 'data/workflow-maintenance', `update-handoff-${next.id}.json`), 'utf8')))
+      .toMatchObject({ previous, successorId: next.id, disposition: 'waiting-update-replaced' });
+    admission.deferredUpdate.finish(next.id, false);
+  });
+
+  it('hands off a UI retry through a launch ticket without losing the original request identity', () => {
+    const { admission } = fixture();
+    const previous = admission.deferredUpdate.request();
+    const ticket = admission.deferredUpdate.reserveLaunch({ recoverWaiting: true });
+    admission.deferredUpdate.bindLaunch(ticket, process.pid);
+    expect(admission.deferredUpdate.reconcile().operation).toBeNull();
+    const next = admission.deferredUpdate.claimLaunch(ticket);
+    expect(next.requestedAt).toBe(previous.requestedAt);
+    expect(() => admission.deferredUpdate.acquire(previous.id)).toThrow();
+    expect(admission.deferredUpdate.acquire(next.id)).toBe(true);
+    expect(() => admission.deferredUpdate.reserveLaunch({ recoverWaiting: true })).toThrow();
+    expect(() => admission.deferredUpdate.request({ recoverWaiting: true })).toThrow();
+    expect(admission.deferredUpdate.operation().phase).toBe('starting');
+    admission.deferredUpdate.enter(next.id, process.pid);
+    expect(() => admission.deferredUpdate.request({ recoverWaiting: true })).toThrow();
+    admission.deferredUpdate.finish(next.id, false);
+  });
+
+  it('ignores exact empty legacy media rows while retaining real recovery jobs and the original file', async () => {
+    const { root, admission } = fixture();
+    mkdirSync(join(root, 'data'), { recursive: true });
+    const path = join(root, 'data/media-jobs.json');
+    const original = JSON.stringify({ jobs: [{}, { id: 'remote-job', status: 'failed', result: { topazUncertain: true } }] });
+    writeFileSync(path, original);
+    const launch = vi.fn(completedLaunch(admission));
+    const wait = vi.fn(async () => {
+      expect(launch).not.toHaveBeenCalled();
+      expect(readFileSync(path, 'utf8')).toBe(original);
+      writeFileSync(path, JSON.stringify({ jobs: [{}, { id: 'remote-job', status: 'completed' }] }));
+    });
+    await expect(runDeferredUpdate({ admission, launch, wait, legacyRunning: async () => false,
+      absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    expect(wait).toHaveBeenCalledOnce();
+    expect(JSON.parse(readFileSync(path, 'utf8')).jobs).toHaveLength(2);
+  });
+
   it('atomically cancels a pending launch so a late supervisor cannot start', () => {
     const { admission } = fixture();
     const first = admission.deferredUpdate.reserveLaunch();
