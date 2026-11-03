@@ -1018,7 +1018,7 @@ export const LOCAL_LLM_CATALOG = [
     family: 'lfm3',
     description: "Liquid AI's compact vision-language model with a 128K context window — step-by-step visual reasoning, document parsing, and chart understanding for edge devices.",
     capabilities: ['chat', 'reasoning', 'vision'],
-    context: 131072,
+    context: 128000,
     ollama: 'lfm3-vl:2b',
     lmstudio: 'lmstudio-community/LFM3-VL-2B-GGUF',
     lmstudioAliases: ['LiquidAI/LFM3-VL-2B-GGUF']
