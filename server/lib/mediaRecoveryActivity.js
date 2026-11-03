@@ -1,4 +1,7 @@
 /** A queued or terminal-looking job can still own an interrupted provider. */
+export const isEmptyLegacyMediaJob = job => Boolean(job) && typeof job === 'object'
+  && !Array.isArray(job) && Object.keys(job).length === 0;
+
 export function remoteMediaRecoveryPending(job) {
   return (job.status === 'queued' && (job.params?.remoteMedia?.reconcile === true
       || job.params?.reattach === true || job.params?.topazRecovery === true))
@@ -7,6 +10,7 @@ export function remoteMediaRecoveryPending(job) {
 }
 
 export function mediaRecoveryPending(job) {
+  if (isEmptyLegacyMediaJob(job)) return false;
   if (!job || typeof job !== 'object' || !['queued', 'running', 'completed', 'failed', 'canceled'].includes(job.status)) return true;
   return job.status === 'running' || remoteMediaRecoveryPending(job) || Boolean(job.durabilityPending);
 }

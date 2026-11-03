@@ -37,6 +37,9 @@ describe('system activity routes', () => {
     expect(response.body.llm.runs[0]).not.toHaveProperty('prompt');
     expect(response.body.ollama).toMatchObject({ trusted: true, models: [{ name: 'example:7b' }] });
     expect(response.body.activity.idle).toBe(false);
+    expect(response.body.update.handoffTracking).toBe(true);
+    const { getSystemActivity } = await import('../services/activeProcessing.js');
+    expect((await getSystemActivity()).update).not.toHaveProperty('handoffTracking');
     await request(app).get('/api/system/gpu-telemetry');
     expect(deps.loaded).toHaveBeenCalledTimes(1);
     expect(deps.loaded).toHaveBeenCalledWith({ timeout: 1500 });

@@ -107,9 +107,26 @@ Two guards keep a launch that did nothing from being reported as an update:
 
 The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a refusal must land before the checkout moves, and its `code` is what the panel's acknowledge-and-retry buttons key on — then passes `preflightAlreadyRun` so the launcher reads a fresh `getUpdateStatus()` (post-pull, for the stale workspaces) without re-running guards that already answered. The script checks image-state trust again after acquiring its shared hold.
 
-Direct `update.sh` / `update.ps1` and service launches enter `scripts/deferred-update.mjs` before changing logs, git or PM2. Its machine-local operation waits without holding admission, allowing an active release to launch and finish its children. The maintenance journal atomically takes the update hold only after admitted work has released its reservation; a render racing that transaction either becomes a blocker or is refused. While an update waits, the server can reconcile inactive legacy reservations after fresh activity and process checks, preserving them in an automatic receipt with output completeness unknown (see [Storage](STORAGE.md#inactive-reservations-while-updating)). Existing receiver-issued peer updates retain their exclusive capability hold. A manual/peer maintenance hold supersedes a still-waiting local update: the updater cancels its own pending row, leaves that hold untouched, and reports failure so the maintenance drain can finish. It does not silently requeue.
+Direct `update.sh` / `update.ps1` and service launches enter `scripts/deferred-update.mjs` before changing logs, git or PM2. Its machine-local operation waits without holding admission, allowing an active release to launch and finish its children. The maintenance journal atomically takes the update hold only after admitted work has released its reservation; a render racing that transaction either becomes a blocker or is refused. While an update waits, both the server and the fresh updater can reconcile inactive legacy reservations after fresh activity and process checks, preserving them in an automatic receipt with output completeness unknown (see [Storage](STORAGE.md#inactive-reservations-while-updating)). Existing receiver-issued peer updates retain their exclusive capability hold. A manual/peer maintenance hold supersedes a still-waiting local update: the updater cancels its own pending row, leaves that hold untouched, and reports failure so the maintenance drain can finish. It does not silently requeue.
 
-The offline supervisor, shared journal transaction and image guard use only Node built-ins, so missing or replaced application dependencies cannot disable admission or terminal failure publication.
+A retry can replace an older supervisor only while it is still waiting with no
+child or hold. The transfer and acquisition share the journal lock, so a
+supervisor already starting or running cannot be replaced. The transfer preserves
+the original request time and writes `update-handoff-<successor-id>.json`; the
+replaced attempt is recorded as interrupted. The old supervisor's later cleanup
+cannot release its successor. The UI continues observing its current launch
+instead of starting another copy on repeated clicks.
+
+Fresh updater recovery works before an older server restarts. It authenticates
+local activity reads using the existing credential or a temporary local session,
+checks `COS_RUNNER_URL` from the environment or `.env`, and verifies the running
+service observes the same waiting owner. A missing local runner is allowed only
+when process inspection confirms direct mode; an unavailable configured runner
+remains a blocker. Only a confirmed self-update handoff is excluded from app
+activity. Exact empty legacy media rows are ignored during inspection without
+rewriting the saved inventory; real jobs and recovery uncertainty remain intact.
+
+The offline supervisor, shared journal transaction and image guard use only Node built-ins, so missing or replaced application dependencies cannot disable admission or terminal failure publication. Live reservation recovery loads service dependencies before acquiring admission; an offline install without outstanding work reservations can still update without them.
 
 The detached supervisor survives the server restart and releases only after proven command settlement. Success requires terminal script evidence and child completion. POSIX additionally waits for the whole process group; after an interrupted supervisor, proven owner/group absence records failure and releases automatically. Windows requires the exact operation's terminal script record, written after awaited update, restart and health commands; controlled failure exits publish failure after recovery finishes. A Windows interruption without that evidence leaves liveness unknown and admission held. Neither a timeout nor an old completion marker clears ownership. Legacy control files alone are history; an observed surviving updater or update child still makes the new update wait.
 

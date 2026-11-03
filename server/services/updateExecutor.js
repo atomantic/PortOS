@@ -10,7 +10,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { processAbsent, reconcileReusedLaunch } from '../lib/maintenanceDeferredUpdate.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
-import { trackUpdateControl, withUpdateControlLock } from './updateControlActivity.js';
+import { isUpdateControlTracked, trackUpdateControl, withUpdateControlLock } from './updateControlActivity.js';
 
 const UPDATE_SH = join(PATHS.root, 'update.sh');
 const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
@@ -126,7 +126,10 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
   const legacyArgs = isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH];
   const previousRunning = await isDetachedRunning(legacyControlDir, { executable: cmd, args })
     || (!peerExecution && await isDetachedRunning(legacyControlDir, { executable: isWindows ? 'powershell' : 'bash', args: legacyArgs }));
-  if (previousRunning) {
+  const previous = admission.deferredUpdate.operation();
+  const waiting = previous?.phase === 'waiting' && !previous.childPid && !previous.holdId;
+  const alreadyObserved = previous && isUpdateControlTracked(join(legacyControlDir, previous.id));
+  if ((previousRunning && !waiting) || alreadyObserved) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
       version: targetVersion,
@@ -142,7 +145,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
   let ticket = null;
   if (!peerExecution) await reconcileReusedLaunch(admission, supervisorSnapshot);
-  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch(); }
+  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true }); }
   catch (error) {
     if (error.code !== 'MAINTENANCE_STALE') throw error;
     const errorMessage = 'A previous update is still running — wait for it to finish before starting another update';

@@ -35,8 +35,12 @@ const END_PHASES = new Set(['completion', 'failure', 'cancellation']);
  * several keys, so they collapse back to one row; repoPath stays server-side,
  * since the client only needs to name and render the run.
  */
-export const listActiveAppOperations = () =>
-  [...new Set(activeAppOperations.values())].map(({ repoPath: _repoPath, ...op }) => op);
+export const listActiveAppOperations = ({ includeUpdateOwnership = false } = {}) =>
+  [...new Set(activeAppOperations.values())].map(operation => {
+    const { repoPath: _repoPath, ...op } = operation;
+    const supervisorPid = admissionByOperation.get(operation)?.supervisorPid;
+    return { ...op, ...(includeUpdateOwnership && supervisorPid ? { deferredUpdateOwnerPid: supervisorPid } : {}) };
+  });
 
 /** The same rows in the shape the `app:operations:active` frame carries. */
 export const activeOperationsPayload = () => ({ operations: listActiveAppOperations() });
