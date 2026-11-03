@@ -34,11 +34,11 @@ import { isAppleSilicon } from '../../lib/platform.js';
 export const RIGGING_RUNTIME = Object.freeze({
   condaEnv: 'rigging',
   module: 'bpy',
-  moduleVersion: '4.2.0',
-  pythonVersion: '3.11',
+  moduleVersion: '5.2.3',
+  pythonVersion: '3.13',
 });
 
-/** `bpy==4.2.0` — the pinned requirement, assembled once from the descriptor. */
+/** `bpy==5.2.3` — the pinned requirement, assembled once from the descriptor. */
 export const RIGGING_MODULE_REQUIREMENT = `${RIGGING_RUNTIME.module}==${RIGGING_RUNTIME.moduleVersion}`;
 
 /**

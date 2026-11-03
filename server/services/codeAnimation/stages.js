@@ -306,7 +306,7 @@ function inspectStage(ctx, revision, style, pilot, review = null) {
 
 const repairPrompt = ({ manifest, files, entryPath, findings }) => [
   manifest.renderer.kind === 'blender'
-    ? 'Repair a Blender scene. Return the complete Python source in one ```python fence. Keep build_scene(config), deterministic baked constant subject/FX keys with portos_cadence 2 or 3, and smooth keyed camera. No live physics, external downloads or installers.'
+    ? `Repair a Blender scene. Return the complete Python source in one \`\`\`python fence. Keep build_scene(config), deterministic baked constant subject/FX keys with portos_cadence 2 or 3, and smooth keyed camera. No live physics, external downloads or installers. Target Blender ${manifest.renderer.version}; read keyframes with the provided action_fcurves(obj) helper, since Blender 5 removed Action.fcurves.`
     : 'Repair a browser animation. Return complete HTML in one ```html fence. Keep window.ANIMATION_META and window.renderFrame(t), pure time-based canvas rendering, no network or animation timers.',
   `Brief: ${manifest.brief.concept}`,
   `Format: ${manifest.format.width}x${manifest.format.height}, ${manifest.format.fps}fps, ${manifest.format.durationSeconds}s.`,

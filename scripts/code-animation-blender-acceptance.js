@@ -8,6 +8,7 @@ import { renderBlenderSequence } from '../server/services/codeAnimation/blenderR
 import { getBlenderStarterPackage } from '../server/services/codeAnimation/blenderStarter.js';
 import { runContainedWorker, runTrustedLocalWorker } from '../server/services/codeAnimation/containedWorker.js';
 import { codeAnimationManifestSchema } from '../server/lib/codeAnimationPackage.js';
+import { LATEST_BLENDER_VERSION, isSupportedBlenderVersion } from '../server/lib/blenderVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -18,11 +19,13 @@ export function parseAcceptanceArgs(args) {
     phase: { type: 'string', default: 'pilot' }, engine: { type: 'string', default: 'CYCLES' }, backend: { type: 'string' }, times: { type: 'string', default: '1,5,9' },
     repeat: { type: 'boolean', default: false }, 'cancel-after': { type: 'string' },
     size: { type: 'string', default: '1920x1080' }, seconds: { type: 'string', default: '10' },
+    'blender-version': { type: 'string', default: LATEST_BLENDER_VERSION },
   } });
   if (!values.executable || !values.out || !['contained', 'trusted-local'].includes(values.mode)
     || !['pilot', 'final', 'style'].includes(values.phase) || !['CYCLES', 'BLENDER_EEVEE_NEXT'].includes(values.engine)
-    || (values.engine === 'CYCLES' ? values.backend !== undefined : !['METAL', 'OPENGL', 'VULKAN'].includes(values.backend)) || !/^\d+x\d+$/.test(values.size)) {
-    throw new Error('Usage: --executable <Blender 4.2.0> --out <new directory> [--mode contained|trusted-local] [--phase pilot|final|style] [--engine CYCLES|BLENDER_EEVEE_NEXT --backend METAL|OPENGL|VULKAN]');
+    || (values.engine === 'CYCLES' ? values.backend !== undefined : !['METAL', 'OPENGL', 'VULKAN'].includes(values.backend)) || !/^\d+x\d+$/.test(values.size)
+    || !isSupportedBlenderVersion(values['blender-version'])) {
+    throw new Error('Usage: --executable <Blender 4.2 or newer> --out <new directory> [--blender-version <x.y.z of that executable>] [--mode contained|trusted-local] [--phase pilot|final|style] [--engine CYCLES|BLENDER_EEVEE_NEXT --backend METAL|OPENGL|VULKAN]');
   }
   const [width, height] = values.size.split('x').map(Number);
   const format = codeAnimationManifestSchema.shape.format.parse({ width, height, fps: 24, durationSeconds: Number(values.seconds) });
@@ -42,10 +45,10 @@ export async function runAcceptance(options, { render = renderBlenderSequence } 
   const out = resolve(options.out);
   // Refuse reuse so an earlier run cannot masquerade as current evidence.
   await mkdir(out, { recursive: false });
-  const pkg = await getBlenderStarterPackage();
+  const pkg = await getBlenderStarterPackage({ version: options['blender-version'] });
   pkg.manifest.format = options.format;
   const revision = { manifest: pkg.manifest, files: pkg.files, entryPath: 'scene.py' };
-  const provenance = { binding: 'acceptance-script', version: '4.2.0', engine: options.engine, device: options.engine === 'CYCLES' ? 'CPU' : 'GPU',
+  const provenance = { binding: 'acceptance-script', version: options['blender-version'], engine: options.engine, device: options.engine === 'CYCLES' ? 'CPU' : 'GPU',
     backend: options.engine === 'CYCLES' ? 'CPU' : options.backend, executionMode: options.mode, contained: options.mode === 'contained' };
   const nativeWorker = options.mode === 'contained' ? runContainedWorker : runTrustedLocalWorker;
   const workerRuns = [];

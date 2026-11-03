@@ -238,8 +238,9 @@ def _round_trip(bpy, path, armature_name):
 
 
 def run(job):
-    import bmesh  # noqa: PLC0415 -- Blender-only imports stay inside the runtime path
-    import bpy  # noqa: PLC0415
+    # bpy first: the pip `bpy` module only exposes bmesh once bpy has been imported.
+    import bpy  # noqa: PLC0415 -- Blender-only imports stay inside the runtime path
+    import bmesh  # noqa: PLC0415
 
     thresholds = job["thresholds"]
     report = {

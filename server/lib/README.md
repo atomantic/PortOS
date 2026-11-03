@@ -1085,3 +1085,4 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `greyboxSequence.js` | Offline sequence validation, absolute-time anchor/camera sampling and global frame-grid planning for greybox reference exports. |
 
 | `ecosystemPortEdits.js` | `analyzeEcosystemPorts` and `planEcosystemPortEdits` — non-executing AST analysis of process identities and runtime port source spans; rejects ambiguous mutations, opaque spreads and partial batches before file or registry writes. |
+| `blenderVersion.js` | Supported Blender releases for Code Animation: `LATEST_BLENDER_VERSION`, `MIN_BLENDER_SERIES`, `blenderSeries(v)` (patch-insensitive match), `isSupportedBlenderVersion(v)`, and `BLENDER_COMPAT_PY` (engine-id and `Action.fcurves` shims shared by the driver and probe across Blender 4.2–5.x). |
