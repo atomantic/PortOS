@@ -23,14 +23,10 @@ const HOMES = Object.freeze({
   models3d: { path: '/models/3d', label: '3D models' },
 });
 
-export const SOFTWARE_GROUPS = Object.freeze([
+const SOFTWARE_GROUPS = Object.freeze([
   'Runtime', 'Browser', 'Agent harnesses', 'Local AI', 'Media tools', 'Environments',
 ]);
 
-/** Row states, most urgent first; the client sorts and badges by this order. */
-export const SOFTWARE_STATES = Object.freeze([
-  'security', 'attention', 'update', 'unknown', 'current', 'missing', 'unsupported',
-]);
 
 const entry = (fields) => ({
   installed: null, version: null, latest: null, summary: null, action: null, home: null, ...fields,
@@ -48,7 +44,7 @@ const withTimeout = (promise, ms) => {
   ]).finally(() => clearTimeout(timer));
 };
 
-export function nodeRows(runtime) {
+function nodeRows(runtime) {
   const { node, nvm, pm2, releases } = runtime;
   const offer = releases?.offers?.[0] || null;
   const security = node.securityBaseline?.compliant === false || releases?.securityUpdate === true;
@@ -104,7 +100,7 @@ const BROWSER_STATES = Object.freeze({
   checking: ['unknown', 'Checking Chrome…'],
 });
 
-export function browserRow(status, arch = process.arch) {
+function browserRow(status, arch = process.arch) {
   const [state, summary] = BROWSER_STATES[status?.state] || ['unknown', 'Chrome update status could not be verified.'];
   const published = status?.publishedVersions?.[arch === 'arm64' ? 'mac_arm64' : 'mac'] || null;
   return entry({
@@ -114,7 +110,7 @@ export function browserRow(status, arch = process.arch) {
   });
 }
 
-export function harnessRows(harnesses) {
+function harnessRows(harnesses) {
   return harnesses.map((harness) => entry({
     id: `harness:${harness.id}`, name: harness.label, group: 'Agent harnesses', home: HOMES.harnesses,
     installed: harness.installed === true, version: harness.version || null, latest: harness.latestVersion || null,
@@ -123,7 +119,7 @@ export function harnessRows(harnesses) {
   }));
 }
 
-export function ytDlpRow(status) {
+function ytDlpRow(status) {
   return entry({
     id: 'yt-dlp', name: 'yt-dlp', group: 'Media tools', home: HOMES.ytdlp,
     installed: status.installed, version: status.version, latest: status.latestVersion,
@@ -134,7 +130,7 @@ export function ytDlpRow(status) {
   });
 }
 
-export function localLlmRows(status) {
+function localLlmRows(status) {
   const { ollama, lmstudio } = status;
   return [
     entry({
@@ -154,7 +150,7 @@ export function localLlmRows(status) {
 }
 
 /** Blender's own version, read from the app bundle or install directory without running it. */
-export async function readBlenderVersion(executable, { read = readFile } = {}) {
+async function readBlenderVersion(executable, { read = readFile } = {}) {
   if (!executable) return null;
   const bundle = executable.match(/^(.*?\.app)\/Contents\//);
   if (bundle) {
@@ -165,7 +161,7 @@ export async function readBlenderVersion(executable, { read = readFile } = {}) {
   return executable.match(/blender-(\d+\.\d+(?:\.\d+)?)/i)?.[1] || null;
 }
 
-export async function blenderRow(execution, deps) {
+async function blenderRow(execution, deps) {
   const blender = execution.tools?.blender || {};
   const lane = execution.lanes?.blender || {};
   return entry({
@@ -181,7 +177,7 @@ const SUPERCOLLIDER_STATES = Object.freeze({
   'docker-stopped': 'attention', 'docker-unsupported': 'unsupported', unverified: 'attention', 'smoke-failed': 'attention',
 });
 
-export function superColliderRows(status) {
+function superColliderRows(status) {
   const docker = status.docker || {};
   return [
     entry({
@@ -199,13 +195,13 @@ export function superColliderRows(status) {
   ];
 }
 
-export const CONDA_ENVS = Object.freeze([
+const CONDA_ENVS = Object.freeze([
   { env: 'rigging', name: 'Rigging (bpy)', home: null, platforms: ['darwin', 'linux'] },
   { env: 'trellis2', name: 'TRELLIS.2 (CUDA)', home: HOMES.models3d, platforms: ['linux'] },
   { env: 'pixal3d', name: 'Pixal3D (CUDA)', home: HOMES.models3d, platforms: ['linux'] },
 ]);
 
-export function condaRows({ resolve = resolveCondaEnvPython, platform = process.platform } = {}) {
+function condaRows({ resolve = resolveCondaEnvPython, platform = process.platform } = {}) {
   return CONDA_ENVS.flatMap(({ env, name, home, platforms }) => {
     const python = resolve(env);
     if (!python && !platforms.includes(platform)) return [];
@@ -250,3 +246,5 @@ export async function getSoftwareInventory({ fresh = false, collectors = COLLECT
   });
   return { components, groups: SOFTWARE_GROUPS, checkedAt: new Date().toISOString() };
 }
+
+export const __testing = { nodeRows, browserRow, ytDlpRow, readBlenderVersion, condaRows };

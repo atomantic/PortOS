@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  browserRow, condaRows, getSoftwareInventory, nodeRows, readBlenderVersion, ytDlpRow,
-} from './softwareInventory.js';
+import { __testing, getSoftwareInventory } from './softwareInventory.js';
+
+const { browserRow, condaRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
 
 const runtime = (overrides = {}) => ({
   node: { version: 'v26.12.1', inSupportedRange: true, securityBaseline: { compliant: true }, pinned: '/x/node' },
