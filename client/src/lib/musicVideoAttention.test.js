@@ -33,6 +33,15 @@ describe('deriveAttentionItems (#9940)', () => {
     expect(deriveAttentionItems(project({ revisions: [revision({ status: 'complete' }), revision({ id: 'x', status: 'canceled' })] }))).toEqual([]);
   });
 
+  it('flags a song whose audio was replaced after its timing was made, naming what is stale (#14793)', () => {
+    expect(deriveAttentionItems({ id: 'mv-1', songAudioChange: null })).toEqual([]);
+    const [beatsOnly] = deriveAttentionItems({ id: 'mv-1', songAudioChange: { analysisStale: true, lyricsStale: false } });
+    expect(beatsOnly).toMatchObject({ kind: 'song-audio', projectId: 'mv-1' });
+    expect(beatsOnly.detail).toMatch(/^The beat grid came/);
+    const [both] = deriveAttentionItems({ id: 'mv-1', songAudioChange: { analysisStale: true, lyricsStale: true } });
+    expect(both.detail).toMatch(/^The beat grid and lyric timing came/);
+  });
+
   it('surfaces an open revision with the id the server holds and how far its takes got', () => {
     const items = deriveAttentionItems(project({
       scenes: [scene('scene-a', { videoHistoryId: 'vh-1' }), scene('scene-b'), scene('scene-c')],

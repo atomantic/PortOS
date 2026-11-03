@@ -86,6 +86,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     getProject,
     updateProject,
     resolveAudio: pickAlignmentPath,
+    masterFilename: async (record) => (await import('./songAudio.js')).currentMasterFilename(record),
     decodeAudio: decodeSourceToWav,
     resolveTranscriber,
     forceAlign: async (...args) => (await import('./lyricForcedAlign.js')).forceAlignLyrics(...args),
@@ -115,6 +116,8 @@ export async function alignProjectLyrics(projectId, options = {}) {
     checkCancel();
   }
   const expectedAudioKey = audioKey(project);
+  // A take replaced in place keeps the same track link, so audioKey cannot see it (#14793).
+  const expectedMaster = await deps.masterFilename(project);
   onProgress({ stage: 'decoding' });
   const { path: audioPath, source } = await deps.resolveAudio(project);
   const wav = await deps.decodeAudio(audioPath);
@@ -184,7 +187,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
   checkCancel();
 
   const fresh = await deps.getProject(projectId);
-  if (!fresh || audioKey(fresh) !== expectedAudioKey) {
+  if (!fresh || audioKey(fresh) !== expectedAudioKey || (await deps.masterFilename(fresh)) !== expectedMaster) {
     throw new ServerError('The song changed while lyrics were aligning. Run Align words again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
   }
   const freshCues = Array.isArray(fresh.lyricCues) ? fresh.lyricCues : [];
@@ -224,7 +227,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
   console.log(`🎤 Aligned lyric words from the ${source} via ${kind} (${matched} words matched)`);
   // Provenance is project-wide, so only a whole-song pass may change it; one
   // re-aligned line leaves the other lines' timings as stale as they were.
-  const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source }) };
+  const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source, ...(expectedMaster ? { lyricTimingMasterFilename: expectedMaster } : {}) }) };
   if (stemPcm) patch.lyricAlignSilentWords = silentWords.length;
   if (!cueId) {
     const analysis = relabeledAnalysis(fresh, nextCues);

@@ -43,6 +43,22 @@ describe('automatic song preparation', () => {
     expect(align).toHaveBeenLastCalledWith('p', { separateVocals: true });
   });
 
+  it('re-analyzes and re-times only what predates a replaced take, and only when asked (#14793)', async () => {
+    const aligned = { audioAnalysis: { durationSec: 30 }, lyricAlignSource: 'vocal-stem', lyricCues: [{ id: 'c', text: 'hi', words }] };
+    put({ id: 'p', ...aligned });
+    const audioChange = vi.fn(async () => ({ analysisStale: true, lyricsStale: true }));
+    expect(await autoPrepareSong('p', { analyze, align, audioChange })).toMatchObject({ analyzed: false, alignJobId: null });
+    expect(audioChange).not.toHaveBeenCalled();
+    expect(await autoPrepareSong('p', { refresh: true, analyze, align, audioChange })).toMatchObject({ analyzed: true, alignJobId: 'job-1' });
+    expect(align).toHaveBeenCalledWith('p', { separateVocals: true });
+
+    analyze.mockClear();
+    align.mockClear();
+    const lyricsOnly = vi.fn(async () => ({ analysisStale: false, lyricsStale: true }));
+    expect(await autoPrepareSong('p', { refresh: true, analyze, align, audioChange: lyricsOnly })).toMatchObject({ analyzed: false, alignJobId: 'job-1' });
+    expect(analyze).not.toHaveBeenCalled();
+  });
+
   it('does nothing without audio, for an instrumental, or while an autonomous run drives the project', async () => {
     put({ id: 'p', trackId: null });
     expect(await autoPrepareSong('p', { analyze, align })).toMatchObject({ analyzed: false, alignJobId: null });
