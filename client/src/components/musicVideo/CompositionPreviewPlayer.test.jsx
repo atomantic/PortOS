@@ -250,7 +250,7 @@ describe('CompositionPreviewPlayer', () => {
     await screen.findByTitle('Composition document preview');
     await waitFor(() => expect(opens()).toHaveLength(1));
     expect(opens()[0][1]).toEqual(expect.objectContaining({
-      kind: 'music-video', projectId: 'mv-1', revision: `${DOCUMENT.directory}|`,
+      kind: 'music-video', projectId: 'mv-1', revision: expect.stringContaining(`${DOCUMENT.directory}||fx-`),
     }));
     expect(api.getMusicVideoCompositionPreview).not.toHaveBeenCalled();
     expect(api.fetchMusicVideoPreviewAsset).not.toHaveBeenCalled();
@@ -280,6 +280,17 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   // Uniquely catches an older engine blocking playback instead of naming the shots it skips and offering the update.
+  // Uniquely catches an open session keeping a stale effects warning (and stale effects) after a shot effect edit.
+  it('reopens the document preview when a shot effect changes', async () => {
+    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 2 }];
+    const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, scenes }} audioUrl={null} />);
+    await waitFor(() => expect(opens()).toHaveLength(1));
+    rerender(<CompositionPreviewPlayer project={{ ...project, scenes, name: 'Renamed' }} audioUrl={null} />);
+    expect(opens()).toHaveLength(1);
+    rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...scenes[0], glitches: [{ atSec: 0.5, style: 'light-leak' }] }] }} audioUrl={null} />);
+    await waitFor(() => expect(opens()).toHaveLength(2));
+  });
+
   it('plays without effects an older engine cannot draw, names those shots, and updates the engine in one tap', async () => {
     socket.emit.mockImplementation((event, payload) => {
       if (event !== 'generated-preview:open') return;

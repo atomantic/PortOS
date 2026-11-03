@@ -33,6 +33,15 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
+// The shot effect inputs a document session stages at open. A change reopens it,
+// so a new effect draws (or is named as unsupported) and a removed one clears.
+const shotEffectsKey = (project) => JSON.stringify((project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
+  s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer]));
+const shotEffectsVersion = (project) => {
+  const key = shotEffectsKey(project);
+  return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
+};
+
 const EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
 const SHOTS_SHOWN = 6;
 
@@ -101,7 +110,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
-  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}` : null;
+  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
   const request = useMemo(() => {
     if (!wanted || !revision || !doc) return null;
     return {
