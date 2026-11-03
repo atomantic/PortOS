@@ -8,8 +8,9 @@ import StaleApprovalActions from './StaleApprovalActions.jsx';
  * control, a `run` starts the work itself (`onAction` gets either) — unless the
  * header's next action already goes there (`headerAnchor`). An item may add a
  * quieter `secondary` choice beside it. Run buttons wait while `busy`. A stale
- * approval offers a Revert per changed input whose approved value was kept
- * (folded behind "See N changes" when there are several).
+ * approval's Keep approved and its `secondary` (Review) render as two equal
+ * choices under the row, each with its `hint`, then a Revert per changed input
+ * whose approved value was kept (folded behind "See N changes" when there are several).
  * An `optional` item is listed but never counted toward the step being done.
  * A finished step shows nothing: the step tab already says it is done.
  * An item's `notes` (open change requests) each get a Mark resolved button,
@@ -28,7 +29,11 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
         <span className="text-xs text-port-text-muted">{`${done} of ${required.length} done`}</span>
       </div>
       <ul className="mt-2 space-y-1.5">
-        {items.map((item) => (
+        {items.map((item) => {
+          // A stale approval's Keep approved and its alternative sit side by side under the
+          // text, each saying what it does, even when the header already points at the editor.
+          const keepChoice = !item.done && !!onAction && item.action?.run === 'keep-approval';
+          return (
           // The action wraps under the text on a phone instead of squeezing it into a narrow column.
           <li key={item.id} className="flex min-w-0 flex-wrap items-start gap-2 text-sm">
             {item.done
@@ -76,13 +81,16 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                   ))}
                 </ul>
               )}
-              {!item.done && item.revert && onRevert && (
+              {!item.done && (keepChoice || (item.revert && onRevert)) && (
                 <div className="mt-1">
-                  <StaleApprovalActions revertible={item.revert.fields} busy={busy} onRevert={(field) => onRevert(item.revert.stage, field)} />
+                  <StaleApprovalActions revertible={item.revert?.fields} busy={busy}
+                    onRevert={item.revert && onRevert ? (field) => onRevert(item.revert.stage, field) : undefined}
+                    onKeep={keepChoice ? () => onAction(item.action) : undefined} keepHint={keepChoice ? item.action.hint : null}
+                    alternative={keepChoice && item.secondary ? { label: item.secondary.label, hint: item.secondary.hint, onClick: () => onAction(item.secondary) } : null} />
                 </div>
               )}
             </div>
-            {!item.done && onAction && (
+            {!item.done && onAction && !keepChoice && (
               <div className="ml-6 flex shrink-0 flex-wrap items-center gap-1.5 sm:ml-0">
                 {[item.action, item.secondary].filter((action) => action && (action.run || action.anchor !== headerAnchor)).map((action) => (
                   <button
@@ -101,7 +109,8 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
               </div>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </section>
   );

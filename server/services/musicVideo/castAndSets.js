@@ -298,6 +298,6 @@ export function reconfirmCastAndSetsOnProject(project, approvedInputs, approvedV
 export function assertCastAndSetsApprovable(project) {
   const stage = requireStage(project);
   if (stage.status !== 'review') throw stageError(409, 'CAST_SETS_NOT_IN_REVIEW', `The Cast & Sets check-in is ${stage.status}, not waiting for review`);
-  if (castSetsInspectionBlockers(stage).length) throw stageError(409, 'CAST_SETS_INSPECTION_REQUIRED', 'Review the flagged or unreviewed images and explicitly acknowledge them, or regenerate, before approving.');
+  if (castSetsInspectionBlockers(stage).length) throw stageError(409, 'CAST_SETS_INSPECTION_REQUIRED', 'Retry vision, regenerate, or accept each flagged or unchecked image before approving.');
   return stage;
 }

@@ -24,6 +24,7 @@ const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js')
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
+const { castSetsInspectionInputs } = await import('../../lib/musicVideoCastSetsInspection.js');
 const { musicVideoEvents } = await import('./events.js');
 
 const app = express();
@@ -2126,6 +2127,38 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
       && image.inspection.discrepancy === 'Vision unavailable: No enabled vision API reviewer is configured')).toBe(true);
     expect(reviewImage).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('provider: unresolved, model: default): No enabled vision API reviewer is configured'));
+  });
+
+  // Uniquely catches accepting an image while its vision re-check could still come back a mismatch.
+  it('refuses to accept an image while its vision re-check is still running', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: async () => { throw new Error('Example vision outage'); } }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const key = 'set:lab';
+    let release;
+    let started;
+    const answered = new Promise((resolve) => { release = resolve; });
+    const reviewing = new Promise((resolve) => { started = resolve; });
+    heldWorkReleases.add(() => release());
+    const reviewImage = vi.fn(async () => { started(); await answered; return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' }; });
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage }));
+    const retry = request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: [key] }).then((res) => res);
+    await reviewing;
+    const pending = (await current(project.id)).castAndSets;
+    expect(pending.images[key].inspection.verdict).toBe('pending');
+    const early = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`)
+      .send({ inputs: castSetsInspectionInputs(pending, key), inspectionId: pending.images[key].inspection.id });
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('CAST_SETS_INSPECTION_PENDING');
+    release();
+    expect((await retry).status).toBe(200);
+    const stage = (await current(project.id)).castAndSets;
+    expect(reviewImage).toHaveBeenCalledTimes(1);
+    expect(stage.images[key].inspection.verdict).toBe('pass');
+    expect(stage.status).toBe('review');
   });
 
   it('rejects an in-flight result after the saved prompt changes and preserves unrelated image evidence', async () => {

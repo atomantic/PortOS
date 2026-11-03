@@ -832,6 +832,8 @@ export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
     const inputs = castSetsInspectionInputs(stage, input.inputs.key);
     const inspection = currentCastSetsInspection(stage, input.inputs.key);
     if (!sameCastSetsInspectionInputs(inputs, input.inputs) || input.inspectionId !== (inspection?.id || null)) throw new ServerError('This image or inspection changed. Review it again.', { status: 409, code: 'CAST_SETS_INSPECTION_STALE' });
+    // A verdict still on its way could turn out to be a mismatch the director never saw.
+    if (inspection?.verdict === 'pending') throw new ServerError('Vision is still checking this image. Wait for its answer.', { status: 409, code: 'CAST_SETS_INSPECTION_PENDING' });
     const image = stage.images[input.inputs.key];
     return { project: { ...current, castAndSets: { ...stage, images: { ...stage.images,
       [input.inputs.key]: { ...image, inspectionAcknowledgement: { inputs, inspectionId: input.inspectionId, reviewer, at: new Date().toISOString() } } } } } };

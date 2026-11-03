@@ -579,7 +579,7 @@ describe('stageChecklist', () => {
     const feedback = [{ id: 'fb-1', stage: 'storyboard', target: 'Chorus', text: 'More lyrics on screen', decision: 'request-changes' }];
     const stale = { ...NOT_APPROVED, storyboard: { approved: false, problems: [], stale: { changedFields: ['cast'] } } };
     const stills = (r, p = castProject({ scenes: [scene()] })) => stageChecklist('produce', p, r).find((i) => i.id === 'approve-storyboard');
-    expect(stills(stale).action).toEqual({ label: 'Keep approved', run: 'keep-approval', stage: 'storyboard' });
+    expect(stills(stale).action).toMatchObject({ label: 'Keep approved', run: 'keep-approval', stage: 'storyboard' });
     const blocked = { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Resolve storyboard feedback for Chorus: More lyrics on screen'], stale: { changedFields: ['cast'] } } };
     const project = castProject({ scenes: [scene()], productionReview: { feedback } });
     const items = stageChecklist('board', project, blocked);

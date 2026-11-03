@@ -9,6 +9,19 @@ import { findProductionRun, assertProductionActive, reserveProductionReview } fr
 const MAX_ATTEMPTS = 2;
 export { reviewRenderedImage as reviewCastSetsImage } from '../imageRenderInspection.js';
 
+// A failed vision call is recorded as an unreviewed verdict naming why, never thrown.
+function unavailableOutcome(error, reviewer, run) {
+  const providerId = reviewer?.provider?.id || run?.reviewer?.providerId || null;
+  const model = reviewer?.model || run?.reviewer?.model || null;
+  const message = String(error?.message || error || 'Unknown inspection failure');
+  const reason = (reviewer?.provider?.apiKey ? message.split(reviewer.provider.apiKey).join('[redacted]') : message)
+    .replace(/\s+/g, ' ').slice(0, 300);
+  const refused = error?.status >= 400 && error.status < 500;
+  const log = refused ? console.log : console.error;
+  log(`${refused ? '🚫' : '❌'} Cast & Sets vision inspection failed (provider: ${providerId || 'unresolved'}, model: ${model || 'default'}): ${reason}`);
+  return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId, model };
+}
+
 export async function inspectCastAndSetsImages(projectId, { processId, resolveReviewer, reviewImage, publish, retryImage }) {
   const original = await requireProject(projectId);
   const revision = original.castAndSets.revision;
@@ -50,17 +63,7 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
           });
         };
         return reviewImage({ inputs, reviewer, beforeExecute });
-      })().catch((error) => {
-        const providerId = reviewer?.provider?.id || run?.reviewer?.providerId || null;
-        const model = reviewer?.model || run?.reviewer?.model || null;
-        const message = String(error?.message || error || 'Unknown inspection failure');
-        const reason = (reviewer?.provider?.apiKey ? message.split(reviewer.provider.apiKey).join('[redacted]') : message)
-          .replace(/\s+/g, ' ').slice(0, 300);
-        const refused = error?.status >= 400 && error.status < 500;
-        const log = refused ? console.log : console.error;
-        log(`${refused ? '🚫' : '❌'} Cast & Sets vision inspection failed (provider: ${providerId || 'unresolved'}, model: ${model || 'default'}): ${reason}`);
-        return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId, model };
-      });
+      })().catch((error) => unavailableOutcome(error, reviewer, run));
       const settled = await mutateProjectRecord(projectId, (current) => {
         const image = current.castAndSets?.images?.[key];
         if (!owned(current) || image?.inspection?.id !== id || !sameCastSetsInspectionInputs(inputs, castSetsInspectionInputs(current.castAndSets, key))) return { project: current, changed: false };
@@ -120,13 +123,7 @@ export async function reinspectCastAndSetsImages(projectId, { keys, resolveRevie
         if (!live(current, inputs) || current.castAndSets.images[key].inspection?.id !== id) throw new Error('Cast & Sets image changed during inspection');
       };
       return reviewImage({ inputs, reviewer, beforeExecute });
-    })().catch((error) => {
-      const message = String(error?.message || error || 'Unknown inspection failure');
-      const reason = (reviewer?.provider?.apiKey ? message.split(reviewer.provider.apiKey).join('[redacted]') : message).replace(/\s+/g, ' ').slice(0, 300);
-      const log = error?.status >= 400 && error.status < 500 ? console.log : console.error;
-      log(`${error?.status >= 400 && error.status < 500 ? '🚫' : '❌'} Cast & Sets vision re-check failed (provider: ${reviewer?.provider?.id || 'unresolved'}): ${reason}`);
-      return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId: reviewer?.provider?.id || null, model: reviewer?.model || null };
-    });
+    })().catch((error) => unavailableOutcome(error, reviewer));
     const settled = await mutateProjectRecord(projectId, (current) => {
       const image = current.castAndSets?.images?.[key];
       if (!live(current, inputs) || image?.inspection?.id !== id) return { project: current, changed: false };

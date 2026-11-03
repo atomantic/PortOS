@@ -8,7 +8,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
+  api: { selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), inspectMusicVideoCastAndSetsImages: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
   greyboxData: { places: {} },
 }));
@@ -756,12 +756,37 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
   });
 
+  // Uniquely catches Keep approved standing alone with Rebuild far below the image grid.
+  it('offers Rebuild beside Keep approved on a stale sheet, each saying what it does', async () => {
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['subjects'] };
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('directing', { revision: 2 }) });
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
+    const choices = screen.getByRole('group', { name: 'Keep or redo this approval' });
+    expect(within(choices).getByText('Use these images as they are.')).toBeInTheDocument();
+    expect(within(choices).getByText(/Redo the direction from the current inputs.*Faces can drift/)).toBeInTheDocument();
+    // The note never promises a rebuild the panel doesn't show (#14796).
+    expect(screen.queryByText(/or rebuild it from the current inputs/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Rebuild' })).toHaveLength(1);
+    await act(async () => { fireEvent.click(within(choices).getByRole('button', { name: 'Rebuild' })); });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+  });
+
+  // Uniquely catches a vision outage leaving a dozen images to retry one tap at a time.
+  it('retries vision on every unchecked image at once (#14794)', async () => {
+    api.inspectMusicVideoCastAndSetsImages.mockResolvedValue({ project: withStatus('approved') });
+    const done = (key) => ({ status: 'done', imageId: `${key}.png`, jobId: `job-${key}`, submittedRevision: 1, submittedPrompt: 'Example prompt' });
+    const vision = (verdict) => ({ id: 'inspection-x', inputs: { key: 'set:roof', imageId: 'set:roof.png', jobId: 'job-set:roof', imageRevision: 1, planPrompt: 'Example prompt', submittedPrompt: 'Example prompt' }, verdict });
+    const plan = Object.fromEntries(['character', 'set:lab', 'set:roof'].map((key) => [key, { key, label: key, prompt: 'Example prompt' }]));
+    open(withStatus('approved', { plan, images: { character: done('character'), 'set:lab': done('set:lab'), 'set:roof': { ...done('set:roof'), inspection: vision('pass') } } }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry vision on all' })); });
+    expect(api.inspectMusicVideoCastAndSetsImages).toHaveBeenCalledWith('example-project', { keys: ['character', 'set:lab'] }, { silent: true });
+  });
+
   it('offers Revert only for changed inputs whose approved value was kept (#10241)', () => {
     const onRevertApproval = vi.fn();
     const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
-    // Keep approved sits in the same row as Revert, right under the stale note.
-    expect(screen.getByRole('button', { name: 'Keep approved' }).parentElement).toBe(screen.getByRole('button', { name: 'Revert concept' }).parentElement);
+    expect(screen.getByRole('button', { name: 'Keep approved' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
     expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
     expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
