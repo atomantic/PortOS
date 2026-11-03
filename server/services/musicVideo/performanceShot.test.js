@@ -307,6 +307,15 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ seconds: SONG_SEC - 1 }));
     await rm(PATHS.uploads, { recursive: true, force: true });
     await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_VOCAL_STEM_TIMEBASE' });
+    // Split by demucs from this very master, it is on the song's timebase whatever the container durations say.
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav', vocalStemMasterFilename: 'song.wav', vocalStemDerived: true });
+    await expect(preparePerformanceShot(args)).resolves.toMatchObject({ shotInstruction: { audio: { conditioning: { source: 'vocal-stem' } } } });
+    // The song's file was replaced since (a new take on the same track): the stem belongs to the old song.
+    await writeFile(join(PATHS.music, 'vocals.wav'), stem);
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav', vocalStemMasterFilename: 'older-song.wav', vocalStemDerived: true });
+    await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_VOCAL_STEM_STALE' });
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav' });
+    await rm(PATHS.uploads, { recursive: true, force: true });
     // A stem the record names but the disk lacks is not silently replaced by the mix.
     await rm(join(PATHS.music, 'vocals.wav'));
     await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 404, code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });

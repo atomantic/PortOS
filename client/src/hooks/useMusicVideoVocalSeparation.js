@@ -15,6 +15,19 @@ const STAGE_LABELS = {
 };
 
 /**
+ * The fields of a separated project to apply to the board's copy: the stem
+ * and its provenance together, so the "earlier version of the song" check
+ * reads the stem it is showing.
+ */
+export const separatedStemPatch = (project) => ({
+  vocalStemFilename: project.vocalStemFilename ?? null,
+  vocalStemMasterFilename: project.vocalStemMasterFilename ?? null,
+  vocalStemDerived: project.vocalStemDerived ?? null,
+  performanceConditioningSource: project.performanceConditioningSource ?? null,
+  updatedAt: project.updatedAt,
+});
+
+/**
  * "Separate vocals" for a Music Video project: one demucs job over SSE whose
  * terminal frame carries the project with its new vocal stem. `start(projectId)`
  * is the button; `run(projectId)` is the same job as a promise for the

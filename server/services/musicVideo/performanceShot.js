@@ -54,7 +54,7 @@ import {
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
-import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
+import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';
 
 export const SHOT_INSTRUCTION_VERSION = 2;
 
@@ -367,7 +367,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     : project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
   const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
   if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
-  if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
+  if (stemPath) await assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
 
   const audioSha256 = await hashFile(masterPath);
   // #9266: the MASTER's loudness over this window, so a later re-master that

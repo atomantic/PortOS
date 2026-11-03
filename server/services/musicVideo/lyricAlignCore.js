@@ -7,7 +7,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { STT_TIMEOUT_MS } from '../voice/stt.js';
 import { lyricKey, lyricTokens } from './timedText.js';
-import { resolveVocalStemPath } from './vocalStem.js';
+import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
 
 const LYRIC_ALIGN_SAMPLE_RATE = 16000;
 const LYRIC_ALIGN_CHUNK_SEC = 20;
@@ -824,8 +824,12 @@ export async function pickAlignmentPath(project, io = {}) {
   });
   const stem = resolveStem(project);
   // CTC aligns the known text directly to the stem, without decoding the mix.
-  if (stem) return { path: stem, source: 'vocal-stem', mixPath: null };
-  return { path: await resolveMaster(project), source: 'master', mixPath: null };
+  // A stem recorded against an earlier song file would place the words at the
+  // old song's times, so the current mix is aligned instead.
+  if (stem && !project.vocalStemMasterFilename) return { path: stem, source: 'vocal-stem', mixPath: null };
+  const master = await resolveMaster(project);
+  if (stem && !vocalStemMasterChanged(project, master)) return { path: stem, source: 'vocal-stem', mixPath: null };
+  return { path: master, source: 'master', mixPath: null };
 }
 
 // A word sung at -50 dBFS RMS or quieter in an isolated vocal is not being

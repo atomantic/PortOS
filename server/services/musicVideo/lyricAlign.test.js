@@ -211,6 +211,16 @@ describe('lyric alignment audio', () => {
       resolveMaster,
     })).resolves.toEqual({ path: '/library/mix.wav', source: 'master', mixPath: null });
 
+    // A stem of the song's previous file would place the words at the old song's times.
+    await expect(pickAlignmentPath({ vocalStemFilename: 'v.wav', vocalStemMasterFilename: 'old-mix.wav' }, {
+      resolveStem: () => '/library/v.wav',
+      resolveMaster,
+    })).resolves.toEqual({ path: '/library/mix.wav', source: 'master', mixPath: null });
+    await expect(pickAlignmentPath({ vocalStemFilename: 'v.wav', vocalStemMasterFilename: 'mix.wav' }, {
+      resolveStem: () => '/library/v.wav',
+      resolveMaster,
+    })).resolves.toEqual({ path: '/library/v.wav', source: 'vocal-stem', mixPath: null });
+
     const missing = new ServerError('missing', { status: 404, code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });
     await expect(pickAlignmentPath({ vocalStemFilename: 'gone.wav' }, {
       resolveStem: () => { throw missing; },
@@ -467,7 +477,7 @@ describe('alignProjectLyrics', () => {
     }
   });
 
-  it('separates a missing stem only with explicit consent, then aligns that stem', async () => {
+  it('separates a missing or old-song stem only with explicit consent, then aligns that stem', async () => {
     const record = { ...project, lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
     const separated = { ...record, vocalStemFilename: 'stem.wav' };
     const updateProject = vi.fn(async (_id, patch) => ({ ...separated, ...patch }));
@@ -486,6 +496,16 @@ describe('alignProjectLyrics', () => {
     const legacy = harness(vi.fn(async () => [{ text: 'walking', startSec: 1, endSec: 2 }]), record);
     await legacy.run({ deps: { separateVocals } });
     expect(separateVocals).toHaveBeenCalledOnce();
+
+    // A stem of the song's previous file is separated again from the current one.
+    const oldStem = { ...record, vocalStemFilename: 'old-stem.wav', vocalStemMasterFilename: 'old-song.wav' };
+    await alignProjectLyrics('mv-1', { separateVocals: true, deps: {
+      getProject: vi.fn().mockResolvedValueOnce(oldStem).mockResolvedValue(separated), updateProject, separateVocals, forceAlign,
+      stemOfOldSong: async (p) => p.vocalStemMasterFilename === 'old-song.wav',
+      resolveAudio: async (project) => { expect(project.vocalStemFilename).toBe('stem.wav'); return { path: 'stem.wav', source: 'vocal-stem' }; },
+      decodeAudio: async () => stem,
+    } });
+    expect(separateVocals).toHaveBeenCalledTimes(2);
   });
 
   it('names the analysis sections after the lyric sheet once the lines are timed', async () => {

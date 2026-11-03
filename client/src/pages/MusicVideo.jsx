@@ -40,7 +40,7 @@ import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
 import useMusicVideoCastAndSets from '../hooks/useMusicVideoCastAndSets.js';
 import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
 import useMusicVideoLyricAlign from '../hooks/useMusicVideoLyricAlign.js';
-import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
+import useMusicVideoVocalSeparation, { separatedStemPatch } from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoPublishKit from '../hooks/useMusicVideoPublishKit.js';
@@ -356,7 +356,7 @@ export default function MusicVideo() {
   // "Separate vocals" (demucs) — one slot shared by the stem control and the
   // autopilot kickoff; the terminal frame carries the project with its stem.
   const separation = useMusicVideoVocalSeparation({
-    onSeparated: (projectId, project) => patchProject(projectId, { vocalStemFilename: project.vocalStemFilename, updatedAt: project.updatedAt }),
+    onSeparated: (projectId, project) => patchProject(projectId, separatedStemPatch(project)),
   });
   const lyricAlign = useMusicVideoLyricAlign({
     onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
