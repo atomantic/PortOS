@@ -45,6 +45,7 @@ import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
+import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
@@ -568,6 +569,8 @@ function buildScene(input, { order }) {
     ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+    ...(input.wipeIn ? { wipeIn: input.wipeIn } : {}),
+    ...(input.wipeOut ? { wipeOut: input.wipeOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
     ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
@@ -652,6 +655,8 @@ function carryOver(prior, fresh) {
     ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
     ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
     ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+    ...(prior.wipeIn ? { wipeIn: prior.wipeIn } : {}),
+    ...(prior.wipeOut ? { wipeOut: prior.wipeOut } : {}),
     ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
     ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
     // A still playing an image effect stays one: the effect is the shot's picture.
@@ -758,7 +763,7 @@ export function applyStoryboardShotSync(project, plan) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel'];
 
@@ -823,6 +828,33 @@ export function applySceneUpdate(project, sceneId, patch) {
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
+}
+
+/**
+ * "Vary wipes": a wipe out of each of `count` shots from `fromSceneId` in song
+ * order, no style twice in a row (nor the wipe out of the shot before the run),
+ * each replacing that shot's glitch out. The last shot has no cut out and is
+ * skipped. Returns `{ project, scenes }`, `scenes` the changed shots.
+ */
+export function varySceneWipes(project, { fromSceneId, count, styles, lengthSec = null, color = null, seed = 1 }) {
+  const timed = (project.scenes || []).filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  const start = timed.findIndex((scene) => scene.sceneId === fromSceneId);
+  if (start < 0) throw new ServerError('Pick a timed shot to start from', { status: 404, code: 'NOT_FOUND' });
+  const run = timed.slice(start, Math.min(timed.length - 1, start + count));
+  if (!run.length) throw new ServerError('The last shot has no cut out to wipe', { status: 400, code: 'VALIDATION_ERROR' });
+  const picks = varyWipes(run.length, { styles, previous: start > 0 ? sceneWipe(timed[start - 1], 'out')?.style ?? null : null, seed });
+  let next = project;
+  const scenes = run.map((scene, i) => {
+    const wipeOut = {
+      style: picks[i],
+      ...(lengthSec ? { lengthSec } : {}),
+      ...(color && MUSIC_VIDEO_EDGED_WIPES.includes(picks[i]) ? { color } : {}),
+    };
+    const outcome = applySceneUpdate(next, scene.sceneId, { wipeOut, transitionOut: null });
+    next = outcome.project;
+    return outcome.updated;
+  });
+  return { project: next, scenes };
 }
 
 /** Remove a scene and re-sequence the remaining scenes' `order`. Returns the next record. */

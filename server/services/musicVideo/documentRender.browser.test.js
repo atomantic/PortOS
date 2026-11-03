@@ -364,6 +364,84 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await page.close(); }
   }, 90000);
 
+  // Catches a document drawing a wipe on other frames than its cut, losing the
+  // held outgoing frame or the edge color, or the export and preview disagreeing.
+  it('paints shape and move wipes from their cuts identically in preview, full export and a mid-wipe excerpt', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const names = ['wipe-red.png', 'wipe-blue.png', 'wipe-green.png'];
+    const colors = ['#d02020', '#2040d0', '#20c020'];
+    const images = await Promise.all(colors.map(background => sharp({ create: { width: 64, height: 36, channels: 3, background } }).png().toBuffer()));
+    await Promise.all(names.map((name, i) => writeFile(join(PATHS.images, name), images[i])));
+    const created = await projects.createProject({ name: 'Synthetic wipes' });
+    const still = (sceneId, startSec, image, extra = {}) => ({ sceneId, startSec, endSec: startSec + 1, visualLayer: 'still', stillMove: 'hold', referenceImageId: image, ...extra });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 3, sections: [] },
+      scenes: [
+        still('a', 0, names[0], { wipeOut: { style: 'iris', lengthSec: 0.5, color: '#ffff00' } }),
+        still('b', 1, names[1], { wipeOut: { style: 'push-left', lengthSec: 0.5 } }),
+        still('c', 2, names[2]),
+      ],
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const audio = join(PATHS.music, 'wipes.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', audio]);
+    const encode = async (name, windowStart, windowEnd) => {
+      const outputPath = join(PATHS.videos, name);
+      await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: name.replace('.mp4', ''),
+        audioPath: audio, outputPath, windowStart, windowEnd });
+      return execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    };
+    const full = await encode('wipes-full.mp4', 0, 3);
+    const excerpt = await encode('wipes-excerpt.mp4', 50 / 24, 58 / 24);
+    const pixel = (raw, frame, x, y = 18) => {
+      const index = (frame * 64 * 36 + y * 64 + x) * 3;
+      return [...raw.subarray(index, index + 3)];
+    };
+    const preview = await buildDocumentPreview(project);
+    const assets = preview.assets.filter(asset => asset.url.startsWith('/data/images/')).map(asset => ({
+      key: asset.key, encoded: images[names.indexOf(decodeURIComponent(asset.url.split('/').at(-1)))].toString('base64'),
+    }));
+    const page = await browser.newPage();
+    try {
+      await page.setContent(preview.html);
+      await page.evaluate(assets => {
+        addEventListener('message', ({ data }) => {
+          if (data?.type !== 'portos-mv:request') return;
+          const asset = assets.find(item => item.key === data.key);
+          if (!asset) return;
+          const blob = new Blob([Uint8Array.from(atob(asset.encoded), c => c.charCodeAt(0))], { type: 'image/png' });
+          window.postMessage({ type: 'portos-mv:asset', key: asset.key, blob }, '*');
+        });
+        window.postMessage({ type: 'portos-mv:manifest', keys: assets.map(asset => asset.key) }, '*');
+      }, assets);
+      await page.waitForFunction(() => globalThis.portosComposition);
+      const live = (frame, x, y = 18) => page.evaluate(async ({ frame, x, y }) => {
+        await globalThis.portosComposition.seek(frame / 24);
+        const canvas = document.getElementById('stage');
+        return [...canvas.getContext('2d').getImageData(Math.round(canvas.width * x / 64), Math.round(canvas.height * y / 36), 1, 1).data].slice(0, 3);
+      }, { frame, x, y });
+      for (const frame of [23, 24, 30, 36, 47, 48, 52, 56, 60]) {
+        for (const x of [4, 32, 60]) {
+          const shown = await live(frame, x);
+          near(pixel(full, frame, x), shown, 24);
+          if (frame >= 50 && frame < 58) near(pixel(excerpt, frame - 50, x), shown, 24);
+        }
+      }
+      // The iris opens on the cut: the incoming centre at once, the frame's edge still outgoing.
+      const [cutCentre, cutEdge] = [await live(24, 32), await live(24, 4)];
+      expect(cutCentre[2]).toBeGreaterThan(cutCentre[0] + 80);
+      expect(cutEdge[0]).toBeGreaterThan(cutEdge[2] + 80);
+      expect((await live(36, 4))[2]).toBeGreaterThan((await live(36, 4))[0] + 60);
+      // Pushed left: the incoming shot enters from the right.
+      const [pushLeft, pushRight] = [await live(52, 4), await live(52, 60)];
+      expect(pushLeft[2]).toBeGreaterThan(pushLeft[1] + 60);
+      expect(pushRight[1]).toBeGreaterThan(pushRight[2] + 60);
+    } finally { await page.close(); }
+  }, 90000);
+
   it('repaints a chroma effect independently of the last image rendered', async () => {
     await mkdir(PATHS.images, { recursive: true });
     const names = ['chroma-red.png', 'chroma-blue.png'];

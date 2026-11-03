@@ -40,6 +40,7 @@ import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
 import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { wipeCuts } from '../../lib/musicVideoWipes.js';
 import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { documentRenderClock, documentSongDuration } from './documentTiming.js';
 
@@ -450,6 +451,8 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // The shipped engine before cut wipes (#14831).
+  'b5180a986424a2d6c15cde037baa72088ebf347e79e21b0e89f3c957936d1062',
   // The shipped engine before document end-frame and selected glitch effects.
   '0cc9d52c4bbf82cec93b418e41e7cfe49a89f6feb0602c02ecdee6f00f9cf307',
   // Shipped between still effects (#11319) and the later lyric-runtime check.
@@ -650,21 +653,29 @@ export async function documentDirectoryForRender(project, { requireSelectedEffec
   return relative(PATHS.data, dir).split(sep).join('/');
 }
 
-const SELECTED_EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
+const SELECTED_EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects', wipe: 'wipes' };
+// The `portos-selected-effects` level a document must declare to draw each kind: 2 adds wipes (#14831).
+const SELECTED_EFFECT_LEVELS = { transition: 1, glitch: 1, end: 1, wipe: 2 };
 
 const selectedEffectKinds = shots => Object.keys(SELECTED_EFFECT_LABELS)
   .filter(kind => shots.some(shot => shot.effects.includes(kind))).map(kind => SELECTED_EFFECT_LABELS[kind]);
 
-const declaresSelectedEffects = async files => {
+// The highest `portos-selected-effects: N` an engine.js or index.html declares, 0 when none.
+const declaredEffectsLevel = async files => {
   const declarations = files.filter(file => ['engine.js', 'index.html'].includes(file.rel));
-  const marked = await Promise.all(declarations.map(async file =>
-    /^(?:\/\/ portos-selected-effects: 1|<!-- portos-selected-effects: 1 -->)$/m.test(await readFile(file.abs, 'utf8'))));
-  return marked.some(Boolean);
+  const levels = await Promise.all(declarations.map(async file =>
+    Number(/^(?:\/\/ portos-selected-effects: (\d+)|<!-- portos-selected-effects: (\d+) -->)$/m.exec(await readFile(file.abs, 'utf8'))?.slice(1).find(Boolean) || 0)));
+  return Math.max(0, ...levels);
 };
+
+// The shots with effects a document at `level` cannot draw, each naming only those effects.
+const unsupportedAt = (shots, level) => shots
+  .map(shot => ({ ...shot, effects: shot.effects.filter(kind => SELECTED_EFFECT_LEVELS[kind] > level) }))
+  .filter(shot => shot.effects.length);
 
 /**
  * The shots whose selected effects land inside the song and need an engine that
- * declares `portos-selected-effects`: `[{ sceneId, effects: ['transition'|'glitch'|'end'] }]`.
+ * declares `portos-selected-effects`: `[{ sceneId, effects: ['transition'|'glitch'|'end'|'wipe'] }]`.
  * Each shot is checked with only its own effects so the list names the shots.
  */
 function selectedEffectShots(project) {
@@ -678,10 +689,11 @@ function selectedEffectShots(project) {
     if (!found.has(sceneId)) found.set(sceneId, []);
     if (!found.get(sceneId).includes(kind)) found.get(sceneId).push(kind);
   };
-  const bare = ({ transitionIn: _in, transitionOut: _out, ...section }) => section;
+  const bare = ({ transitionIn: _in, transitionOut: _out, wipeIn: _wipeIn, wipeOut: _wipeOut, ...section }) => section;
   for (const section of sections) {
     if ((section.transitionIn || section.transitionOut)
       && transitionGlitchFrames(sections.map(other => other === section ? other : bare(other)), { totalFrames: frames }).length > 0) add(section.sceneId, 'transition');
+    if ((section.wipeIn || section.wipeOut) && wipeCuts(sections.map(other => other === section ? other : bare(other)), { fps }).length > 0) add(section.sceneId, 'wipe');
     if (section.shotGlitches && shotGlitchFrames([section], fps).some(inSong)) add(section.sceneId, 'glitch');
   }
   const generated = project.composition?.document?.source?.kind === 'generated';
@@ -716,7 +728,7 @@ function selectedEffectShots(project) {
  */
 export async function unsupportedDocumentEffects(project) {
   const { files } = await collectTree(await requireDocument(project));
-  return (await declaresSelectedEffects(files)) ? [] : selectedEffectShots(project);
+  return unsupportedAt(selectedEffectShots(project), await declaredEffectsLevel(files));
 }
 
 /** Every file a document ships, read into memory (the preview builder). */
@@ -724,8 +736,8 @@ export async function readDocumentFiles(project, { requireLyricVisibility = true
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
-  if (requireSelectedEffects && !(await declaresSelectedEffects(files))) {
-    const shots = selectedEffectShots(project);
+  if (requireSelectedEffects) {
+    const shots = unsupportedAt(selectedEffectShots(project), await declaredEffectsLevel(files));
     if (shots.length) throw new ServerError(`This composition does not declare support for the selected shot effects (${selectedEffectKinds(shots).join(', ')}). Update the layered engine under Document source, or add effect support to the custom document.`, {
       status: 422, code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED',
     });

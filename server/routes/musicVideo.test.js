@@ -28,6 +28,8 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateScene: vi.fn(async (_id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+  // Vary wipes (#14831) — the run itself is exercised in services/musicVideo/transitions.test.js.
+  varyProjectWipes: vi.fn(async () => ({ project: { updatedAt: 't1' }, scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null, takes: [] }] })),
   // Scene split (#8977) — exercised against the real store in musicVideoSceneSplit.test.js.
   splitProjectScene: vi.fn(),
   mergeProjectNextScene: vi.fn(),
@@ -864,6 +866,18 @@ describe('musicVideo routes', () => {
       const r = await request(app).post('/api/music-video/mv-1/scenes/reorder').send({ sceneIds: ['b', 'a'] });
       expect(r.status).toBe(200);
       expect(r.body.scenes.map((s) => s.sceneId)).toEqual(['b', 'a']);
+    });
+
+    it('POST /:id/scenes/vary-wipes returns only the changed wipes', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes/vary-wipes').send({ fromSceneId: 'a', count: 4, styles: ['star', 'iris'], seed: 9 });
+      expect(r.status).toBe(200);
+      expect(svc.varyProjectWipes).toHaveBeenCalledWith('mv-1', { fromSceneId: 'a', count: 4, styles: ['star', 'iris'], seed: 9 });
+      expect(r.body).toEqual({ scenes: [{ sceneId: 'a', wipeOut: { style: 'star' }, transitionOut: null }], updatedAt: 't1' });
+    });
+
+    it('POST /:id/scenes/vary-wipes refuses an unknown style', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/scenes/vary-wipes').send({ fromSceneId: 'a', count: 4, styles: ['crossfade'] });
+      expect(r.status).toBe(400);
     });
 
     it('POST /:id/scenes/reorder rejects an empty list', async () => {

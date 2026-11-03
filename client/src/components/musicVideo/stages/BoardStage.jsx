@@ -269,6 +269,7 @@ export default function BoardStage({ board }) {
               storyboardShot={panelOf(scene)}
               onStoryboardBoard={setStoryboard}
               onApplyCameos={board.applyCameos}
+              onVaryWipes={board.varyWipes}
               expanded={activeSceneId === scene.sceneId}
               onToggleExpand={toggleInspector}
               stepShot={stepShot}

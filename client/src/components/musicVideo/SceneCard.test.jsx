@@ -840,6 +840,34 @@ describe('VHS glitch transitions', () => {
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
     expect(screen.getByLabelText('Effect in').value).toBe('');
   });
+
+  // Uniquely catches a cut keeping both a glitch and a wipe, or a wipe's length
+  // or edge color saving the wrong shape.
+  it('swaps a glitch for a wipe, sets its length and edge, and swaps back', async () => {
+    const onSave = vi.fn();
+    const onVaryWipes = vi.fn(async () => {});
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [], transitionOut: 'vhs-glitch' });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} onVaryWipes={onVaryWipes} />;
+    }
+    render(<Harness />);
+    const out = screen.getByLabelText('Effect out');
+    fireEvent.change(out, { target: { value: 'heart' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart' }, transitionOut: null });
+    fireEvent.change(screen.getByLabelText('Effect out wipe length'), { target: { value: '0.5' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart', lengthSec: 0.5 } });
+    fireEvent.change(screen.getByLabelText('Edge'), { target: { value: '#ff3366' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart', lengthSec: 0.5, color: '#ff3366' } });
+    // A move wipe has no edge, and keeps the length.
+    fireEvent.change(out, { target: { value: 'push-left' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    expect(screen.queryByLabelText('Edge')).toBeNull();
+    fireEvent.change(out, { target: { value: 'vhs-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch', wipeOut: null });
+    fireEvent.change(screen.getByLabelText('over'), { target: { value: '16' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Vary wipes' })); });
+    expect(onVaryWipes).toHaveBeenCalledWith('s1', 16);
+  });
 });
 
 // Uniquely catches the in-shot glitch control saving the wrong shape, losing a

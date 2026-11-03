@@ -247,6 +247,16 @@ describe('music-video composition documents', () => {
     expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual([]);
   });
 
+  it('asks a document for selected-effects level 2 before it is trusted with wipes', async () => {
+    const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';
+    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 1, transitionOut: 'vhs-glitch' }, { sceneId: 'b', startSec: 1, endSec: 2, wipeOut: { style: 'star' } }, { sceneId: 'c', startSec: 2, endSec: 3 }];
+    for (const [level, expected] of [[1, [{ sceneId: 'b', effects: ['wipe'] }]], [2, []]]) {
+      await uploadZip(project.id, createZip([{ name: 'index.html', data: index }, { name: 'engine.js', data: `// portos-selected-effects: ${level}\n` }]));
+      await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, audioAnalysis: { durationSec: 3 }, scenes } }));
+      expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual(expected);
+    }
+  });
+
   it('only blocks a document for effect frames inside the song', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';

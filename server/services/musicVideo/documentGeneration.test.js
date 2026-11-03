@@ -839,7 +839,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     const revised = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
     const after = await manifestAt(revised);
     expect(after.sections.map(section => section.source)).toEqual([before.sections[0].source, source('#00ff00'), before.sections[2].source]);
-    expect((await readFile(join(PATHS.data, revised.directory, 'engine.js'), 'utf8'))).toContain('portos-selected-effects: 1');
+    expect((await readFile(join(PATHS.data, revised.directory, 'engine.js'), 'utf8'))).toContain('portos-selected-effects: 2');
   });
 
   it('upgrades an unchanged generated layered engine without changing authored sections', async () => {

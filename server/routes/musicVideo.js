@@ -36,6 +36,7 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoVaryWipesSchema,
   musicVideoSceneSplitSchema,
   musicVideoLyricCutSchema,
   musicVideoPacingRecutSchema,
@@ -128,6 +129,7 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  varyProjectWipes,
   splitProjectScene,
   cutProjectScenesOnLyrics,
   previewProjectPacingRecut,
@@ -1762,6 +1764,13 @@ router.patch('/:id/scenes/:sceneId', asyncHandler(async (req, res) => {
 router.delete('/:id/scenes/:sceneId', asyncHandler(async (req, res) => {
   const updated = await deleteScene(req.params.id, req.params.sceneId);
   res.json(updated);
+}));
+
+// A non-repeating run of wipes over the cuts out of `count` shots from `fromSceneId` (musicVideoWipes.js).
+router.post('/:id/scenes/vary-wipes', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoVaryWipesSchema, req.body ?? {});
+  const { project, scenes } = await varyProjectWipes(req.params.id, options);
+  res.json({ scenes: scenes.map(({ sceneId, wipeOut, transitionOut }) => ({ sceneId, wipeOut, transitionOut: transitionOut ?? null })), updatedAt: project.updatedAt });
 }));
 
 router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {

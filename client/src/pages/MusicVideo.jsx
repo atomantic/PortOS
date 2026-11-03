@@ -16,6 +16,7 @@ import {
   createMusicVideoProject,
   cloneMusicVideoProject,
   updateMusicVideoProject,
+  varyMusicVideoWipes,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
   prepareMusicVideoSong,
@@ -1641,6 +1642,17 @@ function ProjectWorkspace({
       scenes: mergeCameoScenes(p.scenes, scenes),
       ...(updatedAt ? { updatedAt } : {}),
     })),
+    // "Vary wipes": a wipe out of each of `count` shots from this one; only their cut-out fields change here.
+    varyWipes: (fromSceneId, count) => varyMusicVideoWipes(selected.id, { fromSceneId, count, seed: Math.floor(Math.random() * 2147483646) }, { silent: true })
+      .then(({ scenes, updatedAt }) => {
+        const byId = new Map(scenes.map((scene) => [scene.sceneId, scene]));
+        patchProject(selected.id, (p) => ({
+          scenes: p.scenes.map((scene) => (byId.has(scene.sceneId) ? { ...scene, ...byId.get(scene.sceneId) } : scene)),
+          ...(updatedAt ? { updatedAt } : {}),
+        }));
+        toast.success(`Wipes on ${scenes.length} cut${scenes.length === 1 ? '' : 's'}`);
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to vary the wipes')),
     // Only labels still empty here: an edit made while the request ran keeps its own.
     applyReferenceLabels: (labels) => patchProject(selected.id, (p) => ({ visualSpec: { ...(p.visualSpec || {}),
       references: (p.visualSpec?.references || []).map((ref) => (labels[ref.id] && !ref.label?.trim() ? { ...ref, label: labels[ref.id] } : ref)) } })),

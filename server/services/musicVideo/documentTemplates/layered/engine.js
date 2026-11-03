@@ -9,6 +9,8 @@
  *
  * Data: window.PORTOS_MV, written by PortOS as portos-mv.js at render time —
  * { project, render, song, lyrics, lyricMarkers, scenes, textCues, composition }.
+ * A scene's `wipe` ({ style, frames, cutFrame, fromSceneId, color }) plays over its
+ * first frames through globalThis.__portosMusicVideoWipe, which PortOS provides.
  * scenes[].media.src names a file PortOS copied into media/ (the selected take).
  * In the in-app preview window.PORTOS_MV_ASSETS resolves to { src: blob URL }.
  *
@@ -17,7 +19,7 @@
  */
 // portos-lyric-overlay-visibility: 1
 // portos-photo-sequence: 2
-// portos-selected-effects: 1
+// portos-selected-effects: 2
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
@@ -545,9 +547,9 @@
 
   let imageEffects = null;
 
-  function render(t, scene, source, state, reviewFootage = false) {
+  // The scene's picture (its take or card, camera move, image effect and beat glitch), under every overlay.
+  function drawSceneLayer(t, scene, source, state, authored) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
-    const authored = sectionFunction(t);
     const effect = source && scene?.visualLayer === 'still' && scene.media?.kind === 'image' && scene.imageEffect
       ? imageEffects?.imageEffectState(scene.imageEffect, (frameOf(t) - Math.round(scene.startSec * FPS)) / FPS, { fps: FPS }) : null;
     if (scene) {
@@ -567,6 +569,42 @@
         if (effect) _flash(effect.fog, imageEffects.IMAGE_EFFECT_FOG_COLOR);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
+    }
+    return effect;
+  }
+
+  // ---------- wipes (PORTOS_MV.scenes[].wipe, drawn by globalThis.__portosMusicVideoWipe) ----------
+  // A wipe runs from its scene's first frame: the outgoing scene's last frame, held, gives way to this one.
+  const wipeCanvases = {};
+  const wipeCanvas = (key) => {
+    const c = wipeCanvases[key] ||= document.createElement('canvas');
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    return c;
+  };
+  function wipeAt(scene, t) {
+    const wipe = scene?.wipe;
+    if (!wipe || !Number.isFinite(wipe.cutFrame) || !(wipe.frames > 0)) return null;
+    const index = frameOf(t) - wipe.cutFrame;
+    const from = index >= 0 && index < wipe.frames ? SCENES.find((s) => s.sceneId === wipe.fromSceneId) : null;
+    return from ? { ...wipe, index, from, fromT: (wipe.cutFrame - 0.5) / FPS } : null;
+  }
+  // Draw the outgoing scene's held frame now, before the incoming source is resolved (a photo stack reuses one canvas).
+  async function outgoingLayer(wipe) {
+    const fromSource = cardFor(wipe.from) ? null : await sourceFor(wipe.from, wipe.fromT);
+    drawSceneLayer(wipe.fromT, wipe.from, fromSource, eventState(wipe.fromT), sectionFunction(wipe.fromT));
+    const held = wipeCanvas('out');
+    held.getContext('2d').drawImage(canvas, 0, 0);
+    return held;
+  }
+
+  function render(t, scene, source, state, reviewFootage = false, wipe = null) {
+    const authored = sectionFunction(t);
+    const effect = drawSceneLayer(t, scene, source, state, authored);
+    if (wipe?.held) {
+      if (!globalThis.__portosMusicVideoWipe) throw new Error('Music-video wipe painter is unavailable');
+      const incoming = wipeCanvas('in');
+      incoming.getContext('2d').drawImage(canvas, 0, 0);
+      globalThis.__portosMusicVideoWipe(ctx, { outgoing: wipe.held, incoming, style: wipe.style, index: wipe.index, frames: wipe.frames, color: wipe.color || null, width: W, height: H });
     }
     const before = reviewFootage && source ? footagePixels() : null;
     if (authored?.fn) {
@@ -627,8 +665,10 @@
       const state = eventState(t);
       t = state.t;
       const scene = sceneAt(t);
+      const wipe = wipeAt(scene, t);
+      const held = wipe ? await outgoingLayer(wipe) : null;
       const source = scene && !cardFor(scene) ? await sourceFor(scene, t) : null;
-      render(t, scene, source, state, reviewFootage);
+      render(t, scene, source, state, reviewFootage, wipe ? { ...wipe, held } : null);
       return true;
     },
   };

@@ -17,6 +17,8 @@
  */
 
 import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
+import { sceneWipe, wipeCuts } from './musicVideoWipes.js';
+import { sceneCutEffect } from './musicVideoCutEffects.js';
 
 export const MUSIC_VIDEO_TRANSITIONS = Object.freeze(['vhs-glitch', 'channel-change', 'vhs-tracking', 'vhs-dropout', 'camera-flash', 'color-block', 'vhs-rewind',
   'film-burn', 'light-leak', 'gate-jump', 'shutter', 'film-scratches', 'color-split']);
@@ -314,21 +316,27 @@ const glitchLook = (g) => ({
 });
 
 /**
- * A scene's chosen glitches, only the ones that are set:
- * `{ transitionIn?, transitionOut?, shotGlitches? }` (`shotGlitches` on the song's clock).
+ * A scene's chosen cut effects, only the ones that are set:
+ * `{ transitionIn?, transitionOut?, wipeIn?, wipeOut?, shotGlitches? }`
+ * (`shotGlitches` on the song's clock, wipes as `sceneWipe` returns them). A
+ * side with a wipe (musicVideoWipes.js) carries no glitch: a cut plays one.
  */
 export function sceneTransitions(scene) {
   const shotGlitches = shotGlitchesOnSong(scene);
+  const wipeIn = sceneWipe(scene, 'in');
+  const wipeOut = sceneWipe(scene, 'out');
   return {
-    ...(isTransition(scene?.transitionIn) ? { transitionIn: scene.transitionIn } : {}),
-    ...(isTransition(scene?.transitionOut) ? { transitionOut: scene.transitionOut } : {}),
+    ...(!wipeIn && isTransition(scene?.transitionIn) ? { transitionIn: scene.transitionIn } : {}),
+    ...(!wipeOut && isTransition(scene?.transitionOut) ? { transitionOut: scene.transitionOut } : {}),
+    ...(wipeIn ? { wipeIn } : {}),
+    ...(wipeOut ? { wipeOut } : {}),
     ...(shotGlitches.length ? { shotGlitches } : {}),
   };
 }
 
 /**
  * Every glitched frame of a cut timeline. `sections` are the cut pieces in
- * order, each `{ sceneId, startFrame, endFrame, transitionIn?, transitionOut? }`
+ * order, each `{ sceneId, startFrame, endFrame, transitionIn?, transitionOut?, wipeOut? }`
  * on one frame grid. A piece that only borrows another shot's footage (an
  * intercut partner, `partner: true`) carries no transitions, and a shot cut
  * into several pieces glitches in before its first piece and out after its
@@ -348,6 +356,8 @@ export function transitionGlitchFrames(sections, { totalFrames = null } = {}) {
   });
   const outAt = (i) => (!list[i].partner && lastOf.get(list[i].sceneId) === i && isTransition(list[i].transitionOut) ? list[i].transitionOut : null);
   const inAt = (i) => (!list[i].partner && firstOf.get(list[i].sceneId) === i && isTransition(list[i].transitionIn) ? list[i].transitionIn : null);
+  // The outgoing shot's wipe owns its cut, so the incoming shot's glitch in stays off it.
+  const wipesOut = (i) => !list[i].partner && lastOf.get(list[i].sceneId) === i && !!list[i].wipeOut;
   const taken = new Map();
   const place = (style, firstFrame) => {
     MUSIC_VIDEO_TRANSITION_STYLES[style].frames.forEach((_, index) => {
@@ -358,7 +368,7 @@ export function transitionGlitchFrames(sections, { totalFrames = null } = {}) {
   // The opening shot's glitch in starts on the video's first frame.
   if (inAt(0)) place(inAt(0), list[0].startFrame);
   for (let i = 0; i < list.length - 1; i++) {
-    const style = outAt(i) || inAt(i + 1);
+    const style = outAt(i) || (wipesOut(i) ? null : inAt(i + 1));
     if (style) place(style, list[i + 1].startFrame - MUSIC_VIDEO_TRANSITION_STYLES[style].lead);
   }
   // The closing shot's glitch out ends on the video's last frame.
@@ -384,6 +394,28 @@ export function sceneTransitionSections(scenes, fps, { endSec = null } = {}) {
     const stop = next ? next.startSec : (Number.isFinite(endSec) ? endSec : scene.endSec);
     return { sceneId: scene.sceneId, startFrame: Math.round(scene.startSec * fps), endFrame: Math.round((stop ?? scene.startSec) * fps), ...sceneTransitions(scene) };
   });
+}
+
+/**
+ * The storyboard's wipes on `fps` (the animatic's and a document's counterpart
+ * of the render's): `[{ style, color?, frames, cutFrame, cutSec, endSec, fromSceneId, toSceneId }]`,
+ * each running from its cut for `frames` frames. `planned` maps a scene id to
+ * its storyboard row's transition, whose dissolve or fade owns the cut.
+ */
+export function sceneWipeCuts(scenes, fps, { endSec = null, planned = null } = {}) {
+  const byId = new Map((Array.isArray(scenes) ? scenes : []).map((scene) => [scene?.sceneId, scene]));
+  const sections = sceneTransitionSections(scenes, fps, { endSec })
+    .map((section) => ({ ...section, cutEffect: sceneCutEffect(byId.get(section.sceneId), planned?.get?.(section.sceneId)) }));
+  return wipeCuts(sections, { fps }).map((cut) => ({
+    style: cut.style,
+    ...(cut.color ? { color: cut.color } : {}),
+    frames: cut.frames,
+    cutFrame: cut.cutFrame,
+    cutSec: cut.cutFrame / fps,
+    endSec: (cut.cutFrame + cut.frames) / fps,
+    fromSceneId: sections[cut.index].sceneId,
+    toSceneId: sections[cut.index + 1].sceneId,
+  }));
 }
 
 const even = (n) => Math.round(n / 2) * 2;

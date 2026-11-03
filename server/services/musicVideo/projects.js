@@ -299,6 +299,12 @@ export async function updateScene(id, sceneId, patch) {
   return updated;
 }
 
+/** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Returns `{ project, scenes }`. */
+export async function varyProjectWipes(id, options) {
+  const { varySceneWipes } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => varySceneWipes(current, options));
+}
+
 export async function deleteScene(id, sceneId) {
   const { removeScene } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, (current) => ({ project: removeScene(current, sceneId) }));

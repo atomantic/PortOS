@@ -9,7 +9,7 @@ import {
   MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
-import { applySceneUpdate } from './projectsLogic.js';
+import { applySceneUpdate, varySceneWipes } from './projectsLogic.js';
 
 const ffmpeg = await findFfmpeg();
 const ffprobe = await findFfprobe();
@@ -154,6 +154,54 @@ describe.skipIf(!ffmpeg)('a VHS glitch on a cut in the final render', () => {
     const spreads = frameSpreads(output);
     expect(spreads).toHaveLength(2 * FPS);
     expect(spreads.map((s, f) => (s > 4 ? f : null)).filter((f) => f != null)).toEqual(expected);
+  });
+});
+
+// Uniquely catches a wipe moving its cut or adding time, landing on other
+// frames in a shot segment than in the whole-film render, or a glitch stacking on it.
+describe.skipIf(!ffmpeg)('a wipe on a cut in the final render', () => {
+  // Centre pixel of each frame: red until the iris reaches it, then blue.
+  const centres = (path) => {
+    const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const size = W * H * 3;
+    const at = ((H / 2) * W + W / 2) * 3;
+    return Array.from({ length: raw.length / size }, (_, f) => (raw[f * size + at] > 128 ? 'r' : 'b')).join('');
+  };
+  const edge = (path) => {
+    const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const size = W * H * 3;
+    // The frame's corner stays on the outgoing shot until the iris's last frames.
+    return Array.from({ length: raw.length / size }, (_, f) => (raw[f * size] > 128 ? 'r' : 'b')).join('');
+  };
+  it('keeps the cut and every frame, and paints the same frames shot by shot', () => {
+    const song = join(dir, 'wipe-song.wav');
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    const clips = ['0xd02020', '0x2020d0'].map((color, i) => {
+      const videoPath = join(dir, `wipe-clip${i}.mp4`);
+      run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+      return { sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' };
+    });
+    Object.assign(clips[0], sceneTransitions({ wipeOut: { style: 'iris', lengthSec: 0.5 } }));
+    Object.assign(clips[1], sceneTransitions({ transitionIn: 'vhs-glitch' }));
+    const output = join(dir, 'wipe.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    expect(plan.sections.map((s) => [s.startSec, s.endSec])).toEqual([[0, 1], [1, 2]]);
+    // The centre turns at the cut's first frame; the corner only once the iris has covered the frame.
+    expect(centres(output)).toBe(`${'r'.repeat(FPS)}${'b'.repeat(FPS)}`);
+    const corner = edge(output);
+    expect(corner).toHaveLength(2 * FPS);
+    expect(corner.slice(0, FPS + 5)).toBe('r'.repeat(FPS + 5));
+    expect(corner.slice(FPS + 6)).toBe('b'.repeat(FPS - 6));
+    // The incoming shot's glitch in gives way to the outgoing shot's wipe.
+    const raw = run(['-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+    const size = W * H * 3;
+    expect(raw[FPS * 2 * size - 3]).toBeLessThan(80);
+
+    const segmentPath = join(dir, 'wipe-segment.mp4');
+    const segment = buildMusicVideoFfmpegArgs(clips, song, segmentPath, { audioDurationSec: 2, frameGrid: true, segment: { index: 1 } });
+    run(segment.args.filter((arg, i) => !(arg === '-progress' || segment.args[i - 1] === '-progress')));
+    expect(edge(segmentPath)).toBe(corner.slice(FPS));
   });
 });
 
@@ -339,6 +387,29 @@ describe('a shot\'s transitions on the board', () => {
     const { project: cleared } = applySceneUpdate(set, 's1', { transitionOut: null });
     expect(cleared.scenes[0].transitionOut).toBeNull();
     expect(() => applySceneUpdate(project, 's1', { transitionOut: 'crossfade' })).toThrow();
+  });
+
+  it('saves a wipe with its length and edge, clears it with null and refuses an unknown style or length', () => {
+    const { project: set } = applySceneUpdate(project, 's1', { wipeOut: { style: 'heart', lengthSec: 0.5, color: '#ff3366' } });
+    expect(set.scenes[0].wipeOut).toEqual({ style: 'heart', lengthSec: 0.5, color: '#ff3366' });
+    expect(applySceneUpdate(set, 's1', { wipeOut: null }).project.scenes[0].wipeOut).toBeNull();
+    expect(() => applySceneUpdate(project, 's1', { wipeOut: { style: 'crossfade' } })).toThrow();
+    expect(() => applySceneUpdate(project, 's1', { wipeOut: { style: 'iris', lengthSec: 5 } })).toThrow();
+  });
+
+  it('varies wipes over a run of shots, replacing their glitches out and leaving the last cut alone', () => {
+    const scenes = Array.from({ length: 6 }, (_, i) => ({ sceneId: `s${i}`, order: i, startSec: i, endSec: i + 1, takes: [], transitionOut: 'vhs-glitch' }));
+    const { project: varied, scenes: changed } = varySceneWipes({ id: 'mv-1', scenes }, { fromSceneId: 's1', count: 1000, styles: ['iris', 'push-left', 'clock'], color: '#00ff00', seed: 4 });
+    // s1..s4 have a cut out; the last shot has none.
+    expect(changed.map((scene) => scene.sceneId)).toEqual(['s1', 's2', 's3', 's4']);
+    const styles = varied.scenes.slice(1, 5).map((scene) => scene.wipeOut.style);
+    styles.slice(1).forEach((style, i) => expect(style).not.toBe(styles[i]));
+    varied.scenes.slice(1, 5).forEach((scene) => {
+      expect(scene.transitionOut).toBeNull();
+      expect('color' in scene.wipeOut).toBe(scene.wipeOut.style === 'iris');
+    });
+    expect(varied.scenes[0].transitionOut).toBe('vhs-glitch');
+    expect(varied.scenes[5].wipeOut ?? null).toBeNull();
   });
 
   it('saves in-shot glitches, clears them with null and refuses an unknown style', () => {

@@ -65,6 +65,7 @@ import {
   MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_GLITCH_REPEAT_SEC, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS,
 } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
+import { MUSIC_VIDEO_WIPE_SEC, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
@@ -729,8 +730,16 @@ export const musicVideoResearchSeedSchema = z.object({
   preview: z.boolean().optional(),
 }).strict();
 
+// A shot's wipe on one of its cuts (musicVideoWipes.js).
+const musicVideoWipeSchema = z.object({
+  style: z.enum(MUSIC_VIDEO_WIPES),
+  lengthSec: z.number().min(MUSIC_VIDEO_WIPE_SEC.min).max(MUSIC_VIDEO_WIPE_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+});
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
+
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
   // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
@@ -758,6 +767,10 @@ const sceneLayerFields = {
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+  // An image-to-image wipe on the cut into / out of this shot (musicVideoWipes.js), its length and a
+  // shape wipe's edge color; a side with a wipe plays no glitch. null clears it.
+  wipeIn: musicVideoWipeSchema.nullable().optional(),
+  wipeOut: musicVideoWipeSchema.nullable().optional(),
   // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
   // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
   glitches: z.array(z.object({
@@ -1943,6 +1956,17 @@ export const musicVideoCameoUnlinkSchema = z.object({ sceneIds: z.array(z.string
 export const musicVideoCameoStillFromShotSchema = z.object({
   sceneId: z.string().min(1).max(64),
   variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN).nullable().optional(),
+}).strict();
+
+// "Vary wipes" (musicVideoWipes.js): a wipe out of each of `count` shots from `fromSceneId` in song
+// order, no style twice in a row, drawn from `styles` (default every wipe).
+export const musicVideoVaryWipesSchema = z.object({
+  fromSceneId: z.string().min(1).max(200),
+  count: z.number().int().min(1).max(1000),
+  styles: z.array(z.enum(MUSIC_VIDEO_WIPES)).min(1).max(MUSIC_VIDEO_WIPES.length).optional(),
+  lengthSec: z.number().min(MUSIC_VIDEO_WIPE_SEC.min).max(MUSIC_VIDEO_WIPE_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+  seed: z.number().int().min(0).max(2147483646).optional(),
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.
