@@ -537,6 +537,7 @@ function buildScene(input, { order }) {
     beatAligned: input.beatAligned ?? false,
     ...(input.beatNeedsReview ? { beatNeedsReview: true } : {}),
     ...(input.pacingCut ? { pacingCut: true } : {}),
+    ...(input.wordCut ? { wordCut: true } : {}),
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
     // #8964: a new shot never silently repeats its clip to fill a span — looping
@@ -757,7 +758,7 @@ export function applyStoryboardShotSync(project, plan) {
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
-const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'wordCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel'];
@@ -1053,14 +1054,15 @@ const sameCut = (a, b) => Math.abs(a - b) < 1e-3;
 
 /**
  * `next` without its word anchor when it was cleared (null) or its start was
- * moved off its timed word by hand. Other edits keep it, even on a shot whose
+ * moved by hand off its word (or while the word has no timing, so the next
+ * alignment cannot pull it back). Other edits keep it, even on a shot whose
  * re-sync was blocked, so the storyboard check can still name it.
  */
 function keepAnchorOnItsWord(prior, next, cues) {
   if (!('lyricAnchor' in next)) return next;
   if (next.lyricAnchor && next.startSec === prior.startSec) return next;
   const onset = next.lyricAnchor ? lyricAnchorOnset(cues, next.lyricAnchor) : null;
-  if (next.lyricAnchor && (!onset || (timedSec(next.startSec) && Math.abs(onset.startSec - next.startSec) <= ANCHOR_TOLERANCE_SEC))) return next;
+  if (next.lyricAnchor && onset && timedSec(next.startSec) && Math.abs(onset.startSec - next.startSec) <= ANCHOR_TOLERANCE_SEC) return next;
   return withoutSlot(next, ['lyricAnchor']);
 }
 
@@ -1130,9 +1132,14 @@ export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {})
     next = split.project;
     split.scenes.slice(1).forEach((piece, i) => { anchors.set(piece.sceneId, kept[i]); from[piece.sceneId] = sceneId; });
   }
+  // Every shot whose span the cut set plays it exactly in the render: the anchored
+  // shots, and the shots before them that now end on a word.
+  const ordered = timedSongScenes(next);
+  const owned = new Set(ordered.filter((scene, i) => anchors.has(scene.sceneId) || anchors.has(ordered[i + 1]?.sceneId)).map((scene) => scene.sceneId));
   const scenes = next.scenes.map((scene) => {
     const cut = anchors.get(scene.sceneId);
-    return cut ? { ...scene, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : scene;
+    const timed = owned.has(scene.sceneId) ? { ...scene, wordCut: true } : scene;
+    return cut ? { ...timed, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : timed;
   });
   next = carryStoryboardApproval(project, touch(next, { scenes }), 'Cut shots on lyric words');
   return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from };
@@ -1155,30 +1162,43 @@ function syncWordAnchoredScenes(before, project) {
   const unresolved = [];
   const blocked = [];
   const retimed = new Set();
+  // Which shots meet the one before them, on the timing before any move.
+  const meets = order.map((scene, i) => i > 0 && sameCut(order[i - 1].endSec, scene.startSec));
+  const proposed = new Map();
   order.forEach((scene, i) => {
     if (!targets.has(scene.sceneId)) return;
     const onset = targets.get(scene.sceneId);
     if (!onset) { unresolved.push(scene.sceneId); return; }
     if (scene.lyricText !== onset.text) { scene.lyricText = onset.text; retimed.add(scene.sceneId); }
-    if (sameCut(onset.startSec, scene.startSec)) return;
-    const prev = i > 0 && sameCut(order[i - 1].endSec, scene.startSec) ? order[i - 1] : null;
-    const following = order[i + 1];
-    const followingTarget = following && sameCut(following.startSec, scene.endSec) ? targets.get(following.sceneId) : null;
-    const end = followingTarget ? followingTarget.startSec : scene.endSec;
-    if (onset.startSec > end - MIN_SPLIT_PIECE_SEC || (prev && onset.startSec < prev.startSec + MIN_SPLIT_PIECE_SEC)
-      || (!prev && i > 0 && onset.startSec < order[i - 1].endSec)) {
-      blocked.push(scene.sceneId);
-      return;
+    if (!sameCut(onset.startSec, scene.startSec)) proposed.set(i, onset.startSec);
+  });
+  // Moves depend on their neighbours' moves, so drop any that would leave a shot
+  // under 0.1 s (or overlapping) given the others, until the rest all fit.
+  for (let dropped = true; dropped;) {
+    dropped = false;
+    for (const [i, at] of proposed) {
+      const end = meets[i + 1] && proposed.has(i + 1) ? proposed.get(i + 1) : order[i].endSec;
+      const prevStart = i > 0 ? proposed.get(i - 1) ?? order[i - 1].startSec : null;
+      const fitsBefore = meets[i] ? at >= prevStart + MIN_SPLIT_PIECE_SEC : i === 0 || at >= order[i - 1].endSec;
+      if (at > end - MIN_SPLIT_PIECE_SEC || !fitsBefore) {
+        proposed.delete(i);
+        blocked.push(order[i].sceneId);
+        dropped = true;
+      }
     }
-    moved.push({ sceneId: scene.sceneId, fromSec: scene.startSec, toSec: onset.startSec });
-    scene.startSec = onset.startSec;
+  }
+  for (const [i, at] of proposed) {
+    const scene = order[i];
+    moved.push({ sceneId: scene.sceneId, fromSec: scene.startSec, toSec: at });
+    scene.startSec = at;
     retimed.add(scene.sceneId);
-    if (prev) {
-      prev.endSec = onset.startSec;
+    if (meets[i]) {
+      const prev = order[i - 1];
+      prev.endSec = at;
       if (!prev.lyricAnchor) prev.lyricText = sungLyricTextWithin(project.lyricCues, prev.startSec, prev.endSec);
       retimed.add(prev.sceneId);
     }
-  });
+  }
   if (!retimed.size && !unresolved.length && !blocked.length) return project;
   const byId = new Map(order.map((scene) => [scene.sceneId, scene]));
   const scenes = (project.scenes || []).map((scene) => byId.get(scene.sceneId) || scene);

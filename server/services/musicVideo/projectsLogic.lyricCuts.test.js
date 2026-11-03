@@ -77,6 +77,45 @@ describe('word-anchored shots after re-alignment', () => {
     expect(edited.scenes.find((s) => s.sceneId === collie.sceneId).startSec).toBe(collie.startSec);
     const retimed = applySceneUpdate(cut, collie.sceneId, { startSec: collie.startSec + 0.3 }).updated;
     expect(retimed).not.toHaveProperty('lyricAnchor');
+    // A hand retime while the word is untimed also wins over the next alignment.
+    const whileUntimed = applySceneUpdate(edited, collie.sceneId, { startSec: collie.startSec + 0.3 }).project;
+    const back = applyProjectPatch(whileUntimed, { lyricCues: LINES.map((line) => cue(line)) });
+    expect(back.scenes.find((s) => s.sceneId === collie.sceneId).startSec).toBeCloseTo(collie.startSec + 0.3, 6);
+  });
+
+  // Catches a move accepted against a neighbour's move that is itself blocked, leaving a negative-length shot.
+  it('blocks moves that depend on a neighbour that cannot move, keeping every span positive and contiguous', () => {
+    const base = addScenes(applyProjectPatch(buildProjectRecord({ name: 'Two words' }, { id: 'mv-2', now: 'n' }),
+      { lyricCues: [cue(['a', 'one, two', 10], {}), cue(['b', 'three', 30])] }), [
+      { label: 'Intro', startSec: 0, endSec: 10 },
+      { label: 'Words', startSec: 10, endSec: 12 },
+      { label: 'Outro', startSec: 12, endSec: 20 },
+    ]).project;
+    // Shift the words so "one," lands at 10 and "two" at 10.9, then cut there.
+    const cut = cutScenesOnLyricWords(base, { cueIds: ['a'], mode: 'phrase' }).project;
+    const words = cut.scenes.filter((s) => s.lyricAnchor);
+    expect(words).toHaveLength(2);
+    // "two" moves past the outro's fixed start, so it cannot move, and "one," may not move past it either.
+    const realigned = applyProjectPatch(cut, { lyricCues: [cue(['a', 'one, two', 10], { 'a:0': 1.5, 'a:1': 1.2 }), cue(['b', 'three', 30])] });
+    const board = realigned.scenes.slice().sort((x, y) => x.startSec - y.startSec);
+    board.forEach((s) => expect(s.endSec - s.startSec).toBeGreaterThan(0));
+    board.slice(1).forEach((s, i) => expect(s.startSec).toBeCloseTo(board[i].endSec, 6));
+    expect(realigned.lyricAnchorSync.blocked.sort()).toEqual(words.map((s) => s.sceneId).sort());
+  });
+});
+
+describe('word cuts in the render plan', () => {
+  // Catches the render re-deriving cut spans from clip length, or flooring a short word shot.
+  it('plays every shot the cut timed for exactly its span', async () => {
+    const { beatSnapClips } = await import('./render.js');
+    const base = addScenes(applyProjectPatch(buildProjectRecord({ name: 'Fast' }, { id: 'mv-3', now: 'n' }),
+      { lyricCues: [{ id: 'f', text: 'go go go', startSec: 0.2, endSec: 1, words: [0.2, 0.4, 0.7].map((startSec) => ({ w: 'go', startSec, endSec: startSec + 0.1, conf: 'matched' })) }] }),
+    [{ label: 'Run', startSec: 0, endSec: 2 }]).project;
+    const { project: cut } = cutScenesOnLyricWords(base, { cueIds: ['f'], mode: 'word' });
+    const scenes = cut.scenes.slice().sort((a, b) => a.startSec - b.startSec);
+    expect(scenes.every((s) => s.wordCut)).toBe(true);
+    const clips = scenes.map((s) => ({ sceneId: s.sceneId, inSec: 0, outSec: 5, duration: 5 }));
+    expect(beatSnapClips(clips, [], { scenes }).map((c) => Math.round(c.duration * 1000) / 1000)).toEqual([0.2, 0.2, 0.3, 1.3]);
   });
 });
 

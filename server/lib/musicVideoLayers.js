@@ -93,8 +93,8 @@ export function sceneHasAuthoredSpan(scene) {
   return typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec;
 }
 
-/** Fixed shot timing is independent of whether its boundaries landed on beats. */
-export const sceneUsesAuthoredTiming = (scene) => Boolean(scene?.pacingCut || scene?.beatAligned
+/** Fixed shot timing is independent of whether its boundaries landed on beats. A word cut (#14820) owns its span too. */
+export const sceneUsesAuthoredTiming = (scene) => Boolean(scene?.pacingCut || scene?.wordCut || scene?.beatAligned
   || (Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0));
 
 /**

@@ -409,7 +409,8 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
       // Insufficient coverage for a non-looping shot is refused before render
       // (#8964), using the preserved playable duration in sourceSec.
       const inSec = clip.inSec || 0;
-      const spanSec = Math.max(minClipSec, scene.endSec - scene.startSec);
+      // A cut on a sung word may be shorter than the floor; it plays exactly its span (#14820).
+      const spanSec = scene.wordCut ? scene.endSec - scene.startSec : Math.max(minClipSec, scene.endSec - scene.startSec);
       running += spanSec;
       return { ...clip, inSec, outSec: inSec + spanSec, duration: spanSec };
     }
