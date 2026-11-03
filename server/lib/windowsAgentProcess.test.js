@@ -28,11 +28,13 @@ beforeEach(async () => {
   owner = { version: 1, agentId: agent.id, taskId: agent.taskId, startedAt: agent.startedAt, nonce: randomUUID() };
 });
 
+const coalitionProof = { kind: 'launchd-coalition', version: 1, coalition: '4242' };
 async function proof() {
   await mkdir(root, { recursive: true });
   await writeFile(join(root, 'owner.json'), JSON.stringify({ owner, executable: 'example-supervisor.exe' }));
   await writeFile(join(root, 'launch.json'), JSON.stringify({ owner }));
-  const started = { owner, pid: 123, created: '123456789' };
+  // Only a macOS supervisor names its kernel proof (the launchd coalition).
+  const started = { owner, pid: 123, created: '123456789', ...(process.platform === 'darwin' && { proof: coalitionProof }) };
   await writeFile(join(root, 'started.json'), JSON.stringify(started));
   const receipt = { ...started, version: 1, active: 0, exitCode: 0, settledAt: new Date().toISOString() };
   await writeFile(join(root, 'settled.json'), JSON.stringify(receipt));
@@ -43,7 +45,9 @@ it('recovers a complete durable receipt and rejects reused agent/start, nonce an
   const receipt = await proof();
   expect(await readWindowsAgentSettlement(agent)).toEqual(receipt);
   await expect(readWindowsAgentSettlement({ ...agent, startedAt: new Date(0).toISOString() })).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
-  for (const update of [{ pid: 124 }, { created: '999' }, { owner: { ...owner, nonce: randomUUID() } }, { active: 1 }, { settledAt: new Date(Date.now() + 60000).toISOString() }]) {
+  // A changed coalition, or a proof appearing on another platform's receipt, is not the started tree's proof.
+  const proofDrift = process.platform === 'darwin' ? { proof: { ...coalitionProof, coalition: '4243' } } : { proof: coalitionProof };
+  for (const update of [{ pid: 124 }, { created: '999' }, { owner: { ...owner, nonce: randomUUID() } }, { active: 1 }, { settledAt: new Date(Date.now() + 60000).toISOString() }, proofDrift]) {
     await writeFile(join(root, 'settled.json'), JSON.stringify({ ...receipt, ...update }));
     await expect(readWindowsAgentSettlement(agent)).rejects.toMatchObject({ code: 'WINDOWS_AGENT_PROCESS_UNVERIFIED' });
   }

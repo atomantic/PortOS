@@ -10,7 +10,8 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { withCheckoutPublication, reserveCheckoutRetirement, releaseCheckoutReservation } from '../lib/checkoutRetirementAdmission.js';
 
 const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, unreadable: false,
-  processHold: null, processGate: null, nativeProof: false, pr: null, repo: null, saves: 0, forgeReads: 0, forgeHook: null }));
+  processHold: null, processGate: null, nativeProof: false, pr: null, repo: null, saves: 0, forgeReads: 0, forgeHook: null,
+  promotions: null, tags: [], runs: [] }));
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('candidate-recovery-data-') }));
 vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => [] }));
 vi.mock('./shell.js', () => ({ listAllSessions: () => [] }));
@@ -46,6 +47,12 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   fixture.forgeReads++;
   await fixture.forgeHook?.();
   const query = args.at(-1);
+  if (query.endsWith('/pulls?state=open&base=release&per_page=100')) {
+    return JSON.stringify(fixture.promotions || (fixture.pr?.state === 'open' ? [fixture.pr] : []));
+  }
+  if (query.endsWith('/git/matching-refs/tags/v1.2.3')) return JSON.stringify(fixture.tags);
+  const runs = query.match(/\/actions\/workflows\/release\.yml\/runs\?status=([a-z_]+)&per_page=1$/);
+  if (runs) return JSON.stringify({ total_count: fixture.runs.filter(run => run.status === runs[1]).length });
   if (query.includes('/pulls?')) return JSON.stringify(fixture.pr ? [fixture.pr] : []);
   if (query.endsWith('/pulls/12')) return JSON.stringify(fixture.pr);
     if (query.endsWith('/git/ref/heads/release')) return JSON.stringify({ ref: 'refs/heads/release', object: { type: 'commit', sha: fixture.releaseBase } });
@@ -72,7 +79,9 @@ beforeEach(async () => {
   fixture.queue = createFileWriteQueue();
   fixture.unreadable = false;
   fixture.nativeProof = false;
-  fixture.processHold = fixture.processGate = fixture.pr = fixture.forgeHook = null;
+  fixture.processHold = fixture.processGate = fixture.pr = fixture.forgeHook = fixture.promotions = null;
+  fixture.tags = [];
+  fixture.runs = [{ id: 1, status: 'completed', conclusion: 'success', run_attempt: 1 }];
   fixture.saves = fixture.forgeReads = 0;
   scratch = await realpath(await mkdtemp(join(tmpdir(), 'candidate-recovery-')));
   fixture.repo = join(scratch, 'repo'); checkout = join(scratch, 'candidate');
@@ -311,6 +320,14 @@ for (const [name, reason, change] of [
   ['unreadable registry', 'ownership-unreadable', () => { fixture.unreadable = true; }],
   ['prepared version changed', 'candidate-prepared-version-conflict', async () => { await writeFile(join(checkout, 'package.json'), '{"version":"1.2.4"}'); }],
   ['release target moved', 'candidate-release-base-changed', () => { fixture.releaseBase = 'f'.repeat(40); }],
+  ['extra promotion PR', 'candidate-publication-ambiguous', () => {
+    fixture.promotions = [{ number: 13, head: { ref: 'codex/release-agent-other', repo: { full_name: 'example/repo' } } }];
+  }],
+  ['version tag already present', 'candidate-release-tag-present', () => { fixture.tags = [{ ref: 'refs/tags/v1.2.3' }]; }],
+  ['older release workflow re-run in progress', 'candidate-release-workflow-active', () => {
+    fixture.runs = [...Array.from({ length: 150 }, (_, id) => ({ id: id + 2, status: 'completed' })),
+      { id: 1, status: 'in_progress', run_attempt: 2 }];
+  }],
   ['unknown review receipt version', 'candidate-review-identity-conflict', async () => {
     const receipt = JSON.parse(await readFile(reviewPath, 'utf8'));
     await writeFile(reviewPath, JSON.stringify({ ...receipt, version: 3 }));
@@ -341,22 +358,31 @@ describe.skipIf(process.platform === 'win32')('unsupervised POSIX recovery proof
   });
 });
 
-// The Linux subreaper writes the same receipt shape as the Windows Job.
-describe.skipIf(process.platform !== 'win32' && process.platform !== 'linux')('supervised native release recovery', () => {
-  test('transfers through the service after the registered supervisor proves process-tree settlement', async () => {
+// The Linux subreaper and macOS launchd coalition write the same receipt shape as the Windows Job.
+describe.skipIf(!['win32', 'linux', 'darwin'].includes(process.platform))('supervised native release recovery', () => {
+  test('holds while a detached descendant of the predecessor survives, then transfers once the supervisor proves settlement', async () => {
     const { reserveWindowsAgentProcess, prepareWindowsAgentLaunch, watchWindowsAgentProcess } = await import('../lib/windowsAgentProcess.js');
     const { spawn } = await import('../lib/childProcess.js');
     const source = fixture.state.agents['agent-original'];
     source.status = 'running';
     await reserveWindowsAgentProcess(source);
-    const launch = prepareWindowsAgentLaunch(source.id, process.execPath, ['-e', 'process.stdout.write("settled")'], { cwd: checkout, env: process.env });
+    const ready = join(scratch, 'descendant-ready');
+    const release = join(scratch, 'descendant-release');
+    const descendant = `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) clearInterval(timer); }, 20);`;
+    const root = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'ignore', detached: true }).unref();`;
+    const launch = prepareWindowsAgentLaunch(source.id, process.execPath, ['-e', root], { cwd: checkout, env: process.env });
     const child = watchWindowsAgentProcess(spawn(launch.command, launch.args, { cwd: checkout, stdio: 'pipe' }), launch);
     const closed = once(child, 'close');
     try {
-      expect((await closed)[0]).toBe(0);
+      await vi.waitFor(async () => expect(await readFile(ready, 'utf8')).toBe('ready'), { timeout: 15000 });
       source.status = 'completed'; source.completedAt = new Date().toISOString();
       fixture.state.agents['agent-successor'].startedAt = new Date().toISOString();
       fixture.nativeProof = true;
+      // The registry says the predecessor completed, but its tree still runs.
+      expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-process-proof-unavailable' });
+      await writeFile(release, 'release');
+      expect((await closed)[0]).toBe(0);
       expect(await recover()).toMatchObject({ recovered: true, transfer: { settlement: { active: 0, owner: { agentId: source.id } } } });
     } finally { child.kill(); await closed; }
   }, 30000);
@@ -412,7 +438,8 @@ test('serializes same-successor retries and refuses review drift during verifica
   const saved = structuredClone(fixture.disk);
   fixture.forgeReads = 0;
   fixture.forgeHook = async () => {
-    if (fixture.forgeReads === 3) await writeFile(reviewPath, JSON.stringify({ ...JSON.parse(await readFile(reviewPath, 'utf8')), status: 'clean' }));
+    // Read 10 opens the second inspection; the first made nine forge reads.
+    if (fixture.forgeReads === 10) await writeFile(reviewPath, JSON.stringify({ ...JSON.parse(await readFile(reviewPath, 'utf8')), status: 'clean' }));
   };
   expect(await recover()).toMatchObject({ recovered: false, reason: 'candidate-evidence-changed' });
   expect(fixture.state).toEqual(saved);
