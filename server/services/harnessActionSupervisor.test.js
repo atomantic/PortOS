@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runHarnessActionSupervisor, spawnHarnessActionSupervisor } from './harnessActionSupervisor.js';
 
 const proof = { candidate: '1.2.4', expiresAt: 12345, identity: { path: '/fixture/cli' } };
-const owner = { id: 'review-owner', runtime: 'opencode', action: 'update', holdId: 'hold' };
+const owner = { id: 'review-owner', runtime: 'opencode', action: 'update', holdId: null };
 const input = { ownerId: owner.id, runtime: owner.runtime, action: owner.action, reviewed: proof };
 
 function fixture() {
@@ -65,16 +65,14 @@ describe('harness action supervisor', () => {
     expect(deps.launch).not.toHaveBeenCalled();
   });
 
-  it('rejects a different action or a reviewed nonexclusive owner before entry', async () => {
+  it('rejects a different action before entry', async () => {
     const { deps } = fixture();
     await expect(runHarnessActionSupervisor({ ...input, action: 'install' }, deps)).rejects.toThrow('ownership');
-    deps.admission.harnessActions.operation = () => ({ ...owner, holdId: null });
-    await expect(runHarnessActionSupervisor(input, deps)).rejects.toThrow('ownership');
     expect(deps.admission.harnessActions.enter).not.toHaveBeenCalled();
     expect(deps.launch).not.toHaveBeenCalled();
   });
 
-  it('runs a protected legacy-page update through the fixed vendor command without inventing review evidence', async () => {
+  it('runs a Harnesses-page update through the fixed vendor command without inventing review evidence', async () => {
     const { events, child, deps } = fixture();
     const result = runHarnessActionSupervisor({ ...input, reviewed: null }, deps);
     await vi.waitFor(() => expect(deps.launch).toHaveBeenCalledOnce());

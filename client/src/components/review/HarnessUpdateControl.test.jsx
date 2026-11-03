@@ -30,7 +30,7 @@ describe('inline harness update review', () => {
     expect(changeWarning).toHaveBeenCalledWith(7);
     fireEvent.click(screen.getByRole('button', { name: 'Update Example CLI' }));
     expect(screen.getByText(/published less than 3 days ago/)).toBeInTheDocument();
-    expect(screen.getByText(/cannot detect other terminal sessions or processes that leave/)).toBeInTheDocument();
+    expect(screen.getByText(/one that loads files from the harness mid-run, or starts during the update, can fail/)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Update now for urgent security' }));
     expect(update).toHaveBeenCalledWith({ ...harness, ticket });

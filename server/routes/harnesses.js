@@ -49,7 +49,7 @@ router.get('/update-reference', asyncHandler(async (req, res) => {
   res.json(await getHarnessUpdateReference(runtime));
 }));
 
-// Inline update uses the same guarded stream, with an additional active-work check.
+// Inline update uses the same guarded stream, pinned to the reviewed executable.
 router.post('/review-update', asyncHandler(async (req, res) => {
   const { runtime, expectedVersion, candidateVersion, ticket } = validateRequest(reviewUpdateSchema, req.query);
   const { getRuntimeUpdateReviewSnapshot } = await import('../services/runtimeUpdateReview.js');
@@ -60,7 +60,7 @@ router.post('/review-update', asyncHandler(async (req, res) => {
   const { takeHarnessUpdateTicket } = await import('../services/harnessUpdateReference.js');
   const reviewed = takeHarnessUpdateTicket(runtime, ticket, expectedVersion, candidateVersion);
   if (!reviewed) throw new ServerError('The update review expired or changed. Refresh it before retrying.', { status: 409, code: 'HARNESS_UPDATE_CHANGED' });
-  await streamHarnessAction(req, res, { runtime, action: 'update', requireIdle: true, expectedVersion, reviewed });
+  await streamHarnessAction(req, res, { runtime, action: 'update', requireSupervisor: true, expectedVersion, reviewed });
 }));
 
 /**
