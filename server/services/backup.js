@@ -279,6 +279,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/composition-proofs/', reason: 'HTML-composition contact-sheet proofs — review stills, re-rendered from the composition source', overridable: true },
   { path: '/greybox-renders/', reason: 'In-flight greybox capture pages — removed when each render ends', overridable: false },
   { path: '/photoreal-workspaces/', reason: 'In-flight Environments photoreal Blender workspaces — removed when each render ends', overridable: false },
+  { path: '/photoreal-blends/', reason: 'Latest Blender scene per Environment, rebuilt from its greybox by the next Photoreal render', overridable: true },
   { path: '/code-animation-workspaces/', reason: 'In-flight sandboxed Code Animation worker workspaces — removed when each run ends', overridable: false },
   { path: '/code-animation-exports/', reason: 'Code Animation frame-exact export staging — the stored HTML plus render shim, staged once per export', overridable: true },
   { path: '/music-video-compositions/', reason: 'In-flight music-video typography overlay scratch — removed when its render ends and swept at boot', overridable: false },
