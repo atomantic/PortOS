@@ -118,7 +118,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
       return [];
     });
     const ownOperation = await selfUpdate(activity, update);
-    if (activity.llm?.directCallsTracked !== true) refuse('The older runtime cannot report all provider calls. Use an acknowledged manual update (--interrupt) to restart it.');
+    if (activity.llm?.directCallsTracked !== true) refuse('The older runtime cannot report all provider calls. Run a manual update to restart it.');
     disposition.assertInactiveActivity(ownOperation ? { ...activity, appOperations: [] } : activity, agents, { waitingUpdate: true });
     const loadAgent = id => read(`/api/cos/agents/${encodeURIComponent(id)}`, true);
     const loadTask = async id => (await read(`/api/cos/tasks/${encodeURIComponent(id)}`, true))?.task ?? null;
