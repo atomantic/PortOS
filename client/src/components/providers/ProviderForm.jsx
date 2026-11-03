@@ -22,6 +22,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
 import ProviderModelAccess from './ProviderModelAccess';
+import ProviderModelAutocomplete from './ProviderModelAutocomplete';
 import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog, scopeModelsByAccess } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
@@ -268,20 +269,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // the Default Model (resolveProviderModelTier) — so a preset only sets the
   // tiers it wants on a different model (#8149).
   const sortedTierModels = sortProviderModels([...new Set([...configuredModels, ...availableModels])]);
-  const modelSelectOptions = (emptyLabel = 'None') => (
-    <>
-      <option value="">{emptyLabel}</option>
-      {configuredDefault && (
-        <option value={configuredDefault}>Use the CLI&apos;s configured default</option>
-      )}
-      {sortedTierModels.map(model => (
-        <option key={model} value={model} disabled={!availableModels.includes(model)}>
-          {modelOptionLabel(model, localModels.ctxById, capabilityProvider)}
-          {!availableModels.includes(model) ? ' (unavailable on this machine)' : ''}
-        </option>
-      ))}
-    </>
-  );
+  const modelSelectOptions = (emptyLabel = 'None') => [
+    { value: '', label: emptyLabel },
+    ...(configuredDefault ? [{ value: configuredDefault, label: "Use the CLI's configured default" }] : []),
+    ...sortedTierModels.map(model => ({
+      value: model,
+      label: `${modelOptionLabel(model, localModels.ctxById, capabilityProvider)}${availableModels.includes(model) ? '' : ' (unavailable on this machine)'}`,
+      disabled: !availableModels.includes(model),
+    })),
+  ];
 
   // Filter out current provider from fallback options (treat undefined enabled as enabled)
   const fallbackOptions = allProviders.filter(p => p.id !== provider?.id
@@ -313,6 +309,18 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     && !compatibleFallbackModelOptions.includes(formData.fallbackModel)
     && !isProviderModelHardwareCompatible(fallbackCapabilityProvider, formData.fallbackModel)
   );
+  const fallbackModelSelectOptions = [
+    { value: '', label: "Use fallback provider's default" },
+    ...(fallbackModelIsUnavailable ? [{
+      value: formData.fallbackModel,
+      label: `${modelOptionLabel(formData.fallbackModel, localModels.ctxById, selectedFallbackProvider)} (unavailable on this machine)`,
+      disabled: true,
+    }] : []),
+    ...compatibleFallbackModelOptions.map(model => ({
+      value: model,
+      label: modelOptionLabel(model, localModels.ctxById, selectedFallbackProvider),
+    })),
+  ];
   // `capabilityProvider`, not `formData`: the per-model windows model refresh
   // recorded (`modelContextWindows`) live on the RECORD and are not form fields,
   // so reading formData alone reported the assumed 128K for a model whose real
@@ -1117,16 +1125,17 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                 onChange={(modelAccess) => setFormData(prev => ({ ...prev, modelAccess }))}
               />
 
-              <FormField label="Default Model">
-                {availableModels.length > 0 ? (
-                  <select
-                    value={formData.defaultModel}
-                    onChange={(e) => setFormData(prev => ({ ...prev, defaultModel: e.target.value }))}
-                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                  >
-                    {modelSelectOptions()}
-                  </select>
-                ) : (
+              {availableModels.length > 0 ? (
+                <ProviderModelAutocomplete
+                  label="Default Model"
+                  description="Search and select the model to use when no tier is specified."
+                  value={formData.defaultModel}
+                  options={modelSelectOptions()}
+                  onChange={(defaultModel) => setFormData(prev => ({ ...prev, defaultModel }))}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                />
+              ) : (
+                <FormField label="Default Model">
                   <input
                     type="text"
                     value={formData.defaultModel}
@@ -1134,13 +1143,9 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     placeholder="claude-sonnet-4-20250514"
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                   />
-                )}
-                <p className="text-xs text-gray-500 mt-1">
-                  {availableModels.length > 0
-                    ? 'Model to use when no tier is specified'
-                    : 'Save and test provider to fetch available models'}
-                </p>
-              </FormField>
+                  <p className="text-xs text-gray-500 mt-1">Save and test provider to fetch available models</p>
+                </FormField>
+              )}
 
               {provider?.id && <div>
                 <ExecutionOptionsSelect provider={{ ...capabilityProvider, args: argList(formData.args), executionOptions: undefined }} model={formData.defaultModel} value={formData.executionOptions}
@@ -1164,20 +1169,20 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               <div className="border-t border-port-border pt-4 mt-4">
                 <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tier Overrides</h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {TIER_FIELDS.map(({ key, label, dot, placeholder }) => (
-                    <FormField key={key} labelClassName="block text-xs text-gray-400 mb-1" label={<>
-                        <span className={`inline-block w-2 h-2 rounded-full ${dot} mr-1`}></span>
-                        {label}
-                      </>}>
-                      {availableModels.length > 0 ? (
-                        <select
-                          value={formData[key]}
-                          onChange={(e) => setFormData(prev => ({ ...prev, [key]: e.target.value }))}
-                          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
-                        >
-                          {modelSelectOptions(key === 'ultraModel' ? 'Inherit Heavy' : 'Inherit Default Model')}
-                        </select>
-                      ) : (
+                  {TIER_FIELDS.map(({ key, label, dot, placeholder }) => {
+                    const tierLabel = <><span className={`inline-block w-2 h-2 rounded-full ${dot} mr-1`}></span>{label}</>;
+                    return availableModels.length > 0 ? (
+                      <ProviderModelAutocomplete
+                        key={key}
+                        label={tierLabel}
+                        labelClassName="block text-xs text-gray-400 mb-1"
+                        value={formData[key]}
+                        options={modelSelectOptions(key === 'ultraModel' ? 'Inherit Heavy' : 'Inherit Default Model')}
+                        onChange={(model) => setFormData(prev => ({ ...prev, [key]: model }))}
+                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                      />
+                    ) : (
+                      <FormField key={key} labelClassName="block text-xs text-gray-400 mb-1" label={tierLabel}>
                         <input
                           type="text"
                           value={formData[key]}
@@ -1185,13 +1190,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                           placeholder={placeholder}
                           className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                         />
-                      )}
-                    </FormField>
-                  ))}
+                      </FormField>
+                    );
+                  })}
                 </div>
                 <p className="text-xs text-gray-500 mt-2">
                   {availableModels.length > 0
-                    ? 'Optional. A task, role, or prompt stage that names a tier runs on its model here; a blank tier uses the Default Model (Ultra uses Heavy first). Nothing picks a tier automatically.'
+                    ? 'Search and select optional tier models. A task, role, or prompt stage that names a tier runs on its model here; a blank tier uses the Default Model (Ultra uses Heavy first). Nothing picks a tier automatically.'
                     : 'Save provider, then use Test or Refresh to fetch available models'}
                 </p>
               </div>
@@ -1224,36 +1229,28 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                 </FormField>
 
                 {formData.fallbackProvider && (
-                  <FormField label="Fallback Model" className="mt-3">
-                    {compatibleFallbackModelOptions.length > 0 ? (
-                      <select
+                  compatibleFallbackModelOptions.length > 0 ? (
+                      <ProviderModelAutocomplete
+                        label="Fallback Model"
+                        wrapperClassName="mt-3"
+                        description="Search and select a model on the fallback provider. Leave blank to use that provider's default model."
                         value={formData.fallbackModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, fallbackModel: e.target.value }))}
-                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                      >
-                        <option value="">Use fallback provider's default</option>
-                        {fallbackModelIsUnavailable && (
-                          <option value={formData.fallbackModel} disabled>
-                            {modelOptionLabel(formData.fallbackModel, localModels.ctxById, selectedFallbackProvider)} (unavailable on this machine)
-                          </option>
-                        )}
-                        {compatibleFallbackModelOptions.map(model => (
-                          <option key={model} value={model}>{modelOptionLabel(model, localModels.ctxById, selectedFallbackProvider)}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={formData.fallbackModel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, fallbackModel: e.target.value }))}
-                        placeholder="Use fallback provider's default"
+                        options={fallbackModelSelectOptions}
+                        onChange={(fallbackModel) => setFormData(prev => ({ ...prev, fallbackModel }))}
                         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                       />
-                    )}
-                    <p className="text-xs text-gray-500 mt-1">
-                      Model to run on the fallback provider. Leave blank to use that provider's default model.
-                    </p>
-                  </FormField>
+                    ) : (
+                      <FormField label="Fallback Model" className="mt-3">
+                        <input
+                          type="text"
+                          value={formData.fallbackModel}
+                          onChange={(e) => setFormData(prev => ({ ...prev, fallbackModel: e.target.value }))}
+                          placeholder="Use fallback provider's default"
+                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Model to run on the fallback provider. Leave blank to use that provider's default model.</p>
+                      </FormField>
+                    )
                 )}
               </div>
             </div>
