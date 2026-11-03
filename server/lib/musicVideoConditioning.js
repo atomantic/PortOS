@@ -305,7 +305,7 @@ export function musicVideoClipConditioningReferences(project, scene, castMedia =
   const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
   return musicVideoConditioningReferences(project, source, castMedia)
     .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
-      && (explicit || ref.role === 'character'))
+      && (explicit || ref.role === 'character' || ref.role === 'subject'))
     .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)
     .slice(0, Math.max(0, limit));
 }

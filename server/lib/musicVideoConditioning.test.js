@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -196,5 +196,7 @@ describe('musicVideoConditioningReferences with research photos (#14822)', () =>
     expect(ids(refs)).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
     expect(refs[0]).toMatchObject({ role: 'subject', label: 'Example Breed', research: true });
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set', 'mvr-research-r2'] }))).toEqual(['set.png', 'research-2.png']);
+    // On Auto a clip also keeps the subject photos, beside the identities.
+    expect(ids(musicVideoClipConditioningReferences(project(authored), scene))).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
   });
 });
