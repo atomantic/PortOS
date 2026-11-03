@@ -1676,6 +1676,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/update/auto', ACTIVE_WORK_READ],
   ['GET /api/update/browser', 'Reads the cached Chrome version observation; fixed read-only process and CDP probes run in the background monitor, not in the request.'],
   ['GET /api/update/status', FORGE_READ],
+  ['GET /api/update/software', 'Aggregates the existing status reads of every managed component (Node/nvm/pm2, cached Chrome observation, harness `--version` checks, Ollama/LM Studio, yt-dlp, Blender configuration, the Docker and code-animation containment probes, conda env paths) with fixed version probes; installs, starts and updates nothing.'],
   ['GET /api/usage', PROVIDER_USAGE],
   ['GET /api/usage/claude-code', PROVIDER_USAGE],
   ['GET /api/usage/providers', PROVIDER_USAGE],
