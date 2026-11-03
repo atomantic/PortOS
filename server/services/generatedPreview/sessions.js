@@ -457,6 +457,7 @@ async function startMusicVideo(session, input) {
     revision: `${pointer?.directory || ''}|${pointer?.updatedAt || ''}`,
     frame: await capture(opened.page),
     ...(opened.playback ? { playback: opened.playback } : {}),
+    ...(opened.unsupportedEffects?.length ? { unsupportedEffects: opened.unsupportedEffects } : {}),
   };
 }
 
@@ -579,6 +580,7 @@ async function openGeneratedPreview(socket, data) {
       revision: started.revision,
       audio: started.audio || 'none',
       ...(started.playback ? { playback: started.playback } : {}),
+      ...(started.unsupportedEffects ? { unsupportedEffects: started.unsupportedEffects } : {}),
     });
     emitFrame(session, 0, started.frame);
   } catch (error) {

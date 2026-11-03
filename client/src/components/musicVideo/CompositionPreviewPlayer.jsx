@@ -4,8 +4,10 @@ import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../..
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { hashString } from '../../utils/hashString.js';
-import ShotStepper, { shotSteps } from './ShotStepper.jsx';
+import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
+import toast from '../ui/Toast';
+import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -31,6 +33,24 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
+const EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
+const SHOTS_SHOWN = 6;
+
+/** "glitch transitions (shots 3, 7), end-frame effects (shot 12)" from the preview's unsupported list. */
+export function unsupportedEffectsSummary(unsupported, scenes) {
+  const numbers = shotNumbers(scenes);
+  return Object.entries(EFFECT_LABELS).map(([kind, label]) => {
+    const entries = unsupported.filter((entry) => entry.effects?.includes(kind));
+    if (!entries.length) return null;
+    // A cold-open shot has no number on the song clock.
+    const shots = entries.map((entry) => numbers.get(entry.sceneId)).filter(Boolean).sort((a, b) => a - b);
+    if (!shots.length) return label;
+    const listed = shots.slice(0, SHOTS_SHOWN).join(', ');
+    const more = shots.length > SHOTS_SHOWN ? ` +${shots.length - SHOTS_SHOWN} more` : '';
+    return `${label} (${shots.length === 1 ? 'shot' : 'shots'} ${listed}${more})`;
+  }).filter(Boolean).join(', ');
+}
+
 // A phone's collapsed mini-player has no picture to show, so it must not start
 // the isolated renderer up front. Without matchMedia, load eagerly.
 const DESKTOP_QUERY = '(min-width: 1024px)';
@@ -46,9 +66,11 @@ const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_Q
  * `lyrics` previews timed lyrics instead of the document. `draft` previews the
  * candidate document. `shotNav` adds Back and Next shot buttons (and the arrow
  * keys) and frame-by-frame stepping for the docked player; `onEditShot(sceneId)`
- * there adds Edit shot, which pauses first.
+ * there adds Edit shot, which pauses first. When the document's engine predates
+ * selected shot effects, the preview plays without them and names those shots;
+ * `onProject(project)` there adds a one-tap engine update.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, onEditShot = null, scrubId: givenScrubId = null }) {
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, onEditShot = null, onProject = null, scrubId: givenScrubId = null }) {
   const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
   const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
@@ -74,6 +96,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const resyncs = useRef([]);
   const [preparing, setPreparing] = useState(false);
   const [audioError, setAudioError] = useState('');
+  const [upgrading, setUpgrading] = useState(false);
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
@@ -305,7 +328,18 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     preview.resume();
   };
 
+  const upgradeEngine = async () => {
+    setUpgrading(true);
+    const result = await upgradeMusicVideoCompositionEngine(project.id, doc.directory, { silent: true })
+      .catch((error) => { toast.error(error?.message || 'The layered engine could not be updated'); return null; });
+    if (mounted.current) setUpgrading(false);
+    if (!result) return;
+    if (result.project) onProject(result.project);
+    toast.success(result.changed ? 'Layered engine updated; every effect now previews' : 'Layered engine is already current');
+  };
+
   if (!doc) return null;
+  const unsupported = lyrics ? [] : preview.unsupportedEffects || [];
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
@@ -320,6 +354,16 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     <div className="space-y-2" aria-label={lyrics ? 'Lyric timing playthrough' : 'Composition preview'}>
       {failed && <p className="text-xs text-port-error" role="alert">{audioError || preview.reason || 'Preview unavailable'}</p>}
       {preview.playbackReason && <p className="text-xs text-port-text-muted" role="status">{preview.playbackReason}</p>}
+      {unsupported.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning" role="status">
+          <span className="min-w-0 break-words">Playing without effects this engine can't draw: {unsupportedEffectsSummary(unsupported, project.scenes)}.</span>
+          {onProject && !draft && (
+            <button type="button" className={buttonCls} disabled={upgrading || !!project.composition?.documentDraft} onClick={upgradeEngine}>
+              {upgrading ? 'Updating…' : 'Update layered engine'}
+            </button>
+          )}
+        </div>
+      )}
       <div title={title} className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview.frameUrl ? (

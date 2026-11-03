@@ -39,7 +39,7 @@ import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
 import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { documentRenderClock, documentSongDuration } from './documentTiming.js';
 
@@ -644,10 +644,79 @@ export function detachDocument(projectId) {
 }
 
 /** The document folder a render stages; throws COMPOSITION_DOCUMENT_MISSING. */
-export async function documentDirectoryForRender(project) {
-  await readDocumentFiles(project);
+export async function documentDirectoryForRender(project, { requireSelectedEffects = true } = {}) {
+  await readDocumentFiles(project, { requireSelectedEffects });
   const dir = await requireDocument(project);
   return relative(PATHS.data, dir).split(sep).join('/');
+}
+
+const SELECTED_EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
+
+const selectedEffectKinds = shots => Object.keys(SELECTED_EFFECT_LABELS)
+  .filter(kind => shots.some(shot => shot.effects.includes(kind))).map(kind => SELECTED_EFFECT_LABELS[kind]);
+
+const declaresSelectedEffects = async files => {
+  const declarations = files.filter(file => ['engine.js', 'index.html'].includes(file.rel));
+  const marked = await Promise.all(declarations.map(async file =>
+    /^(?:\/\/ portos-selected-effects: 1|<!-- portos-selected-effects: 1 -->)$/m.test(await readFile(file.abs, 'utf8'))));
+  return marked.some(Boolean);
+};
+
+/**
+ * The shots whose selected effects land inside the song and need an engine that
+ * declares `portos-selected-effects`: `[{ sceneId, effects: ['transition'|'glitch'|'end'] }]`.
+ * Each shot is checked with only its own effects so the list names the shots.
+ */
+function selectedEffectShots(project) {
+  const scenes = project.scenes || [];
+  const duration = documentSongDuration(project);
+  const { fps, frames } = documentRenderClock(duration || 0);
+  const sections = sceneTransitionSections(scenes, fps, { endSec: duration });
+  const inSong = effect => effect.frame >= 0 && effect.frame < frames;
+  const found = new Map();
+  const add = (sceneId, kind) => {
+    if (!found.has(sceneId)) found.set(sceneId, []);
+    if (!found.get(sceneId).includes(kind)) found.get(sceneId).push(kind);
+  };
+  const bare = ({ transitionIn: _in, transitionOut: _out, ...section }) => section;
+  for (const section of sections) {
+    if ((section.transitionIn || section.transitionOut)
+      && transitionGlitchFrames(sections.map(other => other === section ? other : bare(other)), { totalFrames: frames }).length > 0) add(section.sceneId, 'transition');
+    if (section.shotGlitches && shotGlitchFrames([section], fps).some(inSong)) add(section.sceneId, 'glitch');
+  }
+  const generated = project.composition?.document?.source?.kind === 'generated';
+  const imageExists = id => isTopLevelEntryName(id) && !id.includes('..') && existsSync(join(PATHS.images, id));
+  const eligibleEnd = scenes.filter(scene => Number.isFinite(scene?.startSec) && scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
+    && scene.endImageId && documentSceneVisualLayer(project, scene, { generated }) === 'still').filter(scene => {
+    const sequence = scenePhotoSequence(scene);
+    return imageExists(scene.endImageId) && (sequence ? sequence.imageIds.length > 0 && sequence.imageIds.every(imageExists) : imageExists(scene.referenceImageId));
+  });
+  // The layered engine displays only valid intervals, using the latest valid
+  // scene at an overlap. Its glitch overlay has a separate frame timeline.
+  const layeredScenes = scenes.filter(scene => scene?.sceneId && Number.isFinite(scene.startSec)
+    && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec).sort((a, b) => a.startSec - b.startSec);
+  for (const scene of eligibleEnd) {
+    const index = layeredScenes.indexOf(scene);
+    const next = layeredScenes[index + 1];
+    const lastFrame = index < 0 ? -1 : Math.min(frames, Math.ceil(scene.endSec * fps), next ? Math.ceil(next.startSec * fps) : frames) - 1;
+    const visible = index >= 0 && lastFrame >= Math.max(0, Math.ceil(scene.startSec * fps)) && (() => {
+      const state = imageEffectState(sceneImageEffect(scene, { layered: true }), (lastFrame - Math.round(scene.startSec * fps)) / fps, { fps });
+      return state.end > 0 || state.flash > 0;
+    })();
+    if (visible || sceneImageEffectGlitchFrames(scenes.map(other => other === scene ? other : { ...other, imageEffect: null }),
+      fps, { layered: true, endSec: duration }).some(inSong)) add(scene.sceneId, 'end');
+  }
+  return [...found].map(([sceneId, effects]) => ({ sceneId, effects }));
+}
+
+/**
+ * Shots whose selected effects this document cannot draw (its engine predates
+ * them): `[{ sceneId, effects }]`, empty when every effect is drawn. The live
+ * preview plays without them and names them; renders refuse instead.
+ */
+export async function unsupportedDocumentEffects(project) {
+  const { files } = await collectTree(await requireDocument(project));
+  return (await declaresSelectedEffects(files)) ? [] : selectedEffectShots(project);
 }
 
 /** Every file a document ships, read into memory (the preview builder). */
@@ -655,43 +724,11 @@ export async function readDocumentFiles(project, { requireLyricVisibility = true
   const dir = await requireDocument(project);
   const { files } = await collectTree(dir);
   await assertDocumentMediaPolicy(project, files);
-  if (requireSelectedEffects) {
-    const scenes = project.scenes || [];
-    const duration = documentSongDuration(project);
-    const { fps, frames } = documentRenderClock(duration || 0);
-    const sections = sceneTransitionSections(scenes, fps, { endSec: duration });
-    const inSong = effect => effect.frame >= 0 && effect.frame < frames;
-    const selectedTransitions = transitionGlitchFrames(sections, { totalFrames: frames }).length > 0
-      || sceneShotGlitchFrames(scenes, fps, { endSec: duration }).some(inSong);
-    const endScenes = scenes.filter(scene => Number.isFinite(scene?.startSec) && scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
-      && scene.endImageId && documentSceneVisualLayer(project, scene, { generated: project.composition?.document?.source?.kind === 'generated' }) === 'still');
-    const imageExists = id => isTopLevelEntryName(id) && !id.includes('..') && existsSync(join(PATHS.images, id));
-    const eligibleEnd = endScenes.filter(scene => {
-      const sequence = scenePhotoSequence(scene);
-      return imageExists(scene.endImageId) && (sequence ? sequence.imageIds.length > 0 && sequence.imageIds.every(imageExists) : imageExists(scene.referenceImageId));
+  if (requireSelectedEffects && !(await declaresSelectedEffects(files))) {
+    const shots = selectedEffectShots(project);
+    if (shots.length) throw new ServerError(`This composition does not declare support for the selected shot effects (${selectedEffectKinds(shots).join(', ')}). Update the layered engine under Document source, or add effect support to the custom document.`, {
+      status: 422, code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED',
     });
-    // The layered engine displays only valid intervals, using the latest valid
-    // scene at an overlap. Its glitch overlay has a separate frame timeline.
-    const layeredScenes = scenes.filter(scene => scene?.sceneId && Number.isFinite(scene.startSec)
-      && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec).sort((a, b) => a.startSec - b.startSec);
-    const selectedEnd = eligibleEnd.some(scene => {
-      const index = layeredScenes.indexOf(scene);
-      if (index < 0) return false;
-      const next = layeredScenes[index + 1];
-      const lastFrame = Math.min(frames, Math.ceil(scene.endSec * fps), next ? Math.ceil(next.startSec * fps) : frames) - 1;
-      if (lastFrame < Math.max(0, Math.ceil(scene.startSec * fps))) return false;
-      const state = imageEffectState(sceneImageEffect(scene, { layered: true }), (lastFrame - Math.round(scene.startSec * fps)) / fps, { fps });
-      return state.end > 0 || state.flash > 0;
-    }) || sceneImageEffectGlitchFrames(scenes.map(scene => eligibleEnd.includes(scene) ? scene : { ...scene, imageEffect: null }),
-      fps, { layered: true, endSec: duration }).some(inSong);
-    if (selectedTransitions || selectedEnd) {
-      const declarations = files.filter(file => ['engine.js', 'index.html'].includes(file.rel));
-      const marked = await Promise.all(declarations.map(async file =>
-        /^(?:\/\/ portos-selected-effects: 1|<!-- portos-selected-effects: 1 -->)$/m.test(await readFile(file.abs, 'utf8'))));
-      if (!marked.some(Boolean)) throw new ServerError('This composition does not declare support for the selected shot effects. Update the layered engine under Document source, or add effect support to the custom document.', {
-        status: 422, code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED',
-      });
-    }
   }
   const sequences = (project.scenes || []).map(scene => scenePhotoSequence(scene)).filter(Boolean);
   if (sequences.length) {

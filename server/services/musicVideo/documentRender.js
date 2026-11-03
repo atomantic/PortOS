@@ -42,7 +42,7 @@ import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
-import { documentDirectoryForRender } from './compositionDocument.js';
+import { documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
@@ -310,8 +310,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
  * Everything a document render needs before the page opens. Throws
  * COMPOSITION_DOCUMENT_MISSING (409) or NO_TIMELINE (422).
  */
-export async function prepareDocumentRender(project) {
-  const directory = await documentDirectoryForRender(project);
+export async function prepareDocumentRender(project, { requireSelectedEffects = true } = {}) {
+  const directory = await documentDirectoryForRender(project, { requireSelectedEffects });
   const songDurationSec = documentSongDuration(project);
   if (!songDurationSec) {
     throw new ServerError('A composition document is timed against the song — analyze the track first', { status: 422, code: 'NO_TIMELINE' });
@@ -375,7 +375,10 @@ async function stageDocumentData(compositionDir, data, media, signal) {
  * stays in the staged copy; it is not posted into the user's browser.
  */
 export async function openIsolatedDocumentPreview({ project, jobId, signal, onEvent }) {
-  const plan = await prepareDocumentRender(project);
+  // The live preview plays an older engine without the effects it cannot draw
+  // and names those shots; renders keep refusing so a final never drops them.
+  const plan = await prepareDocumentRender(project, { requireSelectedEffects: false });
+  const unsupportedEffects = await unsupportedDocumentEffects(project);
   const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
@@ -445,7 +448,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
       }
     }
     return {
-      page, scratchRoot: staged.scratchRoot, playbackAdapter,
+      page, scratchRoot: staged.scratchRoot, playbackAdapter, unsupportedEffects,
       ...(playbackAvailable ? { playback: { ...playbackAdapter, version: 1 } } : {}),
       width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
     };

@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   getMusicVideoCompositionPreview: vi.fn(),
   getMusicVideoLyricPlaythroughPreview: vi.fn(),
   fetchMusicVideoPreviewAsset: vi.fn(),
+  upgradeMusicVideoCompositionEngine: vi.fn(),
 }));
 const socket = vi.hoisted(() => {
   const handlers = new Map();
@@ -278,14 +279,26 @@ describe('CompositionPreviewPlayer', () => {
     expect(screen.getByText('Preview unavailable')).toBeInTheDocument();
   });
 
-  it('shows the selected-effects upgrade remedy from the preview socket', async () => {
+  // Uniquely catches an older engine blocking playback instead of naming the shots it skips and offering the update.
+  it('plays without effects an older engine cannot draw, names those shots, and updates the engine in one tap', async () => {
     socket.emit.mockImplementation((event, payload) => {
       if (event !== 'generated-preview:open') return;
-      for (const fn of socket.__handlers.get('generated-preview:error') || []) fn({ requestId: payload.requestId,
-        code: 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED', message: 'Update the layered engine under Document source.' });
+      socket.reply(event, payload);
+      for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
+        sessionId: '00000000-0000-4000-8000-0000000000aa', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
+        unsupportedEffects: [{ sceneId: 'c', effects: ['transition', 'end'] }, { sceneId: 'a', effects: ['transition'] }] });
     });
-    render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Update the layered engine under Document source.');
+    const scenes = [{ sceneId: 'a', startSec: 0, endSec: 2 }, { sceneId: 'b', startSec: 2, endSec: 4 }, { sceneId: 'c', startSec: 4, endSec: 6 }];
+    const upgraded = { ...project, scenes, composition: { ...project.composition, document: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-b' } } };
+    api.upgradeMusicVideoCompositionEngine.mockResolvedValue({ project: upgraded, changed: true });
+    const onProject = vi.fn();
+    render(<CompositionPreviewPlayer project={{ ...project, scenes }} audioUrl="/data/music/song.mp3" onProject={onProject} />);
+    expect(await screen.findByText(/glitch transitions \(shots 1, 3\), end-frame effects \(shot 3\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Update layered engine' }));
+    await waitFor(() => expect(onProject).toHaveBeenCalledWith(upgraded));
+    expect(api.upgradeMusicVideoCompositionEngine).toHaveBeenCalledWith('mv-1', DOCUMENT.directory, { silent: true });
   });
 
   it('applies film look and title-card edits made while the isolated worker is opening', async () => {
