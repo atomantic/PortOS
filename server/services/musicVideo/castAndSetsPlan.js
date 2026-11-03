@@ -61,7 +61,7 @@ export { CAST_SETS_SUBJECT_PREFIX };
 const PHOTO = 'photorealistic, editorial photography';
 // Identity and wardrobe sheets define the person; recurring objects have their
 // own sheet, even when a legacy signature or wardrobe mentions carrying one.
-const EMPTY_HANDS = 'Hands empty and relaxed, no camera, device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only; never put a carried object from the description or reference images in their hands';
+const EMPTY_HANDS = 'Hands empty and relaxed, holding no device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only, drawn as worn (a watch on the wrist, a camera hanging from its wrist strap), never gripped in a hand; never put a carried object from the description or reference images in their hands';
 // Stacked, interlocked or piled look-alike objects are where image models fuse
 // geometry (chairs molded into a table), and every shot on the set copies it.
 const PLAUSIBLE_SET = 'Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';

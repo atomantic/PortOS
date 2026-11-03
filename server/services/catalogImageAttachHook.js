@@ -72,7 +72,10 @@ async function attachGeneratedImage({ ingredientId, kind, role, library, filenam
       return reviewRenderedImage({ inputs: { imageId: filename, planPrompt: effectiveJobPrompt(job) },
         reviewer: await resolvePlateReviewer({}), source: 'catalog-sheet-inspection' });
     }).catch(() => ({ verdict: 'unreviewed', discrepancy: 'Vision inspection unavailable or incomplete. Review this sheet before using it.' }));
-    inspectionLibrary = { review: { status: inspection.verdict === 'pass' ? 'good' : inspection.verdict === 'mismatch' ? 'bad' : 'unreviewed',
+    // An advisory (local-model) reviewer's lone render-quality fail is a hint, not a rejection.
+    const advisoryOnly = inspection.advisory === true && inspection.verdict === 'mismatch'
+      && inspection.checks?.filter((c) => c.status === 'fail').every((c) => c.id === 'render-quality');
+    inspectionLibrary = { review: { status: inspection.verdict === 'pass' ? 'good' : inspection.verdict === 'mismatch' && !advisoryOnly ? 'bad' : 'unreviewed',
       feedback: inspection.discrepancy || 'Vision: matches the saved prompt; no rendering defect found.' } };
   }
   const metadata = await readImageGenerationMetadata(filename);

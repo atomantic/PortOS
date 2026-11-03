@@ -80,6 +80,20 @@ describe('catalogImageAttachHook', () => {
     expect(updateMediaLibrary).toHaveBeenLastCalledWith('ing-sheet', 'defect.png', 'reference', expect.objectContaining({ review: { status: 'bad', feedback: expect.stringContaining('Rendering defect:') } }), { preserveExisting: true });
   });
 
+  // Uniquely catches a local-model hallucinated render-quality fail rating a good sheet "bad" (#14795).
+  it('files an advisory reviewer\'s lone render-quality failure as unreviewed, but a prompt mismatch still as bad', async () => {
+    const tag = { ingredientId: 'ing-sheet', kind: 'reference', role: 'sheet:environment', inspect: true };
+    const checks = (failing) => ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id, status: failing.includes(id) ? 'fail' : 'pass', note: 'n' }));
+    inspectImage.mockResolvedValue({ verdict: 'mismatch', advisory: true, discrepancy: 'Rendering defect: FRONT appears as FROHT.', checks: checks(['render-quality']) });
+    await emit({ prompt: 'p', catalogAttach: tag }, 'a.png');
+    expect(attachGeneratedMedia).toHaveBeenLastCalledWith('ing-sheet', 'a.png', expect.objectContaining({
+      library: { review: { status: 'unreviewed', feedback: 'Rendering defect: FRONT appears as FROHT.' } } }));
+    inspectImage.mockResolvedValue({ verdict: 'mismatch', advisory: true, discrepancy: 'A person is visible.', checks: checks(['empty-set']) });
+    await emit({ prompt: 'p', catalogAttach: tag }, 'b.png');
+    expect(attachGeneratedMedia).toHaveBeenLastCalledWith('ing-sheet', 'b.png', expect.objectContaining({
+      library: { review: { status: 'bad', feedback: 'A person is visible.' } } }));
+  });
+
   it('honors an explicit tag kind', async () => {
     await emit({ catalogAttach: { ingredientId: 'ing-3', kind: 'reference' } }, 'ref.png');
     expect(attachGeneratedMedia).toHaveBeenCalledWith('ing-3', 'ref.png', { kind: 'reference' });

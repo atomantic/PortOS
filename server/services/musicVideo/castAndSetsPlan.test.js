@@ -24,7 +24,7 @@ describe('Cast & Sets prop sheet', () => {
     for (const props of [direction.props, []]) {
       const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, props });
       for (const key of ['character', 'looks', 'form:age-7', 'cast:kevin']) {
-        expect(plan[key].prompt).toContain('Hands empty and relaxed, no camera, device or carried object');
+        expect(plan[key].prompt).toContain('Hands empty and relaxed, holding no device or carried object');
         expect(plan[key].prompt).toContain('Carried props are drawn on the prop sheet');
       }
       for (const key of ['character', 'looks']) {
