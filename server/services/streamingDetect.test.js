@@ -608,6 +608,24 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it.each([
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; module.exports = { apps: apps.filter(() => false) };",
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; module.exports = apps.filter(() => false);",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; app.name = 'new-api'; module.exports = { apps: [app] };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; app['name'] = 'new-api'; module.exports = { apps: [app] };",
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; apps[0] = { name: 'new-api' }; module.exports = { apps };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; const alias = app; alias.name = 'new-api'; module.exports = { apps: [app] };",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; module.exports.apps[0].env.PORT = 6200;",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; module.exports.apps[0].name = 'new-api';",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; exports.apps = [];",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; const alias = app; ++alias.env.PORT; module.exports = { apps: [app] };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; --app['env'].PORT; module.exports = { apps: [app] };",
+  ])('does not discover or rewrite dynamically changed ecosystem apps', (content) => {
+    const edit = { processName: 'old-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({ content, applied: [], unapplied: [edit] });
+  });
+
   it('rewrites quoted inline port keys for only the selected process', () => {
     const content = `module.exports = { apps: [
   { name: 'quoted-api', script: 'server.js', ports: { "api": 6000 } },
