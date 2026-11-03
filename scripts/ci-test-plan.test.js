@@ -32,6 +32,7 @@ import {
   structuralTestsFor,
   SUPERCOLLIDER_LIVE_ENTRIES,
   DOCKER_CONTAINMENT_LIVE_ENTRIES,
+  MACOS_NATIVE_TESTS,
   WINDOWS_CONTRACT_TESTS,
   WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
@@ -2348,5 +2349,32 @@ describe('path-gated single-purpose jobs', () => {
     expect(realPlan(['client/src/App.jsx']).dockerContainmentLive).toBe(false);
     expect(realPlan(['docs/CONTAINMENT.md']).dockerContainmentLive).toBe(false);
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).dockerContainmentLive).toBe(true);
+  });
+
+  // The launchd-coalition suites skip on Linux and Windows, so this job is the
+  // only CI proof of macOS release recovery (#14781).
+  it('runs the macOS supervision suites only for the native supervision path and its harness', () => {
+    for (const file of [
+      'server/lib/windowsAgentProcess.js', 'server/lib/windowsAgentProcess.darwin.test.js', 'server/lib/darwinAgentSupervisor.py',
+      'server/services/releaseCandidateRecovery.js', 'server/services/releaseCandidateRecovery.test.js',
+      'server/services/releaseCandidateSettlement.js', 'server/vitest.config.js', 'server/package-lock.json', 'server/.npmrc',
+      'scripts/trusted-rebuilds.js', '.github/workflows/ci.yml',
+    ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(true);
+    for (const file of [
+      'server/lib/windowsAgentSupervisor.ps1', 'server/lib/linuxAgentSupervisor.py', 'server/lib/bufferedSpawn.js',
+      'server/services/releaseCandidateEvidence.js', 'client/src/App.jsx', 'docs/GITHUB_ACTIONS.md',
+      '.github/workflows/release.yml', 'package-lock.json', 'client/.npmrc',
+    ]) expect(buildCiTestPlan([file]).macosNative, file).toBe(false);
+    expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).macosNative).toBe(true);
+
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    expect(jobs.impact).toContain('macos_native: ${{ steps.plan.outputs.macos_native }}');
+    expect(jobs['macos-native']).toContain("if: needs.impact.outputs.macos_native == 'true'");
+    expect(jobs['macos-native']).toContain('runs-on: macos-latest');
+    const run = jobs['macos-native'].match(/npm test --prefix server -- --run (.+)/)[1].trim();
+    expect(run.split(' ').map((path) => posix.join('server', path))).toEqual(MACOS_NATIVE_TESTS);
+    for (const test of MACOS_NATIVE_TESTS) expect(existsSync(join(repo, test)), test).toBe(true);
+    expect(jobs.gate).toMatch(/needs: \[[^\]]*\bmacos-native\b/);
+    expect(jobs.gate).toContain('CI_GATE_RESULT_MACOS_NATIVE: ${{ needs.macos-native.result }}');
   });
 });

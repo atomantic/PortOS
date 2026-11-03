@@ -645,6 +645,18 @@ export const DOCKER_CONTAINMENT_LIVE_ENTRIES = [
 ];
 // The job installs server dependencies from these before running anything.
 export const DOCKER_CONTAINMENT_LIVE_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+// The `macos-native` job runs the macOS launchd-coalition release-agent
+// boundary (#14781): suites that skip on every other platform, so the Linux
+// and Windows jobs can never prove them. macOS runners are the scarcest hosted
+// capacity, so the gate is this explicit path list, not an import closure —
+// the recovery suite's closure reaches most of the server.
+export const MACOS_NATIVE_TESTS = [
+  'server/lib/windowsAgentProcess.darwin.test.js',
+  'server/services/releaseCandidateRecovery.test.js',
+];
+// The supervision path itself, the dependency manifests and Vitest harness the
+// job installs and loads, and ci.yml so a workflow edit proves the job runs.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -989,7 +1001,7 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
  * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live) runs.
+ * Docker containment live, macOS native) runs.
  *
  * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
@@ -1013,6 +1025,7 @@ export function buildCiTestPlan(changedFiles, options = {}) {
       || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
     dockerContainmentLive: forceFull
       || touchesJobInputs(plan.changedFiles, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE),
+    macosNative: forceFull || plan.changedFiles.some((path) => MACOS_NATIVE_PATH_RE.test(path)),
   };
 }
 
@@ -1418,6 +1431,7 @@ export function emitGitHubPlan(plan) {
     linux_containment: plan.linuxContainment,
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
+    macos_native: plan.macosNative,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),

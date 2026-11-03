@@ -132,6 +132,7 @@ export function buildPregateReport({
       linuxContainment: plan.linuxContainment,
       supercolliderLive: plan.supercolliderLive,
       dockerContainmentLive: plan.dockerContainmentLive,
+      macosNative: plan.macosNative,
       suiteReasons: plan.suiteReasons ?? {},
     },
     stages: stageRecords,
