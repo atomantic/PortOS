@@ -202,7 +202,6 @@ describe('managed app updates', () => {
     // happened. No `io`: App Management renders the run from `onStep`, and
     // mirroring the same frames onto portos:update:* would double the fan-out.
     expect(mock.startPortosSelfUpdate).toHaveBeenCalledWith({
-      automatic: false, acknowledgeInterruption: false,
       acknowledgeFork: true,
       acknowledgePersistentMindImageBackup: false,
       preflightAlreadyRun: true,

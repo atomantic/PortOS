@@ -392,7 +392,7 @@ describe('app socket handlers', () => {
       expect(appUpdater.updateApp).toHaveBeenCalledWith(
         APPS['app-a'],
         expect.any(Function),
-        { syncFork: false, automatic: false, acknowledgeInterruption: false,
+        { syncFork: false,
         acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
       );
     });

@@ -117,7 +117,8 @@ export async function runAppUpdate({
     let failure = null;
     let errorContext = null;
     result = await appUpdater.updateApp(app, emit, {
-      automatic, acknowledgeInterruption,
+      ...(automatic ? { automatic } : {}),
+      ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}),
       syncFork,
       acknowledgeFork,
       acknowledgePersistentMindImageBackup,

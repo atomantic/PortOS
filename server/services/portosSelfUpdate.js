@@ -124,7 +124,7 @@ async function startSelfUpdate({
     console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
     io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
   };
-  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, automatic, acknowledgeInterruption, ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
+  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(automatic ? { automatic } : {}), ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}), ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
     reportFailure(err);
     throw err;
   });

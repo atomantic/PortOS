@@ -255,7 +255,8 @@ async function _doUpdate(app, emit, {
       // frames (`onStep`), so mirroring the whole stream onto
       // `portos:update:*` as well would double the fan-out for no new reader.
       const launch = await startPortosSelfUpdate({
-        automatic, acknowledgeInterruption,
+        ...(automatic ? { automatic } : {}),
+        ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}),
         acknowledgeFork,
         acknowledgePersistentMindImageBackup,
         preflightAlreadyRun: true,
