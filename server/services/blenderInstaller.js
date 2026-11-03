@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -155,35 +155,61 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
     const mount = join(work, 'mount');
     let mounted = false;
     try {
-      emit('download', 'running', `Downloading Blender ${offer.version}…`);
-      await download(offer.url, dmg, offer.sha256, emit);
-      emit('download', 'done', 'Download verified against Blender\'s SHA-256');
-
-      emit('install', 'running', 'Copying Blender.app…');
-      await mkdir(mount);
-      await run('/usr/bin/hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg]);
-      mounted = true;
-      const app = (await readdir(mount)).find((name) => /^Blender.*\.app$/.test(name));
-      if (!app) throw new ServerError('The Blender disk image has no Blender.app.', { status: 502, code: 'BLENDER_IMAGE_INVALID' });
       const destination = managedBlenderApp(offer.version, home);
-      const staging = `${destination}.partial`;
-      await rm(staging, { recursive: true, force: true });
-      await run('/usr/bin/ditto', [join(mount, app), staging]);
-      await rm(destination, { recursive: true, force: true });
-      await rename(staging, destination);
-      emit('install', 'done', `Installed at ${destination}`);
+      const executable = managedBlenderExecutable(offer.version, home);
+      // An app already at the versioned path (an earlier managed install) is reused,
+      // never replaced: nothing here deletes an existing bundle.
+      if (await stat(executable).catch(() => null)) {
+        emit('install', 'done', `Blender ${offer.version} is already installed at ${destination}`);
+      } else {
+        emit('download', 'running', `Downloading Blender ${offer.version}…`);
+        await download(offer.url, dmg, offer.sha256, emit);
+        emit('download', 'done', 'Download verified against Blender\'s SHA-256');
+
+        emit('install', 'running', 'Copying Blender.app…');
+        await mkdir(mount);
+        await run('/usr/bin/hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg]);
+        mounted = true;
+        const app = (await readdir(mount)).find((name) => /^Blender.*\.app$/.test(name));
+        if (!app) throw new ServerError('The Blender disk image has no Blender.app.', { status: 502, code: 'BLENDER_IMAGE_INVALID' });
+        // Staged inside the temp work dir, then moved into a path that does not exist yet.
+        const staging = join(work, app);
+        await run('/usr/bin/ditto', [join(mount, app), staging]);
+        if (await stat(destination).catch(() => null)) {
+          throw new ServerError(`${destination} already exists without a Blender executable; move it aside and try again.`, { status: 409, code: 'BLENDER_DESTINATION_EXISTS' });
+        }
+        await mkdir(join(home, 'Applications'), { recursive: true });
+        await run('/usr/bin/ditto', [staging, destination]);
+        emit('install', 'done', `Installed at ${destination}`);
+      }
 
       emit('verify', 'running', 'Running the Code Animation execution check…');
       const before = (await execution.getCodeAnimationExecution()).tools.blender;
-      const select = (executable) => execution.setCodeAnimationExecutionTools({ blender: {
-        executable, executionMode: before.executionMode, engine: before.engine,
+      const select = (path) => execution.setCodeAnimationExecutionTools({ blender: {
+        executable: path, executionMode: before.executionMode, engine: before.engine,
         acknowledgeHostAccess: before.executionMode === 'trusted-local',
       } });
-      await select(managedBlenderExecutable(offer.version, home));
-      const checked = await execution.probeCodeAnimationExecution();
-      if (!checked.lanes?.blender?.ready) {
-        if (before.executable) await select(before.executable).catch(() => null);
-        throw new ServerError(`Blender ${offer.version} is installed but did not pass the execution check${before.executable ? ', so Code Animation keeps the previous Blender' : ''}: ${checked.lanes?.blender?.reason || 'unknown reason'}.`,
+      await select(executable);
+      let failure = null;
+      try {
+        const checked = await execution.probeCodeAnimationExecution();
+        if (!checked.lanes?.blender?.ready) failure = checked.lanes?.blender?.reason || 'unknown reason';
+      } catch (error) {
+        failure = error.message;
+      }
+      if (failure) {
+        // Any failure after selecting puts the previous selection back (including none),
+        // and re-runs the check so a previously working renderer is ready again.
+        const restored = await select(before.executable || null).then(async () => {
+          if (before.executable) await execution.probeCodeAnimationExecution().catch(() => null);
+          return true;
+        }, (error) => {
+          console.error(`❌ Could not restore the previous Blender selection: ${error.message}`);
+          return false;
+        });
+        const kept = !restored ? ' Restoring the previous selection also failed; select Blender in Code Animation.'
+          : before.executable ? ' Code Animation is back on the previous Blender.' : ' Code Animation has no Blender selected again.';
+        throw new ServerError(`Blender ${offer.version} is installed at ${destination} but did not pass the execution check: ${failure}.${kept}`,
           { status: 502, code: 'BLENDER_CHECK_FAILED' });
       }
       emit('complete', 'done', `Blender ${offer.version} is installed and passed the execution check.`);
