@@ -102,8 +102,8 @@ export const installLocalLlmBackend = (backend) =>
 // Upgrade an already-installed backend in place (Homebrew on macOS, official
 // Ollama script on Linux). The pull-model path uses this on the OLLAMA_OUTDATED
 // recovery flow so a stale binary doesn't keep the user from installing new models.
-export const upgradeLocalLlmBackend = (backend) =>
-  request('/local-llm/upgrade-backend', { method: 'POST', body: JSON.stringify({ backend }) });
+export const upgradeLocalLlmBackend = (backend, options = {}) =>
+  request('/local-llm/upgrade-backend', { method: 'POST', body: JSON.stringify({ backend }), ...options });
 
 export const controlOllamaService = (action) =>
   request('/local-llm/ollama-service', { method: 'POST', body: JSON.stringify({ action }) });

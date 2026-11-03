@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { __testing, getSoftwareInventory } from './softwareInventory.js';
 
-const { browserRow, condaRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
+const { blenderRow, browserRow, condaRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
 
 const runtime = (overrides = {}) => ({
   node: { version: 'v26.12.1', inSupportedRange: true, securityBaseline: { compliant: true }, pinned: '/x/node' },
@@ -84,5 +84,34 @@ describe('component rows', () => {
     expect(await readBlenderVersion('/Applications/Blender.app/Contents/MacOS/Blender', { read })).toBe('5.2.4');
     expect(await readBlenderVersion('/opt/blender-4.2.0-linux-x64/blender', { read })).toBe('4.2.0');
     expect(await readBlenderVersion(null, { read })).toBeNull();
+  });
+
+  describe('Blender row', () => {
+    const offer = { version: '5.2.3', series: '5.2', newestSeries: '5.2' };
+    const configured = (executable, ready = true) => ({ tools: { blender: { executable, executionMode: 'contained', problem: executable ? null : 'Not configured.' } },
+      lanes: { blender: ready ? { ready: true } : { ready: false, reason: 'check not run' } } });
+    const read = async () => '';
+
+    it('flags an installed but unselected Blender and offers the managed install', async () => {
+      const row = await blenderRow(configured(null), { offer, platform: 'darwin', read,
+        candidates: [{ executable: '/Applications/Blender.app/Contents/MacOS/Blender', version: '4.3.2' }] });
+      expect(row).toMatchObject({ state: 'attention', version: '4.3.2', latest: '5.2.3',
+        action: { kind: 'blender-install', label: 'Install Blender 5.2.3' } });
+      expect(row.summary).toMatch(/4\.3\.2 is installed at .* no Blender selected/);
+    });
+
+    it('offers an update for an older patch, and none while installing or off macOS', async () => {
+      const older = configured('/x/blender-5.2.1-macos/Blender');
+      expect(await blenderRow(older, { offer, platform: 'darwin', read })).toMatchObject({ state: 'update', version: '5.2.1', action: { label: 'Update to 5.2.3' } });
+      expect(await blenderRow(older, { offer, platform: 'darwin', read, job: { version: '5.2.3' } })).toMatchObject({ busy: 'Installing Blender 5.2.3', action: null });
+      expect((await blenderRow(older, { offer, platform: 'linux', read })).action).toBeNull();
+      expect(await blenderRow(configured('/x/blender-5.2.3-macos/Blender'), { offer, platform: 'darwin', read })).toMatchObject({ state: 'current', action: null });
+    });
+
+    it('marks a Blender older than the supported series as needing attention', async () => {
+      const row = await blenderRow(configured('/x/blender-4.1.0/blender'), { offer, platform: 'darwin', read });
+      expect(row).toMatchObject({ state: 'attention', action: { kind: 'blender-install' } });
+      expect(row.summary).toMatch(/older than the 4\.2 series/);
+    });
   });
 });

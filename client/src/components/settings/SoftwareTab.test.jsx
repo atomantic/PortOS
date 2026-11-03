@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import SoftwareTab from './SoftwareTab';
-import { getSoftwareInventory, updateNodeRuntime, updatePm2Runtime, updateYtDlp } from '../../services/api';
+import { getSoftwareInventory, installManagedBlender, updateNodeRuntime, updatePm2Runtime, updateYtDlp } from '../../services/api';
 
 const listeners = vi.hoisted(() => new Map());
 vi.mock('../../services/socket', () => ({ default: {
@@ -14,7 +14,7 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
 vi.mock('../../services/api', () => ({
   getSoftwareInventory: vi.fn(), updateNodeRuntime: vi.fn(), updatePm2Runtime: vi.fn(),
-  updateYtDlp: vi.fn(), upgradeLocalLlmBackend: vi.fn(),
+  updateYtDlp: vi.fn(), upgradeLocalLlmBackend: vi.fn(), installManagedBlender: vi.fn(),
 }));
 const captureBaseline = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../../hooks/usePortosRestartWatch', () => ({ usePortosRestartWatch: () => ({ captureBaseline }) }));
@@ -30,6 +30,8 @@ const inventory = {
       home: { path: '/devtools/video-download', label: 'Video download' }, action: { kind: 'ytdlp-update', label: 'Update to 2026.02.01', restarts: false } },
     { id: 'pm2', name: 'pm2', group: 'Runtime', state: 'attention', version: '7.0.0', latest: '7.1.0',
       action: { kind: 'pm2-sync', label: 'Sync terminal pm2', restarts: false } },
+    { id: 'blender', name: 'Blender', group: 'Media tools', state: 'attention', version: '4.3.2', latest: '5.2.3',
+      action: { kind: 'blender-install', label: 'Install Blender 5.2.3', restarts: false } },
     { id: 'harness:codex', name: 'Codex CLI', group: 'Agent harnesses', state: 'missing', home: { path: '/ai/harnesses', label: 'Harnesses' } },
   ],
 };
@@ -57,7 +59,7 @@ describe('Settings › Software', () => {
     await waitFor(() => expect(updateYtDlp).toHaveBeenCalled());
     expect(captureBaseline).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Update to v26.13.0/ }));
-    await waitFor(() => expect(updateNodeRuntime).toHaveBeenCalledWith('v26.13.0'));
+    await waitFor(() => expect(updateNodeRuntime).toHaveBeenCalledWith('v26.13.0', { silent: true, acknowledgeBusy: false }));
     expect(captureBaseline).toHaveBeenCalled();
     expect(await screen.findByText(/PortOS restarts to finish/)).toBeInTheDocument();
   });
@@ -115,6 +117,24 @@ describe('Settings › Software', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Sync terminal pm2/ })).not.toBeDisabled());
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('offers the owner override when PortOS is busy, and shows Blender install progress until it finishes', async () => {
+    installManagedBlender
+      .mockRejectedValueOnce(Object.assign(new Error('PortOS is busy (1 video render).'), { code: 'SYSTEM_BUSY' }))
+      .mockResolvedValueOnce({ started: true, version: '5.2.3' });
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Install Blender 5.2.3/ }));
+    expect(await screen.findByText('PortOS is busy (1 video render).')).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Update anyway' }));
+    await waitFor(() => expect(installManagedBlender).toHaveBeenLastCalledWith({ silent: true, acknowledgeBusy: true }));
+    await act(async () => fire('software:blender', { step: 'download', status: 'running', message: 'Downloading Blender… 40%' }));
+    expect(screen.getByText('Downloading Blender… 40%')).toBeInTheDocument();
+    await act(async () => fire('software:blender', { step: 'complete', status: 'done', message: 'done' }));
+    await act(async () => fire('software:changed', { reason: 'blender' }));
+    expect(toast.success).toHaveBeenCalledWith('Blender updated');
+    expect(screen.queryByText('Downloading Blender… 40%')).not.toBeInTheDocument();
   });
 
   it('shows a retryable failure instead of an empty page', async () => {

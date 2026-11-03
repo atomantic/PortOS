@@ -103,6 +103,14 @@ describe.skipIf(process.platform === 'win32')('startNodeUpdate', () => {
     expect(mocks.runStreamingCommand).not.toHaveBeenCalled();
   });
 
+  it('proceeds while busy when the owner acknowledges it, through the post-install restart check too', async () => {
+    mocks.activity = { idle: false, blockers: [{ label: '1 video render' }] };
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(startNodeUpdate({ version: NEXT, io, acknowledgeBusy: true })).resolves.toEqual({ started: true, restart: true });
+    await vi.waitFor(() => expect(mocks.startPortosSelfUpdate).toHaveBeenCalled());
+    expect(readPin()).toContain(`PORTOS_NODE_INTERPRETER=${nodeBinary}`);
+  });
+
   it('restores the previous pin when the restart is refused after the install', async () => {
     mocks.startPortosSelfUpdate.mockRejectedValue(Object.assign(new Error('Update already in progress'), { code: 'UPDATE_IN_PROGRESS' }));
     await startNodeUpdate({ version: NEXT, io });
