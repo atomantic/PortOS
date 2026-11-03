@@ -474,6 +474,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // worktree, or a job that runs a shell command directly.
   'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
+  'POST /api/cos/claim-selection',
   'POST /api/cos/start',
   'POST /api/cos/resume',
   'POST /api/cos/evaluate',
