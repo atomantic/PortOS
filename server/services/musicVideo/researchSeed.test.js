@@ -11,7 +11,15 @@ vi.mock('./projects.js', () => ({
   },
 }));
 
-const { deps, startSceneResearch } = await import('./researchSeed.js');
+vi.mock('./cameos.js', () => ({
+  addCameoReferences: async (_id, cameoId, references) => {
+    const cameo = store.project.cameos.find((c) => c.cameoId === cameoId);
+    cameo.references = [...(cameo.references || []), ...references];
+    return { cameos: store.project.cameos, scenes: store.project.scenes };
+  },
+}));
+
+const { deps, startCameoResearch, startSceneResearch } = await import('./researchSeed.js');
 const { musicVideoEvents } = await import('./events.js');
 
 const photo = (width, height) => sharp({ create: { width, height, channels: 3, background: '#886644' } }).jpeg().toBuffer();
@@ -19,7 +27,7 @@ const answer = (images) => JSON.stringify({ images });
 const original = { ...deps };
 
 beforeEach(() => {
-  store.project = { id: 'mv-1', scenes: [{ sceneId: 's1', frameReferenceIds: ['set'] }] };
+  store.project = { id: 'mv-1', scenes: [{ sceneId: 's1', frameReferenceIds: ['set'] }], cameos: [{ cameoId: 'mvcam-1', name: 'Example Dog', references: [] }] };
   let n = 0;
   deps.saveImage = vi.fn(async () => ({ filename: `upload-${++n}.png` }));
   deps.resolve = vi.fn(async ({ providerId }) => ({ provider: { id: providerId, type: providerId === 'api' ? 'api' : 'cli', enabled: true }, selectedModel: null }));
@@ -27,8 +35,8 @@ beforeEach(() => {
 afterEach(() => Object.assign(deps, original));
 
 const settle = () => new Promise((resolve) => {
-  const on = (event) => { if (event.status !== 'running') { musicVideoEvents.off('scene-research', on); resolve(event); } };
-  musicVideoEvents.on('scene-research', on);
+  const on = (event) => { if (event.status !== 'running') { musicVideoEvents.off('research-seed', on); resolve(event); } };
+  musicVideoEvents.on('research-seed', on);
 });
 
 describe('Research and seed imports', () => {
@@ -89,5 +97,17 @@ describe('startSceneResearch', () => {
     const [scene] = store.project.scenes;
     expect(scene.researchReferences).toEqual([expect.objectContaining({ imageId: 'upload-1.png', subject: 'Example Breed', pageUrl: 'https://example.com/a' })]);
     expect(scene.frameReferenceIds).toEqual([scene.researchReferences[0].id, 'set']);
+  });
+});
+
+describe('startCameoResearch', () => {
+  // Uniquely catches cameo research photos missing their research source or source link.
+  it('adds the photos to the cameo as research references and announces the saved project', async () => {
+    deps.fetchImage = vi.fn(async () => ({ buffer: await photo(800, 800), contentType: 'image/jpeg' }));
+    deps.run = vi.fn(async () => ({ text: answer([{ imageUrl: 'https://example.com/a.jpg', pageUrl: 'https://example.com/a' }]) }));
+    const settled = settle();
+    await startCameoResearch('mv-1', 'mvcam-1', { subject: 'Example Dog', providerId: 'claude' }, { hasHostControl: true });
+    expect(await settled).toMatchObject({ cameoId: 'mvcam-1', status: 'done', added: 1 });
+    expect(store.project.cameos[0].references).toEqual([expect.objectContaining({ imageId: 'upload-1.png', source: 'research', pageUrl: 'https://example.com/a' })]);
   });
 });

@@ -54,8 +54,11 @@ export const proposeMusicVideoStory = (id, body, options = {}) => request(`/musi
 export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-// Research and seed (#14822): 202 { status: 'running' }; the result arrives as `music-video:scene-research`.
+// Research and seed (#14822): 202 { status: 'running' }; the result arrives as `music-video:research-seed`.
 export const startMusicVideoSceneResearch = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/research-seed`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const startMusicVideoCameoResearch = (id, cameoId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/research-seed`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 export const applyMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/apply`, {
@@ -764,3 +767,26 @@ export const musicVideoDcpEventsUrl = jobId => `/api/music-video/dcp/${encodeURI
 export const cancelMusicVideoDcp = (jobId, options = {}) => request(`/music-video/dcp/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 export const getMusicVideoDcpLocation = (id, artifactId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/location`, options);
 export const musicVideoDcpReportUrl = (id, artifactId) => `/api/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/report`;
+
+// Cameos (#14821): every call answers `{ cameos, scenes, updatedAt }` (plus the
+// cameos a create made), since a still change refills the shots linked to it.
+const cameoJson = (method, body, options) => ({ method, ...(body ? { body: JSON.stringify(body) } : {}), ...options });
+export const createMusicVideoCameos = (id, cameos, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos`, cameoJson('POST', { cameos }, options));
+export const updateMusicVideoCameo = (id, cameoId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}`, cameoJson('PATCH', patch, options));
+export const deleteMusicVideoCameo = (id, cameoId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}`, cameoJson('DELETE', null, options));
+export const addMusicVideoCameoReferences = (id, cameoId, references, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/references`, cameoJson('POST', { references }, options));
+export const removeMusicVideoCameoReference = (id, cameoId, imageId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/references/remove`, cameoJson('POST', { imageId }, options));
+export const addMusicVideoCameoVariant = (id, cameoId, variant, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants`, cameoJson('POST', variant, options));
+export const updateMusicVideoCameoVariant = (id, cameoId, variantId, patch, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants/${encodeURIComponent(variantId)}`, cameoJson('PATCH', patch, options));
+export const deleteMusicVideoCameoVariant = (id, cameoId, variantId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants/${encodeURIComponent(variantId)}`, cameoJson('DELETE', null, options));
+export const linkMusicVideoCameoShots = (id, cameoId, { sceneIds, variantId = null }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/shots`, cameoJson('POST', { sceneIds, variantId }, options));
+export const setMusicVideoCameoStillFromShot = (id, cameoId, { sceneId, variantId = null }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/still-from-shot`, cameoJson('POST', { sceneId, variantId }, options));
+export const unlinkMusicVideoCameoShots = (id, sceneIds, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameo-links/clear`, cameoJson('POST', { sceneIds }, options));

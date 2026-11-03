@@ -50,6 +50,7 @@ import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRo
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
+import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
 
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
@@ -658,6 +659,7 @@ function carryOver(prior, fresh) {
     ...(prior.photoSequence ? { photoSequence: prior.photoSequence, ...(prior.visualLayer === 'still' ? { visualLayer: 'still' } : {}) } : {}),
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
+    ...(prior.cameoId ? { cameoId: prior.cameoId, ...(prior.cameoVariantId ? { cameoVariantId: prior.cameoVariantId } : {}), ...(prior.cameoLabel ? { cameoLabel: prior.cameoLabel } : {}) } : {}),
   };
 }
 
@@ -756,7 +758,27 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage'];
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage',
+  'cameoId', 'cameoVariantId', 'cameoLabel'];
+
+/**
+ * A shot linked to another roster cameo (or variant) trades the still it
+ * inherited for the new cameo's; a shot with its own still keeps it (#14821).
+ */
+function linkSceneCameo(project, before, after) {
+  const cameoId = after.cameoId || null;
+  const cameo = findMusicVideoCameo(project, cameoId);
+  if (cameoId && !cameo) throw new ServerError('Cameo not found', { status: 404, code: 'NOT_FOUND' });
+  const variantId = cameo ? after.cameoVariantId || null : null;
+  if (variantId && !(cameo.variants || []).some((v) => v.variantId === variantId)) {
+    throw new ServerError('That variant is not on this cameo', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const linked = { ...after, cameoId, cameoVariantId: variantId };
+  if (!cameoId) { delete linked.cameoId; delete linked.cameoVariantId; delete linked.cameoLabel; }
+  else if (!variantId) delete linked.cameoVariantId;
+  const relinked = before.cameoId !== cameoId || (before.cameoVariantId || null) !== variantId;
+  return relinked ? fillSceneFromCameo(linked, cameoStillFor(cameo, variantId)) : linked;
+}
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -779,7 +801,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
-  const updated = touchesSlot ? { ...merged, takes: ensureSceneTakes(merged, undefined, 'manual') } : merged;
+  const slotted = touchesSlot ? { ...merged, takes: ensureSceneTakes(merged, undefined, 'manual') } : merged;
+  const updated = ('cameoId' in data || 'cameoVariantId' in data) ? linkSceneCameo(project, scenes[idx], slotted) : slotted;
   // The partial-patch schema can't enforce endSec >= startSec (the paired value
   // may be unchanged on the record), so validate the merged range here.
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {

@@ -100,10 +100,10 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Derived render cleanup changed; refresh the project render inventory.',
     payloadSchema: { type: 'object', required: ['projectId'], properties: { projectId: { type: 'string' } }, additionalProperties: false },
   },
-  'music-video:scene-research': {
-    direction: 'server-to-client', summary: 'Research and seed for a shot started, imported photos (with the saved project), or failed.',
-    payloadSchema: { type: 'object', required: ['projectId', 'sceneId', 'status'], properties: {
-      projectId: { type: 'string' }, sceneId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed'] },
+  'music-video:research-seed': {
+    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), or failed.',
+    payloadSchema: { type: 'object', required: ['projectId', 'status'], properties: {
+      projectId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed'] },
       subject: { type: 'string' }, added: { type: 'integer' }, error: { type: 'string' }, project: { type: 'object' },
     }, additionalProperties: false },
   },

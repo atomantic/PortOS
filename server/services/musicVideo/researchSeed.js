@@ -9,7 +9,7 @@
  * captions, page text) reaches an image or video model, and the reference label
  * is the director's own subject. Downloads go through the SSRF-guarded public
  * fetch with private hosts blocked, and only decodable images are kept.
- * `researchSubjectImages` is the reusable core, for the cameo roster (#14821) to export when it adds research.
+ * Shots (`scene.researchReferences`) and roster cameos (#14821) share the run.
  */
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -19,6 +19,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, findMusicVideoCameo } from '../../lib/musicVideoCameos.js';
 import { musicVideoEvents } from './events.js';
 import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
@@ -42,7 +43,6 @@ export const deps = {
 };
 
 const running = new Set();
-const runKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
 /** The exact prompt the research agent receives: fixed instructions plus the director's subject. */
 function researchSeedPrompt(subject, count) {
@@ -147,48 +147,81 @@ function addResearchReferences(project, sceneId, subject, images) {
   return { patch, added };
 }
 
-const emit = (payload) => musicVideoEvents.emit('scene-research', payload);
+const emit = (payload) => musicVideoEvents.emit('research-seed', payload);
 
 /**
- * Start Research and seed for one shot. `preview` answers with the prompt the
- * agent would get. Otherwise the run continues in the background and settles
- * as a `scene-research` event carrying the saved project; answers `{ status: 'running' }`.
+ * Shared run for a shot or a cameo: `target` names it in events (`{ sceneId }`
+ * or `{ cameoId }`), `room` is how many photos it can still hold, and
+ * `save(images)` stores the imported photos, resolving to `{ project, added }`.
+ * `preview` answers with the prompt the agent would get; otherwise the run
+ * continues in the background, settles as a `research-seed` event carrying the
+ * saved project, and this answers `{ status: 'running' }`.
  */
-export async function startSceneResearch(projectId, sceneId, input, { hasHostControl = false } = {}) {
-  const project = await requireProject(projectId);
-  const scene = (project.scenes || []).find((s) => s.sceneId === sceneId);
-  if (!scene) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+async function startResearch({ projectId, target, what, room, limit, input, hasHostControl, save }) {
   const subject = input.subject.trim();
-  const room = MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT - (scene.researchReferences?.length || 0);
   const count = Math.min(input.count || RESEARCH_SEED_DEFAULT_COUNT, Math.max(room, 0));
   const sentPrompt = researchSeedPrompt(subject, count || RESEARCH_SEED_DEFAULT_COUNT);
   // Everything after the subject line is PortOS's own instruction block (#11317).
   const promptAdditions = [{ id: 'research-seed-instructions', label: 'Research instructions', text: sentPrompt.split('\n').slice(2).join('\n') }];
   if (input.preview) return { status: 'preview', sentPrompt, promptAdditions };
-  if (count < 1) throw new ServerError(`This shot already has ${MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT} research photos. Drop one first.`, { status: 409, code: 'RESEARCH_FULL' });
-  const key = runKey(projectId, sceneId);
-  if (running.has(key)) throw new ServerError('Research is already running for this shot.', { status: 409, code: 'RESEARCH_RUNNING' });
+  if (count < 1) throw new ServerError(`This ${what} already has ${limit} photos. Remove one first.`, { status: 409, code: 'RESEARCH_FULL' });
+  const key = `${projectId}:${target.sceneId || target.cameoId}`;
+  if (running.has(key)) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING' });
   const resolved = await resolveResearchProvider(input, hasHostControl);
   running.add(key);
-  emit({ projectId, sceneId, status: 'running', subject });
+  const label = `${what} ${target.sceneId || target.cameoId} of ${projectId}`;
+  emit({ projectId, ...target, status: 'running', subject });
   (async () => {
     const found = await researchSubjectImages({ ...input, subject, count, resolved });
     if (!found.images.length) {
       throw new ServerError(found.candidates ? `None of the ${found.candidates} photos the agent found could be downloaded as images.` : 'The agent found no photo links.', { code: 'RESEARCH_EMPTY' });
     }
-    const { applySceneUpdate } = await import('./projectsLogic.js');
-    let added = [];
-    const outcome = await mutateProjectRecord(projectId, (current) => {
-      const next = addResearchReferences(current, sceneId, subject, found.images);
-      added = next.added;
-      return applySceneUpdate(current, sceneId, next.patch);
-    });
-    console.log(`🔎 Research and seed: ${added.length} photo(s) for shot ${sceneId} of ${projectId}`);
-    emit({ projectId, sceneId, status: 'done', subject, added: added.length, project: outcome.project });
+    const { project, added } = await save(subject, found.images);
+    console.log(`🔎 Research and seed: ${added} photo(s) for ${label}`);
+    emit({ projectId, ...target, status: 'done', subject, added, project });
   })().catch((err) => {
-    if (err?.code === 'RESEARCH_EMPTY') console.log(`⏭️ Research and seed found nothing usable for shot ${sceneId} of ${projectId}: ${err.message}`);
-    else console.error(`❌ Research and seed failed for shot ${sceneId} of ${projectId}: ${err?.message}`);
-    emit({ projectId, sceneId, status: 'failed', subject, error: String(err.message || 'Research failed').slice(0, 300) });
+    if (err?.code === 'RESEARCH_EMPTY') console.log(`⏭️ Research and seed found nothing usable for ${label}: ${err.message}`);
+    else console.error(`❌ Research and seed failed for ${label}: ${err?.message}`);
+    emit({ projectId, ...target, status: 'failed', subject, error: String(err?.message || 'Research failed').slice(0, 300) });
   }).finally(() => running.delete(key));
   return { status: 'running', sentPrompt, promptAdditions };
+}
+
+/** Research and seed for one shot: the photos land on `scene.researchReferences`. */
+export async function startSceneResearch(projectId, sceneId, input, { hasHostControl = false } = {}) {
+  const project = await requireProject(projectId);
+  const scene = (project.scenes || []).find((s) => s.sceneId === sceneId);
+  if (!scene) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+  return startResearch({
+    projectId, target: { sceneId }, what: 'shot', limit: MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT,
+    room: MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT - (scene.researchReferences?.length || 0), input, hasHostControl,
+    save: async (subject, images) => {
+      const { applySceneUpdate } = await import('./projectsLogic.js');
+      let added = [];
+      const outcome = await mutateProjectRecord(projectId, (current) => {
+        const next = addResearchReferences(current, sceneId, subject, images);
+        added = next.added;
+        return applySceneUpdate(current, sceneId, next.patch);
+      });
+      return { project: outcome.project, added: added.length };
+    },
+  });
+}
+
+/** Research and seed for a roster cameo (#14821): the photos join its reference photos. */
+export async function startCameoResearch(projectId, cameoId, input, { hasHostControl = false } = {}) {
+  const project = await requireProject(projectId);
+  const cameo = findMusicVideoCameo(project, cameoId);
+  if (!cameo) throw new ServerError('Cameo not found', { status: 404, code: 'NOT_FOUND' });
+  return startResearch({
+    projectId, target: { cameoId }, what: 'cameo', limit: MUSIC_VIDEO_CAMEO_MAX_REFERENCES,
+    room: MUSIC_VIDEO_CAMEO_MAX_REFERENCES - (cameo.references?.length || 0), input, hasHostControl,
+    save: async (_subject, images) => {
+      const { addCameoReferences } = await import('./cameos.js');
+      const before = (cameo.references || []).length;
+      await addCameoReferences(projectId, cameoId, images.map((image) => ({ ...image, source: 'research' })));
+      const saved = await requireProject(projectId);
+      return { project: saved, added: Math.max(0, (findMusicVideoCameo(saved, cameoId)?.references?.length ?? before) - before) };
+    },
+  });
 }

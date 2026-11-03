@@ -6,7 +6,8 @@ import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from '../../lib/codexAccount.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
 import { effectiveModelAccess, scopeModelsByAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
@@ -53,6 +54,28 @@ async function resolveOllamaVisionModel(provider, selectedModel, pinned) {
   );
 }
 
+// Codex on its subscription attaches the image with `codex exec -i` and runs the
+// one-shot in a read-only sandbox, so image text cannot reach a host-writing tool.
+const isCodexVisionReviewer = (provider) => provider?.type === 'cli' && isCodexSubscriptionProvider(provider) && isAuthoringOneShotProvider(provider);
+const canReviewImages = (provider) => (provider?.type === 'api' && isToolFreeOneShotProvider(provider)) || isCodexVisionReviewer(provider);
+
+// `enabled` alone doesn't mean the binary is installed: a scaffolded Codex must not
+// displace a working API reviewer when these runs refuse fallback.
+async function readyCodexReviewer() {
+  const { getAllProviders } = await import('../providers.js');
+  const configured = (await getAllProviders().catch(() => null))?.providers || [];
+  const candidates = configured.filter((entry) => entry.enabled !== false && isCodexVisionReviewer(entry));
+  if (!candidates.length) return null;
+  const { getProviderPrerequisiteReadinessMap } = await import('../providerPrerequisites.js');
+  const readiness = await getProviderPrerequisiteReadinessMap(configured, { candidates }).catch(() => ({}));
+  const installed = candidates.find((entry) => readiness[entry.id]?.status === 'ready');
+  if (!installed) return null;
+  // That map only peeks at the account cache, which is cold after a restart; this user-started run reads it.
+  const { getCodexAccountReadiness } = await import('../codexAppServer.js');
+  const account = await getCodexAccountReadiness().catch(() => null);
+  return account?.status === CODEX_ACCOUNT_STATUS.ready ? installed : null;
+}
+
 export async function resolvePlateReviewer(reviewer = {}) {
   const { resolveProviderAndModel, resolveEffectiveModel } = await import('../promptRunner.js');
   let provider;
@@ -60,12 +83,12 @@ export async function resolvePlateReviewer(reviewer = {}) {
   if (reviewer.providerId) {
     ({ provider, selectedModel } = await resolveProviderAndModel(reviewer));
   } else {
-    const { resolveAPIProvider } = await import('../aiProvider.js');
-    provider = await resolveAPIProvider();
+    // Codex caught real render defects that every local vision model missed (#14814), so an enabled Codex is the default.
+    provider = await readyCodexReviewer();
+    if (!provider) provider = await (await import('../aiProvider.js')).resolveAPIProvider();
     selectedModel = provider ? resolveEffectiveModel(provider, reviewer.model) : null;
   }
-  // The vision runner must never use a host-tool CLI to interpret image text.
-  if (!provider || provider.enabled === false || provider.type !== 'api' || !isToolFreeOneShotProvider(provider)) throw new Error('No enabled vision API reviewer is configured. Configure an API provider for image inspection.');
+  if (!provider || provider.enabled === false || !canReviewImages(provider)) throw new Error('No enabled vision reviewer is configured. Configure Codex or an API provider for image inspection.');
   if ((reviewer?.providerId && provider.id !== reviewer.providerId) || (reviewer?.model && selectedModel !== reviewer.model)) throw new Error('The selected plate reviewer is unavailable');
   selectedModel = await resolveOllamaVisionModel(provider, selectedModel, Boolean(reviewer.model));
   return { provider, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };
@@ -77,7 +100,7 @@ export async function reviewPlate({ scene, assetId, runId, reviewer, beforeExecu
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
   const result = await runPromptThroughProvider({ provider: reviewer.provider, model: reviewer.model, prompt,
     screenshots: [imagePath], source: 'music-video-plate-review', timeout: reviewer.provider.timeout || 120000,
-    beforeExecute, allowFallback: false });
+    toolFree: true, beforeExecute, allowFallback: false });
   assertVisionRunUsedImages(result, reviewer.provider);
   if (result.provider?.id !== reviewer.provider.id || (reviewer.model && result.model !== reviewer.model)) throw new Error('Plate review ran on a different provider or model');
   return plateReviewEvidence(scene, assetId, runId, result.text, { providerId: reviewer.provider.id, model: result.model || reviewer.model, providerRunId: result.runId || null });
@@ -107,7 +130,7 @@ export async function reviewPlateStrip({ strip, runId, reviewer, beforeExecute }
     const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('../promptRunner.js');
     const result = await runPromptThroughProvider({ provider: reviewer.provider, model: reviewer.model, prompt,
       screenshots: [file], source: 'music-video-plate-strip-review', timeout: reviewer.provider.timeout || 120000,
-      beforeExecute, allowFallback: false });
+      toolFree: true, beforeExecute, allowFallback: false });
     assertVisionRunUsedImages(result, reviewer.provider);
     if (result.provider?.id !== reviewer.provider.id || (reviewer.model && result.model !== reviewer.model)) throw new Error('Plate strip review ran on a different provider or model');
     return { findings: plateStripFindings(strip, result.text), providerId: reviewer.provider.id, model: result.model || reviewer.model, providerRunId: result.runId || null };

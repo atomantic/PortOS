@@ -5,7 +5,11 @@ const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisi
   resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
 const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));
 const ollama = vi.hoisted(() => ({ getBaseUrl: vi.fn(() => 'http://localhost:11434'), getModelCapabilities: vi.fn(), getInstalledModels: vi.fn() }));
+const prerequisites = vi.hoisted(() => ({ getProviderPrerequisiteReadinessMap: vi.fn(async (_all, { candidates }) => Object.fromEntries(candidates.map((p) => [p.id, { status: 'ready' }]))) }));
 vi.mock('../providers.js', () => providers);
+const codexAccount = vi.hoisted(() => ({ getCodexAccountReadiness: vi.fn(async () => ({ status: 'ready' })) }));
+vi.mock('../providerPrerequisites.js', () => prerequisites);
+vi.mock('../codexAppServer.js', () => codexAccount);
 vi.mock('../promptRunner.js', () => runner);
 vi.mock('../ollamaManager.js', () => ollama);
 vi.mock('sharp', () => ({ default: () => ({ resize: () => ({ png: () => ({ toBuffer: async () => Buffer.alloc(1) }) }), composite: () => ({ png: () => ({ toFile: async () => {} }) }) }) }));
@@ -61,9 +65,36 @@ describe('plate evidence admission', () => {
     expect(await resolvePlateReviewer({ providerId: api.id, model: 'pinned-model' })).toMatchObject({ model: 'pinned-model' });
     await expect(resolvePlateReviewer({ providerId: 'missing', model: 'pinned-model' })).rejects.toThrow('selected plate reviewer is unavailable');
     runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'cli', type: 'cli', enabled: true }, selectedModel: 'm' });
-    await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/vision API reviewer/);
+    await expect(resolvePlateReviewer({ providerId: 'cli' })).rejects.toThrow(/No enabled vision reviewer/);
     providers.getAllProviders.mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, { ...api, enabled: false }] });
-    await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision API reviewer is configured');
+    await expect(resolvePlateReviewer({})).rejects.toThrow('No enabled vision reviewer is configured');
+  });
+
+  // Uniquely catches the default falling back to a local reviewer that caught 0 of 16 real defects (#14814) while Codex is set up.
+  it('defaults to Codex on its subscription, never a local-runtime Codex or a tool-capable CLI', async () => {
+    const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
+    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true, defaultModel: 'codex-model' };
+    const localCodex = { id: 'codex-ollama', type: 'cli', command: 'codex', enabled: true, ollamaBacked: true, defaultModel: 'local-model' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [localCodex, api, codex] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: codex, model: 'codex-model', costUsd: null });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [localCodex, api, { ...codex, enabled: false }] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    // An enabled but uninstalled or signed-out Codex must not displace a working API reviewer.
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [api, codex] });
+    prerequisites.getProviderPrerequisiteReadinessMap.mockResolvedValueOnce({ codex: { status: 'blocked', reasonCodes: ['runtime'] } });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    // The account read, not the cold prerequisite cache, decides a signed-out Codex.
+    codexAccount.getCodexAccountReadiness.mockResolvedValueOnce({ status: 'signed-out' });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    codexAccount.getCodexAccountReadiness.mockRejectedValueOnce(new Error('app-server unavailable'));
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    const pathCodex = { ...codex, command: '/usr/local/bin/codex' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [api, pathCodex] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: pathCodex });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: localCodex, selectedModel: 'local-model' });
+    await expect(resolvePlateReviewer({ providerId: 'codex-ollama' })).rejects.toThrow(/No enabled vision reviewer/);
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'claude', type: 'cli', command: 'claude', enabled: true }, selectedModel: 'm' });
+    await expect(resolvePlateReviewer({ providerId: 'claude' })).rejects.toThrow(/No enabled vision reviewer/);
   });
 
   it('uses a verified local vision model for an unpinned text-only default and refuses a pinned text-only reviewer', async () => {

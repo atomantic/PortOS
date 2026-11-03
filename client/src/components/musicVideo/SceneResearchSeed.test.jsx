@@ -26,7 +26,7 @@ describe('a shot\'s Research and seed step', () => {
     expect(start).toHaveBeenCalledWith('mv-1', 's1', expect.objectContaining({ subject: 'Example Breed', count: 3, providerId: 'example-api' }), { silent: true });
 
     const saved = { ...scene, researchReferences: [photo], frameReferenceIds: [photo.id, 'set'] };
-    act(() => handlers.get('music-video:scene-research')({ projectId: 'mv-1', sceneId: 's1', status: 'done', added: 1, project: { scenes: [saved] } }));
+    act(() => handlers.get('music-video:research-seed')({ projectId: 'mv-1', sceneId: 's1', status: 'done', added: 1, project: { scenes: [saved] } }));
     expect(onEditLocal).toHaveBeenCalledWith('s1', { researchReferences: [photo], frameReferenceIds: [photo.id, 'set'] });
     expect(screen.getByRole('status').textContent).toContain('Added 1 photo');
 

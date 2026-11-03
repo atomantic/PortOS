@@ -70,6 +70,10 @@ import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, 
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
+import {
+  MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES,
+  MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES, MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN,
+} from './musicVideoCameos.js';
 import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -1867,7 +1871,66 @@ export const musicVideoSceneUpdateSchema = z.object({
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.
   lastFailure: musicVideoSceneLastFailureSchema.nullable().optional(),
+  // #14821: the roster cameo this shot shows (null unlinks), and the cameo's variant it picks.
+  cameoId: z.string().regex(MUSIC_VIDEO_CAMEO_ID_PATTERN, 'Invalid cameo id').nullable().optional(),
+  cameoVariantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN, 'Invalid variant id').nullable().optional(),
+  // This shot's own on-screen name for its cameo (an alias, e.g. Spoodle for the Cockapoo); null uses the cameo's label.
+  cameoLabel: z.string().trim().max(120).nullable().optional(),
   ...scenePanelFields,
+}).strict();
+
+// Music Video cameo roster (#14821, lib/musicVideoCameos.js).
+const cameoImageIdSchema = z.string().max(256).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'Image must be a gallery basename ending in png/jpg/webp');
+const cameoUrlSchema = z.string().trim().url().max(2000).refine((u) => /^https?:\/\//i.test(u), 'Only http(s) links');
+const cameoTextFields = {
+  name: z.string().trim().min(1).max(120),
+  // What the video shows on screen; empty means the name.
+  label: z.string().trim().max(120).optional(),
+  description: z.string().trim().max(4000).optional(),
+};
+export const musicVideoCameoResearchSchema = z.object({
+  status: z.enum(MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES).optional(),
+  notes: z.string().trim().max(8000).optional(),
+  sources: z.array(z.object({ url: cameoUrlSchema, title: z.string().trim().max(300).optional() }).strict())
+    .max(MUSIC_VIDEO_CAMEO_MAX_SOURCES).optional(),
+}).strict();
+export const musicVideoCameoReferenceInputSchema = z.object({
+  imageId: cameoImageIdSchema,
+  source: z.enum(MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES).optional(),
+  // The image file a researched photo came from, and the page it was found on.
+  sourceUrl: cameoUrlSchema.optional(),
+  pageUrl: cameoUrlSchema.optional(),
+}).strict();
+export const musicVideoCameoCreateSchema = z.object({
+  cameos: z.array(z.object(cameoTextFields).strict()).min(1).max(MUSIC_VIDEO_MAX_CAMEOS),
+}).strict();
+export const musicVideoCameoUpdateSchema = z.object({
+  name: cameoTextFields.name.optional(),
+  label: cameoTextFields.label,
+  description: cameoTextFields.description,
+  research: musicVideoCameoResearchSchema.optional(),
+  stillImageId: cameoImageIdSchema.nullable().optional(),
+}).strict();
+export const musicVideoCameoReferencesAddSchema = z.object({
+  references: z.array(musicVideoCameoReferenceInputSchema).min(1).max(MUSIC_VIDEO_CAMEO_MAX_REFERENCES),
+}).strict();
+export const musicVideoCameoReferenceRemoveSchema = z.object({ imageId: cameoImageIdSchema }).strict();
+export const musicVideoCameoVariantCreateSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  // How the variant differs from the chosen still (the instruction a shot's Refine renders it with).
+  prompt: z.string().max(2000).optional(),
+  imageId: cameoImageIdSchema.nullable().optional(),
+}).strict();
+export const musicVideoCameoVariantUpdateSchema = musicVideoCameoVariantCreateSchema.partial().strict();
+export const musicVideoCameoLinkSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500),
+  variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN).nullable().optional(),
+}).strict();
+export const musicVideoCameoUnlinkSchema = z.object({ sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500) }).strict();
+// Use a linked shot's selected still as the cameo's still, or one variant's.
+export const musicVideoCameoStillFromShotSchema = z.object({
+  sceneId: z.string().min(1).max(64),
+  variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN).nullable().optional(),
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.

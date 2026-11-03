@@ -107,6 +107,7 @@ import {
   deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
+import { mergeCameoScenes } from '../lib/musicVideoCameos.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
@@ -1622,6 +1623,12 @@ function ProjectWorkspace({
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
+    // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
+    applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({
+      cameos,
+      scenes: mergeCameoScenes(p.scenes, scenes),
+      ...(updatedAt ? { updatedAt } : {}),
+    })),
     // Only labels still empty here: an edit made while the request ran keeps its own.
     applyReferenceLabels: (labels) => patchProject(selected.id, (p) => ({ visualSpec: { ...(p.visualSpec || {}),
       references: (p.visualSpec?.references || []).map((ref) => (labels[ref.id] && !ref.label?.trim() ? { ...ref, label: labels[ref.id] } : ref)) } })),

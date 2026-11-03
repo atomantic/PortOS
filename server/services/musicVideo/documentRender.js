@@ -6,6 +6,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
+import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -16,7 +17,7 @@ import { titleCardRuntime } from './titleCardFonts.js';
  * adds the data the document draws from, before the snapshot freezes:
  *
  *   portos-mv.js  `window.PORTOS_MV = { project, render, song, lyrics, lyricMarkers,
- *                  scenes, textCues, composition }` — read with a plain <script>,
+ *                  scenes, cameos, textCues, composition }` — read with a plain <script>,
  *                  (scenes carry textZone/lyricRole for the shared lyricType.js),
  *                  no fetch (the sandbox refuses network).
  *   song.json     the same song block the code-rendered mode reads.
@@ -246,6 +247,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         lyricText: typeof scene.lyricText === 'string' ? scene.lyricText : null,
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),
+        // #14821: the roster cameo the shot shows, so a page can label a placeholder until its still exists.
+        ...documentSceneCameo(project, scene),
         media: m ? {
           kind: m.kind, src: mediaSrc(scene.sceneId, m),
           ...(m.end ? { end: { src: mediaSrc(`${scene.sceneId}-end`, m.end) } } : {}),
@@ -290,6 +293,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
     lyrics,
     lyricMarkers: Array.isArray(project?.lyricMarkers) ? project.lyricMarkers : [],
     scenes,
+    cameos: documentCameos(project),
     effectFrames,
     // Where and when the title card shows, so the lyric type keeps its default zones off it.
     titleCard: titleCardVisible(project?.titleCard)
