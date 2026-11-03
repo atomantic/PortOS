@@ -1493,6 +1493,7 @@ const REVIEWED_PROCESS_SITES = [
   ['server/services/dataManager.js#getDirSizeAndCount', HOST_QUERY],
   ['server/services/git.js#isRepo', GIT_PROBE],
   ['server/services/github.js#getGitHubAuthStatus', GIT_PROBE],
+  ['server/services/maintenanceProcessInventory.js#snapshotMaintenanceProcesses', HOST_QUERY],
   ['server/services/github.js#probeGh', GIT_PROBE],
   ['server/services/imageGen/mossRuntime.js#probeMossBinary', VERSION_PROBE],
   ['server/services/itermAuth.js#isItermRunning', HOST_QUERY],

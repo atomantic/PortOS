@@ -72,6 +72,7 @@ import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
+import { startAutomaticUpdateReservationRecovery, stopAutomaticUpdateReservationRecovery } from './automaticUpdateReservationRecovery.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
@@ -1011,7 +1012,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // no-op it: the reconcile needs a database the hermetic root does not have.
     initLoraTraining,
     initMediaJobDependentHooks,
-    resumeMediaJobCompletions,
+    resumeMediaJobCompletions: () => {
+      resumeMediaJobCompletions();
+      startAutomaticUpdateReservationRecovery();
+    },
 
     // Sharing: attach chokidar watchers to every registered share bucket so
     // incoming manifests from peers are picked up live. Backlog processing
@@ -1257,6 +1261,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // disarming timers that could launch work while shutdown is suspended.
     stopIdleReaper();
     stopHarnessActionRecovery();
+    stopAutomaticUpdateReservationRecovery();
     stopHostedSessionSweep();
     stopBeeperSocket();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())

@@ -971,6 +971,8 @@ export * from './forgeMaintenanceTasks.js';
 
 export * from './maintenanceAdmission.js';
 export * from './maintenanceDeferredUpdate.js';
+export * from './maintenanceSettlementRetry.js';
+export * from './mediaRecoveryActivity.js';
 export * from './maintenanceHarnessAction.js';
 export * from './updateImageGuard.js';
 export * from './maintenanceExclusive.js';

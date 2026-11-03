@@ -279,6 +279,7 @@ $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $diagnosticFile = Join-Path $dir 'supervisor-bootstrap.log'
 ${WINDOWS_BOOTSTRAP_DIAGNOSTIC}
 $started = $false
+$preserveStarted = $false
 function Test-LaunchCancelled {
   return (!(Test-Path -LiteralPath $dir) -or (Test-Path -LiteralPath (Join-Path $dir 'launch-cancelled')))
 }
@@ -286,6 +287,7 @@ try {
   $ErrorActionPreference = 'Stop'
   Write-BootstrapStage 'reading-job'
   $job = Get-Content -LiteralPath (Join-Path $dir 'job.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $preserveStarted = $job.preserveStartedOnBootstrapError -eq $true
   $params = @{
     FilePath               = $job.bin
     RedirectStandardOutput = (Join-Path $dir 'stdout.log')
@@ -333,9 +335,11 @@ try {
   $failureCode = $_.Exception.HResult
   try { Write-BootstrapStage 'failed' $failureCode } catch { }
   try {
-    if ($started -and !$p.HasExited) { & taskkill /pid $p.Id /T /F 2>$null | Out-Null }
+    if ($started -and !$preserveStarted -and !$p.HasExited) { & taskkill /pid $p.Id /T /F 2>$null | Out-Null }
   } catch { }
-  try { [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1') } catch { }
+  if (!$started -or !$preserveStarted) {
+    try { [System.IO.File]::WriteAllText((Join-Path $dir 'exit'), '1') } catch { }
+  }
 }
 `;
 
@@ -360,7 +364,7 @@ const quoteWindowsArg = (arg) => {
  * (The supervisor's own launch of the job passes `-NoNewWindow` for the same
  * reason; `-WindowStyle Hidden` would NOT set `CreateNoWindow`.)
  */
-async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher }) {
+async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher, preserveStartedOnBootstrapError }) {
   const supervisorPath = join(controlDir, 'supervisor.ps1');
   // Independent files — write them together rather than serializing two
   // round-trips in front of every launch.
@@ -369,6 +373,7 @@ async function launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observ
       bin,
       arguments: args.map(quoteWindowsArg).join(' '),
       cwd: cwd || null,
+      preserveStartedOnBootstrapError,
     }), 'utf8'),
     writeFile(supervisorPath, WINDOWS_SUPERVISOR, 'utf8'),
   ]);
@@ -446,9 +451,9 @@ async function readBootstrapDiagnostic(controlDir, name) {
  * @param {string} opts.controlDir - dir holding stdout.log/stderr.log/exit
  * @param {number} opts.pollMs - tail/poll cadence
  * @param {boolean} opts.cleanup - rm the controlDir once the job terminates
- * @returns {{ tick: () => Promise<void>, finish: () => Promise<void> }}
+ * @returns {{ tick: () => Promise<void>, finish: () => Promise<void>, stop: () => Promise<void> }}
  */
-function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
+function createLogTailer(handle, { controlDir, pollMs, cleanup, openLog = open }) {
   const exitFile = join(controlDir, 'exit');
   const stdoutLog = join(controlDir, 'stdout.log');
   const stderrLog = join(controlDir, 'stderr.log');
@@ -465,7 +470,7 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
   // bytesRead, so no per-tick stat is needed to find EOF.
   const drainLog = async (logPath) => {
     if (!fds[logPath]) {
-      fds[logPath] = await open(logPath, 'r').catch(() => null);
+      fds[logPath] = await openLog(logPath, 'r').catch(() => null);
       if (!fds[logPath]) return; // file not created yet (job hasn't started writing)
     }
     const fh = fds[logPath];
@@ -489,13 +494,32 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
 
   let closed = false;
   let timer = null;
-  const finish = async () => {
-    if (closed) return;
+  let draining = null;
+  let terminal = null;
+  const stop = () => {
+    if (terminal) return terminal;
+    if (closed) return Promise.resolve();
     closed = true;
     if (timer) clearTimeout(timer);
+    terminal = (async () => {
+      if (draining) await draining;
+      await closeFds();
+      handle.stdout.emit('end');
+      handle.stderr.emit('end');
+    })();
+    return terminal;
+  };
+  const finish = () => {
+    if (terminal) return terminal;
+    if (closed) return Promise.resolve();
+    closed = true;
+    if (timer) clearTimeout(timer);
+    terminal = (async () => {
     // Final drain so the job's last bytes (e.g. the RESULT:/result-JSON line a
     // hard os._exit can emit just before teardown) are delivered before 'end'.
-    await drainBoth();
+    draining = drainBoth();
+    await draining;
+    draining = null;
     await closeFds();
     handle.stdout.emit('end');
     handle.stderr.emit('end');
@@ -525,6 +549,8 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
     handle.signalCode = signal;
     handle.emit('close', code, signal);
     if (cleanup) rm(controlDir, { recursive: true, force: true }).catch(() => {});
+    })();
+    return terminal;
   };
 
   // Single poll tick: stream new output, then check for the exit sentinel. The
@@ -535,7 +561,10 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
   let replayedEmitted = false;
   const tick = async () => {
     if (closed) return;
-    await drainBoth();
+    draining = drainBoth();
+    await draining;
+    draining = null;
+    if (closed) return;
     // After the first drain, the entire pre-existing backlog has been emitted —
     // for a fresh spawn that's ~nothing, but for a reattach (#1332) it's the
     // whole replayed-from-offset-0 history. Fire a one-time 'replayed' so a
@@ -543,6 +572,7 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
     // wall-clock stall detector from arming on instantly-replayed step lines).
     if (!replayedEmitted) { replayedEmitted = true; handle.emit('replayed'); }
     const exited = await stat(exitFile).then((s) => s.size > 0).catch(() => false);
+    if (closed) return;
     if (exited) {
       await finish();
       return;
@@ -550,7 +580,7 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
     timer = setTimeout(() => { tick().catch((err) => handle.emit('error', err)); }, pollMs);
   };
 
-  return { tick, finish };
+  return { tick, finish, stop };
 }
 
 const markAbandoned = (writer) => {
@@ -562,16 +592,16 @@ const markAbandoned = (writer) => {
 // Process-table snapshot, POSIX only. `lstart` is fixed-format under LC_ALL=C;
 // an unparseable row throws rather than being skipped, because a skipped row
 // could be exactly the surviving writer a caller is looking for.
-const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s?(.*)$/;
+const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3} \w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s?(.*)$/;
 export async function snapshotProcesses() {
   if (process.platform === 'win32') throw new Error('Process-group snapshots are unavailable on Windows');
-  const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='],
+  const { stdout } = await execFileAsync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'stat=', '-o', 'lstart=', '-o', 'command='],
     safeChildProcessOptions({ timeout: 15000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' } }));
   const rows = stdout.split('\n').filter(line => line.trim()).map((line) => {
     const match = PS_ROW.exec(line);
-    const startedAt = match ? Date.parse(match[4]) : NaN;
+    const startedAt = match ? Date.parse(match[5]) : NaN;
     if (!match || !Number.isFinite(startedAt)) throw new Error('Unreadable process table');
-    return { pid: Number(match[1]), pgid: Number(match[2]), state: match[3], startedAt, command: match[5] };
+    return { pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), state: match[4], startedAt, command: match[6] };
   });
   if (!rows.some(row => row.pid === process.pid)) throw new Error('Incomplete process table');
   return rows;
@@ -656,7 +686,7 @@ export async function spawnDatabaseMaintenanceWorker(id, token) {
 
 async function spawnDetachedWithReservation(bin, args, {
   env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, pidTimeoutMs = PID_TIMEOUT_MS,
-  cleanup = false, killProcessGroup = false,
+  cleanup = false, killProcessGroup = false, onLaunchTimeout,
 }, reserveWriter) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
 
@@ -756,7 +786,8 @@ async function spawnDetachedWithReservation(bin, args, {
     child.once('close', () => { launcherClosed = true; recordLauncherStage('closed'); });
   };
   const launcher = isWindows
-    ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher })
+    ? await launchWindowsSupervisor({ controlDir, bin, args, env, cwd, observeLauncher,
+      preserveStartedOnBootstrapError: Boolean(onLaunchTimeout) })
       .catch((err) => { launcherSpawnError = err; return null; })
     : spawn('sh', ['-c', LAUNCHER, 'sh', controlDir, bin, ...args], {
       // Pin PWD to the spawn cwd — see withSpawnCwdEnv (#3193).
@@ -777,7 +808,8 @@ async function spawnDetachedWithReservation(bin, args, {
   // streaming new bytes as stdout/stderr 'data' and emitting 'close' on exit.
   // Factored out so reattachDetached (boot re-attach to a survivor — #1332) can
   // drive the exact same streaming machinery against an existing control dir.
-  const { tick, finish } = createLogTailer(handle, { controlDir, pollMs, cleanup });
+  const { tick, finish, stop } = createLogTailer(handle, { controlDir, pollMs, cleanup });
+  handle.stopTailing = stop;
 
   // Block until the supervisor records the job PID (the instant the job
   // spawns), so callers can rely on `handle.pid` right after `await
@@ -843,9 +875,14 @@ async function spawnDetachedWithReservation(bin, args, {
 
   let failureCleanupAllowed = true;
   if (isWindows && launchError) {
+    if (onLaunchTimeout) {
+      try { handle.launchTimeoutResult = await onLaunchTimeout(); }
+      catch (error) { handle.launchTimeoutError = error; }
+    }
     // Persist cancellation before returning or scheduling cleanup. A supervisor
     // still cold-starting must not launch an orphan after this failed handoff.
-    const cancellationWritten = await writeFile(join(controlDir, 'launch-cancelled'), '1').then(() => true, () => false);
+    const mayCancel = !onLaunchTimeout || ['canceled', 'unknown'].includes(handle.launchTimeoutResult?.state);
+    const cancellationWritten = mayCancel && await writeFile(join(controlDir, 'launch-cancelled'), '1').then(() => true, () => false);
     // A launcher exit does not prove its detached supervisor/job stopped. Keep
     // the cancellation marker and evidence until reconciliation can confirm it.
     // Only a failed native spawn with no process identity proves no child exists.
@@ -860,7 +897,7 @@ async function spawnDetachedWithReservation(bin, args, {
       readBootstrapDiagnostic(controlDir, 'launcher-bootstrap.log'),
       readBootstrapDiagnostic(controlDir, 'supervisor-bootstrap.log'),
     ]);
-    launchError = new Error(`detached spawn failed to acquire PID within ${pidTimeoutMs}ms; launcher=${launcherResult}; launcher-lifecycle=${launcherTimeline.join('>') || 'not-spawned'}; launcher-stage=${launcherStage}; supervisor-stage=${supervisorStage}; cancellation=${cancellationWritten ? 'written' : 'unconfirmed'}; cleanup=${cleanupState}`);
+    launchError = new Error(`detached spawn failed to acquire PID within ${pidTimeoutMs}ms; launcher=${launcherResult}; launcher-lifecycle=${launcherTimeline.join('>') || 'not-spawned'}; launcher-stage=${launcherStage}; supervisor-stage=${supervisorStage}; cancellation=${!mayCancel ? 'not-requested' : cancellationWritten ? 'written' : 'unconfirmed'}; cleanup=${cleanupState}`);
   }
 
   // Kick off tailing (or the launch-failure path) AFTER returning, so the
@@ -933,7 +970,7 @@ export async function isReattachable(controlDir) {
  * @param {boolean} [opts.cleanup] - rm the controlDir once the job terminates
  * @returns {Promise<object|null>} ChildProcess-like handle, or null if not reattachable
  */
-export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, cleanup = false } = {}) {
+export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, cleanup = false, deferTail = false } = {}) {
   // No platform gate: whether there is a survivor to re-attach to is a fact
   // about the CONTROL DIR, and the pid/exit probe below already answers it.
   // Every platform now writes those files (#6169, #6170), so a Windows job is
@@ -954,7 +991,14 @@ export async function reattachDetached(controlDir, { pollMs = DEFAULT_POLL_MS, c
   const { tick } = createLogTailer(handle, { controlDir, pollMs, cleanup });
   // Defer the first tick so the caller's synchronous .on('data'|'close'|'error')
   // listeners are wired before any event fires (matches spawnDetached timing).
-  setImmediate(() => { tick().catch((err) => handle.emit('error', err)); });
+  let started = false;
+  const startTail = () => {
+    if (started) return;
+    started = true;
+    setImmediate(() => { tick().catch((err) => handle.emit('error', err)); });
+  };
+  if (deferTail) handle.startTail = startTail;
+  else startTail();
   return handle;
 }
 
@@ -1105,6 +1149,8 @@ const isLoaderInitFailure = ({
 };
 
 export const __detachedSpawnTesting = {
+  createLogTailer,
+  WINDOWS_SUPERVISOR,
   processCommandMatches,
   readBootstrapDiagnostic,
   WINDOWS_LOADER_EXIT_CODES,

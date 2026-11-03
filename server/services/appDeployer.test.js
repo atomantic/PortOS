@@ -9,8 +9,21 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 }));
 
 import { DEPLOY_FLAGS, deployApp, runDeployFlow } from './appDeployer.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 describe('deployApp environment', () => {
+  it('keeps the deploy pending after a live child error until close', async () => {
+    const child = new EventEmitter();
+    Object.assign(child, { pid: 1234, stdout: new EventEmitter(), stderr: new EventEmitter() });
+    mockSpawn.mockReturnValueOnce(child);
+    let finished = false;
+    const pending = deployApp({ repoPath: '/repo/live-deploy' }, [], () => {}).then(result => { finished = true; return result; });
+    child.emit('error', new Error('kill failed'));
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    child.emit('close', 0);
+    await expect(pending).resolves.toEqual({ success: false, code: -1 });
+  });
   it('does not hand server secrets to deploy.sh', async () => {
     vi.stubEnv('PRIVACY_VAULT_KEY', 'vault');
     vi.stubEnv('PGPASSWORD', 'db');
@@ -43,6 +56,17 @@ describe('deploy flag contract', () => {
 
 describe('runDeployFlow', () => {
   const app = { id: 'app-1', name: 'MyApp', repoPath: '/repo', type: 'xcode' };
+
+  it('does not start deployment while an update holds maintenance', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    const runDeploy = vi.fn();
+    try {
+      await expect(runDeployFlow('app-1', [], { resolveApp: async () => app,
+        checkScript: () => true, runDeploy })).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(runDeploy).not.toHaveBeenCalled();
+    } finally { maintenance.deferredUpdate.finish(update.id, false); }
+  });
 
   it('returns a not-found outcome when the app is missing (no deploy attempted)', async () => {
     const runDeploy = vi.fn();

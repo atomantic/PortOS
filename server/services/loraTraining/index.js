@@ -28,7 +28,7 @@ import { sleepDisplayForTraining, wakeDisplay } from './displayPower.js';
 import { makeTrainingLineHandler } from './progress.js';
 import { makeStallDetector } from './stallDetector.js';
 
-import { claimHeavyLocalJob, adoptHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { beginHeavyJobRecovery, claimHeavyLocalJob, adoptHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 
@@ -44,20 +44,19 @@ export const runSamplesDir = (runId) => join(runDir(runId), 'samples');
 // GPU lane serializes training with renders, so at most one trainer child
 // exists at a time. Keyed by jobId anyway so a stale cancel can't kill a
 // newer run.
-let activeProcess = null;
-let activeJobId = null;
+const activeProcesses = new Map();
 const explicitlyCanceledTrainers = new WeakSet();
 
 // Recovery still observes a surviving trainer for stalls.
 const STALL_TICK_MS = 30_000;
 
 export const cancel = (jobId) => {
-  if (!activeProcess || (jobId && activeJobId !== jobId)) return false;
-  const proc = activeProcess;
+  const proc = jobId ? activeProcesses.get(jobId) : [...activeProcesses.values()].at(-1);
+  if (!proc) return false;
   explicitlyCanceledTrainers.add(proc);
-  // Keep activeProcess set until 'close' clears it — the trainer may spend
+  // Keep the process registered until 'close' clears it — the trainer may spend
   // a few seconds writing its cancel checkpoint. Escalate after 8s.
-  killWithEscalation(proc, { label: 'training child', stillRunning: () => activeProcess === proc });
+  killWithEscalation(proc, { label: 'training child', stillRunning: () => [...activeProcesses.values()].includes(proc) });
   return true;
 };
 
@@ -182,12 +181,13 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
   const settings = await getSettings();
   const dir = runDir(runId);
   let heavyClaim = null;
+  let claimSetup = Promise.resolve();
   const retainOwnership = () => {
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
   };
   let claimRelease;
-  const releaseClaim = () => claimRelease ||= Promise.resolve().then(() => heavyClaim?.release()).catch(err => {
+  const releaseClaim = () => claimRelease ||= Promise.resolve().then(() => claimSetup).then(() => heavyClaim?.release({ childSettled: true })).catch(err => {
     retainOwnership();
     console.error(`❌ training [${shortId(jobId)}] claim release failed: ${err.message}`);
   });
@@ -226,23 +226,63 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
   // survived run outright. Adopt the existing claim instead of contending for
   // a fresh one.
   if (reattach) {
-    const proc = await reattachDetached(join(dir, '.detached'));
+    const proc = await reattachDetached(join(dir, '.detached'), { deferTail: true });
     if (!proc) {
       // The survivor died (killed mid-run) with no RESULT to recover — fail the
       // run; its latest checkpoint stays retained for inspection, same as the
       // pre-#1332 reap path would have left it.
       return failBeforeSpawn('Trainer did not survive the restart — marking failed; artifacts are preserved.');
     }
-    heavyClaim = (await adoptHeavyLocalJob({ kind: 'LoRA training', id: jobId, pid: proc.pid }))
-      || (await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId }));
-    if (!heavyClaim.ok) return failBeforeSpawn(heavyClaim.message);
-    // Only true on the claimHeavyLocalJob fallback (no matching on-disk claim
-    // survived) — adoptHeavyLocalJob only ever returns a claim already
-    // recorded against this exact pid.
-    if (heavyClaim.holder?.pid !== proc.pid) await heavyClaim.handoffTo?.(proc.pid);
+    const endClaimRecovery = beginHeavyJobRecovery(jobId);
     console.log(`🔁 training [${shortId(jobId)}] re-attached to surviving trainer pid ${proc.pid} (run ${shortId(runId)})`);
+    try { wireProcLifecycle(proc, { isReattach: true }); }
+    catch (err) { endClaimRecovery(); throw err; }
     trainingEvents.emit('status', { generationId: jobId, message: 'Re-attached to trainer that survived a restart' });
-    wireProcLifecycle(proc, { isReattach: true });
+    // Observe and permit cancellation immediately. Ownership reattachment may
+    // wait for another accelerator claim or transient storage, but must never
+    // hide a trainer's terminal event or hold server startup.
+    claimSetup = (async () => {
+      let reported = false;
+      while (activeProcesses.get(jobId) === proc) {
+        let claim;
+        try {
+          claim = (await adoptHeavyLocalJob({ kind: 'LoRA training', id: jobId, pid: proc.pid }))
+            || (await claimHeavyLocalJob({ kind: 'LoRA training', id: jobId, pid: proc.pid, continuationOwned: true }));
+          if (claim?.ok) {
+            heavyClaim = claim;
+            if (claim.holder?.pid === proc.pid) return;
+            while (activeProcesses.get(jobId) === proc) {
+              try { await claim.handoffTo?.(proc.pid); return; }
+              catch (err) {
+                if (err.code === 'HEAVY_CLAIM_CHANGED') {
+                  await claim.release();
+                  if (heavyClaim === claim) heavyClaim = null;
+                  break;
+                }
+                if (!reported) console.warn(`⚠️ training [${shortId(jobId)}] waiting to record its surviving trainer: ${err.message}`);
+                reported = true;
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            }
+            if (activeProcesses.get(jobId) !== proc) return;
+            continue;
+          }
+        } catch (err) {
+          if (claim?.ok) {
+            // Unexpected cleanup failure keeps ownership through close.
+            console.error(`❌ training [${shortId(jobId)}] claim handoff is uncertain: ${err.message}`);
+            return;
+          }
+          if (!reported) console.warn(`⚠️ training [${shortId(jobId)}] waiting to recover its accelerator claim: ${err.message}`);
+        }
+        reported = true;
+        if (activeProcesses.get(jobId) === proc) await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    })().catch(err => {
+      retainOwnership();
+      console.error(`❌ training [${shortId(jobId)}] claim recovery failed: ${err.message}`);
+    }).finally(endClaimRecovery);
+    proc.startTail?.();
     return { observing: true };
   }
 
@@ -250,9 +290,8 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
 
   function wireProcLifecycle(proc, { isReattach = false } = {}) {
   const releaseDataAccess = acquireRetiredDataAccess();
-  activeProcess = proc;
-  activeJobId = jobId;
-  void heavyClaim?.handoffTo?.(proc.pid)?.catch((err) => console.error(`❌ training [${shortId(jobId)}] claim handoff failed: ${err.message}`));
+  activeProcesses.set(jobId, proc);
+  if (!isReattach) void heavyClaim?.handoffTo?.(proc.pid)?.catch((err) => console.error(`❌ training [${shortId(jobId)}] claim handoff failed: ${err.message}`));
 
   // Keep the Mac awake for the duration of the training child (idle + system
   // sleep held off) — but DELIBERATELY let the *display* sleep. An active
@@ -406,7 +445,7 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
       // setInterval callback — runs outside the request lifecycle, so guard
       // against any throw (a crash here would take down the server process).
       try {
-        if (stallKilled || activeProcess !== proc) return;
+        if (stallKilled || activeProcesses.get(jobId) !== proc) return;
         const { stalled, idleMs, budgetMs } = stallDetector.checkStall();
         if (!stalled) return;
         stallKilled = true;
@@ -433,7 +472,7 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
     if (proc.pid) return;
     terminalStarted = true;
     stopStallWatchdog();
-    if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
+    if (activeProcesses.get(jobId) === proc) activeProcesses.delete(jobId);
     // A no-PID launch failure owns no running trainer.
     wakeDisplay(settings);
     // A launch failure after the run was marked `running` — a genuine spawn
@@ -453,7 +492,7 @@ export async function runTraining({ jobId, runId, reattach = false, recoveryPerm
     if (terminalStarted) return;
     terminalStarted = true;
     stopStallWatchdog();
-    if (activeProcess === proc) { activeProcess = null; activeJobId = null; }
+    if (activeProcesses.get(jobId) === proc) activeProcesses.delete(jobId);
     // Flush the debounced progress (final checkpoint + last sample) BEFORE
     // finalize reads the run record — the collapse guard and previewImageUrl
     // both read run.artifacts. Async finalize wrapped so a rejection can't

@@ -27,8 +27,22 @@ export function processAbsent(pid, kill = process.kill) {
   try { kill(pid, 0); return false; } catch (err) { return err.code === 'ESRCH'; }
 }
 
+// A pre-claim ticket cannot authorize mutation after it is removed. Compare the
+// exact ticket under the journal lock so a supervisor that claimed it wins the
+// race even if the original launcher's PID was subsequently reused.
+export async function reconcileReusedLaunch(admission, snapshot) {
+  const pending = admission.deferredUpdate.launch();
+  if (!pending) return;
+  let processes;
+  try { processes = await snapshot(); } catch { return; }
+  if (!Array.isArray(processes)) return;
+  const process = processes.find(row => row.pid === pending.pid);
+  if (Number.isFinite(process?.startedAt) && process.startedAt > Date.parse(pending.startedAt) + 2000)
+    admission.deferredUpdate.reconcile({ obsoleteLaunch: pending });
+}
+
 /** Local updates share the exact transaction that admits agents and renders. */
-export function createDeferredUpdateAdmission({ transaction, read, makeId, error, now, directory, io, syncDirectory }) {
+export function createDeferredUpdateAdmission({ transaction, read, makeId, error, now, directory, io, syncDirectory, lockExists = () => false }) {
   const kind = 'deferred-update';
   const resultPath = join(directory, 'update-result.json');
   const inspect = state => {
@@ -66,8 +80,17 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     return result;
   };
   const operation = () => inspect(read());
+  const launch = () => read().operations.find(op => op.kind === 'deferred-update-launch') ?? null;
   const get = () => ({ operation: operation(), result: readResult() });
-  const reconcile = ({ absent = processAbsent, platform = process.platform } = {}) => {
+  const reconcile = ({ absent = processAbsent, platform = process.platform, obsoleteLaunch = null } = {}) => {
+    const pending = launch();
+    const pendingChild = pending?.resource ? JSON.parse(pending.resource).childPid : null;
+    if (pendingChild !== null && !pid(pendingChild)) throw error('MAINTENANCE_UNAVAILABLE', 'Invalid deferred update launch identity.');
+    if (pending && (absent(pending.pid) || (pendingChild && absent(pendingChild))
+      || (obsoleteLaunch && JSON.stringify(pending) === JSON.stringify(obsoleteLaunch)))) transaction(state => {
+      const index = state.operations.findIndex(op => op.id === pending.id && op.kind === 'deferred-update-launch');
+      if (index >= 0 && JSON.stringify(state.operations[index]) === JSON.stringify(pending)) state.operations.splice(index, 1);
+    });
     const { operation } = get();
     if (!operation || !absent(operation.ownerPid)) return get();
     // Before enter(), a child is forbidden from mutating the installation.
@@ -82,24 +105,70 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     return get();
   };
   const request = () => transaction(state => {
-    if (inspect(state)) stale();
+    if (inspect(state) || state.operations.some(op => op.kind === 'deferred-update-launch')) stale();
     if (state.operations.some(op => ['harness-action', 'harness-action-wake'].includes(op.kind)))
       throw error('MAINTENANCE_HELD', 'A harness action is still running or finishing.');
     const operation = { id: makeId(), ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: new Date(now()).toISOString() };
     save(state, operation);
     return { ...operation };
   });
-  const acquire = (id, { externalWorkPending = false } = {}) => transaction(state => {
-    const operation = current(state, id);
-    if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
-    if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
-    if (externalWorkPending || state.operations.some(op => op.id !== id) || state.exclusive) return false;
-    operation.phase = 'starting';
-    operation.holdId = makeId();
-    state.hold = { id: operation.holdId, revision: state.revision + 1, reason: 'Applying a deferred PortOS update', owner: 'deferred-update', requestedAt: new Date(now()).toISOString() };
-    save(state, operation);
+  // A launch ticket allows a timed-out parent to cancel a late supervisor
+  // before it mutates the install. Claim and cancellation share the journal.
+  const reserveLaunch = () => {
+    reconcile();
+    return transaction(state => {
+      if (state.hold || state.exclusive || inspect(state)
+        || state.operations.some(op => ['deferred-update-launch', 'harness-action', 'harness-action-wake'].includes(op.kind))) stale();
+      const ticket = { id: makeId(), kind: 'deferred-update-launch', resource: '', pid: process.pid,
+        startedAt: new Date(now()).toISOString() };
+      state.operations.push(ticket);
+      return ticket.id;
+    });
+  };
+  const claimLaunch = id => transaction(state => {
+    const index = state.operations.findIndex(op => op.id === id && op.kind === 'deferred-update-launch');
+    if (index < 0 || inspect(state)) stale();
+    const [ticket] = state.operations.splice(index, 1);
+    const claimed = { id, ownerPid: process.pid, phase: 'waiting', childPid: null, holdId: null, requestedAt: ticket.startedAt };
+    save(state, claimed);
+    return { ...claimed };
+  });
+  const bindLaunch = (id, childPid) => transaction(state => {
+    if (!pid(childPid)) throw error('MAINTENANCE_STALE', 'Invalid update supervisor identity.');
+    const pending = state.operations.find(op => op.id === id && op.kind === 'deferred-update-launch' && op.pid === process.pid);
+    if (!pending) return false;
+    pending.resource = JSON.stringify({ childPid });
     return true;
   });
+  const cancelLaunch = id => transaction(state => {
+    const index = state.operations.findIndex(op => op.id === id && op.kind === 'deferred-update-launch' && op.pid === process.pid);
+    if (index >= 0) { state.operations.splice(index, 1); return { state: 'canceled' }; }
+    const claimed = inspect(state);
+    if (claimed?.id === id) return { state: 'claimed', ownerPid: claimed.ownerPid };
+    const result = readResult();
+    if (result?.id === id) return { state: 'finished', result };
+    return { state: 'unknown' };
+  });
+  const acquire = (id, { externalWorkPending = false, checkExternal = () => false } = {}) => {
+    // A blocked poll need not rewrite the journal every second. The transaction
+    // below still rechecks everything when this read sees an idle candidate.
+    const observed = read();
+    const pending = current(observed, id);
+    if (pending.phase !== 'waiting' || pending.ownerPid !== process.pid) stale();
+    if (observed.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
+    if ((externalWorkPending || observed.operations.some(op => op.id !== id) || observed.exclusive) && !lockExists()) return false;
+    return transaction(state => {
+      const operation = current(state, id);
+      if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
+      if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
+      if (externalWorkPending || state.operations.some(op => op.id !== id) || state.exclusive || checkExternal()) return false;
+      operation.phase = 'starting';
+      operation.holdId = makeId();
+      state.hold = { id: operation.holdId, revision: state.revision + 1, reason: 'Applying a deferred PortOS update', owner: 'deferred-update', requestedAt: new Date(now()).toISOString() };
+      save(state, operation);
+      return true;
+    });
+  };
   const enter = (id, childPid) => transaction(state => {
     const operation = current(state, id);
     if (operation.phase !== 'starting' || processAbsent(operation.ownerPid)
@@ -121,5 +190,5 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (operation.ownerPid !== process.pid) stale();
     return settle(state, operation, success, false);
   });
-  return { inspect, operation, get, reconcile, request, acquire, enter, terminal, finish };
+  return { inspect, operation, launch, get, reconcile, request, reserveLaunch, claimLaunch, bindLaunch, cancelLaunch, acquire, enter, terminal, finish };
 }

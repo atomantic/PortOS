@@ -3,7 +3,8 @@ import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
 import * as appDeployer from '../services/appDeployer.js';
 import { runAppUpdate } from '../services/appUpdateRunner.js';
-import { activeOperationsPayload, claimAppOperation, endAppOperation, recordOperationStep } from '../services/appOperations.js';
+import { activeOperationsPayload, appOperationResource, claimAppOperation, endAppOperation, recordOperationStep, runAppOperation } from '../services/appOperations.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import {
   appDeploySchema,
   appStandardizeSchema,
@@ -43,13 +44,13 @@ export const registerAppHandlers = (socket, io) => {
       const { repoPath, providerId, overwriteEcosystem = false } = data;
       console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-      const outcome = await pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+      const outcome = await maintenance.run('app-operation', appOperationResource(repoPath), () => pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
         overwriteEcosystem,
         onStep: ({ step, status, data }) => {
           socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
         },
         onAnalyzed: (payload) => socket.emit('standardize:analyzed', payload)
-      });
+      }));
 
       socket.emit('standardize:complete', outcome);
     } catch (err) {
@@ -104,10 +105,12 @@ export const registerAppHandlers = (socket, io) => {
 
   socket.on('app:standardize', async (rawData) => {
     let operatingAppId = null;
+    let requestedAppId = null;
     let outcome = 'failure';
     try {
       const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
       if (!data) return;
+      requestedAppId = data.appId;
 
       const app = await appsService.getAppById(data.appId);
       if (!app) {
@@ -133,6 +136,7 @@ export const registerAppHandlers = (socket, io) => {
       const operation = claim.operation;
       operatingAppId = app.id;
 
+      await runAppOperation(operation, async () => {
       console.log(`🔧 Socket standardize started for ${app.name}`);
       const emit = (step, status, message) => {
         const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
@@ -190,10 +194,11 @@ export const registerAppHandlers = (socket, io) => {
       });
       outcome = 'completion';
       console.log(`✅ Socket standardize complete for ${app.name}`);
+      });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:standardize]: ${message}`);
-      io.emit('app:standardize:error', { appId: operatingAppId, message });
+      io.emit('app:standardize:error', { appId: operatingAppId ?? requestedAppId, message });
     } finally {
       if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }

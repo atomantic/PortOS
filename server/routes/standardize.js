@@ -6,6 +6,8 @@ import { standardizeApplySchema, standardizeTargetBodySchema, validateRequest } 
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
+import { appOperationResource } from '../services/appOperations.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 const router = Router();
 
@@ -78,7 +80,7 @@ router.post('/analyze', asyncHandler(async (req, res) => {
 
   console.log(`🔧 Analyzing PM2 standardization for: ${path}`);
 
-  const result = await pm2Standardizer.analyzeApp(path, providerId);
+  const result = await maintenance.run('app-operation', appOperationResource(path, appId), () => pm2Standardizer.analyzeApp(path, providerId));
 
   if (!result.success) {
     throw new ServerError(result.error, { status: 400, code: 'ANALYSIS_FAILED' });
@@ -97,23 +99,26 @@ router.post('/apply', asyncHandler(async (req, res) => {
 
   console.log(`🔧 Applying PM2 standardization to: ${path}`);
 
-  const result = await pm2Standardizer.applyStandardization(path, plan, { overwriteEcosystem });
+  const result = await maintenance.run('app-operation', appOperationResource(path, appId), async () => {
+    const result = await pm2Standardizer.applyStandardization(path, plan, { overwriteEcosystem });
 
-  if (!result.success) {
-    throw new ServerError(result.error || 'Standardization failed', { status: 400, code: 'APPLY_FAILED' });
-  }
+    if (!result.success) {
+      throw new ServerError(result.error || 'Standardization failed', { status: 400, code: 'APPLY_FAILED' });
+    }
 
-  if (result.backupBranch) {
-    console.log(`📦 Backup branch created: ${result.backupBranch}`);
-  }
+    if (result.backupBranch) {
+      console.log(`📦 Backup branch created: ${result.backupBranch}`);
+    }
 
-  console.log(`✅ Standardization applied: ${result.filesModified.length} files modified`);
+    console.log(`✅ Standardization applied: ${result.filesModified.length} files modified`);
 
-  // If appId was provided, update the app with new PM2 process names
-  if (appId && plan.proposedChanges?.processes) {
-    const pm2ProcessNames = plan.proposedChanges.processes.map(p => p.name);
-    await appsService.updateApp(appId, { pm2ProcessNames });
-  }
+    // If appId was provided, update the app with new PM2 process names
+    if (appId && plan.proposedChanges?.processes) {
+      const pm2ProcessNames = plan.proposedChanges.processes.map(p => p.name);
+      await appsService.updateApp(appId, { pm2ProcessNames });
+    }
+    return result;
+  });
 
   res.json(result);
 }));
@@ -130,7 +135,7 @@ router.post('/backup', asyncHandler(async (req, res) => {
 
   const path = await resolveStandardizeTarget({ repoPath, appId });
 
-  const result = await pm2Standardizer.createGitBackup(path);
+  const result = await maintenance.run('app-operation', appOperationResource(path, appId), () => pm2Standardizer.createGitBackup(path));
 
   if (!result.success) {
     throw new ServerError(result.reason, { status: 400, code: 'BACKUP_FAILED' });

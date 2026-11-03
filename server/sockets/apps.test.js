@@ -36,6 +36,7 @@ import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import { logAction } from '../services/history.js';
 import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { __resetAppOperations, registerAppHandlers } from '../sockets/apps.js';
 
 // Two app records pointing at ONE checkout — the case app id alone can't catch.
@@ -112,6 +113,35 @@ describe('app socket handlers', () => {
     __resetAppOperations();
     bus = makeBus();
     appsService.getAppById.mockImplementation(async (id) => APPS[id] ?? null);
+  });
+
+  it('waits for Create App standardization and refuses another once update maintenance starts', async () => {
+    const entered = deferred();
+    const work = deferred();
+    pm2Standardizer.runStandardizeFlow.mockImplementation(async () => { entered.resolve(); return work.promise; });
+    const client = connect(bus);
+    const run = client.fire('standardize:start', { repoPath: '/repos/new-app' });
+    onTestFinished(async () => { work.resolve({ success: true }); await run; });
+    await entered.promise;
+    const update = maintenance.deferredUpdate.request();
+    onTestFinished(() => maintenance.deferredUpdate.finish(update.id, false));
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+    work.resolve({ success: true });
+    await run;
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    await client.fire('standardize:start', { repoPath: '/repos/another-app' });
+    expect(client.last('standardize:complete').payload).toMatchObject({ success: false });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a standardization admission refusal to the requested app', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    onTestFinished(() => maintenance.deferredUpdate.finish(update.id, false));
+    const client = connect(bus);
+    await client.fire('app:standardize', { appId: 'app-a' });
+    expect(client.last('app:standardize:error').payload).toMatchObject({ appId: 'app-a' });
+    expect(pm2Standardizer.analyzeApp).not.toHaveBeenCalled();
   });
 
   describe('in-flight collision guard', () => {
@@ -269,6 +299,20 @@ describe('app socket handlers', () => {
   });
 
   describe('PortOS self-update handoff', () => {
+    it('reports a successful handoff despite a history failure and removes its row when the updater exits', async () => {
+      const done = deferred();
+      const { maintenance } = await import('../lib/maintenanceAdmission.js');
+      appUpdater.updateApp.mockResolvedValue({ success: true, selfUpdateStarted: true, supervisorPid: 12345,
+        completion: done.promise, steps: [] });
+      logAction.mockRejectedValueOnce(new Error('history unavailable'));
+      const client = connect(bus);
+      await client.fire('app:update', { appId: 'app-a' });
+      expect(client.events('app:update:error')).toHaveLength(0);
+      expect(maintenance.operations().filter(op => op.kind === 'app-operation')).toEqual([]);
+      expect(client.last('app:operations:active').payload.operations).toHaveLength(1);
+      done.resolve({ success: false });
+      await vi.waitFor(() => expect(client.last('app:operations:active').payload.operations).toEqual([]));
+    });
     it('keeps the operation live and reports no completion once update.sh owns the restart', async () => {
       // update.sh pm2-deletes THIS process partway through, so appUpdater
       // returns as soon as the detached script is launched. Reporting the
@@ -279,6 +323,7 @@ describe('app socket handlers', () => {
       appUpdater.updateApp.mockResolvedValue({
         success: true,
         selfUpdateStarted: true,
+        supervisorPid: 12345,
         steps: [{ step: 'git-pull', success: true }, { step: 'app-update', success: true }],
       });
       const client = connect(bus);

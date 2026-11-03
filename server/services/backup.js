@@ -26,7 +26,7 @@ import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
 import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
-  restoreRecoveryRefusal, settleReplayOutcome,
+  restoreRecoveryRefusal, settleReplayOutcome, withDatabaseRestoreAdmission,
 } from './backupRestoreRecovery.js';
 import { getBackendName } from './memoryBackend.js';
 import { APPLIED_LEDGER_RELPATH, LEGACY_APPLIED_LEDGER_RELPATH } from '../../scripts/lib/migrationLedger.js';
@@ -36,6 +36,8 @@ import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { convertRestoredLegacySplitStores, describeLegacySplitStores, snapshotLegacySplitStores } from './backupLegacyStores.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { settleAdmissionEventually } from '../lib/maintenanceSettlementRetry.js';
 
 // Module-level state
 let isRunning = false;
@@ -644,6 +646,14 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     throw new Error('Backup destination not configured');
   }
 
+  const permit = maintenance.admit('backup', 'snapshot');
+  try {
+    return await permit.run(() => runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultExcludes, retentionCount }, permit));
+  } finally { await settleAdmissionEventually(permit, 'Backup'); }
+}
+
+async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultExcludes, retentionCount }, permit) {
+
   setBackupRunning(true, 'start');
   let snapshotId = null;
   let snapshotDir;
@@ -756,6 +766,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       break;
     }
     if (!snapshotDir) throw new Error('Unable to reserve a fresh backup snapshot');
+    // Both rsync and pg_dump carry this snapshot ID in their argv. Record it
+    // before either process can start, including for external destinations.
+    permit.identify(snapshotId);
     const dataDestDir = join(snapshotDir, 'data');
 
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
@@ -1912,6 +1925,11 @@ function restoreIdleTimeoutMs(largestFileBytes = 0) {
  *   retired machine. Without it the live identity is preserved (`identityPreserved`).
  */
 export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter: requestedFilter = null, source, adoptIdentity = false } = {}) {
+  return maintenance.run('backup', `restore:${String(snapshotId).slice(0, 240)}`, () => restoreSnapshotAdmitted(destPath, snapshotId,
+    { dryRun, requestedFilter, source, adoptIdentity }));
+}
+
+async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requestedFilter, source, adoptIdentity }) {
   // Canonicalize once: manifest selection, the inventory and the rsync include
   // chain each spell the filter differently, so `brain/` or `./brain` would
   // select nothing yet verify clean. An all-dot/empty filter means no filter.
@@ -2317,6 +2335,11 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  * @param {{dryRun?: boolean}} [options]
  */
 export async function restorePostgres(destPath, snapshotId, { dryRun = true, source } = {}) {
+  return withDatabaseRestoreAdmission(`restore-db:${String(snapshotId).slice(0, 240)}`,
+    () => restorePostgresAdmitted(destPath, snapshotId, { dryRun, source }));
+}
+
+async function restorePostgresAdmitted(destPath, snapshotId, { dryRun, source }) {
   const resolved = resolveSnapshotPath(destPath, snapshotId, source);
   await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
   // Held for the whole call, which spans every read of snapshot bytes: the

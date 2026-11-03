@@ -845,6 +845,27 @@ describe('mediaJobQueue', () => {
       await waitFor(() => mediaJobQueue.getJob(id).status === 'failed');
       expect(mediaJobQueue.getJob(id).result.topazUncertain).toBe(true);
     });
+
+    it('retains an expired uncertain Topaz job when saving its terminal status fails', async () => {
+      const id = '00000000-0000-4000-8000-000000000098';
+      writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'video-upscale',
+        status: 'failed', queuedAt: '2020-01-01T00:00:00Z', completedAt: '2020-01-01T00:00:00Z',
+        params: { mode: 'topaz', requestId: '22222222-2222-4222-8222-222222222222' }, result: { topazUncertain: true } }] }));
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      const realWrite = atomicWriteSpy.getMockImplementation();
+      atomicWriteSpy.mockRejectedValueOnce(new Error('synthetic result write failure'));
+      try {
+        const first = mediaJobQueue.updateJobResult(id, { topazUncertain: false, topazProviderStatus: 'failed' });
+        const second = mediaJobQueue.updateJobResult(id, { topazPhase: 'checking' });
+        await expect(first).rejects.toThrow('synthetic result write failure');
+        await expect(second).resolves.toBe(true);
+        expect(mediaJobQueue.getJob(id)?.result.topazUncertain).toBe(true);
+        expect(mediaJobQueue.getJob(id)?.result.topazPhase).toBe('checking');
+        expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs[0].result.topazUncertain).toBe(true);
+        await expect(mediaJobQueue.updateJobResult(id, { topazUncertain: false, topazProviderStatus: 'failed' })).resolves.toBe(true);
+      } finally { atomicWriteSpy.mockImplementation(realWrite); }
+    });
   });
 
   describe('getQueueCapacity', () => {
@@ -1987,12 +2008,13 @@ describe('mediaJobQueue', () => {
   it('holds restored Video production submissions before any worker can spend', async () => {
     const jobs = ['queued', 'running'].map((status, index) => ({ id: `00000000-0000-4000-8000-00000000000${index + 1}`,
       kind: 'video', status, queuedAt: '2026-04-30T10:00:00.000Z',
-      params: { videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
+      params: { mode: 'local', videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     expect(mediaJobQueue.getJob(jobs[0].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: false } } });
     expect(mediaJobQueue.getJob(jobs[1].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: true } } });
+    expect(mediaJobQueue.getMediaRecoveryActivity()).toMatchObject({ trusted: true, pending: false });
     expect(stubs.generateVideo).not.toHaveBeenCalled();
     expect(stubs.generateVideoRemote).not.toHaveBeenCalled();
   });
@@ -3291,8 +3313,20 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
   it('boots without throwing, so an unreadable snapshot cannot kill the server', async () => {
     writeFileSync(join(tempDataDir, 'media-jobs.json'), CORRUPT);
     await importFresh();
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
     await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
     expect(mediaJobQueue.listJobs()).toEqual([]);
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
+  });
+
+  it('keeps a malformed jobs field untrusted and preserves the snapshot', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const malformed = JSON.stringify({ jobs: {} });
+    writeFileSync(file, malformed);
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe(malformed);
   });
 
   it('does NOT overwrite the unreadable file — at boot or on a later enqueue', async () => {

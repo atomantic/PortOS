@@ -33,6 +33,7 @@ import { standardizeRefusalFor, analyzeApp, applyStandardization, createGitBacku
 import { getAppById, updateApp } from '../services/apps.js';
 import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
 import { realpath } from 'fs/promises';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 function makeApp() {
   const app = express();
@@ -66,6 +67,22 @@ describe('standardize routes — target resolution and the refusal gate', () => 
     vi.mocked(isWithinAllowedRoots).mockReturnValue(true);
     vi.mocked(realpath).mockImplementation(async (path) => path);
     vi.mocked(applyStandardization).mockResolvedValue({ success: true, filesModified: [], backupBranch: null });
+  });
+
+  it('refuses standardizer work while an update holds maintenance', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    try {
+      for (const [route, body] of [
+        ['analyze', { repoPath: '/srv/example-app' }],
+        ['apply', { repoPath: '/srv/example-app', plan: validPlan() }],
+        ['backup', { repoPath: '/srv/example-app' }],
+      ]) {
+        const res = await request(makeApp()).post(`/api/standardize/${route}`).send(body);
+        expect(res.status).toBe(503);
+      }
+      expectNoStandardizerWork();
+    } finally { maintenance.deferredUpdate.finish(update.id, false); }
   });
 
   it('resolves an allowed app to its repoPath and proceeds', async () => {

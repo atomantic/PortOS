@@ -92,6 +92,7 @@ const { acquireBackupSnapshotCut, withBackupAssetPublication } = await import('.
 const { reconcileMediaAssets } = await import('../services/mediaAssetIndex/db.js');
 
 const { resumeDatabaseRestore, getDatabaseRestoreRecoveryStatus } = await import('../services/backupRestoreRecovery.js');
+const { maintenance } = await import('./maintenanceAdmission.js');
 
 const begin = () => databaseRestoreRecovery.begin({
   snapshotId: 'snap-1', dumpSha256: 'a'.repeat(64),
@@ -110,6 +111,60 @@ beforeEach(() => {
 afterAll(() => rmSync(fixture.dataRoot, { recursive: true, force: true }));
 
 describe('restore recovery admission', () => {
+  it('does not retain a no-op recovery refused by an active original restore cut', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const releaseCut = await acquireBackupSnapshotCut();
+    try {
+      await expect(resumeDatabaseRestore(record.id)).rejects.toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY' });
+      expect(maintenance.operations().filter(op => op.resource === `restore-recovery:${record.id}`)).toEqual([]);
+    } finally { releaseCut(); }
+    expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+  });
+  it('shares a concurrent recovery and leaves no stale recovery reservations', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const entered = Promise.withResolvers();
+    const finish = Promise.withResolvers();
+    reconcileMediaAssets.mockImplementationOnce(async () => { entered.resolve(); await finish.promise; return { ok: true }; });
+    const first = resumeDatabaseRestore(record.id);
+    await entered.promise;
+    const second = resumeDatabaseRestore(record.id);
+    expect(maintenance.operations().filter(op => op.resource === `restore-recovery:${record.id}`)).toHaveLength(1);
+    finish.resolve();
+    const results = await Promise.all([first, second]);
+    expect(results).toEqual([expect.objectContaining({ status: 'ok' }), expect.objectContaining({ status: 'ok' })]);
+    expect(maintenance.operations().filter(op => op.resource === `restore-recovery:${record.id}`)).toEqual([]);
+  });
+  it.skipIf(process.platform === 'win32')('keeps workflow admission until an uncertain journal unlink is durably recovered', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const earlier = maintenance.admit('backup', 'restore-db:snap-1');
+    earlier.markUnsettled();
+    await earlier.finish();
+    fixture.releaseFault = 'directory-sync';
+    const result = await resumeDatabaseRestore(record.id);
+    expect(result).toMatchObject({ status: 'failed', reason: 'restore_recovery_release' });
+    expect(databaseRestoreRecovery.isFenced()).toBe(true);
+    expect(maintenance.operations()).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'backup', unsettled: true })]));
+    const update = maintenance.deferredUpdate.request();
+    try {
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+      fixture.releaseFaultTriggered = false;
+      expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'failed', reason: 'restore_recovery_release' });
+      expect(maintenance.operations().filter(op => op.resource === `restore-recovery:${record.id}`)).toHaveLength(1);
+      fixture.releaseFault = null;
+      expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
+      expect(maintenance.operations().filter(op => ['restore-db:snap-1', `restore-recovery:${record.id}`].includes(op.resource))).toEqual([]);
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    } finally { fixture.releaseFault = null; maintenance.deferredUpdate.finish(update.id, false); }
+  });
+  it('does not start database repair while an update holds maintenance', async () => {
+    const record = databaseRestoreRecovery.markCommitted(begin().id);
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    try {
+      await expect(resumeDatabaseRestore(record.id)).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(databaseRestoreRecovery.read().id).toBe(record.id);
+    } finally { maintenance.deferredUpdate.finish(update.id, false); }
+  });
   it('drains file publication before same-ID recovery and blocks later publication through media repair', async () => {
     const record = databaseRestoreRecovery.markCommitted(begin().id);
     const published = join(fixture.dataRoot, 'synthetic-history.json');

@@ -2,11 +2,15 @@ import { readFile, unlink } from 'fs/promises';
 import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import { assertPeerExecutionCapability } from '../lib/maintenanceExclusive.js';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { NODE_INTERPRETER_ENV_KEY, resolvePinnedNodeInterpreter, withNodeBinOnPath } from '../lib/nodeInterpreterPin.js';
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { processAbsent, reconcileReusedLaunch } from '../lib/maintenanceDeferredUpdate.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
+import { trackUpdateControl, withUpdateControlLock } from './updateControlActivity.js';
 
 const UPDATE_SH = join(PATHS.root, 'update.sh');
 const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
@@ -48,7 +52,11 @@ const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
  *   Refusal returns its recorded result; spawn failures reject. A successful
  *   launch returns separately from completion, which may outlive this server.
  */
-export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false } = {}) {
+export const launchUpdate = (tag, emit, options = {}) => withUpdateControlLock(() => launchUpdateLocked(tag, emit, options));
+
+async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
+  admission = maintenance, supervisorAbsent = processAbsent, monitorIntervalMs = 5000,
+  supervisorSnapshot = async () => (await import('./maintenanceProcessInventory.js')).snapshotMaintenanceProcesses() } = {}) {
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
   const pinnedNode = resolvePinnedNodeInterpreter();
@@ -77,6 +85,7 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
   else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
   delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
+  delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
   delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
   delete childEnv.PORTOS_PEER_UPDATE_EXPECTED_SHA;
@@ -102,11 +111,10 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   // ChildProcess-like (stdout/stderr 'data', 'close', 'error'), streamed by
   // tailing the control dir's log files — so the STEP: progress parsing below
   // works unchanged. The control dir is reused across updates (spawnDetached
-  // truncates stale files) and kept afterward as the post-mortem record of the
-  // launch.
+  // keeps the files as the post-mortem record of the launch.
   const peerOperation = peerExecution && assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
-  const controlDir = peerOperation
+  const legacyControlDir = peerOperation
     ? join(PATHS.data, 'peer-execution', peerOperation.operationId)
     : join(PATHS.data, 'update-detached');
 
@@ -116,8 +124,8 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
   // dir would prematurely close the new handle with the OLD script's status).
   // A still-running script also means a second update is wrong regardless.
   const legacyArgs = isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH];
-  const previousRunning = await isDetachedRunning(controlDir, { executable: cmd, args })
-    || (!peerExecution && await isDetachedRunning(controlDir, { executable: isWindows ? 'powershell' : 'bash', args: legacyArgs }));
+  const previousRunning = await isDetachedRunning(legacyControlDir, { executable: cmd, args })
+    || (!peerExecution && await isDetachedRunning(legacyControlDir, { executable: isWindows ? 'powershell' : 'bash', args: legacyArgs }));
   if (previousRunning) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
@@ -132,22 +140,101 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
 
   if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
-  const child = await spawnDetached(cmd, args, {
+  let ticket = null;
+  if (!peerExecution) await reconcileReusedLaunch(admission, supervisorSnapshot);
+  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch(); }
+  catch (error) {
+    if (error.code !== 'MAINTENANCE_STALE') throw error;
+    const errorMessage = 'A previous update is still running — wait for it to finish before starting another update';
+    emit('starting', 'error', errorMessage);
+    return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
+  }
+  if (ticket) childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID = ticket;
+  const controlDir = ticket ? join(legacyControlDir, ticket) : legacyControlDir;
+  const untrackControl = trackUpdateControl(controlDir);
+  let child;
+  try { child = await spawnDetached(cmd, args, {
     cwd: PATHS.root,
     env: childEnv,
     controlDir,
+    ...(ticket ? { onLaunchTimeout: () => admission.deferredUpdate.cancelLaunch(ticket) } : {}),
     // The default 250ms cadence is calibrated for trainer/render output; this
     // job emits one human-paced `STEP:` line per multi-second stage, so a
     // quarter of the syscalls buys the same perceived progress.
     pollMs: 1000
-  });
+  }); } catch (error) {
+    untrackControl();
+    if (ticket) {
+      try { admission.deferredUpdate.cancelLaunch(ticket); }
+      catch { retryPendingLaunchCancellation(admission, ticket); }
+    }
+    throw error;
+  }
+  // spawnDetached can report a deferred error on the next tick even when a
+  // journal lookup below fails. Always install a listener before that lookup.
+  child.on('error', () => {});
+  child.once('error', untrackControl);
+  child.once('close', untrackControl);
+  const observedAt = Date.now();
+  if (ticket && Number.isSafeInteger(child.pid) && child.pid > 0) {
+    try { admission.deferredUpdate.bindLaunch(ticket, child.pid); }
+    catch { retryPendingLaunchBinding(admission, ticket, child.pid); }
+  }
 
+  if (ticket && (!Number.isSafeInteger(child.pid) || child.pid <= 0)) {
+    let outcome;
+    try {
+      if (child.launchTimeoutError) throw child.launchTimeoutError;
+      outcome = child.launchTimeoutResult ?? admission.deferredUpdate.cancelLaunch(ticket);
+    }
+    catch (error) {
+      retryPendingLaunchCancellation(admission, ticket);
+      throw Object.assign(new Error(`Update launch status is uncertain: ${error.message}`), { code: 'UPDATE_LAUNCH_UNCERTAIN' });
+    }
+    if (outcome.state === 'unknown') return { started: false, result: { success: false, uncertain: true,
+      failedStep: 'starting', errorMessage: 'Update outcome is unavailable' } };
+    if (outcome.state === 'claimed' || outcome.state === 'finished') {
+      // The supervisor won the claim before the launcher timed out. The
+      // launcher's error is not a completed-update result; observe the claimed
+      // journal operation until its own supervisor settles it.
+      if (outcome.state === 'finished') {
+        const result = await waitForClaimedUpdate(admission, ticket, outcome.result, targetVersion, emit);
+        if (!result.success) return { started: false, result };
+        return { started: true, completion: Promise.resolve(result), supervisorPid: null, completed: true };
+      }
+      child.pid = outcome.ownerPid;
+      const completion = watchSupervisor({ admission, ticket, child, completion: new Promise(() => {}), emit, targetVersion, observedAt, expectedExecutable: cmd,
+        absent: supervisorAbsent, snapshot: supervisorSnapshot, intervalMs: monitorIntervalMs,
+        beginFinalization: () => true, untrackControl });
+      return { started: true, completion, supervisorPid: outcome.ownerPid };
+    }
+  }
+
+  let ignoreLateEvents = false;
+  let finalizing = false;
   const completion = new Promise((resolve) => {
     let lastStep = 'starting';
     // Whether the script ever reported a step. A run that exits 0 without one
     // never executed the script — the scripts emit `git-pull:running` before
     // touching anything — so it must not be recorded as a completed update.
     let sawStep = false;
+
+    const settleClaimedTicket = async () => {
+      if (!ticket) return false;
+      let outcome;
+      try { outcome = admission.deferredUpdate.cancelLaunch(ticket); }
+      catch (error) {
+        retryPendingLaunchCancellation(admission, ticket);
+        resolve({ success: false, uncertain: true, failedStep: 'starting', errorMessage: `Update launch status is uncertain: ${error.message}` });
+        return true;
+      }
+      if (outcome.state !== 'claimed' && outcome.state !== 'finished') return false;
+      if (finalizing) return true;
+      finalizing = true;
+      try { resolve(await waitForClaimedUpdate(admission, ticket, outcome.state === 'finished' ? outcome.result : null, targetVersion, emit)); }
+      catch (error) { resolve({ success: false, uncertain: true, failedStep: 'starting', errorMessage: `Update status is uncertain: ${error.message}` }); }
+      return true;
+    };
 
     // Parse STEP:name:status:message lines from stdout/stderr streams
     const makeLineHandler = () => {
@@ -187,6 +274,10 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
     }
 
     child.on('close', async (code, signal) => {
+      if (ignoreLateEvents || finalizing) return;
+      if (await settleClaimedTicket()) return;
+      if (ignoreLateEvents || finalizing) return;
+      finalizing = true;
       // Exit 0 alone is not proof the update ran. A launch that never executed
       // the script exits 0 with no output at all, and stamping the triggering
       // tag onto that is how a Windows install reported "v2.57.0 — Success"
@@ -252,6 +343,10 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
     });
 
     child.on('error', async (err) => {
+      if (ignoreLateEvents || finalizing) return;
+      if (await settleClaimedTicket()) return;
+      if (ignoreLateEvents || finalizing) return;
+      finalizing = true;
       await recordUpdateResult({
         version: targetVersion,
         success: false,
@@ -266,7 +361,128 @@ export async function launchUpdate(tag, emit, { forceCleanWorkspaces, peerExecut
     // Nothing to unref: spawnDetached's handle is a plain EventEmitter tailing
     // the control dir, and its launcher already unref'd the process it spawned.
   });
-  return { started: true, completion };
+  // spawnDetached may return a handle without a PID and report the failed
+  // launch on the next tick. Do not hand a nonexistent supervisor to callers.
+  if (ticket && (!Number.isSafeInteger(child.pid) || child.pid <= 0)) return { started: false, result: await completion };
+  const observed = ticket ? watchSupervisor({ admission, ticket, child, completion, emit, targetVersion, observedAt, expectedExecutable: cmd,
+    absent: supervisorAbsent, snapshot: supervisorSnapshot, intervalMs: monitorIntervalMs, beginFinalization: () => {
+      if (finalizing) return false;
+      finalizing = true;
+      ignoreLateEvents = true;
+      return true;
+    }, untrackControl }) : completion;
+  return { started: true, completion: observed, supervisorPid: child.pid };
+}
+
+function watchSupervisor({ admission, ticket, child, completion, emit, targetVersion, observedAt, expectedExecutable, absent, snapshot, intervalMs, beginFinalization, untrackControl }) {
+  return new Promise((resolve, reject) => {
+    let timer, done = false;
+    const finish = result => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
+    completion.then(finish, error => { if (!done) { done = true; clearTimeout(timer); reject(error); } });
+    const poll = async () => {
+      if (done) return;
+      try {
+        const pending = admission.deferredUpdate.launch();
+        let gone = absent(child.pid);
+        if (!gone) {
+          const rows = await snapshot().catch(() => []);
+          const observed = rows.find(row => row.pid === child.pid);
+          const command = String(observed?.command ?? '');
+          const node = /(?:^|[\s"'/\\])node(?:js|\.exe)?(?=$|[\s"'])/i.test(command);
+          const expected = join(PATHS.root, 'scripts', 'deferred-update.mjs').replaceAll('\\', '/');
+          const escaped = escapeRegExp(expected);
+          const exact = new RegExp(`(?:^|[\\s"'=])${escaped}(?=$|[\\s"'])`, process.platform === 'win32' ? 'i' : '')
+            .test(command.replaceAll('\\', '/'));
+          const first = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(command.trim());
+          const executable = basename((first?.[1] ?? first?.[2] ?? first?.[3] ?? '').replaceAll('\\', '/')).toLowerCase();
+          const expectedName = basename(expectedExecutable.replaceAll('\\', '/')).toLowerCase();
+          const bothNode = /^node(?:js|\.exe)?$/.test(executable) && /^node(?:js|\.exe)?$/.test(expectedName);
+          const differentExecutable = executable && expectedName && executable !== expectedName && !bothNode;
+          const explicitOther = command && !exact && (differentExecutable || (/\s/.test(command.trim())
+            && (!node || /(?:^|\s)(?:-e|--eval|\S+\.(?:m?js|cjs))(?=$|\s)/i.test(command))));
+          gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther);
+        }
+        if (done) return;
+        if (gone) {
+          const absentOwner = pid => pid === child.pid ? true : absent(pid);
+          const state = admission.deferredUpdate.reconcile({ absent: absentOwner });
+          if (admission.deferredUpdate.launch()?.id !== ticket && state.operation?.id !== ticket) {
+            if (!beginFinalization()) return;
+            try { await child.stopTailing?.(); }
+            catch (error) { console.warn(`⚠️ Could not stop update log tailing: ${error.message}`); }
+            untrackControl();
+            if (state.result?.id === ticket) {
+              finish(await waitForClaimedUpdate(admission, ticket, state.result, targetVersion, emit));
+            } else {
+              const knownUnclaimed = pending?.id === ticket;
+              const errorMessage = knownUnclaimed ? 'Update supervisor exited before starting the update' : 'Update outcome is unavailable';
+              if (knownUnclaimed) await recordUpdateResult({ version: targetVersion, success: false, completedAt: new Date().toISOString(),
+                log: errorMessage }).catch(() => {});
+              try { emit('starting', 'error', errorMessage); }
+              catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
+              finish({ success: false, ...(knownUnclaimed ? {} : { uncertain: true }), failedStep: 'starting', errorMessage });
+            }
+            return;
+          }
+        }
+      } catch { /* Retry transient process or journal failures. */ }
+      if (!done) { timer = setTimeout(poll, intervalMs); timer.unref?.(); }
+    };
+    timer = setTimeout(poll, intervalMs);
+    timer.unref?.();
+  });
+}
+
+function retryPendingLaunchCancellation(admission, id) {
+  const retry = () => {
+    try { admission.deferredUpdate.cancelLaunch(id); }
+    catch { const timer = setTimeout(retry, 5000); timer.unref?.(); }
+  };
+  const timer = setTimeout(retry, 5000);
+  timer.unref?.();
+}
+
+function retryPendingLaunchBinding(admission, id, childPid) {
+  const retry = () => {
+    try { admission.deferredUpdate.bindLaunch(id, childPid); }
+    catch { const timer = setTimeout(retry, 5000); timer.unref?.(); }
+  };
+  const timer = setTimeout(retry, 5000);
+  timer.unref?.();
+}
+
+async function waitForClaimedUpdate(admission, id, existingResult, targetVersion, emit) {
+  let result = existingResult;
+  while (!result) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    let state;
+    try { state = admission.deferredUpdate.reconcile(); }
+    catch (error) {
+      if (['MAINTENANCE_STALE', 'MAINTENANCE_UNAVAILABLE'].includes(error.code)) continue;
+      throw error;
+    }
+    if (state.operation?.id === id) continue;
+    if (state.result?.id === id) result = state.result;
+    else return { success: false, uncertain: true, failedStep: 'starting', errorMessage: 'Update outcome is unavailable' };
+  }
+  let version = targetVersion;
+  let completedAt = result.completedAt;
+  const markerPath = join(PATHS.data, 'update-complete.json');
+  if (result.success) {
+    try {
+      const marker = JSON.parse(await readFile(markerPath, 'utf8'));
+      version = marker.version || await getCurrentVersion().catch(() => targetVersion);
+      completedAt = marker.completedAt || completedAt;
+    } catch { version = await getCurrentVersion().catch(() => targetVersion); }
+  }
+  const recorded = await recordUpdateResult({ version, success: result.success, completedAt,
+    log: result.success ? '' : 'The update did not finish successfully' }).then(() => true, () => false);
+  if (recorded && result.success) await unlink(markerPath).catch(() => {});
+  try {
+    if (result.success) emit('complete', 'done', 'Update complete — restarting');
+    else emit('starting', 'error', 'The update did not finish successfully');
+  } catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
+  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage: 'The update did not finish successfully' };
 }
 
 /**
