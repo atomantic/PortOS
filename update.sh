@@ -299,8 +299,9 @@ fi
 # refusal AFTER the checkout advances leaves the running (old) code over a new
 # working tree and old node_modules — any later single-process restart then
 # boots an unsupported, partly installed revision. So evaluate the target's own
-# gate from `git archive` BEFORE HEAD, submodules or apps change. The package.json
-# rides along because its `"type": "module"` is what lets the ESM gate load.
+# gate from `git archive` before pulling or changing dependencies. Idle updates
+# have not stopped apps; acknowledged continuation restores them on exit.
+# The package.json rides along because its `"type": "module"` is what lets the ESM gate load.
 # An unresolvable target (fetch failed, no upstream) or a target that predates
 # the gate skips this; the pull below then fails or the post-pull gate decides.
 preflight_target_sha=""
@@ -319,7 +320,7 @@ if [ -n "$preflight_target_sha" ] && git cat-file -e "${preflight_target_sha}:sc
     && ! node_gate_output=$(cd "$gate_dir" && node scripts/checkNodeVersion.js 2>&1); then
     rm -rf "$gate_dir"
     log "$node_gate_output"
-    log "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged."
+    log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was left unchanged."
     step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
     exit 1
   fi
@@ -362,28 +363,29 @@ log ""
 
 # Runtime preflight: the pulled target owns its Node support range (it may have
 # just been raised), and npm's engines field only warns. Ask the target's own
-# gate — the same one `npm start`/`npm run setup` run — BEFORE deleting any app
-# or touching dependencies, so an unsupported runtime refuses while PortOS is
-# still up instead of mid-downtime. The pre-check above already refused an
-# unsupported runtime before HEAD moved, so this is the second line of defence.
+# gate — the same one `npm start`/`npm run setup` run — before touching dependencies.
+# Idle updates have not stopped apps; acknowledged continuation restores them
+# on failure. The pre-check above already refused an unsupported runtime before
+# HEAD moved, so this is the second line of defence.
 step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
   log "$node_gate_output"
-  # The apps stay up on the tree they were already running, so a checkout left
-  # on the rejected revision would crash-loop the next restart (memory limit,
+  # Idle updates leave apps up; acknowledged continuation restores them on exit.
+  # A checkout left on the rejected revision would crash-loop the next restart
+  # (memory limit,
   # crash, reboot). Put the tree back; untracked files are the
   # user's, so nothing is cleaned. An unknown pre-pull sha is never reset to.
   if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
     if run git reset --hard "$pre_pull_sha" && run git submodule sync --recursive && run git submodule update --init --recursive; then
-      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running."
-      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
+      log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was rolled back to the pre-pull revision."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back"
     else
-      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. Rolling the checkout back to ${pre_pull_sha} failed — run 'git reset --hard ${pre_pull_sha} && git submodule update --init --recursive' before restarting PortOS."
-      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rollback failed, PortOS apps were left running"
+      log "❌ Update stopped: upgrade Node.js, then re-run the update. Rolling the checkout back to ${pre_pull_sha} failed — run 'git reset --hard ${pre_pull_sha} && git submodule update --init --recursive' before restarting PortOS."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rollback failed"
     fi
   else
-    log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision (no pre-pull commit was recorded to roll back to)."
-    step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+    log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision (no pre-pull commit was recorded to roll back to)."
+    step "runtime-preflight" "failed" "Unsupported Node.js runtime; update stopped"
   fi
   exit 1
 fi

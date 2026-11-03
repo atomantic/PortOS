@@ -380,8 +380,9 @@ if (-not (Repair-StaleSubmodules)) {
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
 # Runtime pre-check (see update.sh): evaluate the TARGET revision's own Node gate
-# from `git archive` BEFORE HEAD, submodules or apps change, so a refusal leaves
-# the checkout untouched. package.json rides along for its "type": "module".
+# from `git archive` before pulling or changing dependencies. Idle updates have
+# not stopped apps; acknowledged continuation restores them on exit.
+# package.json rides along for its "type": "module".
 # An unresolvable target or one that predates the gate skips this check.
 if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
     $preflightTarget = $env:PORTOS_PEER_UPDATE_TARGET_SHA
@@ -413,7 +414,7 @@ if ($preflightTarget) {
         Remove-Item -Recurse -Force $gateDir -ErrorAction SilentlyContinue
         if ($gateRejected) {
             Write-SafeHost $nodeGateOutput
-            Write-SafeHost "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged." -ForegroundColor Red
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was left unchanged." -ForegroundColor Red
             Step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
             Stop-UpdateScript 1
         }
@@ -460,15 +461,17 @@ Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
 # Runtime preflight (see update.sh): run the pulled target's own Node gate before
-# any PM2 delete or dependency change. The pre-check above already refused an
-# unsupported runtime before HEAD moved; this is the second line of defence.
+# dependency changes; idle updates have not stopped apps. The pre-check above
+# already refused an unsupported runtime before HEAD moved; this is the second
+# line of defence.
 Step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if (Test-Path "scripts/checkNodeVersion.js") {
     $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Write-SafeHost $nodeGateOutput
-        # Roll the checkout back (see update.sh): the apps keep running on the old
-        # tree, so a tree left on the rejected revision crash-loops the next restart.
+        # Roll the checkout back (see update.sh). Idle updates leave apps up;
+        # acknowledged continuation restores them on exit. Leaving the rejected
+        # tree would crash-loop the next restart.
         # Untracked files are the user's, so nothing is cleaned.
         $rolledBack = $false
         if ($prePullSha) {
@@ -484,11 +487,11 @@ if (Test-Path "scripts/checkNodeVersion.js") {
             }
         }
         if ($rolledBack) {
-            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running." -ForegroundColor Red
-            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was rolled back to the pre-pull revision." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back"
         } else {
-            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout may still be on the pulled revision." -ForegroundColor Red
-            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout may still be on the pulled revision." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; update stopped"
         }
         Stop-UpdateScript 1
     }
