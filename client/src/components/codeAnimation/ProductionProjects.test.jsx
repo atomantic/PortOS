@@ -153,6 +153,15 @@ describe('Production project rendered interactions', () => {
     expect(screen.queryByText(/Package import/)).toBeNull();
   });
 
+  it('targets the Blender version this server last checked when switching a project to Blender', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText('Renderer');
+    api.getCodeAnimationExecution.mockResolvedValue(execution({ probe: { passed: true, checks: [], tools: { blender: { passed: true, version: '4.2.0' } } } }));
+    await user.selectOptions(screen.getByLabelText('Renderer'), 'blender');
+    await waitFor(() => expect(screen.getByLabelText('Renderer version')).toHaveValue('4.2.0'));
+  });
+
   it('preserves the authoring pin across renderer edits and checks only saved settings', async () => {
     const user = userEvent.setup();
     renderPage();
