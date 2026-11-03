@@ -110,6 +110,7 @@ export const itermInputSchema = z.object({
 // record — they mirror POST /api/update/execute's executeSchema so App
 // Management can supply the same preflight acknowledgements (#5984).
 export const appUpdateSchema = z.object({
+  acknowledgeInterruption: z.boolean().optional(),
   appId: z.string().min(1, 'appId is required'),
   syncFork: z.boolean().optional(),
   acknowledgeFork: z.boolean().optional(),

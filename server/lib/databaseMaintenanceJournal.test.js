@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { createMaintenanceAdmission } from './maintenanceAdmission.js';
 import { copyEcosystemConfig } from '../test/fixtures/ecosystemConfigCopy.js';
 
 // Pass-through fs whose readFileSync can run one hook before or after it: the
@@ -57,6 +58,35 @@ function node(code, args = []) {
 }
 
 describe('persistent database maintenance boundary', () => {
+  it('lets a cutover or updater win across processes, never both', async () => {
+    const admissionUrl = new URL('./maintenanceAdmission.js', import.meta.url).href;
+    const updateCode = `import { createMaintenanceAdmission } from ${JSON.stringify(admissionUrl)}; import { existsSync } from 'node:fs';
+      const gate = createMaintenanceAdmission(${JSON.stringify(data)}); const update = gate.deferredUpdate.request();
+      process.exitCode = gate.deferredUpdate.acquire(update.id, { interrupt: true,
+        checkExternal: () => existsSync(${JSON.stringify(join(data, 'database-maintenance'))}) }) ? 0 : 1;`;
+    const dbCode = `import { createDatabaseMaintenanceJournal } from ${JSON.stringify(moduleUrl)};
+      try { createDatabaseMaintenanceJournal(${JSON.stringify(data)}).begin(${JSON.stringify({ source, target })}); }
+      catch { process.exitCode = 1; }`;
+    const run = code => new Promise(resolve => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' });
+      child.once('close', resolve);
+    });
+    expect((await Promise.all([run(dbCode), run(updateCode)])).sort()).toEqual([0, 1]);
+    expect(readdirSync(join(data, 'workflow-maintenance'))).not.toContain('transaction');
+  });
+  it('serializes a cutover with the installation hold without poisoning ordinary admission on refusal', () => {
+    const gate = createMaintenanceAdmission(data);
+    const update = gate.deferredUpdate.request();
+    expect(gate.deferredUpdate.acquire(update.id, { interrupt: true })).toBe(true);
+    expect(() => journal.begin({ source, target })).toThrow();
+    expect(journal.isFenced()).toBe(false);
+    gate.deferredUpdate.finish(update.id, false);
+    const operation = journal.begin({ source, target });
+    expect(operation.stage).toBe('accepted');
+    expect(gate.status().state).toBe('normal');
+    expect(() => journal.begin({ source, target })).toThrow();
+    expect(gate.status().state).toBe('normal');
+  });
   it('publishes once across competing processes and preserves the winning direction', async () => {
     const code = `import { createDatabaseMaintenanceJournal } from ${JSON.stringify(moduleUrl)};
       const j = createDatabaseMaintenanceJournal(${JSON.stringify(data)});
@@ -348,7 +378,7 @@ describe('persistent database maintenance boundary', () => {
     expect(journal.isFenced()).toBe(true);
     writeFileSync(join(active, 'operation.json'), JSON.stringify({ ...operation, stage: 'importing' }));
     expect(() => journal.cancel(operation.id, source)).toThrow();
-    expect(readdirSync(data)).toEqual(['database-maintenance']);
+    expect(readdirSync(data)).toEqual(['database-maintenance', 'workflow-maintenance']);
   });
 
   it('drives the operator CLI against disposable saved configuration without touching PostgreSQL', () => {

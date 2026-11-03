@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
+import { createMaintenanceJournal } from './maintenanceJournal.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
 import { createDatabaseAuthority } from './databaseAuthority.js';
 
@@ -184,8 +185,13 @@ export function createDatabaseMaintenanceJournal(dataDir = PATHS.data) {
     mkdirSync(dataDir, { recursive: true });
     // Exclusive mkdir is also the cross-process begin lock. No rollback on a
     // failed publication: leaving the fence closed is the recoverable outcome.
-    mkdirSync(activeDir, { mode: 0o700 });
-    syncDirectory(dataDir);
+    const acquired = createMaintenanceJournal(dataDir).transaction(state => {
+      if ((state.hold && ['manual-update', 'deferred-update'].includes(state.hold.owner)) || state.exclusive || isFenced()) return false;
+      mkdirSync(activeDir, { mode: 0o700 });
+      syncDirectory(dataDir);
+      return true;
+    });
+    if (!acquired) throw databaseMaintenanceError();
     const temporary = join(activeDir, 'operation.pending');
     writeDurableExclusive(temporary, record);
     renameSync(temporary, recordPath);

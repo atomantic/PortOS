@@ -82,7 +82,7 @@ describe('automatic update dispatch', () => {
   it('runs the release channel through the Update page launcher', async () => {
     const io = { emit: vi.fn() };
     await expect(runAutoUpdateTick({ io })).resolves.toMatchObject({ ran: true, channel: 'release' });
-    expect(deps.selfUpdate).toHaveBeenCalledWith({ io, mode: 'release' });
+    expect(deps.selfUpdate).toHaveBeenCalledWith({ io, mode: 'release', automatic: true });
     expect(deps.appUpdate).not.toHaveBeenCalled();
   });
 
@@ -90,7 +90,7 @@ describe('automatic update dispatch', () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 6 } });
     const io = { emit: vi.fn() };
     await expect(runAutoUpdateTick({ io })).resolves.toMatchObject({ ran: true, channel: 'main' });
-    expect(deps.appUpdate).toHaveBeenCalledWith({ io, appId: 'portos-default' });
+    expect(deps.appUpdate).toHaveBeenCalledWith({ io, appId: 'portos-default', automatic: true });
     expect(deps.selfUpdate).not.toHaveBeenCalled();
   });
 
@@ -115,6 +115,15 @@ describe('automatic update dispatch', () => {
 });
 
 describe('automatic update gates', () => {
+  it('preserves durable queued work rather than requiring the backlog to drain', async () => {
+    deps.processing.mockResolvedValue({ activity: { idle: false, blockers: [
+      { kind: 'media-queued:video', label: '2 video renders queued', count: 2 },
+      { kind: 'agents-queued', label: '1 CoS task queued', count: 1 },
+      { kind: 'mind-queued', label: '1 message queued', count: 1 },
+    ] } });
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: true });
+    expect(deps.selfUpdate).toHaveBeenCalledWith(expect.objectContaining({ automatic: true }));
+  });
   it('does nothing while the feature is off', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: false } });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'disabled' });
@@ -148,12 +157,12 @@ describe('automatic update gates', () => {
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'cooldown' });
   });
 
-  it('stands down while anything is still running or queued', async () => {
+  it('stands down while actual work is running', async () => {
     deps.processing.mockResolvedValue({
-      activity: { idle: false, blockers: [{ kind: 'media-queued:video', label: '2 video renders queued', count: 2 }] },
+      activity: { idle: false, blockers: [{ kind: 'media-running:video', label: '2 video renders running', count: 2 }] },
     });
     const result = await runAutoUpdateTick({ io: {} });
-    expect(result).toMatchObject({ ran: false, reason: 'busy', detail: '2 video renders queued' });
+    expect(result).toMatchObject({ ran: false, reason: 'busy', detail: '2 video renders running' });
     expect(deps.selfUpdate).not.toHaveBeenCalled();
   });
 

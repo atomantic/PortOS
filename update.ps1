@@ -6,7 +6,7 @@ Set-Location $RootDir
 if ($env:PORTOS_PEER_UPDATE_OPERATION_ID) {
     & node scripts/deferred-update.mjs --peer-enter $env:PORTOS_PEER_UPDATE_OPERATION_ID
 } elseif (-not $env:PORTOS_DEFERRED_UPDATE_ID) {
-    & node scripts/deferred-update.mjs
+    & node scripts/deferred-update.mjs @args
     exit $LASTEXITCODE
 } else {
     & node scripts/deferred-update.mjs --enter $env:PORTOS_DEFERRED_UPDATE_ID $PID
@@ -282,6 +282,31 @@ function Repair-StaleSubmodules {
     return $LASTEXITCODE -eq 0
 }
 
+function Stop-PortosApps {
+    if ($script:Pm2AppsDown) { return }
+# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
+# tears down the daemon and stops EVERY other project's apps on this machine.
+# The daemon itself is left alone here; whether it also needs an in-place reload
+# is decided in the restart step below, against the freshly installed pm2.
+Step "pm2-stop" "running" "Stopping PortOS apps..."
+# Arm the latch BEFORE the delete (see update.sh) so an interruption during the
+# delete itself still reaches the recovery.
+$script:Pm2AppsDown = $true
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
+$global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
+$global:LASTEXITCODE = 0
+Step "pm2-stop" "done" "Apps stopped"
+Write-SafeHost ""
+
+}
+
+if ($env:PORTOS_UPDATE_INTERRUPT -eq "1") {
+    Stop-PortosApps
+    & node scripts/deferred-update.mjs --stopped $env:PORTOS_DEFERRED_UPDATE_ID
+    if ($LASTEXITCODE -ne 0) { Stop-UpdateScript 1 }
+}
+
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
@@ -355,8 +380,9 @@ if (-not (Repair-StaleSubmodules)) {
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
 # Runtime pre-check (see update.sh): evaluate the TARGET revision's own Node gate
-# from `git archive` BEFORE HEAD, submodules or apps change, so a refusal leaves
-# the checkout untouched. package.json rides along for its "type": "module".
+# from `git archive` before pulling or changing dependencies. Idle updates have
+# not stopped apps; acknowledged continuation restores them on exit.
+# package.json rides along for its "type": "module".
 # An unresolvable target or one that predates the gate skips this check.
 if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
     $preflightTarget = $env:PORTOS_PEER_UPDATE_TARGET_SHA
@@ -388,7 +414,7 @@ if ($preflightTarget) {
         Remove-Item -Recurse -Force $gateDir -ErrorAction SilentlyContinue
         if ($gateRejected) {
             Write-SafeHost $nodeGateOutput
-            Write-SafeHost "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged." -ForegroundColor Red
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was left unchanged." -ForegroundColor Red
             Step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
             Stop-UpdateScript 1
         }
@@ -435,15 +461,17 @@ Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
 # Runtime preflight (see update.sh): run the pulled target's own Node gate before
-# any PM2 delete or dependency change. The pre-check above already refused an
-# unsupported runtime before HEAD moved; this is the second line of defence.
+# dependency changes; idle updates have not stopped apps. The pre-check above
+# already refused an unsupported runtime before HEAD moved; this is the second
+# line of defence.
 Step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if (Test-Path "scripts/checkNodeVersion.js") {
     $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Write-SafeHost $nodeGateOutput
-        # Roll the checkout back (see update.sh): the apps keep running on the old
-        # tree, so a tree left on the rejected revision crash-loops the next restart.
+        # Roll the checkout back (see update.sh). Idle updates leave apps up;
+        # acknowledged continuation restores them on exit. Leaving the rejected
+        # tree would crash-loop the next restart.
         # Untracked files are the user's, so nothing is cleaned.
         $rolledBack = $false
         if ($prePullSha) {
@@ -459,11 +487,11 @@ if (Test-Path "scripts/checkNodeVersion.js") {
             }
         }
         if ($rolledBack) {
-            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running." -ForegroundColor Red
-            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was rolled back to the pre-pull revision." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back"
         } else {
-            Write-SafeHost "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout may still be on the pulled revision." -ForegroundColor Red
-            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
+            Write-SafeHost "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout may still be on the pulled revision." -ForegroundColor Red
+            Step "runtime-preflight" "failed" "Unsupported Node.js runtime; update stopped"
         }
         Stop-UpdateScript 1
     }
@@ -471,20 +499,7 @@ if (Test-Path "scripts/checkNodeVersion.js") {
 Step "runtime-preflight" "done" "Node.js runtime supported"
 Write-SafeHost ""
 
-# Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
-# tears down the daemon and stops EVERY other project's apps on this machine.
-# The daemon itself is left alone here; whether it also needs an in-place reload
-# is decided in the restart step below, against the freshly installed pm2.
-Step "pm2-stop" "running" "Stopping PortOS apps..."
-# Arm the latch BEFORE the delete (see update.sh) so an interruption during the
-# delete itself still reaches the recovery.
-$script:Pm2AppsDown = $true
-Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
-$global:LASTEXITCODE = 0
-Invoke-Logged node ./node_modules/pm2/bin/pm2 delete portos-ui --silent
-$global:LASTEXITCODE = 0
-Step "pm2-stop" "done" "Apps stopped"
-Write-SafeHost ""
+Stop-PortosApps
 
 # Update dependencies with retry logic
 Step "npm-install" "running" "Installing all dependencies..."

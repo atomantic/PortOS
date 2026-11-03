@@ -1,3 +1,8 @@
+vi.mock('../services/activeProcessing.js', () => ({ getSystemActivity: vi.fn(async () => ({
+  jobs: [], agents: { trusted: true, active: (await filterLiveAgentIds(getActiveAgentIds())).length + mockSpawningTasks.size, queued: 0 },
+  mind: { trusted: true, thinking: false, queued: 0 }, llm: { trusted: true, active: 0 },
+  extras: { imageTo3d: [] }, appOperations: [], renders: [], backup: { inProgress: false },
+})) }));
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -195,11 +200,14 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     }));
   });
 
-  it('hands active agents and in-flight spawns to the deferred script without blocking their children', async () => {
+  it('requires explicit manual continuation for active agents and in-flight spawns', async () => {
     getActiveAgentIds.mockReturnValue(['agent-1']);
     mockSpawningTasks.add('task-42');
     const res = await request(makeApp()).post('/api/update/execute').send({});
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('UPDATE_INTERRUPTION_REQUIRED');
+    const continued = await request(makeApp()).post('/api/update/execute').send({ acknowledgeInterruption: true });
+    expect(continued.status).toBe(200);
     expect(launchUpdate).toHaveBeenCalled();
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
   });

@@ -4,6 +4,57 @@ How PortOS notices a new release and updates itself. PortOS is distributed softw
 
 Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
 
+## Manual and automatic updates
+
+Manual Update and Reconcile actions stay available while work is running. When
+work is active or cannot be verified, PortOS explains that restarting PortOS and
+Chrome can interrupt agents, renders and provider calls. **Update now and interrupt
+active work** explicitly accepts that risk. Saved state and queued jobs remain;
+interrupted work is never reported as successful. Fork and image-backup
+acknowledgments remain separate and are preserved when retrying.
+
+For terminal updates, run `bash update.sh` or `./update.ps1`. If work or stale
+reservations prevent an idle update, an interactive terminal offers a warning;
+a noninteractive invocation exits with an actionable message. Use
+`bash update.sh --interrupt`, `./update.ps1 --interrupt`, or
+`npm run update -- --interrupt` to explicitly continue. This also recovers an
+older/offline runtime whose activity API cannot report every provider call.
+
+An already-running older UI cannot render the new confirmation controls. When
+its activity API lacks complete provider counters, the fresh updater puts a
+confirmation URL in the waiting-step output. Open that URL on the same PortOS
+instance, sign in, and explicitly continue in the browser. The generic page
+uses the existing authenticated command endpoint and the normal detached
+updater. Its private attempt retains the previous image-backup acknowledgment
+and reconcile options, bound to the originating checkout. A newer pending or
+completed attempt, or a changed checkout, invalidates the confirmation.
+Command acceptance or a server disconnect does not claim update success.
+The normal client build removes this temporary page. Installations without a
+served production client can use the terminal confirmation or `--interrupt`.
+If the old server refuses an existing updater before it can launch fresh
+scripts, open **DevTools → Runner**, choose **Command** and the PortOS workspace,
+and run `node scripts/manual-update-recovery.mjs --request`. This starts the
+normal detached manual path without granting interruption consent; follow its
+confirmation URL when the old activity counters are incomplete.
+
+Automatic callers use `--automatic`. They wait for actual running work, while
+queued durable jobs remain queued across restart. The scheduler passes this
+policy explicitly; an automatic waiting owner does not prevent an acknowledged
+manual continuation. Missing activity instrumentation never counts as proof of
+idleness.
+
+Acknowledged continuation closes intake, gracefully stops PortOS before any git
+or dependency changes, and records absent/reused-owner reservations as
+`interrupted` with unknown output completeness. Positively observed live work
+retains its ownership evidence. Boot uses normal interrupted-media recovery:
+owned orphan videos are reaped and failed, remote jobs reconcile, and surviving
+trainers reattach. Unrelated desktop daemons are untouched.
+
+A live installer, database restore/cutover, or dirty/divergent source still
+prevents conflicting changes. A surviving directly launched PortOS runtime is
+named with its PID and must be stopped before retrying. Update failures after
+shutdown use the existing service-restart recovery and still report failure.
+
 ## Release polling always targets upstream
 
 The release-notification poll **always queries the upstream `atomantic/PortOS`** repo, so a user running from a fork still sees new upstream versions. The constants come from `server/lib/gitRemote.js` (`UPSTREAM_OWNER`, `UPSTREAM_REPO`, `UPSTREAM_FULL_NAME`) — do not re-hardcode the upstream slug anywhere else.
@@ -49,7 +100,7 @@ submodule, so those changes remain a visible update blocker.
 
 ### Submodules follow the pulled parent revision
 
-**An unsupported Node.js runtime refuses the update before anything changes.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero with HEAD, submodules, dependencies and PM2 apps untouched, so the running server never ends up as old code over a newer checkout. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
+**An unsupported Node.js runtime refuses the target before installation.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero before pulling the target or changing dependencies. Idle updates leave PM2 apps running. An acknowledged manual continuation has already stopped them and uses failure recovery to restart them. The checkout therefore does not advance to an unsupported target. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
 
 Before pulling, both platform scripts repair any recursive submodule checkout
 that is not at the commit pinned by the current parent tree. After switching to

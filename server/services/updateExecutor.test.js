@@ -83,6 +83,39 @@ beforeEach(() => {
 });
 
 describe('executeUpdate', () => {
+  it('keeps a takeover superseded when a pending process snapshot returns the exited waiter as a zombie', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'update-zombie-takeover-'));
+    const admission = createMaintenanceAdmission(root);
+    const first = createMockChild(), second = createMockChild(); second.pid = 12346;
+    let releaseSnapshot, enteredSnapshot;
+    const snapshotReady = new Promise(resolve => { enteredSnapshot = resolve; });
+    const snapshot = new Promise(resolve => { releaseSnapshot = resolve; });
+    let latestTicket;
+    spawnDetached.mockImplementationOnce(async (_command, _args, options) => {
+      latestTicket = options.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID; admission.deferredUpdate.claimLaunch(latestTicket); return first;
+    }).mockImplementationOnce(async (_command, _args, options) => {
+      latestTicket = options.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID; admission.deferredUpdate.claimLaunch(latestTicket); return second;
+    });
+    const report = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const automatic = await launchUpdate('v1.0.0', report, { admission, automatic: true, monitorIntervalMs: 5,
+        supervisorAbsent: () => false, supervisorSnapshot: () => { enteredSnapshot(); return snapshot; } });
+      vi.advanceTimersByTime(5); await snapshotReady;
+      const manual = await launchUpdate('v1.0.0', vi.fn(), { admission, acknowledgeInterruption: true });
+      releaseSnapshot([{ pid: first.pid, startedAt: Date.now() - 1000, state: 'Z', command: '(node)' }]);
+      const outcome = await automatic.completion;
+      const oldWrites = recordUpdateResult.mock.calls.length;
+      const oldError = report.mock.calls.some(([, status]) => status === 'error');
+      admission.deferredUpdate.acquire(latestTicket, { interrupt: true });
+      admission.deferredUpdate.enter(latestTicket, second.pid);
+      admission.deferredUpdate.finish(latestTicket, false);
+      emitStep(second); second.emit('close', 1); await manual.completion;
+      expect(outcome).toMatchObject({ success: false, superseded: true });
+      expect(oldWrites).toBe(0);
+      expect(oldError).toBe(false);
+    } finally { vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); }
+  });
   it('retires an unclaimed ticket when a PID-bearing child fails before the supervisor starts', async () => {
     const child = createMockChild();
     spawnDetached.mockResolvedValue(child);

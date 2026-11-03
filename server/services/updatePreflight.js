@@ -6,6 +6,23 @@ import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+
+export async function checkManualUpdateActivity({ automatic = false, acknowledgeInterruption = false, ignoreAppId } = {}) {
+  if (automatic || acknowledgeInterruption) return;
+  const activity = await import('./activeProcessing.js').then(m => m.getSystemActivity()).catch(() => null);
+  const blockers = activity ? summarizeSystemActivity({ ...activity,
+    jobs: activity.jobs?.filter(job => job.status === 'running'),
+    agents: { ...activity.agents, queued: 0 }, mind: { ...activity.mind, queued: 0 },
+    appOperations: activity.appOperations?.filter(op => op.appId !== ignoreAppId), update: { inProgress: false },
+  }).blockers : [];
+  let residue = true;
+  try { residue = maintenance.operations().some(op => op.id !== maintenance.currentId() && !['deferred-update', 'deferred-update-launch'].includes(op.kind)); } catch { /* Show uncertainty, not an idle assertion. */ }
+  if (activity && !blockers.length && !residue) return;
+  throw new ServerError(`${blockers.length ? blockers.map(b => b.label).join(', ') + '. ' : 'Work or its saved reservations could not be verified idle. '}` +
+    'Updating restarts PortOS and Chrome. Active agents, renders and provider calls may fail or lose unsaved progress. Saved state and queued work are preserved. Continue only after saving your work.',
+  { status: 409, code: 'UPDATE_INTERRUPTION_REQUIRED' });
+}
 
 // Shared refusal logic for the PortOS self-update path, called from both
 // POST /api/update/execute (server/routes/update.js) and the app:update
@@ -117,8 +134,9 @@ export async function checkPortosUpdatePreflight({
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
   deferActivity = false,
+  acknowledgeInterruption = false,
 } = {}) {
-  if (!deferActivity) {
+  if (!deferActivity && !acknowledgeInterruption) {
     const activeCosAgents = await countActiveCosAgents();
     if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
     const renders = listActiveRenders();
@@ -127,9 +145,7 @@ export async function checkPortosUpdatePreflight({
 
   const imageCheck = await getPersistentMindImageWorkGuard();
   if (!imageCheck.trusted) throw persistentMindStateUntrustedError();
-  if (!imageCheck.safe && !acknowledgePersistentMindImageBackup) {
-    throw persistentMindImageWorkError(imageCheck);
-  }
+  if (!imageCheck.safe && !acknowledgePersistentMindImageBackup) throw persistentMindImageWorkError(imageCheck);
 
   const status = await updateChecker.getUpdateStatus();
   const remote = status.remoteInfo;

@@ -1050,7 +1050,8 @@ async function restorePersistedJob(persisted) {
     archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
     return { failedId: j.id };
   }
-  if (j.status === 'running' && maintenance.held()) {
+  const manualUpdate = maintenance.status().hold?.owner === 'manual-update';
+  if (j.status === 'running' && maintenance.held() && !manualUpdate) {
     maintenance.recoverOwned('media', j.id);
     const reattach = await reattachSurvivingTrainer(j);
     if (reattach) {
@@ -1128,6 +1129,10 @@ async function restoreInterruptedRunningJob(j) {
   // cycle. Falls through to the fail path when nothing survived.
   const reattach = await reattachSurvivingTrainer(j);
   if (reattach) {
+    if (maintenance.held()) {
+      maintenance.recoverOwned('media', j.id);
+      recoveringJobs.add(j.id);
+    }
     console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
     return { reattach };
   }
@@ -1200,7 +1205,9 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
     // initLoraTraining.) This runs before the worker starts, so every dir
     // present is an orphan from the prior process.
-    const videoReap = maintenance.held() ? { reaped: 0 }
+    // Acknowledged manual updates use normal restart recovery: owned orphan
+    // videos are reaped and interrupted jobs fail honestly; queues survive.
+    const videoReap = maintenance.held() && maintenance.status().hold?.owner !== 'manual-update' ? { reaped: 0 }
       : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const persisted of persistedJobs) {

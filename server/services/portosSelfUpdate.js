@@ -3,7 +3,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { launchUpdate } from './updateExecutor.js';
 import * as updateChecker from './updateChecker.js';
-import { checkPortosUpdatePreflight } from './updatePreflight.js';
+import { checkManualUpdateActivity, checkPortosUpdatePreflight } from './updatePreflight.js';
 
 const withLaunch = createMutex();
 
@@ -95,18 +95,21 @@ async function startSelfUpdate({
   mode = 'release',
   onStep,
   peerExecution,
+  automatic = false,
+  acknowledgeInterruption = false,
 } = {}) {
   // The Git-tab caller already advanced HEAD; read its new install state.
   // Activity is deferred by the script, not blocked here by a process-local flag.
   const status = preflightAlreadyRun
     ? await updateChecker.getUpdateStatus()
-    : await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup, deferActivity: true });
+    : await checkPortosUpdatePreflight({ acknowledgeFork, acknowledgePersistentMindImageBackup, acknowledgeInterruption, deferActivity: true });
 
   assertCanRun(status, mode);
   const tag = resolveTag(status, mode);
   if (!TAG_PATTERN.test(tag)) {
     throw new ServerError('Invalid release tag format', { status: 400, code: 'INVALID_TAG' });
   }
+  if (!peerExecution && !preflightAlreadyRun) await checkManualUpdateActivity({ automatic, acknowledgeInterruption });
 
   const emit = (step, stepStatus, message) => {
     if (io) {
@@ -121,7 +124,7 @@ async function startSelfUpdate({
     console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
     io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
   };
-  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
+  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces, ...(automatic ? { automatic } : {}), ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}), ...(acknowledgePersistentMindImageBackup ? { acknowledgePersistentMindImageBackup } : {}), ...(peerExecution ? { peerExecution } : {}) }).catch(err => {
     reportFailure(err);
     throw err;
   });
@@ -129,12 +132,13 @@ async function startSelfUpdate({
     const result = launch.result;
     io?.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
     throw new ServerError(result.errorMessage || 'PortOS update failed to launch',
-      { status: 409, code: 'UPDATE_LAUNCH_FAILED' });
+      { status: 409, code: result.errorCode || 'UPDATE_LAUNCH_FAILED' });
   }
 
   // Observe the lifetime without awaiting it: the script normally kills this
   // server at pm2-stop, then the restarted server reads its completion marker.
   launch.completion.then(result => {
+    if (result.superseded) return;
     // May never fire: update.sh's PM2 delete usually kills this process first.
     // The client polls /api/system/health instead of relying on it.
     if (!io) return;
@@ -145,7 +149,7 @@ async function startSelfUpdate({
         versionKnown: !!result.version,
       });
     } else {
-      io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
+      io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown', ...(result.errorCode ? { code: result.errorCode } : {}) });
     }
   }).catch(reportFailure);
 

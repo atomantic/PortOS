@@ -12,6 +12,7 @@ import { listActiveRenders } from './renderActivity.js';
 import { getAgents } from './cosAgentLifecycle.js';
 import { getPendingTaskIds } from './cosTaskStore.js';
 import { getStatus } from './cos.js';
+import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
@@ -167,7 +168,7 @@ export async function getSystemActivity({ includeOllama = false, includeUpdateOw
     // process — activity in exactly the sense the updater must not restart
     // through, and distinct from a CoS agent (its own slice above, spawned
     // through a different path entirely).
-    llm: llmState,
+    llm: { ...llmState, active: llmState.active + getDirectProviderCallCount(), directCallsTracked: true },
     // An App Management update/standardize holds a checkout and restarts PM2
     // processes — activity in exactly the sense that matters to a caller
     // deciding whether it may restart the install.

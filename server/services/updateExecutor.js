@@ -18,6 +18,7 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 // Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
 // passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
 const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+const supersededUpdates = new Set();
 
 /**
  * Launch the PortOS update script (git pull to latest).
@@ -54,16 +55,20 @@ const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
  */
 export const launchUpdate = (tag, emit, options = {}) => withUpdateControlLock(() => launchUpdateLocked(tag, emit, options));
 
-async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
+async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
+  automatic = false, acknowledgeInterruption = false,
+  expectedRefusalId,
   admission = maintenance, supervisorAbsent = processAbsent, monitorIntervalMs = 5000,
   supervisorSnapshot = async () => (await import('./maintenanceProcessInventory.js')).snapshotMaintenanceProcesses() } = {}) {
+  let ticket = null;
+  const emit = (...args) => { if (!ticket || !supersededUpdates.has(ticket)) report(...args); };
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
   const pinnedNode = resolvePinnedNodeInterpreter();
   const cmd = peerExecution ? (isWindows ? 'powershell' : 'bash') : (pinnedNode || process.execPath);
   const args = peerExecution
     ? (isWindows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', UPDATE_PS1] : [UPDATE_SH])
-    : [join(PATHS.root, 'scripts', 'deferred-update.mjs')];
+    : [join(PATHS.root, 'scripts', 'deferred-update.mjs'), ...(automatic ? ['--automatic'] : acknowledgeInterruption ? ['--interrupt'] : [])];
 
   emit('starting', 'running', `Starting update (target: ${tag})...`);
 
@@ -85,6 +90,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
   if (acknowledgePersistentMindImageBackup) childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED = '1';
   else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
   delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
+  delete childEnv.PORTOS_UPDATE_INTERRUPT;
   delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
   delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;
@@ -129,7 +135,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
   const previous = admission.deferredUpdate.operation();
   const waiting = previous?.phase === 'waiting' && !previous.childPid && !previous.holdId;
   const alreadyObserved = previous && isUpdateControlTracked(join(legacyControlDir, previous.id));
-  if ((previousRunning && !waiting) || alreadyObserved) {
+  if ((previousRunning && !waiting) || (alreadyObserved && (!waiting || automatic))) {
     const errorMessage = 'A previous update script is still running — wait for it to finish before starting another update';
     await recordUpdateResult({
       version: targetVersion,
@@ -143,15 +149,16 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
 
   if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
-  let ticket = null;
-  if (!peerExecution) await reconcileReusedLaunch(admission, supervisorSnapshot);
-  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true }); }
+  if (!peerExecution && expectedRefusalId === undefined) await reconcileReusedLaunch(admission, supervisorSnapshot);
+  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true,
+    ...(expectedRefusalId !== undefined ? { expectedRefusalId } : {}) }); }
   catch (error) {
     if (error.code !== 'MAINTENANCE_STALE') throw error;
     const errorMessage = 'A previous update is still running — wait for it to finish before starting another update';
     emit('starting', 'error', errorMessage);
     return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
   }
+  if (previous && waiting && alreadyObserved && !automatic) supersededUpdates.add(previous.id);
   if (ticket) childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID = ticket;
   const controlDir = ticket ? join(legacyControlDir, ticket) : legacyControlDir;
   const untrackControl = trackUpdateControl(controlDir);
@@ -209,7 +216,7 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
       const completion = watchSupervisor({ admission, ticket, child, completion: new Promise(() => {}), emit, targetVersion, observedAt, expectedExecutable: cmd,
         absent: supervisorAbsent, snapshot: supervisorSnapshot, intervalMs: monitorIntervalMs,
         beginFinalization: () => true, untrackControl });
-      return { started: true, completion, supervisorPid: outcome.ownerPid };
+      return { started: true, completion: completion.finally(() => supersededUpdates.delete(ticket)), supervisorPid: outcome.ownerPid };
     }
   }
 
@@ -224,6 +231,11 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
 
     const settleClaimedTicket = async () => {
       if (!ticket) return false;
+      if (supersededUpdates.has(ticket)) {
+        finalizing = true;
+        resolve({ success: false, superseded: true, interrupted: true });
+        return true;
+      }
       let outcome;
       try { outcome = admission.deferredUpdate.cancelLaunch(ticket); }
       catch (error) {
@@ -374,17 +386,28 @@ async function launchUpdateLocked(tag, emit, { forceCleanWorkspaces, peerExecuti
       ignoreLateEvents = true;
       return true;
     }, untrackControl }) : completion;
-  return { started: true, completion: observed, supervisorPid: child.pid };
+  return { started: true, completion: observed.finally(() => supersededUpdates.delete(ticket)), supervisorPid: child.pid };
 }
 
 function watchSupervisor({ admission, ticket, child, completion, emit, targetVersion, observedAt, expectedExecutable, absent, snapshot, intervalMs, beginFinalization, untrackControl }) {
   return new Promise((resolve, reject) => {
     let timer, done = false;
     const finish = result => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
+    const finishSuperseded = async () => {
+      if (!beginFinalization()) return;
+      try { await child.stopTailing?.(); }
+      catch (error) { console.warn(`⚠️ Could not stop superseded update log tailing: ${error.message}`); }
+      untrackControl();
+      finish({ success: false, superseded: true, interrupted: true });
+    };
     completion.then(finish, error => { if (!done) { done = true; clearTimeout(timer); reject(error); } });
     const poll = async () => {
       if (done) return;
       try {
+        if (supersededUpdates.has(ticket)) {
+          await finishSuperseded();
+          return;
+        }
         const pending = admission.deferredUpdate.launch();
         let gone = absent(child.pid);
         if (!gone) {
@@ -406,6 +429,7 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
           gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther);
         }
         if (done) return;
+        if (supersededUpdates.has(ticket)) { await finishSuperseded(); return; }
         if (gone) {
           const absentOwner = pid => pid === child.pid ? true : absent(pid);
           const state = admission.deferredUpdate.reconcile({ absent: absentOwner });
@@ -455,9 +479,11 @@ function retryPendingLaunchBinding(admission, id, childPid) {
 }
 
 async function waitForClaimedUpdate(admission, id, existingResult, targetVersion, emit) {
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   let result = existingResult;
   while (!result) {
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
     let state;
     try { state = admission.deferredUpdate.reconcile(); }
     catch (error) {
@@ -469,6 +495,17 @@ async function waitForClaimedUpdate(admission, id, existingResult, targetVersion
     else return { success: false, uncertain: true, failedStep: 'starting', errorMessage: 'Update outcome is unavailable' };
   }
   let version = targetVersion;
+  let errorCode;
+  if (!result.success) {
+    try {
+      const refusal = JSON.parse(await readFile(join(admission.directory, `update-refusal-${id}.json`), 'utf8'));
+      if (refusal.id === id && refusal.code === 'UPDATE_INTERRUPTION_REQUIRED') errorCode = refusal.code;
+    } catch { /* Older scripts have no typed refusal metadata. */ }
+  }
+  const errorMessage = errorCode === 'UPDATE_INTERRUPTION_REQUIRED'
+    ? 'Updating restarts PortOS and Chrome. Active work may fail or lose unsaved progress. Save your work, then explicitly continue the update.'
+    : 'The update did not finish successfully';
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   let completedAt = result.completedAt;
   const markerPath = join(PATHS.data, 'update-complete.json');
   if (result.success) {
@@ -479,13 +516,14 @@ async function waitForClaimedUpdate(admission, id, existingResult, targetVersion
     } catch { version = await getCurrentVersion().catch(() => targetVersion); }
   }
   const recorded = await recordUpdateResult({ version, success: result.success, completedAt,
-    log: result.success ? '' : 'The update did not finish successfully' }).then(() => true, () => false);
+    log: result.success ? '' : errorMessage }).then(() => true, () => false);
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   if (recorded && result.success) await unlink(markerPath).catch(() => {});
   try {
     if (result.success) emit('complete', 'done', 'Update complete — restarting');
-    else emit('starting', 'error', 'The update did not finish successfully');
+    else emit('starting', 'error', errorMessage);
   } catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
-  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage: 'The update did not finish successfully' };
+  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage, ...(errorCode ? { errorCode } : {}) };
 }
 
 /**

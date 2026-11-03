@@ -1,5 +1,5 @@
 /**
- * Unattended PortOS self-update, gated on the install being completely idle.
+ * Unattended PortOS self-update, gated on actual running work.
  *
  * The contract, in order — every gate must pass on the SAME tick:
  *
@@ -13,10 +13,8 @@
  *   4. The checkout is on the default branch and clean, or is one mechanical
  *      repair away (`updateRepoReadiness.js`). What no script may safely fix
  *      queues a CoS agent and waits.
- *   5. The system is idle — no render running or queued, no CoS agent, no
- *      Persistent Mind turn or queued message, no app operation
- *      (`lib/systemIdle.js`, the same verdict the dashboard's Live activity
- *      widget renders).
+ *   5. No work is running. Durable queued jobs/messages remain queued across
+ *      restart; the Live activity snapshot supplies the running blockers.
  *
  * Nothing on disk is WRITTEN until every one of those has passed: the checkout
  * repairs run after the idle gate, never before it.
@@ -332,8 +330,9 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   // replacement for it.
   const processing = await getSystemActivity().catch(() => null);
   if (!processing) return standDown('activity-unknown', 'could not read the activity snapshot');
-  if (!processing.activity.idle) {
-    return standDown('busy', describeActivityBlockers(processing.activity.blockers));
+  const blockers = processing.activity.blockers.filter(b => !['agents-queued', 'mind-queued'].includes(b.kind) && !String(b.kind ?? '').startsWith('media-queued:'));
+  if (blockers.length) {
+    return standDown('busy', describeActivityBlockers(blockers));
   }
 
   // Only NOW may the checkout be written to. `prepareUpdateRepo` re-reads before
@@ -389,10 +388,10 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
  */
 async function launchUpdateFor(channel, io) {
   if (channel === 'release') {
-    await startPortosSelfUpdate({ io, mode: 'release' });
+    await startPortosSelfUpdate({ io, mode: 'release', automatic: true });
     return { ok: true };
   }
-  const result = await runAppUpdate({ io, appId: PORTOS_APP_ID });
+  const result = await runAppUpdate({ io, appId: PORTOS_APP_ID, automatic: true });
   return result.ok ? { ok: true } : { ok: false, message: result.message };
 }
 

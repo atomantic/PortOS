@@ -17,8 +17,9 @@
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import { logAction } from './history.js';
-import { checkPortosUpdatePreflight } from './updatePreflight.js';
-import { claimAppOperation, endAppOperation, handOffAppOperation, recordOperationStep, runAppOperation } from './appOperations.js';
+import { checkManualUpdateActivity, checkPortosUpdatePreflight } from './updatePreflight.js';
+import { claimAppOperation, endAppOperation, handOffAppOperation, isSoleDeferredUpdateAppOperation, recordOperationStep, runAppOperation } from './appOperations.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { appOperationErrorContext } from '../lib/appOperationErrorContext.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
@@ -45,6 +46,8 @@ export async function runAppUpdate({
   syncFork = false,
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
+  automatic = false,
+  acknowledgeInterruption = false,
 }) {
   const app = await appsService.getAppById(appId);
   if (!app) return { ok: false, reason: 'not-found', appId: null, code: null, message: 'App not found' };
@@ -57,6 +60,14 @@ export async function runAppUpdate({
   catch (error) {
     if (!['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(error.code)) throw error;
     return { ok: false, reason: 'refused', appId: app.id, code: error.code, message: error.message };
+  }
+  if (!claim.ok && !automatic && app.id === PORTOS_APP_ID) {
+    const waiting = maintenance.deferredUpdate.operation();
+    if (waiting?.phase === 'waiting' && !waiting.childPid && !waiting.holdId
+      && isSoleDeferredUpdateAppOperation([claim.inFlight], waiting.ownerPid)) {
+      endAppOperation(io, app.id, 'cancellation', claim.inFlight);
+      claim = claimAppOperation(io, app, 'update');
+    }
   }
   if (!claim.ok) {
     return {
@@ -82,11 +93,17 @@ export async function runAppUpdate({
       const refusal = await checkPortosUpdatePreflight({
         acknowledgeFork,
         acknowledgePersistentMindImageBackup,
+        acknowledgeInterruption, deferActivity: true,
       }).then(() => null, (err) => err);
       if (refusal) {
         endAppOperation(io, app.id, 'cancellation');
         operatingAppId = null;
         return { ok: false, reason: 'refused', appId: app.id, code: refusal.code || null, message: refusal.message };
+      }
+      const activityRefusal = await checkManualUpdateActivity({ automatic, acknowledgeInterruption, ignoreAppId: app.id }).then(() => null, err => err);
+      if (activityRefusal) {
+        endAppOperation(io, app.id, 'cancellation'); operatingAppId = null;
+        return { ok: false, reason: 'refused', appId: app.id, code: activityRefusal.code, message: activityRefusal.message };
       }
     }
 
@@ -100,6 +117,8 @@ export async function runAppUpdate({
     let failure = null;
     let errorContext = null;
     result = await appUpdater.updateApp(app, emit, {
+      ...(automatic ? { automatic } : {}),
+      ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}),
       syncFork,
       acknowledgeFork,
       acknowledgePersistentMindImageBackup,
@@ -163,6 +182,8 @@ export async function runAppUpdate({
       // A supervisor can fail before replacing this server. Clear this exact
       // progress row when it exits; a later operation must not be removed.
       result.completion?.then(outcome => {
+        if (!outcome?.success && !outcome?.superseded) io.emit('app:update:error', { appId: app.id,
+          code: outcome?.errorCode || null, message: outcome?.errorMessage || 'The update did not complete' });
         endAppOperation(io, app.id, outcome?.success ? 'completion' : 'failure', operation);
       }).catch(() => endAppOperation(io, app.id, 'failure', operation));
     } else if (operatingAppId) {

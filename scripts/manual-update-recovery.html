@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Continue PortOS update</title>
+  <style>
+    body { color: #e5e7eb; background: #111827; font: 16px/1.6 system-ui, sans-serif; max-width: 48rem; margin: 3rem auto; padding: 0 1.5rem; }
+    button, a { color: #93c5fd; } button { background: #1f2937; border: 1px solid #93c5fd; border-radius: .5rem; padding: .8rem 1rem; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: wait; } pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <h1>Continue PortOS update</h1>
+  <p>Work is active or could not be verified idle. Updating restarts PortOS and Chrome. Active agents, renders and provider calls may fail or lose unsaved progress. Saved state and queued work are preserved.</p>
+  <p>Save your work before continuing. An active installer, database restore or conflicting source changes will still prevent the update.</p>
+  <button id="continue" type="button">Update now and interrupt active work</button>
+  <p id="status" role="status" aria-live="polite">Confirmation is required. No update has started.</p>
+  <p><a href="/">Return to PortOS</a></p>
+  <pre id="output" aria-label="Update output"></pre>
+  <script src="/socket.io/socket.io.js"></script><!-- portos-allow-hidden-content: reviewed same-origin Socket.IO client -->
+  <!-- portos-allow-hidden-content: reviewed explicit confirmation using existing authenticated host controls --><script>
+    const button = document.getElementById('continue');
+    const status = document.getElementById('status');
+    const output = document.getElementById('output');
+    const id = new URLSearchParams(location.search).get('attempt');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id || '')) {
+      button.disabled = true;
+      status.textContent = 'This confirmation is invalid. Return to PortOS and request the update again.';
+    }
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      let accepted = false;
+      let commandId;
+      const buffered = [];
+      let socket;
+      const showFrame = (event, value) => {
+        if (event === `command:${commandId}:data`) output.textContent = (output.textContent + (value.data || '')).slice(-100000);
+        if (event === `command:${commandId}:complete`) status.textContent = value.success
+          ? 'The update command completed. Return to PortOS to verify the installed build.'
+          : 'The update command failed. Review the output and return to PortOS before retrying.';
+      };
+      try {
+        if (typeof io !== 'function') throw new Error('The command connection is unavailable. Return to PortOS and sign in before retrying.');
+        const appResponse = await fetch('/api/apps/portos-default', { credentials: 'same-origin' });
+        if (!appResponse.ok) throw new Error('Sign in to PortOS with host control before continuing.');
+        const app = await appResponse.json();
+        if (typeof app.repoPath !== 'string' || !app.repoPath) throw new Error('The PortOS workspace is unavailable. Use the terminal update command.');
+        socket = io();
+        socket.onAny((event, value) => {
+          if (!event.startsWith('command:')) return;
+          if (commandId) showFrame(event, value);
+          else if (buffered.length < 100) buffered.push([event, value]);
+        });
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('The authenticated command connection timed out.')), 10000);
+          socket.once('command:subscribed', () => { clearTimeout(timer); resolve(); });
+          socket.once('connect_error', () => { clearTimeout(timer); reject(new Error('Sign in to PortOS with host control before continuing.')); });
+          socket.on('connect', () => socket.emit('command:subscribe'));
+        });
+        status.textContent = 'Requesting the update. Completion has not been verified.';
+        const response = await fetch('/api/commands/execute', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: `node scripts/manual-update-recovery.mjs ${id}`, workspacePath: app.repoPath }) });
+        if (!response.ok) throw new Error('PortOS refused the command. Return to PortOS to check host access and try again.');
+        const result = await response.json();
+        if (typeof result.commandId !== 'string') throw new Error('The command response could not be verified. Check PortOS before retrying.');
+        accepted = true;
+        commandId = result.commandId;
+        status.textContent = 'Command accepted. Waiting for update output; success has not been verified.';
+        for (const frame of buffered) showFrame(...frame);
+        socket.on('disconnect', () => { status.textContent = 'PortOS disconnected. It may be restarting; completion is unverified. Return to PortOS when it is available.'; });
+      } catch (error) {
+        status.textContent = error.message;
+        socket?.disconnect();
+        // A missing response can follow a successful launch. Require a fresh
+        // review in PortOS instead of automatically repeating an interruption.
+        if (!accepted) output.textContent += '\nNo successful update has been verified. Check PortOS before retrying.';
+      }
+    });
+  </script>
+</body>
+</html>

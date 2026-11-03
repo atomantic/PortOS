@@ -2139,7 +2139,6 @@ const JUSTIFIED_SILENT_ERROR_RENDERS = new Map([
   // Wraps <AppOperationBanner>, which declares role="status" itself. A one-file
   // walk cannot see across the import, and a second role here would nest two
   // live regions around the same text.
-  ['src/components/apps/tabs/RepositorySourcePanel.jsx', new Set(['(isOperating || restarting || operationError || operationCompleted)'])],
   // Not a status message: `expandedSections.errors` is a disclosure toggle over
   // a static list of historical error CATEGORIES. It appears because the user
   // opened it, so announcing it would duplicate the button they just pressed.

@@ -207,6 +207,8 @@ async function _doUpdate(app, emit, {
   syncFork = false,
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
+  automatic = false,
+  acknowledgeInterruption = false,
 }) {
   const dir = app.repoPath;
   const steps = [];
@@ -216,6 +218,20 @@ async function _doUpdate(app, emit, {
     ? configuredRuntime
     : packageManager;
 
+  const pkgPath = join(dir, 'package.json');
+  let pkg = existsSync(pkgPath) ? JSON.parse(await readFile(pkgPath, 'utf-8')) : null;
+  const configuredUpdate = typeof app.updateCommand === 'string' ? app.updateCommand.trim() : '';
+  const standardScript = process.platform === 'win32' ? 'update.ps1' : 'update.sh';
+  const standardScriptPath = join(dir, standardScript);
+  let usesStandardScript = !configuredUpdate && !pkg?.scripts?.['portos:update'] && existsSync(standardScriptPath);
+  // PortOS running THIS checkout's own standard update script is the one case
+  // whose update routine deletes the process awaiting it — and the only shape
+  // updateExecutor knows how to launch, since it resolves update.sh from
+  // `PATHS.root` rather than from the app record. Both narrowings matter: a
+  // PortOS record carrying a custom `updateCommand`, or pointing somewhere
+  // other than this checkout, keeps the ordinary attached path rather than
+  // silently running a different script than the one configured.
+  const detachSelfUpdate = app.id === PORTOS_APP_ID && usesStandardScript && isSamePath(dir, PATHS.root);
   if (syncFork) {
     emit('git-sync-fork', 'running', 'Syncing the origin fork from canonical upstream...');
     const sync = await syncManagedAppFork(app);
@@ -225,6 +241,34 @@ async function _doUpdate(app, emit, {
     emit('git-sync-fork', 'done', syncMessage);
     steps.push({ step: 'git-sync-fork', success: true, message: syncMessage });
   }
+
+    if (detachSelfUpdate) {
+      // PortOS is itself a managed app, so an App Management update reaches
+      // update.sh through THIS path. `portosSelfUpdate` owns everything about
+      // launching that script — including why nothing may await it — and this
+      // returns the moment it is running. Read that module before changing this.
+      //
+      // `refresh` runs the standard lifecycle without a newer release. The
+      // supervisor owns the checkout before its script pulls any source.
+      //
+      // No `io`: App Management renders the run from its own `app:update:step`
+      // frames (`onStep`), so mirroring the whole stream onto
+      // `portos:update:*` as well would double the fan-out for no new reader.
+      const launch = await startPortosSelfUpdate({
+        ...(automatic ? { automatic } : {}),
+        ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}),
+        acknowledgeFork,
+        acknowledgePersistentMindImageBackup,
+        preflightAlreadyRun: true,
+        mode: 'refresh',
+        onStep: emit,
+      });
+      const launched = 'PortOS update running — this process restarts as part of it';
+      emit('app-update', 'running', launched);
+      steps.push({ step: 'app-update', success: true, message: launched });
+      return { success: true, steps, selfUpdateStarted: true, supervisorPid: launch.supervisorPid,
+        completed: launch.completed, completion: launch.completion };
+    }
 
   emit('git-pull', 'running', 'Updating from origin default branch...');
   const pullResult = await gitService.updateDefaultBranch(dir);
@@ -251,20 +295,9 @@ async function _doUpdate(app, emit, {
     steps.push({ step: stepId, success: true, message: companionMessage });
   }
 
-  const pkgPath = join(dir, 'package.json');
-  const pkg = existsSync(pkgPath) ? JSON.parse(await readFile(pkgPath, 'utf-8')) : null;
-  const configuredUpdate = typeof app.updateCommand === 'string' ? app.updateCommand.trim() : '';
-  const standardScript = process.platform === 'win32' ? 'update.ps1' : 'update.sh';
-  const standardScriptPath = join(dir, standardScript);
-  const usesStandardScript = !configuredUpdate && !pkg?.scripts?.['portos:update'] && existsSync(standardScriptPath);
-  // PortOS running THIS checkout's own standard update script is the one case
-  // whose update routine deletes the process awaiting it — and the only shape
-  // updateExecutor knows how to launch, since it resolves update.sh from
-  // `PATHS.root` rather than from the app record. Both narrowings matter: a
-  // PortOS record carrying a custom `updateCommand`, or pointing somewhere
-  // other than this checkout, keeps the ordinary attached path rather than
-  // silently running a different script than the one configured.
-  const detachSelfUpdate = app.id === PORTOS_APP_ID && usesStandardScript && isSamePath(dir, PATHS.root);
+  // Other managed apps select their routine from the newly pulled checkout.
+  pkg = existsSync(pkgPath) ? JSON.parse(await readFile(pkgPath, 'utf-8')) : null;
+  usesStandardScript = !configuredUpdate && !pkg?.scripts?.['portos:update'] && existsSync(standardScriptPath);
   if (configuredUpdate || pkg?.scripts?.['portos:update'] || usesStandardScript) {
     // A configured runtime may be an absolute Bun path, which is trusted app
     // configuration but not a commandSecurity allowlist token. Only free-form
@@ -291,32 +324,6 @@ async function _doUpdate(app, emit, {
       console.log(`⚠️ PortOS update is using the attached path — ${reason}`);
     }
     emit('app-update', 'running', 'Running the app update routine...');
-    if (detachSelfUpdate) {
-      // PortOS is itself a managed app, so an App Management update reaches
-      // update.sh through THIS path. `portosSelfUpdate` owns everything about
-      // launching that script — including why nothing may await it — and this
-      // returns the moment it is running. Read that module before changing this.
-      //
-      // `refresh`, not `reconcile`: the git-pull step above already advanced
-      // this checkout, so the out-of-sync gate would only be re-asking whether
-      // the pull we just did happened.
-      //
-      // No `io`: App Management renders the run from its own `app:update:step`
-      // frames (`onStep`), so mirroring the whole stream onto
-      // `portos:update:*` as well would double the fan-out for no new reader.
-      const launch = await startPortosSelfUpdate({
-        acknowledgeFork,
-        acknowledgePersistentMindImageBackup,
-        preflightAlreadyRun: true,
-        mode: 'refresh',
-        onStep: emit,
-      });
-      const launched = 'PortOS update running — this process restarts as part of it';
-      emit('app-update', 'running', launched);
-      steps.push({ step: 'app-update', success: true, message: launched });
-      return { success: true, steps, selfUpdateStarted: true, supervisorPid: launch.supervisorPid,
-        completed: launch.completed, completion: launch.completion };
-    }
     await runCommand(command.baseCommand, command.args, dir);
     emit('app-update', 'done', 'App update routine complete');
     steps.push({ step: 'app-update', success: true });

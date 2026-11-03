@@ -17,6 +17,7 @@
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
 export * from './windowsAgentProcess.js';
+export * from './providerCallActivity.js';
 export * from './releaseAttemptMembership.js';
 export * from './releasePublication.js';
 export * from './releaseSynchronization.js';

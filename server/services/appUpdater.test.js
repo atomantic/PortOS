@@ -208,6 +208,7 @@ describe('managed app updates', () => {
       mode: 'refresh',
       onStep: emit,
     });
+    expect(mock.updateDefaultBranch).not.toHaveBeenCalled();
     expect(mock.spawn).not.toHaveBeenCalled();
     // Never "done": the script is still running, and claiming completion is
     // what let the Git tab clear its progress row mid-update.

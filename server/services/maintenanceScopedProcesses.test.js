@@ -9,6 +9,20 @@ describe('workspace-scoped survivor detection', () => {
   const cli = [{ kind: 'cli-run', resource: 'run-1' }];
   const options = { data: '/install/data', loadRun: async () => ({ workspacePath: '/repos/work', providerId: 'example' }),
     loadProvider: async () => ({ command: 'codex' }), loadApp: async () => null, selfPid: 1 };
+  it('does not turn shared desktop daemon cwd into a workspace job, but preserves a real CLI child', async () => {
+    const rows = [{ pid: 2, ppid: 1, command: '/opt/codex app-server daemon pid-update-loop' },
+      { pid: 3, ppid: 2, command: '/opt/codex app-server --listen unix:// --managed-daemon' }];
+    const probeCwds = async () => new Map(rows.map(row => [row.pid, '/repos/work']));
+    await expect(assertNoScopedLegacyProcesses(cli, rows, { ...options, probeCwds })).resolves.toEqual([]);
+    rows.push({ pid: 4, ppid: 3, command: '/opt/codex exec -p task' });
+    await expect(assertNoScopedLegacyProcesses(cli, rows, { ...options, probeCwds })).rejects.toMatchObject({ code: 'MAINTENANCE_STALE' });
+  });
+  it('exempts the owned stdio service only with complete provider activity instrumentation', async () => {
+    const rows = [{ pid: 2, ppid: 1, command: 'node /portos/server/start.js' }, { pid: 3, ppid: 2, command: 'codex app-server' }];
+    await expect(assertNoScopedLegacyProcesses([], rows, { ...options, codeRoot: '/portos' })).rejects.toThrow('older runtime');
+    await expect(assertNoScopedLegacyProcesses(cli, rows, { ...options, codeRoot: '/portos', idleProviderServices: true,
+      probeCwds: async () => new Map([[3, '/repos/work']]) })).resolves.toEqual([]);
+  });
   it('detects a detached CLI without the run ID in its command line', async () => {
     const processes = [{ pid: 2, state: 'S', command: '/usr/local/bin/codex exec' }];
     await expect(assertNoScopedLegacyProcesses(cli, processes, { ...options, probeCwds: async () => new Map([[2, '/repos/work']]) }))

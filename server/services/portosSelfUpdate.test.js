@@ -1,3 +1,7 @@
+vi.mock('./activeProcessing.js', () => ({ getSystemActivity: vi.fn(async () => ({
+  jobs: [], agents: { trusted: true, active: 0, queued: 0 }, mind: { trusted: true, thinking: false, queued: 0 },
+  llm: { trusted: true, active: 0 }, extras: { imageTo3d: [] }, appOperations: [], renders: [], backup: { inProgress: false },
+})) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The release and reconcile modes are already driven end-to-end through
@@ -51,6 +55,12 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(inSyncStatus());
     launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
+  });
+  it('preserves a late interruption-consent refusal in the async UI error', async () => {
+    launchUpdate.mockResolvedValueOnce({ started: true, completion: Promise.resolve({ success: false,
+      errorCode: 'UPDATE_INTERRUPTION_REQUIRED', errorMessage: 'Save your work before continuing' }) });
+    await startPortosSelfUpdate({ io, mode: 'refresh' });
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({ code: 'UPDATE_INTERRUPTION_REQUIRED' })));
   });
 
   it('runs on an in-sync install, where a reconcile would refuse', async () => {
