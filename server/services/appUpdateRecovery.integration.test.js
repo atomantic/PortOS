@@ -6,7 +6,7 @@ vi.mock('../lib/detachedSpawn.js', () => ({ spawnDetached: vi.fn(), isDetachedRu
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async () => ({ id: 'portos-default', name: 'PortOS', repoPath: '/example/portos' })),
   notifyAppsChanged: vi.fn() }));
 vi.mock('./appUpdater.js', () => ({ updateApp: vi.fn() }));
-vi.mock('./updatePreflight.js', () => ({ checkPortosUpdatePreflight: vi.fn(async () => {}) }));
+vi.mock('./updatePreflight.js', () => ({ checkPortosUpdatePreflight: vi.fn(async () => {}), checkManualUpdateActivity: vi.fn(async () => {}) }));
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('./updateChecker.js', () => ({ recordUpdateResult: vi.fn(async () => {}), getCurrentVersion: vi.fn(async () => '1.0.0') }));
 
@@ -17,6 +17,7 @@ import * as appUpdater from './appUpdater.js';
 import { runAppUpdate } from './appUpdateRunner.js';
 import { __resetAppOperations, listActiveAppOperations } from './appOperations.js';
 import { launchUpdate } from './updateExecutor.js';
+import { checkManualUpdateActivity } from './updatePreflight.js';
 
 afterEach(() => { __resetAppOperations(); vi.clearAllMocks(); });
 
@@ -47,6 +48,7 @@ describe('App Management update recovery', () => {
     });
     const io = { emit: vi.fn() };
     await expect(runAppUpdate({ io, appId: 'portos-default' })).resolves.toEqual({ ok: true });
+    expect(checkManualUpdateActivity).toHaveBeenCalledWith({ automatic: false, acknowledgeInterruption: false, ignoreAppId: 'portos-default' });
     await vi.waitFor(() => expect(listActiveAppOperations()).toEqual([]));
     expect(maintenance.deferredUpdate.launch()).toBeNull();
     expect(child.stopTailing).toHaveBeenCalledOnce();
