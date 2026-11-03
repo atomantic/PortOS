@@ -542,6 +542,25 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(manifest.sections.find((s) => s.id === 'intro').source).toContain('#123456');
   });
 
+  it('names an over-long section as too long, not non-deterministic, and states the limit up front', async () => {
+    const id = await fixture();
+    const long = `function render(ctx, env) { ctx.fillStyle = '#000000';${' '.repeat(20001)}}`;
+    const retries = [];
+    h.onSubmit = async () => {
+      if (h.prompt.includes('was rejected')) {
+        retries.push(h.prompt);
+        h.response = response({ intro: '#123456' });
+      } else {
+        expect(h.prompt).toContain('at most 20000 characters');
+        h.response = JSON.stringify({ sections: [{ id: 'intro', source: long }, { id: 'still', source: source('#445566') }, { id: 'clip', source: source('#778899') }] });
+      }
+    };
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatch(/section "intro" was rejected: A section function is \d+ characters, over the 20000-character limit/);
+    expect(retries[0]).not.toMatch(/was rejected: .*non-deterministic/i);
+  });
+
   it('retries an answer with no usable section once as a whole, then fails without a call per section', async () => {
     const id = await fixture();
     h.calls = 0;

@@ -13,7 +13,7 @@ import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
-import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
+import { isDeterministicCodeSource, MUSIC_VIDEO_CODE_SOURCE_MAX } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
@@ -91,6 +91,11 @@ function hasAmbientThreeRandom(fn) {
 // Only an exact function declaration is embedded as a literal in generated.js.
 // In particular, no model-supplied top-level statement ever runs in the page.
 function checkedFunction(source) {
+  // Say so plainly: an over-long section used to read as a determinism failure,
+  // and the retry kept the length because it hunted for a banned call instead.
+  if (typeof source === 'string' && source.length > MUSIC_VIDEO_CODE_SOURCE_MAX) {
+    throw fail(`A section function is ${source.length} characters, over the ${MUSIC_VIDEO_CODE_SOURCE_MAX}-character limit. Return a shorter render function`, 'SECTION_SOURCE_TOO_LONG');
+  }
   if (!isDeterministicCodeSource(source)) throw fail('A section contains a networked or non-deterministic call', 'NONDETERMINISTIC_SECTION');
   let body;
   try { body = parse(source, { sourceType: 'script' }).program.body; }
@@ -377,7 +382,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
       title: project.name, song: { ...context.song, sections }, palette: context.palette, treatment: project.treatment,
       visualSpec: project.visualSpec, scenes, styleLines: sharedStyle.styleLines,
       onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, scoped ? { sceneIds: scenes.map((scene) => scene.sceneId), sections } : {}),
-    });
+    }) + `\n\nSize limit: each section's render function source must be at most ${MUSIC_VIDEO_CODE_SOURCE_MAX} characters; longer sections are rejected.`;
   };
   const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback}` : prompt);
   const guardedBeforeSubmit = async (submission) => {
