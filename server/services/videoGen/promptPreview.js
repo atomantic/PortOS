@@ -18,6 +18,7 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFEREN
 import { grokVideoSentPrompt } from './grok.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
+import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT } from '../../lib/musicVideoConditioning.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -90,6 +91,10 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     // Uploaded reference images follow, named in place of their staged paths.
     castReferences = [...castReferences, ...videoReferenceImageSlots(uploads, body)
       .map(({ field, label }) => ({ path: `(uploaded ${field})`, label }))];
+    if (castReferences.length > MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT) {
+      throw new ServerError(`Grok can send at most ${MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT} combined clip references.`,
+        { status: 400, code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
+    }
     return { backend, ...grokVideoSentPrompt({
       prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,

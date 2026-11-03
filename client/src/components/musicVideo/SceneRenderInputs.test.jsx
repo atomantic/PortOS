@@ -27,6 +27,19 @@ describe('shotCardRenderRequest', () => {
     expect(hailuo.promptAdditions.some((a) => a.id === 'prompt-expansion')).toBe(false);
   });
 
+  it('shows the same named references the fal clip request will send', () => {
+    const project = { visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider' },
+      { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+    ] } };
+    const selected = scene({ clipReferenceIds: ['rider', 'bike'] });
+    const request = shotCardRenderRequest({ project, scene: selected, settings: { backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video' } });
+    expect(request.prompt).toContain('Image 1 is the reference for Rider. Image 2 is the reference for Bike.');
+    expect(request.promptAdditions).toContainEqual(expect.objectContaining({ id: 'clip-references' }));
+    const loose = shotCardRenderRequest({ project, scene: selected, settings: { backend: 'fal', falModelId: 'bytedance/seedance-2.5/reference-to-video' } });
+    expect(loose.prompt).toContain('Use @Image1 as the opening view. @Image2 is the reference for Rider. @Image3 is the reference for Bike.');
+  });
+
   it('offers song audio for a cutaway on an LTX-2 model, off unless toggled, and drops the end frame with it', () => {
     const base = { scene: scene({ endImageId: 'end.png' }), settings: { backend: 'local', modelId: 'ltx25_example' }, models, endFramePlan: { used: true } };
     expect(shotCardRenderRequest(base)).toMatchObject({ songAudio: { state: 'off', note: 'Song 1:04.2–1:09.8' }, endFrame: { state: 'on' } });

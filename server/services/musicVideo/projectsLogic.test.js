@@ -1129,6 +1129,7 @@ describe('create-schema parity', () => {
     lyricText: 'line one',
     visualIntent: 'calm',
     frameReferenceIds: ['ref-a', 'ref-b'],
+    clipReferenceIds: ['ref-b'],
     characterVariant: { ingredientId: 'cat-chr-x', age: 7 },
     camera: { move: 'slow-dolly-in' },
     visualLayer: 'still',

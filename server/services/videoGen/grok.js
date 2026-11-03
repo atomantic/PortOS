@@ -148,10 +148,11 @@ export function buildGrokVideoPrompt({
     ].join('\n');
   } else if (sourceImagePath && castReferences.length) {
     const ratioArg = aspectRatio ? `\nCall it with aspect_ratio "${aspectRatio}".` : '';
+    const subjects = castReferences.some((ref) => ref.role && ref.role !== 'character') ? 'visual' : 'character';
     steps = [
       `Use your built-in reference_to_video tool (not image_to_video) to animate the source image for ${duration} seconds.`,
       `Set first_frame to ${sourceImagePath} so the clip opens exactly on that frame.`,
-      `Set images to ${castReferences.length === 1 ? 'this character reference' : `these ${castReferences.length} character references, in this order`}: ${castReferences.map((ref) => ref.path).join(', ')}`,
+      `Set images to ${castReferences.length === 1 ? `this ${subjects} reference` : `these ${castReferences.length} ${subjects} references, in this order`}: ${castReferences.map((ref) => ref.path).join(', ')}`,
       `Start the tool's prompt with this cast note: ${grokCastNote(castReferences)}`,
       `Then continue the tool's prompt with the motion/direction prompt: ${prompt.trim()}${avoid}${ratioArg}`,
     ].join('\n');
@@ -169,11 +170,19 @@ export function buildGrokVideoPrompt({
 // With first_frame set, reference_to_video numbers its `images` from <IMAGE_1>.
 // Sheet and guide labels append details after " — ", " - ", or " · ".
 const castName = (label) => String(label || '').split(/\s[—·-]\s/)[0].trim() || 'this person';
-export const grokCastNote = (castReferences) => [
-  castReferences.map((ref, i) => `<IMAGE_${i + 1}> shows how ${castName(ref.label)} looks`).join('; ') + '.',
-  'Keep each person\'s face, hair, build and clothing matching their reference for the whole clip, including when a face that starts hidden or turned away is revealed.',
-  'The references set identity only: take the place, light, pose and framing from the first frame, and never add a person who is not in the first frame or the shot.',
-].join(' ');
+export const grokCastNote = (castReferences) => {
+  const visual = castReferences.some((ref) => ref.role && ref.role !== 'character');
+  const people = castReferences.some((ref) => !ref.role || ref.role === 'character');
+  return [
+    castReferences.map((ref, i) => ref.role && ref.role !== 'character'
+      ? `<IMAGE_${i + 1}> is the ${ref.role} reference for ${castName(ref.label)}`
+      : `<IMAGE_${i + 1}> shows how ${castName(ref.label)} looks`).join('; ') + '.',
+    people ? 'Keep each person\'s face, hair, build and clothing matching their reference for the whole clip, including when a face that starts hidden or turned away is revealed.' : null,
+    visual
+      ? 'Use each reference only for its named subject; preserve the first frame\'s composition and light. Never add a person who is not in the first frame or the shot.'
+      : 'The references set identity only: take the place, light, pose and framing from the first frame, and never add a person who is not in the first frame or the shot.',
+  ].filter(Boolean).join(' ');
+};
 
 // Where a storyboard-guided render's first frame is directed, so it can be kept beside the clip.
 const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');

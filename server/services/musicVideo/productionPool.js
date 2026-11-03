@@ -28,7 +28,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { FAL_IMAGE_FAMILIES, buildFalImageRequest, falImageFamily } from '../../lib/falImageModels.js';
 import { resolveFalApiKey } from '../falQueue.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationModes.js';
-import { musicVideoConditioningReferences, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
@@ -98,11 +98,18 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
     return runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) }).costUsd;
   }
   if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'fal' && scene) {
-    return falSceneTake({
+    const take = falSceneTake({
       scene,
       videoSettings: falRouteVideoSettings(project, route),
       songDurationSec: project?.audioAnalysis?.durationSec ?? null,
-    }).costUsd;
+    });
+    // H3 bills image-reference tokens by aspect ratio. The pool cannot know a
+    // reference's actual dimensions here, so its output-only quote cannot bound
+    // a dollar-capped production step that may send extra images.
+    const maySendReferences = Array.isArray(scene.clipReferenceIds) ? scene.clipReferenceIds.length > 0
+      : Boolean(scene.characterVariant || musicVideoClipConditioningReferences(project, scene).length);
+    if (take.modelId === 'minimax/h3-max/reference-to-video' && maySendReferences) return null;
+    return take.costUsd;
   }
   return routePriceUsd(route, project);
 }

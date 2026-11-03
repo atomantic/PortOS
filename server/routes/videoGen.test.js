@@ -1358,7 +1358,7 @@ describe('videoGen routes', () => {
       getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
       clipCastReferences.mockResolvedValueOnce(refs).mockResolvedValueOnce(refs);
       const body = { backend: 'grok', mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 6,
-        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, expectedClipReferenceFiles: ['person.png'] } };
       const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
       expect(preview.status).toBe(200);
       expect(preview.body.sentPrompt).toContain('<IMAGE_1> shows how Person looks');

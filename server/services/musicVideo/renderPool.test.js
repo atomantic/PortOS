@@ -24,7 +24,7 @@ beforeEach(() => {
 describe('project render-pool submission policy', () => {
   it('assigns the least occupied explicit peer/model and never modifies grants', async () => {
     m.jobs = [{ status: 'queued', params: { remoteMedia: { peerId: 'peer-a' } } }];
-    expect(await applyProjectRenderPool(body())).toMatchObject({ mediaProviderPeerId: 'peer-b', modelId: 'model-b' });
+    expect(await applyProjectRenderPool(body())).toMatchObject({ mediaProviderPeerId: 'peer-b', modelId: 'model-b', musicVideo: { clipReferencesDisabled: true } });
     expect(m.resolve).toHaveBeenCalledWith({ id: 'peer-b' }, { kind: 'video', engine: 'local', modelId: 'model-b' });
   });
   it('refuses ready-but-too-large models, unknown maintenance and missing audio negotiation', async () => {

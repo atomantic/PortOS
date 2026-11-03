@@ -4,6 +4,8 @@ import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
 import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity } from '../../../../server/lib/musicVideoConditioning.js';
+import { falClipReferenceAddition } from '../../../../server/lib/storyboardGuidance.js';
 import { formatCount } from '../../utils/formatters.js';
 import SentPromptPanel from '../media/SentPromptPanel';
 import ModelInputPreview from '../media/ModelInputPreview';
@@ -34,7 +36,7 @@ const clock = (sec) => {
  * input is `{ state: 'on' | 'off' | 'required' | 'unavailable', note }` (`wholeLine` is null off a performance shot).
  */
 export function shotCardRenderRequest({
-  project = null, greybox = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
+  project = null, castMedia = null, greybox = null, scene, settings = {}, performance = false, endFramePlan = null, models = [], defaultModel = '', inputs = {}, plan = null,
 }) {
   const falModel = settings.backend === 'fal' ? getFalVideoModel(falSceneTake({ scene, videoSettings: settings }).modelId) : null;
   const runwayModel = settings.backend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: settings }).modelId) : null;
@@ -58,12 +60,16 @@ export function shotCardRenderRequest({
   const contract = scene?.direction?.actionContract;
   const contractProblem = contract != null ? shotActionContractProblem(contract, scene) : null;
   const authored = authoredShotPrompt(scene);
-  const { prompt, promptAdditions: composedAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
+  const { prompt: composedPrompt, promptAdditions: composedAdditions } = musicVideoShotModelInput(contractProblem ? null : project, scene, {
     greybox, authored, asTyped: true, hears, backend: settings.backend, audioReactive,
     audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
   // The server sends music-video fal takes with provider expansion disabled (fal.js).
-  const promptAdditions = [...composedAdditions, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
+  const clipReferences = falModel?.referenceImages && scene?.referenceImageId
+    ? falClipReferenceAddition(falModel, musicVideoClipConditioningReferences(project, scene, castMedia,
+      { limit: musicVideoClipReferenceCapacity('fal', falModel) }), { hasImage: true, prompt: composedPrompt }) : null;
+  const prompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
+  const promptAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
   let endFrame = null;
   if (scene?.endImageId) {

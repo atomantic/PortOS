@@ -44,6 +44,21 @@ export function falReferenceImageName(model, index) {
   return (model.referenceImages.promptName ?? 'Image 1').replace(/1$/, String(index + 1));
 }
 
+/** A clip's reference labels, in the same order as the provider's image list. */
+export function falClipReferenceAddition(model, references = [], { hasImage = true, prompt = '' } = {}) {
+  if (!model?.referenceImages) return null;
+  const looseStart = hasImage && !model.image;
+  const firstName = looseStart ? falReferenceImageName(model, 0) : null;
+  const lines = looseStart && !prompt.includes(`${firstName} is the opening frame`)
+    ? [`Use ${firstName} as the opening view.`] : [];
+  const offset = looseStart ? 1 : 0;
+  for (const [index, ref] of references.entries()) {
+    const label = String(ref.label || ref.role || 'visual reference').replace(/\s+/g, ' ').trim();
+    lines.push(`${falReferenceImageName(model, index + offset)} is the reference for ${label}.`);
+  }
+  return lines.length ? { id: 'clip-references', label: 'Clip references', text: lines.join(' ') } : null;
+}
+
 /** Why `model` cannot render from a storyboard panel, or null when it can. */
 export function falStoryboardGuidanceProblem(model) {
   if (!model?.referenceImages) return `${model?.label || 'This fal.ai model'} takes no reference images. Pick a reference model such as Seedance 2.5 (reference) to render from a storyboard panel.`;

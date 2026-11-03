@@ -207,6 +207,15 @@ describe('videoGen/grok — generateVideo', () => {
     await vi.waitFor(() => expect(paths.map((path) => existsSync(path))).toEqual([false, false, false]));
   });
 
+  it('describes a selected prop as a prop rather than a person', () => {
+    const prompt = grok.buildGrokVideoPrompt({ prompt: 'she rides', sourceImagePath: '/abs/frame.png', duration: 6,
+      stagingPath: '/tmp/result.mp4', scratchDir: '/tmp/shot',
+      castReferences: [{ path: '/abs/rider.png', label: 'Rider' }, { path: '/abs/bike.png', label: 'Bike', role: 'prop' }] });
+    expect(prompt).toContain('<IMAGE_1> shows how Rider looks; <IMAGE_2> is the prop reference for Bike.');
+    expect(prompt).toContain('Use each reference only for its named subject');
+    expect(prompt).toContain('Set first_frame to /abs/frame.png');
+  });
+
   it('keeps image_to_video for a still with no cast, and for a clip with no still', async () => {
     await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', castReferences: [] });
     expect(promptOf()).not.toContain('reference_to_video');

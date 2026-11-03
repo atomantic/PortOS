@@ -191,3 +191,14 @@ describe('useMusicVideoSceneMedia cold-open clip sound', () => {
     }
   });
 });
+
+it('sends the clip card\'s expected reference files with the video request', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', order: 0, prompt: 'a rider', referenceImageId: 'start.png', takes: [], startSec: 0, endSec: 4 };
+  const project = { id: 'p7', scenes: [shot] };
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
+  generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
+  await act(async () => { await result.current.generateSceneVideo(shot, { card: { prompt: shot.prompt, expectedClipReferenceFiles: ['rider.png'] } }); });
+  expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['rider.png'] });
+  cleanup();
+});

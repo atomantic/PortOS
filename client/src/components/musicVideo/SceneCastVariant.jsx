@@ -27,6 +27,10 @@ export default function SceneCastVariant({ project, scene, castMedia = null, onE
     const patch = Array.isArray(picked)
       ? { characterVariant: next, frameReferenceIds: kept.length || !picked.length ? kept : null }
       : { characterVariant: next };
+    if (Array.isArray(scene.clipReferenceIds)) {
+      const clip = scene.clipReferenceIds.filter((refId) => !refId.startsWith('mvr-guide-'));
+      patch.clipReferenceIds = clip.length || !scene.clipReferenceIds.length ? clip : null;
+    }
     onEditLocal(scene.sceneId, patch);
     onSave(scene.sceneId, patch);
   };

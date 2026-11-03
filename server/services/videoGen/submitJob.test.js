@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   discardSourceAudioWindow: vi.fn(async () => ({ ok: true })),
   unlink: vi.fn(async () => {}),
   musicVideoClipCastReferences: vi.fn(async () => []),
+  musicVideoClipReferences: vi.fn(async () => []),
 }));
 
 vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
@@ -59,7 +60,7 @@ vi.mock('../fableLoom/visualConditioning.js', () => ({
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: mocks.enqueueJob }));
 vi.mock('../musicVideo/projects.js', () => ({ getProject: mocks.getMusicVideoProject }));
-vi.mock('../musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: mocks.musicVideoClipCastReferences }));
+vi.mock('../musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: mocks.musicVideoClipCastReferences, musicVideoClipReferences: mocks.musicVideoClipReferences }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: mocks.preparePerformanceShot }));
 vi.mock('../musicVideo/revisionService.js', () => ({ assertRevisionOpen: mocks.assertRevisionOpen }));
 vi.mock('../musicVideo/productionService.js', () => ({ assertProductionSubmission: mocks.assertProductionSubmission }));
@@ -608,6 +609,27 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob.mock.calls.at(-1)[0].params.musicVideoCostUsd).toBeGreaterThan(0);
       await submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', musicVideo: { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'k' } }, {});
       expect(mocks.enqueueJob.mock.calls.at(-1)[0].params).not.toHaveProperty('musicVideoCostUsd');
+    });
+
+    it('refuses new H3 image-reference costs at the production queue boundary when a dollar cap applies', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.musicVideoClipReferences.mockResolvedValueOnce([{ path: '/example/rider.png', label: 'Rider' }]);
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }],
+        productionRuns: [{ id: 'mvpr-1', limits: { spendCapUsd: 1 } }] });
+      await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video',
+        musicVideo: { ...musicVideo, productionRunId: 'mvpr-1', productionStepKey: 'k' } }, {}))
+        .rejects.toMatchObject({ code: 'PRODUCTION_COST_UNKNOWN' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('refuses a paid clip if its resolved references differ from the shot card', async () => {
+      mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
+      mocks.musicVideoClipReferences.mockResolvedValueOnce([{ path: '/example/new-rider.png', label: 'Rider' }]);
+      mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
+      await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video',
+        musicVideo: { ...musicVideo, expectedClipReferenceFiles: ['previous-rider.png'] } }, {}))
+        .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
     it('stamps the quoted runway estimate on a board-started clip but not on a production-run step (#10157)', async () => {

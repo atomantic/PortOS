@@ -25,6 +25,10 @@ import { grokSceneRequestDuration, isPerformanceScene, planPerformanceRepair } f
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
+import SceneClipReferences from './SceneClipReferences.jsx';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices } from '../../../../server/lib/musicVideoConditioning.js';
+import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
@@ -146,6 +150,7 @@ export default function SceneCard({
   const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
   const [speakerDirty, setSpeakerDirty] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
+  const [clipReferenceSaveState, setClipReferenceSaveState] = useState('saved');
   // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
   const [swapKind, setSwapKind] = useState(null);
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
@@ -192,8 +197,19 @@ export default function SceneCard({
     ? scene.lastFailure : null;
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
-  const cardRequest = shotCardRenderRequest({ project, scene, greybox, settings: renderSettings || {}, performance, endFramePlan,
+  const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
+  const peerPool = ['both', 'peers'].includes(renderSettings?.renderPool?.mode);
+  const referenceBackend = peerPool ? 'remote' : renderSettings?.backend || renderLane;
+  const referenceModel = referenceBackend === 'fal'
+    ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
+    : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
+  const referenceCapacity = musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  const variantId = scene.characterVariant?.ingredientId;
+  const guidesPending = referenceCapacity > 0 && variantId && castMedia && castMedia[variantId] === undefined;
+  const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
+  const missingReference = referenceCapacity > 0 && Array.isArray(scene.clipReferenceIds)
+    && scene.clipReferenceIds.some((id) => !availableReferences.some((ref) => ref.id === id));
   // Hosted cutaways cannot use the Local project's supplied-audio default. Preserve
   // an unknown Local model and required performance/audio-reactive inputs for the server to validate.
   const songAudioState = cardRequest.songAudio.state;
@@ -208,13 +224,18 @@ export default function SceneCard({
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
   };
   const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
-  const videoRefusal = greyboxRefusal || otherRefusal;
+  const referenceRefusal = clipReferenceSaveState === 'saving' ? 'Saving clip references…'
+    : clipReferenceSaveState === 'failed' ? 'Save the clip references before rendering'
+      : guidesPending ? 'Cast guides are still loading'
+        : missingReference ? 'A selected clip reference is unavailable' : null;
+  const videoRefusal = greyboxRefusal || referenceRefusal || otherRefusal;
   const sendRender = () => {
     const { endFrame, wholeLine } = cardRequest;
     const card = {
       prompt: cardRequest.authored,
       ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
       ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
+      expectedClipReferenceFiles: musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity }).map((ref) => ref.imageId),
       ...songAudioField,
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
@@ -227,7 +248,7 @@ export default function SceneCard({
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
-  const storyboardRefusal = storyboardDefault ? greyboxRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
+  const storyboardRefusal = storyboardDefault ? greyboxRefusal || referenceRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
     const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
@@ -628,6 +649,9 @@ export default function SceneCard({
               saved={falVideoSettings || {}} disabled={!!generatingVideo} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
+          {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
+            backend={referenceBackend} model={referenceModel} onEditLocal={onEditLocal} onSave={onSave}
+            saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))}

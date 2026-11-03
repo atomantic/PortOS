@@ -24,6 +24,56 @@ beforeEach(() => {
   previewVideoPrompt.mockClear();
 });
 
+it('holds Render while clip references are saving or failed and releases it after a retry', async () => {
+  let settle;
+  const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+  const project = { id: 'mv-1', visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+  ] } };
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', prompt: 'Rider turns', startSec: 0, endSec: 4, referenceImageId: 'frame.png', takes: [] });
+    return <SceneCard scene={scene} project={project} index={0} expanded lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+  render(<Harness />);
+  show('Clip');
+  const clip = screen.getByRole('group', { name: 'Clip references' });
+  fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
+  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  const generate = screen.getByRole('button', { name: 'Render' });
+  expect(generate.disabled).toBe(true);
+  settle(false);
+  await waitFor(() => expect(within(clip).getByRole('button', { name: 'Retry saving clip references' })).toBeTruthy());
+  expect(generate.disabled).toBe(true);
+  fireEvent.click(within(clip).getByRole('button', { name: 'Retry saving clip references' }));
+  settle(true);
+  await waitFor(() => expect(generate.disabled).toBe(false));
+  expect(onSave).toHaveBeenLastCalledWith('s1', { clipReferenceIds: ['rider', 'bike'] });
+});
+
+it('also waits for clip-reference edits before starting a storyboard-to-clip render', async () => {
+  let settle;
+  const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+  const project = { id: 'mv-1', visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+  ] } };
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'Rider turns', startSec: 0, endSec: 4, takes: [] });
+    return <SceneCard scene={scene} project={project} index={0} expanded lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} onGenerateFrame={vi.fn()} />;
+  }
+  render(<Harness />);
+  const clip = screen.getByRole('group', { name: 'Clip references' });
+  fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
+  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  const generate = screen.getByRole('button', { name: 'Clip from storyboard' });
+  expect(generate.disabled).toBe(true);
+  settle(true);
+  await waitFor(() => expect(generate.disabled).toBe(false));
+});
+
 it('previews the Grok shot with the duration and frame the card will submit', async () => {
   const scene = { sceneId: 's1', startSec: 0, endSec: 8, prompt: 'A person waves', referenceImageId: 'still.png', takes: [] };
   render(<SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded
@@ -726,7 +776,7 @@ describe('Sent to the model', () => {
     expect(within(inputs).getByText('She shakes her head')).toBeTruthy();
     fireEvent.click(within(inputs).getByLabelText('Song audio'));
     fireEvent.click(screen.getByRole('button', { name: 'Render' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true, expectedClipReferenceFiles: [] } }));
   });
 
   it.each(['fal', 'runway'])('sends silent cutaways on %s without changing the project audio default', (backend) => {

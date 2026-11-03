@@ -13,6 +13,25 @@ import { escapeRegExp } from './textUtils.js';
  */
 export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
 
+// The Grok CLI does not expose its underlying video-model id. Seven references
+// is supported by both the older Imagine model and the newer 1.5 model.
+export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
+
+/** Extra image slots beside the selected source frame for a video render. */
+export function musicVideoClipReferenceCapacity(backend, model = null) {
+  if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT;
+  if (backend === 'fal') {
+    const max = Number(model?.referenceImages?.max) || 0;
+    return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));
+  }
+  if (backend === 'local') {
+    const images = Number(model?.maxReferenceImages) || 0;
+    const total = Number(model?.maxReferenceTotal) || Infinity;
+    return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, images - 1, total - 1));
+  }
+  return 0;
+}
+
 /**
  * How many reference images one music video still can send on this renderer:
  * the cloud provider's (or model's) own input limit, Qwen Image 2.1 and
@@ -257,6 +276,26 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
   });
   const remaining = [...ordered];
   return ids.map((id) => remaining.splice(remaining.findIndex((ref) => ref.imageId === id), 1)[0]);
+}
+
+/**
+ * A clip can choose its own ordered references. Legacy/Auto retains the cast
+ * references previously derived from the frame selection; an explicit empty
+ * list means no extra images. The selected source frame is not repeated.
+ */
+export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
+  const explicit = Array.isArray(scene?.clipReferenceIds);
+  const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
+  return musicVideoConditioningReferences(project, source, castMedia)
+    .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
+      && (explicit || ref.role === 'character'))
+    .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)
+    .slice(0, Math.max(0, limit));
+}
+
+/** References that may be selected independently for a clip. */
+export function musicVideoClipReferenceChoices(project, scene, castMedia = null) {
+  return [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
 }
 
 /** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */
