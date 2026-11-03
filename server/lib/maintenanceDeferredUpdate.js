@@ -175,7 +175,7 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (result?.id === id) return { state: 'finished', result };
     return { state: 'unknown' };
   });
-  const acquire = (id, { externalWorkPending = false, checkExternal = () => false, interrupt = false } = {}) => {
+  const acquire = (id, { externalWorkPending = false, checkExternal = () => false, interrupt = false, stopFirst = false } = {}) => {
     // A blocked poll need not rewrite the journal every second. The transaction
     // below still rechecks everything when this read sees an idle candidate.
     const observed = read();
@@ -183,17 +183,20 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     if (pending.phase !== 'waiting' || pending.ownerPid !== process.pid) stale();
     if (observed.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
     const restorePending = state => state.operations.some(op => op.kind === 'backup' && /^restore(?:-db|-recovery)?:/.test(op.resource));
-    if (interrupt && restorePending(observed)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
-    if ((externalWorkPending || (!interrupt && observed.operations.some(op => op.id !== id)) || observed.exclusive) && !lockExists()) return false;
+    const drainsAfterShutdown = interrupt || stopFirst;
+    if (drainsAfterShutdown && restorePending(observed)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
+    if ((externalWorkPending || (!drainsAfterShutdown && observed.operations.some(op => op.id !== id)) || observed.exclusive) && !lockExists()) return false;
     return transaction(state => {
       const operation = current(state, id);
       if (operation.phase !== 'waiting' || operation.ownerPid !== process.pid) stale();
       if (state.hold) throw error('MAINTENANCE_HELD', 'Another maintenance request superseded the waiting update.');
-      if (interrupt && restorePending(state)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
-      if (externalWorkPending || (!interrupt && state.operations.some(op => op.id !== id)) || state.exclusive || checkExternal()) return false;
+      if (drainsAfterShutdown && restorePending(state)) throw error('MAINTENANCE_HELD', 'A database restore is active; finish or recover it before updating.');
+      if (externalWorkPending || (!drainsAfterShutdown && state.operations.some(op => op.id !== id)) || state.exclusive || checkExternal()) return false;
       operation.phase = 'starting';
       operation.holdId = makeId();
-      state.hold = { id: operation.holdId, revision: state.revision + 1, reason: interrupt ? 'Manual update: interrupting work and restarting PortOS' : 'Applying a deferred PortOS update', owner: interrupt ? 'manual-update' : 'deferred-update', requestedAt: new Date(now()).toISOString() };
+      state.hold = { id: operation.holdId, revision: state.revision + 1,
+        reason: interrupt ? 'Manual update: interrupting work and restarting PortOS' : stopFirst ? 'Manual update: restarting PortOS' : 'Applying a deferred PortOS update',
+        owner: drainsAfterShutdown ? 'manual-update' : 'deferred-update', requestedAt: new Date(now()).toISOString() };
       save(state, operation);
       return true;
     });
@@ -206,21 +209,16 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
     operation.childPid = childPid;
     save(state, operation);
   });
-  // Called only after the script has stopped the owning runtimes. This is an
-  // interruption receipt, never evidence that a previous output succeeded.
+  // Called after shutdown. Ordinary abandoned rows are bookkeeping, not an
+  // update veto; their domain outputs are never marked successful here.
   const settleInterrupted = (id, { preserveIds = [] } = {}) => transaction(state => {
     const operation = current(state, id);
     if (operation.phase !== 'running' || state.hold?.id !== operation.holdId || state.hold.owner !== 'manual-update' || state.exclusive) stale();
     const retained = new Set([id, ...preserveIds]);
     const operations = state.operations.filter(op => !retained.has(op.id));
     if (!operations.length) return;
-    const path = join(directory, `update-interrupted-${id}-${makeId()}.json`);
-    const fd = io.openSync(path, 'wx', 0o600);
-    try { io.writeFileSync(fd, JSON.stringify({ version: 1, updateId: id, at: new Date(now()).toISOString(),
-      disposition: 'interrupted', outputCompleteness: 'unknown', operations }) + '\n'); io.fsyncSync(fd); }
-    finally { io.closeSync(fd); }
-    syncDirectory(directory, io);
     state.operations = state.operations.filter(op => retained.has(op.id));
+    return operations.length;
   });
   const terminal = (id, childPid, success) => transaction(state => {
     const operation = current(state, id);

@@ -8,6 +8,7 @@ import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
 import { resolveCredentials } from '../portos-api.js';
 import { createMaintenanceJournal } from '../../server/lib/maintenanceJournal.js';
 import { legacyProcessCwds, snapshotLegacyProcesses } from './legacyUpdateActivity.mjs';
+import { manualUpdateBlockers } from '../../server/lib/systemIdle.js';
 
 const refuse = message => { throw Object.assign(new Error(message), { code: 'MAINTENANCE_STALE' }); };
 const canonical = path => { try { return realpathSync(path); } catch { return resolve(path); } };
@@ -47,7 +48,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
   const api = apiOrigin ?? `http://127.0.0.1:${tls ? resolveHttpMirrorPort({ env, dotenv }) : PORTS.API}`;
   const runner = (env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL || `http://localhost:${PORTS.COS}`).replace(/\/+$/, '');
   const connection = credentials ?? await resolveCredentials({ ...env, PORTOS_URL: api });
-  let token = connection.token, session, nextCheck = 0, lastError;
+  let token = connection.token, session, sessionPromise, nextCheck = 0, lastError;
   const alive = () => !signal?.aborted;
   const checkSignal = () => signal?.throwIfAborted();
   const readProcesses = async () => {
@@ -62,12 +63,15 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
       headers: !runnerRead && token ? { Authorization: `Bearer ${token}` } : {},
     });
     let response = await request();
-    if (!runnerRead && response.status === 401 && !session) {
+    if (!runnerRead && response.status === 401) {
       // Local update scripts are host operators. Use the existing supported
       // out-of-process session flow, rather than requiring the opt-in agent
       // key or exposing/asking for the instance password.
-      session = await (mintSession ? mintSession() : import('../../server/services/auth.js')
-        .then(auth => auth.createSession({ label: 'update-recovery' })));
+      if (!session) {
+        sessionPromise ??= mintSession ? mintSession() : import('../../server/services/auth.js')
+          .then(auth => auth.createSession({ label: 'update-recovery' }));
+        session = await sessionPromise;
+      }
       token = session.token;
       checkSignal();
       response = await request();
@@ -114,7 +118,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
       return [];
     });
     const ownOperation = await selfUpdate(activity, update);
-    if (activity.llm?.directCallsTracked !== true) refuse('The older runtime cannot report all provider calls. Use an acknowledged manual update (--interrupt) to restart it.');
+    if (activity.llm?.directCallsTracked !== true) refuse('The older runtime cannot report all provider calls. Run a manual update to restart it.');
     disposition.assertInactiveActivity(ownOperation ? { ...activity, appOperations: [] } : activity, agents, { waitingUpdate: true });
     const loadAgent = id => read(`/api/cos/agents/${encodeURIComponent(id)}`, true);
     const loadTask = async id => (await read(`/api/cos/tasks/${encodeURIComponent(id)}`, true))?.task ?? null;
@@ -138,6 +142,20 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
         .map(owner => ({ pid: owner.pid, completedAt: owner.completedAt ?? owner.pausedAt ?? null })) };
   };
   return {
+    observeManualWork: async update => {
+      const [status, activity] = await Promise.all([
+        read('/api/system/maintenance').catch(() => null), read('/api/system/activity').catch(() => null),
+      ]);
+      let belongs = status?.deferredUpdate?.id === update.id || status?.blockers?.some(op =>
+        op.kind === 'deferred-update' && op.pid === update.ownerPid && op.startedAt === update.requestedAt);
+      if (!belongs) {
+        const app = await read('/api/apps/portos-default', true).catch(() => null);
+        belongs = typeof app?.repoPath === 'string' && canonical(app.repoPath) === canonical(root);
+      }
+      const agents = belongs || env.COS_RUNNER_URL || dotenv.COS_RUNNER_URL ? await read('/agents', false, true).catch(() => []) : [];
+      const own = activity?.appOperations?.find(op => op.deferredUpdateOwnerPid === update.ownerPid);
+      return manualUpdateBlockers(belongs ? activity : null, { legacy: true, runnerAgents: Array.isArray(agents) ? agents : [], ignoreAppId: own?.appId });
+    },
     run: async () => {
       checkSignal();
       if (now() < nextCheck) {
@@ -171,6 +189,7 @@ export async function createUpdateReservationRecovery({ directory, root, signal,
       if (!response.ok && response.status !== 401 && response.status !== 404)
         refuse('The temporary update session could not be revoked.');
       session = null;
+      sessionPromise = null;
     },
   };
 }

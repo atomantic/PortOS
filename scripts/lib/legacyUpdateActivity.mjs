@@ -3,11 +3,12 @@ import { execFile } from 'node:child_process';
 import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { recordedMediaChildIds } from '../../server/lib/mediaRecoveryActivity.js';
 import { PORTS } from '../../server/lib/ports.js';
 import { parseEnvFile, resolveHttpMirrorPort } from './envFile.js';
+import { parseCommandArgs } from '../../server/lib/commandSecurity.js';
 
 const runFile = promisify(execFile);
 
@@ -154,6 +155,9 @@ export async function observedLegacyUpdate({ root, priorPid = null, priorAt = nu
   const modifyingChild = /(?:^|[\s"'/\\])(?:npm|pnpm|yarn|npm-cli\.js)(?:\.exe)?\s+(?:install|ci)(?=$|\s)|(?:^|[\s"'/\\])git(?:\.exe)?\s+(?:pull|fetch|checkout|merge|rebase|reset|submodule)(?=$|\s)/i;
   const isUpdater = row => {
     const command = normalize(String(row.command ?? ''));
+    const [binary, ...args] = parseCommandArgs(String(row.command ?? ''));
+    if (/^(?:bash|sh|zsh|node|nodejs|powershell|pwsh)(?:\.exe)?$/i.test(basename((binary ?? '').replaceAll('\\', '/')))
+      && args.some(arg => isAbsolute(arg) && expectedPaths.has(normalize(canonical(arg))))) return true;
     const relative = script.exec(command)?.[1];
     if (absolute.test(command) || (relative && cwds.has(row.pid)
       && expectedPaths.has(normalize(canonical(resolve(cwds.get(row.pid), relative)))))) return true;

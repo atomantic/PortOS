@@ -32,6 +32,18 @@ const completedLaunch = admission => (_command, _args, options) => {
 };
 
 describe('deferred update admission', () => {
+  it.each(['none', 'installer', 'restore'])('ignores a malformed old pid hint while inspecting actual exclusive work: %s', async work => {
+    const { root, admission } = fixture();
+    mkdirSync(join(root, 'data', 'update-detached'), { recursive: true });
+    writeFileSync(join(root, 'data', 'update-detached', 'pid'), 'lost old owner');
+    const launch = vi.fn(completedLaunch(admission));
+    const command = work === 'installer' ? `bash ${join(root, 'update.sh')}` : 'psql -f /tmp/portos-restore-test/dump.sql';
+    const update = runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch, observeWork: async () => [],
+      legacySnapshot: async () => [{ pid: process.pid, command: 'node updater' }, ...(work === 'none' ? [] : [{ pid: 2468, command }])],
+      legacyCwds: async () => new Map([[2468, root]]), legacyGroups: async () => [], absent: () => true, emit: vi.fn() });
+    if (work === 'none') { await expect(update).resolves.toBe(0); expect(launch).toHaveBeenCalledOnce(); }
+    else { await expect(update).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' }); expect(launch).not.toHaveBeenCalled(); }
+  });
   it('allows the first handoff activity cache to refresh before asking an idle manual caller to interrupt', async () => {
     const { root, admission } = fixture(); let clock = 0;
     const confirmInterruption = vi.fn(async () => false);
@@ -66,17 +78,27 @@ describe('deferred update admission', () => {
       expect(wait).toHaveBeenCalledOnce();
     }
   });
-  it.each(['node start.js', 'node --watch start.js', 'node "C:\\npm\\pm2\\lib\\ProcessContainerFork.js"'])('attributes a Windows runtime without a cwd by its actual listener: %s', async command => {
+  it.each(['node start.js', 'node --watch start.js', 'node "C:\\npm\\pm2\\lib\\ProcessContainerFork.js"'])('does not infer a Windows runtime from a generic Node command or service port: %s', async command => {
     const { root, admission } = fixture();
     const operation = admission.deferredUpdate.request();
     admission.deferredUpdate.acquire(operation.id, { interrupt: true }); admission.deferredUpdate.enter(operation.id, process.pid);
     const options = { admission, cwd: root, platform: 'win32', snapshot: async () => [
       { pid: process.pid, command: 'node updater', state: 'S' }, { pid: 2468, command, state: 'S' },
     ], probeCwds: async () => new Map() };
-    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => [{ pid: 2468, port: 6003 }] })).rejects.toThrow('PID 2468 still owns service port 6003');
-    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => { throw new Error('denied'); } })).rejects.toThrow('listener ownership could not be inspected');
+    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => [{ pid: 2468, port: 6003 }] })).resolves.toBeUndefined();
+    await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => { throw new Error('denied'); } })).resolves.toBeUndefined();
     // A generic relative Node command is not attributed to PortOS by name.
     await expect(settleInterruptedUpdate(operation.id, { ...options, listeners: async () => [{ pid: 9999, port: 6003 }] })).resolves.toBeUndefined();
+  });
+
+  it.each(['absolute', 'relative'])('refuses a positively identified PortOS runtime after shutdown: %s', async form => {
+    const { root, admission } = fixture();
+    const operation = admission.deferredUpdate.request();
+    admission.deferredUpdate.acquire(operation.id, { stopFirst: true }); admission.deferredUpdate.enter(operation.id, process.pid);
+    const script = form === 'absolute' ? join(root, 'server/start.js') : 'server/start.js';
+    await expect(settleInterruptedUpdate(operation.id, { admission, cwd: root,
+      snapshot: async () => [{ pid: process.pid, command: 'node updater' }, { pid: 2468, command: `node ${script}` }],
+      probeCwds: async () => new Map([[2468, root]]) })).rejects.toThrow('PortOS runtime PID 2468 is still running');
   });
 
   it('uses configured mirror and runner listener ports and excludes standalone Chrome CDP', async () => {
@@ -89,41 +111,58 @@ describe('deferred update admission', () => {
     expect(result).toEqual([{ pid: 1, port: 6003 }, { pid: 2, port: 6008 }]);
   });
 
-  it('allows acknowledged manual recovery without an activity API, fences new work, and records dead reservations as interrupted', async () => {
+  it('updates normally with stale reservations and unavailable telemetry, without manufacturing consent or output success', async () => {
     const { root, admission } = fixture();
     const journal = createMaintenanceJournal(join(root, 'data'));
     const stale = admission.admit('api-run', 'old-provider-call');
     journal.transaction(state => { state.operations.find(op => op.id === stale.id).pid = 2147483647; });
     const recover = vi.fn(async () => { throw new Error('old API unavailable'); });
+    const confirmInterruption = vi.fn(async () => false);
+    const saved = JSON.stringify({ jobs: [{ id: 'lost', status: 'running' }, { id: 'pending', status: 'queued' }] });
+    writeFileSync(join(root, 'data', 'media-jobs.json'), saved);
     const launch = vi.fn((_command, _args, options) => {
       const child = new EventEmitter(); child.pid = 4321; child.kill = vi.fn();
       const id = options.env.PORTOS_DEFERRED_UPDATE_ID;
       admission.deferredUpdate.enter(id, child.pid);
-      expect(options.env.PORTOS_UPDATE_INTERRUPT).toBe('1');
+      expect(options.env.PORTOS_UPDATE_INTERRUPT).toBeUndefined();
+      expect(options.env.PORTOS_UPDATE_STOP_FIRST).toBe('1');
       expect(() => admission.admit('agent', 'new-task')).toThrow();
       setImmediate(async () => {
-        await settleInterruptedUpdate(id, { admission, cwd: root, snapshot: async () => [{ pid: process.pid, command: 'node updater', state: 'S' }], probeCwds: async () => new Map() });
+        await settleInterruptedUpdate(id, { admission, cwd: root, snapshot: async () => { throw new Error('unavailable'); },
+          probeCwds: async () => new Map(), listeners: async () => { throw new Error('unavailable'); } });
         admission.deferredUpdate.terminal(id, child.pid, true);
         child.emit('close', 0);
       });
       return child;
     });
-    await expect(runDeferredUpdate({ admission, policy: 'interrupt', launch, recoverReservations: recover,
-      legacyRunning: async () => false, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    await expect(runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch, recoverReservations: recover, confirmInterruption,
+      observeWork: async () => { throw new Error('unavailable'); }, legacyRunning: async () => false, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
     expect(recover).not.toHaveBeenCalled();
-    const receipt = JSON.parse(readFileSync(join(admission.directory, fsReaddir(admission.directory).find(name => name.startsWith('update-interrupted-'))), 'utf8'));
-    expect(receipt).toMatchObject({ disposition: 'interrupted', outputCompleteness: 'unknown', operations: [expect.objectContaining({ id: stale.id })] });
+    expect(confirmInterruption).not.toHaveBeenCalled();
+    expect(fsReaddir(admission.directory).some(name => name.startsWith('update-interrupted-'))).toBe(false);
+    expect(readFileSync(join(root, 'data', 'media-jobs.json'), 'utf8')).toBe(saved);
     expect(admission.operations()).toEqual([]);
   });
 
-  it('returns an actionable manual warning instead of waiting indefinitely on unavailable activity', async () => {
+  it('requires explicit confirmation for observed running work', async () => {
     const { root, admission } = fixture();
     const launch = vi.fn();
     await expect(runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch, recoverReservations: async () => { throw new Error('unavailable'); },
+      observeWork: async () => [{ kind: 'render:image', label: '1 image render running', count: 1 }],
       legacyRunning: async () => false, wait: async () => {}, confirmInterruption: async () => false, emit: vi.fn() }))
       .rejects.toMatchObject({ code: 'UPDATE_INTERRUPTION_REQUIRED' });
     expect(launch).not.toHaveBeenCalled();
     expect(admission.deferredUpdate.operation()).toBeNull();
+  });
+
+  it('rechecks actual work after closing intake and releases the hold if raced work needs confirmation', async () => {
+    const { root, admission } = fixture();
+    const launch = vi.fn(); let observations = 0;
+    await expect(runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch,
+      observeWork: async () => ++observations === 1 ? [] : [{ kind: 'agents-running', label: '1 CoS agent running', count: 1 }],
+      legacyRunning: async () => false, confirmInterruption: async () => false, emit: vi.fn() }))
+      .rejects.toMatchObject({ code: 'UPDATE_INTERRUPTION_REQUIRED' });
+    expect(launch).not.toHaveBeenCalled(); expect(admission.held()).toBe(false);
   });
 
   it.each(['database-maintenance', 'database-restore-recovery.json'])('does not bypass %s under manual acknowledgment', async name => {
@@ -672,7 +711,7 @@ describe.skipIf(process.platform === 'win32')('direct update script offline boun
     // worker writing the executing checkout's data tree (same as boot smoke).
     const env = { ...process.env, PORTOS_DATA_ROOT: root };
     delete env.VITEST;
-    const child = spawn('bash', [join(root, 'update.sh')], { cwd: root, env, stdio: 'ignore' });
+    const child = spawn('bash', [join(root, 'update.sh'), '--automatic'], { cwd: root, env, stdio: 'ignore' });
     return new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   };
 

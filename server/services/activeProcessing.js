@@ -1,9 +1,9 @@
 import { getCudaCapability, getCudaUtilization } from '../lib/cudaCapability.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
-import { listJobs, getRunningJob } from './mediaJobQueue/index.js';
+import { listJobs, getRunningJob, getQueueCapacity } from './mediaJobQueue/index.js';
 import { sanitizeJob } from './mediaJobQueue/sanitizeJob.js';
-import { listGeneratingModelSummaries } from './imageTo3d/models.js';
+import { listGeneratingModelSummaries, getActiveModelOperationCount } from './imageTo3d/models.js';
 import { getLoadedModels, getLastLoadedModelsError } from './ollamaManager.js';
 import { listActiveAppOperations } from './appOperations.js';
 import { readPersistentMindStateForSafetyCheck } from './cosState.js';
@@ -13,6 +13,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import { getPendingTaskIds } from './cosTaskStore.js';
 import { getStatus } from './cos.js';
 import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
+import { activeAgents, spawningTasks } from './agentState.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
@@ -22,6 +23,34 @@ import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
 // same way for the same reason — see "Import scoping" in server/AGENTS.md.
 const importRunner = () => import('./runner.js');
 const importBackup = () => import('./backup.js');
+
+/** Manual updates care about executing work, not persisted recovery records. */
+export async function getObservedUpdateActivity() {
+  const attempt = fn => Promise.resolve().then(fn).catch(() => null);
+  const [capacity, models, mind, runs, backup, runner] = await Promise.all([
+    attempt(() => getQueueCapacity()), attempt(() => getActiveModelOperationCount()),
+    attempt(() => import('./persistentMindSupervisor.js').then(m => m.isPersistentMindTurnRunning())),
+    attempt(() => importRunner().then(m => m.getActiveRunCount())),
+    attempt(() => importBackup().then(m => m.isBackupInProgress())),
+    attempt(() => import('./cosRunnerClient.js').then(m => m.getActiveAgentsFromRunner({ timeoutMs: 1500 }))),
+  ]);
+  const agentIds = new Set();
+  for (const [id, entry] of activeAgents) {
+    const pid = entry.pid ?? entry.process?.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 0 || entry.process?.exitCode != null) continue;
+    try { process.kill(pid, 0); agentIds.add(id); } catch { /* Unavailable or stale is not observed work. */ }
+  }
+  for (const agent of Array.isArray(runner) ? runner : []) if (agent.processActive === true) agentIds.add(agent.id);
+  const jobs = Object.entries(capacity?.byKind ?? {}).flatMap(([kind, lane]) =>
+    Array.from({ length: Math.max(0, Number(lane.running) || 0) }, () => ({ kind, status: 'running' })));
+  return {
+    jobs, agents: { active: agentIds.size + spawningTasks.size, queued: 0 },
+    extras: { imageTo3d: Array.from({ length: Math.max(0, Number(models) || 0) }, () => ({})) },
+    mind: { thinking: mind === true, queued: 0 }, llm: { active: (Number(runs) || 0) + getDirectProviderCallCount() },
+    appOperations: listActiveAppOperations({ includeUpdateOwnership: true, onlyRunning: true }),
+    renders: listActiveRenders(), backup: { inProgress: backup === true },
+  };
+}
 
 // Ollama has no lifecycle callback for external loads/evictions. Shared cache
 // also coalesces simultaneous telemetry and initial inspector reads.
@@ -182,7 +211,8 @@ export async function getSystemActivity({ includeOllama = false, includeUpdateOw
     // No trusted contract needed: an in-process flag with no I/O once loaded.
     backup: { inProgress: backupInProgress },
   };
-  return { ...slices, ...(includeOllama ? { ollama } : {}), activity: summarizeSystemActivity(slices) };
+  return { ...slices, ...(includeUpdateOwnership ? { observedWork: await getObservedUpdateActivity() } : {}),
+    ...(includeOllama ? { ollama } : {}), activity: summarizeSystemActivity(slices) };
 }
 
 /**

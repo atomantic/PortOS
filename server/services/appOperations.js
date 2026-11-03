@@ -35,8 +35,8 @@ const END_PHASES = new Set(['completion', 'failure', 'cancellation']);
  * several keys, so they collapse back to one row; repoPath stays server-side,
  * since the client only needs to name and render the run.
  */
-export const listActiveAppOperations = ({ includeUpdateOwnership = false } = {}) =>
-  [...new Set(activeAppOperations.values())].map(operation => {
+export const listActiveAppOperations = ({ includeUpdateOwnership = false, onlyRunning = false } = {}) =>
+  [...new Set(activeAppOperations.values())].filter(operation => !onlyRunning || admissionByOperation.get(operation)?.running === true).map(operation => {
     const { repoPath: _repoPath, ...op } = operation;
     const supervisorPid = admissionByOperation.get(operation)?.supervisorPid;
     return { ...op, ...(includeUpdateOwnership && supervisorPid ? { deferredUpdateOwnerPid: supervisorPid } : {}) };
@@ -113,7 +113,12 @@ export function isSoleDeferredUpdateAppOperation(snapshot, supervisorPid) {
     && snapshot[0].appId === op.appId && snapshot[0].type === op.type && snapshot[0].startedAt === op.startedAt;
 }
 
-export const runAppOperation = (operation, fn) => admissionByOperation.get(operation).permit.run(fn);
+export const runAppOperation = async (operation, fn) => {
+  const admission = admissionByOperation.get(operation);
+  admission.running = true;
+  try { return await admission.permit.run(fn); }
+  finally { admission.running = false; }
+};
 
 // Clear every key this operation holds, and only the keys pointing at THIS
 // operation — a run that already finished must not evict a live sibling.

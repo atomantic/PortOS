@@ -5,21 +5,14 @@ import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
-import { summarizeSystemActivity } from '../lib/systemIdle.js';
-import { maintenance } from '../lib/maintenanceAdmission.js';
+import { manualUpdateBlockers, summarizeSystemActivity } from '../lib/systemIdle.js';
 
 export async function checkManualUpdateActivity({ automatic = false, acknowledgeInterruption = false, ignoreAppId } = {}) {
   if (automatic || acknowledgeInterruption) return;
-  const activity = await import('./activeProcessing.js').then(m => m.getSystemActivity()).catch(() => null);
-  const blockers = activity ? summarizeSystemActivity({ ...activity,
-    jobs: activity.jobs?.filter(job => job.status === 'running'),
-    agents: { ...activity.agents, queued: 0 }, mind: { ...activity.mind, queued: 0 },
-    appOperations: activity.appOperations?.filter(op => op.appId !== ignoreAppId), update: { inProgress: false },
-  }).blockers : [];
-  let residue = true;
-  try { residue = maintenance.operations().some(op => op.id !== maintenance.currentId() && !['deferred-update', 'deferred-update-launch'].includes(op.kind)); } catch { /* Show uncertainty, not an idle assertion. */ }
-  if (activity && !blockers.length && !residue) return;
-  throw new ServerError(`${blockers.length ? blockers.map(b => b.label).join(', ') + '. ' : 'Work or its saved reservations could not be verified idle. '}` +
+  const activity = await import('./activeProcessing.js').then(m => m.getObservedUpdateActivity()).catch(() => null);
+  const blockers = manualUpdateBlockers(activity, { ignoreAppId });
+  if (!blockers.length) return;
+  throw new ServerError(`${blockers.map(b => b.label).join(', ')}. ` +
     'Updating restarts PortOS and Chrome. Active agents, renders and provider calls may fail or lose unsaved progress. Saved state and queued work are preserved. Continue only after saving your work.',
   { status: 409, code: 'UPDATE_INTERRUPTION_REQUIRED' });
 }

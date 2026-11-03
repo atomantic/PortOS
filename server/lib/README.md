@@ -39,7 +39,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
 | `maintenanceJournal.js` | Dependency-free shared journal transactions for server admission and offline update bootstrap. |
 | `providerCallActivity.js` | Live direct-provider call count, including text calls outside the run toolkit. |
-| `maintenanceDeferredUpdate.js` | Automatic/manual update ownership, interruption receipts and process-settlement recovery in the shared journal. |
+| `maintenanceDeferredUpdate.js` | Automatic/manual update ownership, stop-first shutdown and process settlement in the shared journal. |
 | `maintenanceSettlementRetry.js` | Retry local admission settlement until it completes or ownership changes. |
 | `mediaRecoveryActivity.js` | Identify recoverable media jobs, segment processes and completed accelerator claims. |
 | `maintenanceHarnessAction.js` | Journal ownership, process settlement and deferred-work recovery for harness actions. |

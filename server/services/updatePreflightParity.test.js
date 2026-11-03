@@ -1,8 +1,8 @@
-vi.mock('../services/activeProcessing.js', () => ({ getSystemActivity: vi.fn(async () => ({
+vi.mock('../services/activeProcessing.js', () => { const activity = vi.fn(async () => ({
   jobs: [], agents: { trusted: true, active: getActiveAgentIds().length + mockSpawningTasks.size, queued: 0 },
   mind: { trusted: true, thinking: false, queued: 0 }, llm: { trusted: true, active: 0, directCallsTracked: true },
   extras: { imageTo3d: [] }, appOperations: [], renders: (await import('./renderActivity.js')).listActiveRenders(), backup: { inProgress: false },
-})) }));
+})); return { getSystemActivity: activity, getObservedUpdateActivity: activity }; });
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
