@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -97,6 +97,22 @@ describe('startBlenderInstall', () => {
     await done();
     expect(selected).toEqual([managedBlenderExecutable('5.2.3', HOME), null]);
     expect(events.find(([, frame]) => frame?.step === 'error')[1].message).toMatch(/containment probe crashed\. Code Animation has no Blender selected again/);
+  });
+
+  it('leaves nothing at the versioned path when the copy fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { deps, io, events, selected, done, run } = setup();
+    const base = run.getMockImplementation();
+    run.mockImplementation(async (file, args) => {
+      await base(file, args);
+      if (file.endsWith('ditto')) throw new Error('disk full');
+    });
+    await startBlenderInstall({ io, deps });
+    await done();
+    expect(existsSync(join(HOME, 'Applications', 'Blender-5.2.3.app'))).toBe(false);
+    expect(readdirSync(join(HOME, 'Applications'))).toEqual([]);
+    expect(selected).toEqual([]);
+    expect(events.find(([, frame]) => frame?.step === 'error')[1].message).toBe('disk full');
   });
 
   it('reuses an existing app at the versioned path instead of replacing it', async () => {

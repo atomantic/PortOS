@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
@@ -172,14 +172,20 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
         mounted = true;
         const app = (await readdir(mount)).find((name) => /^Blender.*\.app$/.test(name));
         if (!app) throw new ServerError('The Blender disk image has no Blender.app.', { status: 502, code: 'BLENDER_IMAGE_INVALID' });
-        // Staged inside the temp work dir, then moved into a path that does not exist yet.
-        const staging = join(work, app);
-        await run('/usr/bin/ditto', [join(mount, app), staging]);
         if (await stat(destination).catch(() => null)) {
           throw new ServerError(`${destination} already exists without a Blender executable; move it aside and try again.`, { status: 409, code: 'BLENDER_DESTINATION_EXISTS' });
         }
+        // Copied to a uniquely named sibling this job owns, then renamed into place in
+        // one step, so the trusted path only ever holds a complete app.
         await mkdir(join(home, 'Applications'), { recursive: true });
-        await run('/usr/bin/ditto', [staging, destination]);
+        const partial = `${destination}.partial-${process.pid}-${Date.now()}`;
+        try {
+          await run('/usr/bin/ditto', [join(mount, app), partial]);
+          await rename(partial, destination);
+        } catch (error) {
+          await rm(partial, { recursive: true, force: true }).catch(() => null);
+          throw error;
+        }
         emit('install', 'done', `Installed at ${destination}`);
       }
 
