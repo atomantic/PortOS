@@ -3,6 +3,7 @@ import { IMAGE_REFERENCE_REQUEST_LIMIT, isEditCapableMode, maxInputImages } from
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
+import { musicVideoCameoReferences } from './musicVideoCameos.js';
 
 /**
  * Browser-safe reference selection shared by the board and production lanes.
@@ -169,7 +170,8 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
  * (or without a variant) the result is the automatic set alone.
  */
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
-  const guides = musicVideoCastGuideReferences(project, scene, castMedia);
+  // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
+  const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)];
   const panel = musicVideoPanelArtReferences(scene);
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
@@ -295,7 +297,7 @@ export function musicVideoClipConditioningReferences(project, scene, castMedia =
 
 /** References that may be selected independently for a clip. */
 export function musicVideoClipReferenceChoices(project, scene, castMedia = null) {
-  return [...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
+  return [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
 }
 
 /** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */
