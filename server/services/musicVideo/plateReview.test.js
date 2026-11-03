@@ -89,8 +89,13 @@ describe('plate evidence admission', () => {
     ollama.getModelCapabilities.mockImplementation(async (id) => id === 'text-model' ? ['completion'] : ['completion', 'vision']);
     ollama.getInstalledModels.mockResolvedValue([{ id: 'gemma3:27b' }, { id: 'gemma4:31b' }, { id: 'qwen3.8:27b-mlx' }, { id: 'hf.co/example/Qwen3.8-27B-GGUF:Q8' }]);
     expect(await resolvePlateReviewer({})).toMatchObject({ model: 'hf.co/example/Qwen3.8-27B-GGUF:Q8' });
-    ollama.getInstalledModels.mockResolvedValue([{ id: 'gemma3:27b' }, { id: 'gemma4:31b' }]);
+    ollama.getInstalledModels.mockResolvedValue([{ id: 'gemma3:27b' }, { id: 'qwen3.8:27b-mlx' }, { id: 'gemma4:31b' }]);
     expect(await resolvePlateReviewer({})).toMatchObject({ model: 'gemma4:31b' });
+
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [{ ...api, defaultModel: 'gemma3:27b' }] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ model: 'gemma4:31b' });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { ...api, defaultModel: 'gemma3:27b' }, selectedModel: 'gemma3:27b' });
+    expect(await resolvePlateReviewer({ providerId: 'ollama', model: 'gemma3:27b' })).toMatchObject({ model: 'gemma3:27b' });
   });
 
   it('keeps unknown capability and a different Ollama daemon unchanged', async () => {
