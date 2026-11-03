@@ -35,6 +35,9 @@ const ACTIONS = {
   'ollama-upgrade': () => api.upgradeLocalLlmBackend('ollama'),
 };
 
+// Actions whose request returns `started` while the work continues on the server.
+const BACKGROUND_JOBS = new Set(['pm2-sync']);
+
 const rank = (row) => STATE_ORDER.indexOf(row.state);
 
 function Versions({ row }) {
@@ -103,21 +106,31 @@ export default function SoftwareTab() {
   // A Node/pm2 job that answered `started` without a restart keeps running on
   // the server; it ends with `portos:node-runtime:changed` reason job-finished,
   // preceded by `portos:update:error` when it failed.
+  // Events can arrive before the start response, so the job is tracked before
+  // the request and its outcome recorded until the response says it started.
   const [backgroundJob, setBackgroundJob] = useState(null);
   const jobRef = useRef(null);
-  useEffect(() => { jobRef.current = backgroundJob; }, [backgroundJob]);
+  const settleJob = (job) => {
+    if (jobRef.current !== job) return;
+    jobRef.current = null;
+    setBackgroundJob(null);
+    if (job.error !== undefined) toast.error(`${job.name} update failed${job.error ? `: ${job.error}` : ''}`);
+    else toast.success(`${job.name} updated`);
+  };
+  const settleRef = useRef(settleJob);
+  settleRef.current = settleJob;
   useEffect(() => {
     const onError = ({ message } = {}) => {
-      if (!jobRef.current) return;
-      toast.error(`${jobRef.current.name} update failed${message ? `: ${message}` : ''}`);
-      jobRef.current = null;
-      setBackgroundJob(null);
+      const job = jobRef.current;
+      if (!job || job.error !== undefined) return;
+      job.error = message || '';
+      if (job.started) settleRef.current(job);
     };
     const onChanged = ({ reason } = {}) => {
-      if (reason !== 'job-finished' || !jobRef.current) return;
-      toast.success(`${jobRef.current.name} updated`);
-      jobRef.current = null;
-      setBackgroundJob(null);
+      const job = jobRef.current;
+      if (reason !== 'job-finished' || !job) return;
+      job.finished = true;
+      if (job.started) settleRef.current(job);
     };
     socket.on('portos:update:error', onError);
     socket.on('portos:node-runtime:changed', onChanged);
@@ -147,13 +160,17 @@ export default function SoftwareTab() {
       await captureBaseline();
       setRestarting(true);
     }
+    const job = BACKGROUND_JOBS.has(row.action.kind) && !row.action.restarts ? { id: row.id, name: row.name } : null;
+    jobRef.current = job;
     const result = await launch(row.action).catch(() => null);
     if (!result || result.restart === false) setRestarting(false);
-    if (result?.started && result.restart === false) {
-      jobRef.current = { id: row.id, name: row.name };
-      setBackgroundJob(jobRef.current);
-    } else if (result && !row.action.restarts) {
-      toast.success(`${row.name} updated`);
+    if (job && result?.started && result.restart === false) {
+      job.started = true;
+      if (job.finished || job.error !== undefined) settleJob(job);
+      else setBackgroundJob(job);
+    } else {
+      if (job && jobRef.current === job) jobRef.current = null;
+      if (result && !row.action.restarts) toast.success(`${row.name} updated`);
     }
     setPending(null);
     refetch();

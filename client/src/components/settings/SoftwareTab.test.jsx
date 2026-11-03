@@ -84,6 +84,22 @@ describe('Settings › Software', () => {
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
+  it('settles a pm2 job whose failure arrives before the start response', async () => {
+    let respond;
+    updatePm2Runtime.mockReturnValue(new Promise((resolve) => { respond = resolve; }));
+    renderTab();
+    const sync = await screen.findByRole('button', { name: /Sync terminal pm2/ });
+    fireEvent.click(sync);
+    await waitFor(() => expect(updatePm2Runtime).toHaveBeenCalled());
+    await act(async () => fire('portos:update:error', { message: 'npm failed' }));
+    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished' }));
+    expect(toast.error).not.toHaveBeenCalled();
+    await act(async () => respond({ started: true, restart: false }));
+    expect(toast.error).toHaveBeenCalledWith('pm2 update failed: npm failed');
+    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(sync).not.toBeDisabled());
+  });
+
   it('shows a retryable failure instead of an empty page', async () => {
     getSoftwareInventory.mockRejectedValue(new Error('down'));
     renderTab();
