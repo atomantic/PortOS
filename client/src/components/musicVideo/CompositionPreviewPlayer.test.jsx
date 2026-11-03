@@ -295,6 +295,10 @@ describe('CompositionPreviewPlayer', () => {
     await waitFor(() => expect(opens()).toHaveLength(3));
     rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...still, referenceImageId: 'start.png' }] }} audioUrl={null} />);
     await waitFor(() => expect(opens()).toHaveLength(4));
+    // A generated code-first document takes the shot's medium from the treatment first.
+    const withStart = [{ ...still, referenceImageId: 'start.png' }];
+    rerender(<CompositionPreviewPlayer project={{ ...project, scenes: withStart, treatment: { shotDirections: [{ sceneId: 'a', medium: 'procedural' }] } }} audioUrl={null} />);
+    await waitFor(() => expect(opens()).toHaveLength(5));
   });
 
   it('plays without effects an older engine cannot draw, names those shots, and updates the engine in one tap', async () => {
