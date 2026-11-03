@@ -584,10 +584,10 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
 // are the ones the whole-film render draws there. `segment` is `{ index,
 // maxFrames?, tagFilter? }`; `overlays` here are this window's captures, each
 // with its absolute song `startSec`.
-function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
+function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
   const index = segment.index;
   if (!Number.isInteger(index) || !plan[index]) throw new Error(`buildMusicVideoFfmpegArgs: no section ${index}`);
-  const { c, frames, startSec, endSec } = plan[index];
+  const { c, frames, startSec } = plan[index];
   const startFrame = sectionFrame(startSec);
   const own = addInput(c);
   const preroll = prerolls.find((p) => p.index === index);
@@ -597,7 +597,7 @@ function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectio
   const overlayBase = nextInput();
   for (const overlay of overlays) inputs.push('-itsoffset', String(round3(overlay.startSec - startSec)), '-i', overlay.path);
   const filters = sectionFilters(index, own, preroll, 'v0', postroll);
-  const gradeFilter = musicVideoGradeFilter(grade, [{ sceneId: c.sceneId, startSec, endSec }], { fps, offsetSec: startSec });
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections([index]), { fps, offsetSec: startSec });
   const local = glitches.filter((g) => g.frame >= startFrame && g.frame < startFrame + frames).map((g) => ({ ...g, frame: g.frame - startFrame }));
   const glitchFilter = musicVideoTransitionFilter(local, { width: canonW, height: canonH });
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -755,6 +755,12 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     partner: !!c.intercutOf, wipeIn: c.wipeIn, wipeOut: c.wipeOut, transitionOut: c.transitionOut, cutEffect: c.cutEffect,
   })), { fps });
   const postrolls = wipes.map((wipe) => ({ ...wipe, into: wipe.index + 1, clip: plan[wipe.index].c }));
+  // The finishing grade's windows, starting a wiped shot after its wipe (graded in its own chain).
+  const gradeSections = (indexes) => indexes.map((i) => {
+    const { c, startSec, endSec } = plan[i];
+    const wipe = postrolls.find((p) => p.into === i);
+    return { sceneId: c.sceneId, startSec: wipe ? Math.max(startSec, (wipe.cutFrame + wipe.frames) / fps) : startSec, endSec };
+  });
   // One section's chain, ending on `out`: a wipe in lays the outgoing shot's held frame over its
   // start, and an incoming cut effect lays the next shot's preroll over its end.
   const sectionFilters = (i, input, preroll, out, postroll = null) => {
@@ -763,11 +769,17 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     const wiped = [];
     if (postroll) {
       const from = plan[postroll.index];
+      // Each picture takes its own shot's grade over the wipe's frames (on song time, as the
+      // finishing grade would), and the finishing grade skips them: the held frame keeps its look.
+      const gradeOver = (sceneId) => musicVideoGradeFilter(grade, [{ sceneId, startSec: postroll.cutFrame / fps, endSec: (postroll.cutFrame + postroll.frames) / fps }],
+        { fps, offsetSec: postroll.cutFrame / fps });
+      const heldGrade = gradeOver(from.c.sceneId);
+      const baseGrade = gradeOver(c.sceneId);
       const held = `${sectionChain(from.c, postroll.input, { canonW, canonH, fps, frames: from.frames, frameGrid, beats })},`
-        + `trim=start_frame=${Math.max(0, from.frames - 1)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=${postroll.frames},setpts=PTS-STARTPTS`;
+        + `trim=start_frame=${Math.max(0, from.frames - 1)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=${postroll.frames},setpts=PTS-STARTPTS${heldGrade ? `,${heldGrade}` : ''}`;
       const filter = musicVideoWipeFilter(postroll, { width: canonW, height: canonH, fps, outgoing: `wpost${i}`, incoming: `wbase${i}`, out: `wiped${i}`, key: i });
       if (filter) {
-        wiped.push(`${head}[wbase${i}]`, `${held}[wpost${i}]`, ...filter);
+        wiped.push(`${head}${baseGrade ? `,${baseGrade},format=yuv420p` : ''}[wbase${i}]`, `${held}[wpost${i}]`, ...filter);
         head = `[wiped${i}]null`;
       }
     }
@@ -796,7 +808,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps), shotGlitchFrames(pieces, fps));
 
   if (segment) {
-    return buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
+    return buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
   }
 
   for (const { c } of plan) sectionInputs.push(addInput(c));
@@ -807,7 +819,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
   const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`, postrolls.find((p) => p.into === i)));
-  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections(plan.map((_, i) => i)), { fps });
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');

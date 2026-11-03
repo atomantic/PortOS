@@ -205,6 +205,49 @@ describe.skipIf(!ffmpeg)('a wipe on a cut in the final render', () => {
   });
 });
 
+// Uniquely catches the held outgoing frame losing its own grade (regaining its
+// source color at the cut under the incoming shot's grade), whole film or segment.
+describe.skipIf(!ffmpeg)('a wipe between differently graded shots', () => {
+  it("keeps each shot's grade on its own picture through the wipe", () => {
+    const song = join(dir, 'wipe-grade-song.wav');
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
+    const clips = ['0xd02020', '0x2020d0'].map((color, i) => {
+      const videoPath = join(dir, `wipe-grade-clip${i}.mp4`);
+      run(['-f', 'lavfi', '-i', `color=${color}:s=${W}x${H}:r=${FPS}:d=1`, '-pix_fmt', 'yuv420p', '-y', videoPath]);
+      return { sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' };
+    });
+    Object.assign(clips[0], sceneTransitions({ wipeOut: { style: 'iris', lengthSec: 0.5 } }));
+    const grade = { preset: 'neutral', grain: 0, sections: [{ sceneId: 's0', preset: 'monochrome' }] };
+    const corners = (path) => {
+      const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      const size = W * H * 3;
+      // 'g' gray (the graded outgoing shot), 'b' the neutral incoming shot, 'r' an ungraded red.
+      return Array.from({ length: raw.length / size }, (_, f) => {
+        const [r, g, b] = raw.subarray(f * size, f * size + 3);
+        return b > r + 60 ? 'b' : r > g + 60 ? 'r' : 'g';
+      }).join('');
+    };
+    const centre = (path) => {
+      const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      const size = W * H * 3;
+      const at = ((H / 2) * W + W / 2) * 3;
+      return Array.from({ length: raw.length / size }, (_, f) => (raw[f * size + at + 2] > raw[f * size + at] + 60 ? 'b' : 'x')).join('');
+    };
+    const output = join(dir, 'wipe-grade.mp4');
+    const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true, grade });
+    run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    const film = corners(output);
+    expect(film.slice(0, FPS + 5)).toBe('g'.repeat(FPS + 5));
+    expect(film.slice(FPS + 6)).toBe('b'.repeat(FPS - 6));
+    // The incoming shot is neutral from its first frame.
+    expect(centre(output).slice(FPS)).toBe('b'.repeat(FPS));
+    const segmentPath = join(dir, 'wipe-grade-segment.mp4');
+    const segment = buildMusicVideoFfmpegArgs(clips, song, segmentPath, { audioDurationSec: 2, frameGrid: true, grade, segment: { index: 1 } });
+    run(segment.args.filter((arg, i) => !(arg === '-progress' || segment.args[i - 1] === '-progress')));
+    expect(corners(segmentPath)).toBe(film.slice(FPS));
+  });
+});
+
 // Uniquely catches the encode's output rate drifting from the project's fps
 // (ffmpeg 7.0 picked 25 fps and re-timed the graph's frames, #11476).
 describe('the render pins the output frame rate', () => {
