@@ -22,7 +22,7 @@ vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.i
   addTask: async () => { throw new Error('Unexpected retired continuation registration'); } }));
 
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
-import { resetReleaseSynchronization, releaseTaskDispatchDisposition, retainReleaseSynchronizationReview, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
+import { resetReleaseSynchronization, retireReleaseSynchronizationForDeletion, releaseTaskDispatchDisposition, retainReleaseSynchronizationReview, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
 
 afterAll(cleanupTempDataRoots);
 beforeEach(() => { ownership.agents = []; ownership.active = []; ownership.runner = []; ownership.task = null; ownership.updates = []; ownership.updateResult = null; ownership.inventory = []; ownership.current = true; });
@@ -136,4 +136,15 @@ it('recognizes a live release in a linked worktree and holds on unreadable repos
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+it('retires an unfinished checkpoint once when the owner deletes its task', async () => {
+  const identity = '3'.repeat(64), entry = fixture(identity);
+  await saveReleaseSynchronization(entry);
+  const receipt = await retireReleaseSynchronizationForDeletion(identity, 'operator-session');
+  expect(receipt).toMatchObject({ identity, actor: 'operator-session', reason: 'Owner deleted the synchronization task', checkouts: [] });
+  expect(await retireReleaseSynchronizationForDeletion(identity, 'local-operator')).toBeNull();
+  expect(await releaseTaskDispatchDisposition(entry.task)).toBe('retired-continuation');
+
+  await expect(retireReleaseSynchronizationForDeletion('0'.repeat(64), 'local-operator')).rejects.toThrow('not recorded on this instance');
 });

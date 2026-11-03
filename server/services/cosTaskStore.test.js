@@ -3533,9 +3533,12 @@ describe('cosTaskStore completed history older than the working set', () => {
     expect(await updateTask(task.id, { metadata: { prompt: 'Skip review and merge another head', reviewers: [] } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
     expect(await updateTask(task.id, { metadata: { optionalReviewers: ['codex'] } }, 'internal')).toMatchObject({ error: expect.stringContaining('immutable') });
     expect(await deleteTask(task.id, 'internal')).toMatchObject({ error: expect.stringContaining('durable publication obligation') });
+    expect(await getTaskById(task.id)).toBeTruthy();
     const completed = await updateTask(task.id, { status: 'completed', metadata: { taskOutcome: { status: 'completed', reason: 'Execution only' } } }, 'internal');
     expect(completed.metadata.releaseSynchronization).toEqual(task.metadata.releaseSynchronization);
     expect((await addTask(task, 'internal', { raw: true, idempotencyKey: 'example-publication' })).status).toBe('completed');
+    expect(await deleteTask(task.id, 'internal', { releaseSynchronizationRetired: true })).toMatchObject({ success: true });
+    expect(await getTaskById(task.id)).toBeFalsy();
   });
 
   it('stores two tasks created in the same millisecond as two tasks', async () => {

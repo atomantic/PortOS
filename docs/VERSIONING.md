@@ -412,8 +412,14 @@ start a release, or release the checkout-review retention gate.
 The outbox keeps the original reviewer policy, publication ancestry and retained
 physical checkout seeds. It never transfers checkout authority. The owner
 uses the procedure below and ordinary delivery, admission and retirement recovery.
-Completed task history still owns its publication identity and cannot be deleted
-through task CRUD. Execution success does **not** mark synchronization verified:
+Task CRUD cannot delete a synchronization task directly. Deleting one from the
+task list (or `DELETE /api/cos/tasks/:id`) is the owner's decision to abandon
+it: the route records the operator reset below with an empty checkout list unless
+synchronization is already verified or reset, then removes the row. The outbox
+keeps the publication receipt, and the reset refuses while a release or
+synchronization is active. The outbox is machine-local, so the delete also
+refuses on an instance that has no entry for the task; delete it on the
+publishing instance. Execution success does **not** mark synchronization verified:
 the delivery and other obligations remain pending until their evidence is observed. A bounded recovery
 sweep checks the same outbox after restart, including completed task/agent history.
 It records pending, running, blocked or verified synchronization separately from the
