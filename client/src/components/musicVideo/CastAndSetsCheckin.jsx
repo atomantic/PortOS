@@ -1,4 +1,4 @@
-import { castSetsInspectionBlockers } from '../../../../server/lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionBlockers, castSetsInspectionInputs, currentCastSetsInspection } from '../../../../server/lib/musicVideoCastSetsInspection.js';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
 import { castAndSetsGreyboxPending, musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
@@ -15,6 +15,7 @@ import CastAndSetsReferenceProgress from './CastAndSetsReferenceProgress.jsx';
 import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
+const REBUILD_TITLE = "Build a new sheet; the earlier one stays in the sheet's version history";
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
 function progress(stage) {
@@ -79,34 +80,23 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
   );
 }
 
-// Names only the ways out the panel actually shows: Keep approved and each Revert sit
-// under this line, Rebuild in the action row below (#14796).
-function staleChoicesText({ keep, revert, rebuild }) {
-  const choices = [
-    keep && 'keep the sheet approved as it is',
-    revert && 'revert a changed input to the value you approved',
-    rebuild && 'use Rebuild below to build a new sheet from the current inputs',
-  ].filter(Boolean);
-  if (!choices.length) return '';
-  const text = choices.length === 1 ? choices[0] : `${choices.slice(0, -1).join(', ')}${choices.length > 2 ? ',' : ''} or ${choices.at(-1)}`;
-  return `${text[0].toUpperCase()}${text.slice(1)}.`;
-}
-
 /**
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
  * and the director's actions (Approve & continue, Regenerate,
  * Edit direction on a procedural sheet, Resume, Skip). An approved sheet whose
  * concept, style, subjects or song changed since (`stale`, from the server's
- * readiness) says what changed and offers Keep approved beside each Revert,
- * right under that line (#10141). A sheet built before the director's latest
- * story or guides (`storyStale`) says so and offers Rebuild from story.
+ * readiness) says what changed and, right under that line, offers Keep approved
+ * and Rebuild side by side, each saying what it does, then each Revert (#10141).
+ * A sheet built before the director's latest story or guides (`storyStale`) says so and offers Rebuild from story.
  * Casting changes since the build (`castingChanges`, from
  * useMusicVideoCastingChanges) are named too: new reference images offer
  * Update to re-render those images and their dependents, a newly linked
  * character with no sheet offers to add them through a direction note.
  * A failed Casting read says so with a Retry (`castingChangesError`) and keeps
  * the last notice rather than reading as "nothing changed".
+ * Images vision never answered for offer Retry vision, one card at a time or all
+ * at once (`onReinspectImages(keys)`, #14794).
  * Each image card carries its own Regenerate / Edit / Remove while the stage
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
@@ -130,6 +120,10 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
   const sheet = stage.artifactId ? (project.devArtifacts || []).find((a) => a.id === stage.artifactId && !a.deleted) : null;
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
   const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
+  // Images vision never answered for (provider down, incomplete reply) can be checked again (#14794).
+  const canRetryVision = !!onReinspectImages && !working && ['review', 'approved'].includes(stage.status);
+  const uncheckedKeys = canRetryVision ? Object.keys(stage.plan || {}).filter((key) => castSetsInspectionInputs(stage, key)
+    && !['pass', 'mismatch'].includes(currentCastSetsInspection(stage, key)?.verdict)) : [];
   const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
     <div id={id} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
@@ -141,13 +135,11 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         <LlmRouteNote route={project.automation?.routes?.castAndSets} prefix="Direction ran on" />
       </div>
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
-      {staleText && (
-        <p className="text-xs text-port-warning">
-          {staleText} {staleChoicesText({ keep: !!onReconfirm, revert: !!onRevert && stale?.revertible?.length > 0, rebuild: !!onRebuild })}
-        </p>
-      )}
+      {staleText && <p className="text-xs text-port-warning">{staleText}</p>}
       {staleText && (
         <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
+          keepHint="Use these images as they are."
+          alternative={onRebuild && !working ? { label: 'Rebuild', hint: 'Redo the direction from the current inputs and re-render what changes. Faces can drift.', onClick: onRebuild, title: REBUILD_TITLE } : null}
           keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
       )}
       {storyStale && !working && (
@@ -185,8 +177,17 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           </div>
         </details>
       )}
+      {uncheckedKeys.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/60 p-2" role="status">
+          <p className="min-w-0 flex-1 text-xs text-port-warning">{formatCount(uncheckedKeys.length)} images weren&apos;t checked by vision.</p>
+          <button type="button" disabled={busy} onClick={() => onReinspectImages(uncheckedKeys)} className={`${buttonClass} border border-port-border`}>
+            <RotateCcw size={14} aria-hidden="true" /> Retry vision on all
+          </button>
+        </div>
+      )}
       {greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
-      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage} onReinspectImages={onReinspectImages} busy={busy}
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage}
+        onReinspectImage={canRetryVision ? (key) => onReinspectImages([key]) : null} busy={busy}
         subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh } : null} />
@@ -215,8 +216,9 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
             <Play size={14} aria-hidden="true" /> Resume
           </button>
         )}
-        {onRebuild && ['approved', 'skipped'].includes(stage.status) && (
-          <button type="button" disabled={busy} onClick={onRebuild} title="Build a new sheet; the earlier one stays in the sheet's version history"
+        {/* A stale approval offers Rebuild beside Keep approved, under the stale note. */}
+        {onRebuild && ['approved', 'skipped'].includes(stage.status) && !staleText && (
+          <button type="button" disabled={busy} onClick={onRebuild} title={REBUILD_TITLE}
             className={`${buttonClass} border border-port-border`}>
             <RotateCcw size={14} aria-hidden="true" /> Rebuild
           </button>

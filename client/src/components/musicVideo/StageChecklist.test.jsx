@@ -16,6 +16,19 @@ describe('StageChecklist Revert buttons (#10241)', () => {
     expect(screen.queryByRole('button', { name: 'Revert cast' })).toBeNull();
   });
 
+  // Uniquely catches Keep approved standing alone: the header already pointing at the
+  // editor used to hide Review, leaving no visible alternative to Keep.
+  it('offers Keep approved and Review side by side, each saying what it does', () => {
+    const onAction = vi.fn();
+    render(<StageChecklist items={items(readiness(null))} onAction={onAction} headerAnchor="mv-review-art" />);
+    expect(screen.getByText('Approve it again as it is now.')).toBeTruthy();
+    expect(screen.getByText('Check the changes first, then approve.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep approved' }));
+    expect(onAction).toHaveBeenLastCalledWith(expect.objectContaining({ run: 'keep-approval', stage: 'art' }));
+    fireEvent.click(screen.getByRole('button', { name: /Review art direction/ }));
+    expect(onAction).toHaveBeenLastCalledWith(expect.objectContaining({ anchor: 'mv-review-art' }));
+  });
+
   it('shows no Revert for a legacy approval without kept values', () => {
     render(<StageChecklist items={items(readiness(null))} onRevert={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /^Revert/ })).toBeNull();

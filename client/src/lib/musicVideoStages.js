@@ -967,7 +967,8 @@ function approvalItem(project, readiness, key, label, waitingText) {
     id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
     detail: approved || !readiness ? null : (stale ? (keepable ? stale : `${stale} Re-approve in the editor below.`) : blocker || waitingText),
     ...(keepable
-      ? { action: { label: 'Keep approved', run: 'keep-approval', stage: key }, secondary: { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }
+      ? { action: { label: 'Keep approved', run: 'keep-approval', stage: key, hint: 'Approve it again as it is now.' },
+        secondary: { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key], hint: 'Check the changes first, then approve.' } }
       : { action: approved ? null : { label: `Review ${label.toLowerCase()}`, anchor: APPROVAL_ANCHORS[key], stage: APPROVAL_STAGES[key] } }),
     revert: !approved && stale && readiness[key].stale.revertible?.length ? { stage: key, fields: readiness[key].stale.revertible } : null,
   };

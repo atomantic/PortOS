@@ -1,6 +1,6 @@
 import { castSetsInspectionInputs, currentCastSetsInspection, castSetsImageAccepted } from '../../../../server/lib/musicVideoCastSetsInspection.js';
 import { Link, useLocation } from 'react-router';
-import { Wand2 } from 'lucide-react';
+import { RotateCcw, Wand2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import { detailTabPath, libraryById } from '../../lib/creativeLibraries';
 import { formatCount } from '../../utils/formatters';
@@ -66,9 +66,15 @@ function ReviseLookLink({ ingredientId }) {
     <Wand2 size={12} aria-hidden="true" /> Revise look</Link>;
 }
 
-function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, onReinspectImages, busy }) {
+function visionHeadline(inspection) {
+  if (inspection?.verdict === 'pass') return 'Vision: matches saved prompt';
+  if (inspection?.verdict === 'mismatch') return inspection.checks?.some((c) => c.id === 'render-quality' && c.status === 'fail') ? 'Vision: rendering defect' : 'Vision: prompt mismatch';
+  if (inspection?.verdict === 'pending') return 'Vision: inspecting image…';
+  return 'Vision: not checked';
+}
+
+function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, onReinspectImage, busy }) {
   const image = stage.images?.[item.key] || {};
-  const canRecheck = !!onReinspectImages && ['review', 'approved'].includes(stage.status);
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
   const live = useMediaJobProgress(image.status === 'queued' ? image.jobId : null);
@@ -95,6 +101,10 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
 
   const inspection = currentCastSetsInspection(stage, item.key);
   const accepted = castSetsImageAccepted(stage, item.key);
+  // Vision that never answered (provider down, incomplete reply) can be asked again;
+  // a sheet in review can also accept the image as it is, once vision has answered.
+  const canRetryVision = !!onReinspectImage && ['review', 'approved'].includes(stage.status) && !['pass', 'mismatch'].includes(inspection?.verdict);
+  const canAccept = !accepted && stage.status === 'review' && !!onAcknowledgeImage && inspection?.verdict !== 'pending';
   const submitted = typeof image.submittedPrompt === 'string';
   const references = cardReferences(item, stage);
   const castingId = castingIdFor(item, stage, subjects);
@@ -121,22 +131,26 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
       )}
       {image.status === 'done' && (
         <div className="rounded border border-port-border p-2 text-xs space-y-1" role="status">
-          <p className={inspection?.verdict === 'pass' ? 'text-port-success' : 'text-port-warning'}>
-            {inspection?.verdict === 'pass' ? 'Vision: matches saved prompt' : inspection?.verdict === 'mismatch' ? (inspection.checks?.some((c) => c.id === 'render-quality' && c.status === 'fail') ? 'Vision: rendering defect' : 'Vision: prompt mismatch') : inspection?.verdict === 'pending' ? 'Vision: inspecting image…' : 'Vision: unreviewed'}
-          </p>
+          <p className={inspection?.verdict === 'pass' ? 'text-port-success' : 'text-port-warning'}>{visionHeadline(inspection)}</p>
           {inspection?.discrepancy && <p className="break-words">{inspection.discrepancy}</p>}
-          {accepted && inspection?.verdict !== 'pass' && <p>Explicitly acknowledged for this image.</p>}
-          {canRecheck && inspection?.verdict !== 'pass' && inspection?.verdict !== 'pending' && (
-            <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent"
-              onClick={() => onReinspectImages([item.key])}>
-              Re-check with vision
-            </button>
-          )}
-          {!accepted && stage.status === 'review' && onAcknowledgeImage && (
-            <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent"
-              onClick={() => onAcknowledgeImage({ inputs: castSetsInspectionInputs(stage, item.key), inspectionId: inspection?.id || null })}>
-              Acknowledge {inspection?.verdict === 'mismatch' ? 'mismatch' : 'unreviewed image'}
-            </button>
+          {accepted && inspection?.verdict !== 'pass' && <p>{inspection?.verdict === 'mismatch' ? 'You accepted it anyway.' : 'You accepted it unchecked.'}</p>}
+          {(canRetryVision || canAccept) && (
+            <div className="flex flex-wrap gap-2">
+              {canRetryVision && (
+                <button type="button" disabled={busy} title="Ask the vision reviewer to check this image again"
+                  className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-accent disabled:opacity-50 sm:min-h-0 sm:py-1"
+                  onClick={() => onReinspectImage(item.key)}>
+                  <RotateCcw size={12} aria-hidden="true" /> Retry vision
+                </button>
+              )}
+              {canAccept && (
+                <button type="button" disabled={busy} title="Approve with this image as it is"
+                  className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50 sm:min-h-0 sm:py-1"
+                  onClick={() => onAcknowledgeImage({ inputs: castSetsInspectionInputs(stage, item.key), inspectionId: inspection?.id || null })}>
+                  {inspection?.verdict === 'mismatch' ? 'Accept anyway' : 'Accept unchecked'}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -171,26 +185,18 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
 }
 
 /**
- * `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
+ * Each finished card says what vision found; an unchecked one offers Retry vision
+ * (`onReinspectImage(key)`) and, while the sheet is in review, Accept
+ * (`onAcknowledgeImage`). `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
  * Remove; the check-in passes it only while the stage is idle.
  */
-export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [], onAcknowledgeImage, onReinspectImages, busy }) {
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [], onAcknowledgeImage, onReinspectImage = null, busy }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
-  const stale = onReinspectImages && ['review', 'approved'].includes(stage.status)
-    ? items.filter((item) => castSetsInspectionInputs(stage, item.key) && currentCastSetsInspection(stage, item.key)?.verdict !== 'pass').map((item) => item.key) : [];
   return (
-    <>
-    {stale.length > 1 && (
-      <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-xs text-port-accent"
-        onClick={() => onReinspectImages()}>
-        Re-check all {formatCount(stale.length)} unreviewed images with vision
-      </button>
-    )}
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
       {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions}
-        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} onAcknowledgeImage={onAcknowledgeImage} onReinspectImages={onReinspectImages} busy={busy} />)}
+        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} onAcknowledgeImage={onAcknowledgeImage} onReinspectImage={onReinspectImage} busy={busy} />)}
     </div>
-    </>
   );
 }

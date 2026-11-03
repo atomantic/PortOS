@@ -15,17 +15,8 @@ describe('Cast & Sets inspection card', () => {
     render(<CastAndSetsReferenceProgress stage={stage} onAcknowledgeImage={onAcknowledgeImage} />);
     expect(screen.getByText('Vision: prompt mismatch')).toBeTruthy();
     expect(screen.getByText('A crowded outdoor quay is visible.')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge mismatch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept anyway' }));
     expect(onAcknowledgeImage).toHaveBeenCalledWith({ inputs, inspectionId: 'inspection-1' });
-  });
-
-  it('offers a vision re-check for an acknowledged image on an approved stage', () => {
-    const onReinspectImages = vi.fn();
-    const approved = { ...stage, status: 'approved', images: { 'set:lab': { ...image, inspection: { id: 'inspection-4', inputs, verdict: 'unreviewed', discrepancy: 'Vision unavailable: Provider example is unavailable' },
-      inspectionAcknowledgement: { inputs, inspectionId: 'inspection-4' } } } };
-    render(<CastAndSetsReferenceProgress stage={approved} onReinspectImages={onReinspectImages} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Re-check with vision' }));
-    expect(onReinspectImages).toHaveBeenCalledWith(['set:lab']);
   });
 
   it('names a failed render-quality check as a rendering defect', () => {
@@ -40,11 +31,31 @@ describe('Cast & Sets inspection card', () => {
     const unreviewed = { ...stage, images: { 'set:lab': { ...image, inspection: { id: 'inspection-2', inputs, verdict: 'unreviewed', discrepancy: 'Vision unavailable.' },
       inspectionAcknowledgement: { inputs, inspectionId: 'inspection-2' } } } };
     const view = render(<CastAndSetsReferenceProgress stage={unreviewed} onAcknowledgeImage={vi.fn()} />);
-    expect(screen.getByText('Vision: unreviewed')).toBeTruthy();
-    expect(screen.getByText('Explicitly acknowledged for this image.')).toBeTruthy();
+    expect(screen.getByText('Vision: not checked')).toBeTruthy();
+    expect(screen.getByText('You accepted it unchecked.')).toBeTruthy();
     expect(screen.queryByText('Vision: matches saved prompt')).toBeNull();
     view.rerender(<CastAndSetsReferenceProgress stage={{ ...stage, plan: { 'set:lab': { ...stage.plan['set:lab'], prompt: 'Different location.' } } }} onAcknowledgeImage={vi.fn()} />);
-    expect(screen.getByText('Vision: unreviewed')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Acknowledge unreviewed image' })).toBeTruthy();
+    expect(screen.getByText('Vision: not checked')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accept unchecked' })).toBeTruthy();
+  });
+
+  // Uniquely catches an unavailable vision provider leaving the director only "accept".
+  it('retries vision on an unchecked image, in review or approved, but not after a verdict', () => {
+    const onReinspectImage = vi.fn();
+    const unchecked = (status) => ({ ...stage, status, images: { 'set:lab': { ...image, inspection: { id: 'inspection-2', inputs, verdict: 'unreviewed', discrepancy: 'Vision unavailable: provider offline' } } } });
+    const view = render(<CastAndSetsReferenceProgress stage={unchecked('approved')} onReinspectImage={onReinspectImage} onAcknowledgeImage={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Accept unchecked' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry vision' }));
+    expect(onReinspectImage).toHaveBeenCalledWith('set:lab');
+    view.rerender(<CastAndSetsReferenceProgress stage={unchecked('review')} onReinspectImage={onReinspectImage} onAcknowledgeImage={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Retry vision' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accept unchecked' })).toBeTruthy();
+    // While the retry runs, its answer could still be a mismatch: nothing to accept yet.
+    const running = unchecked('review');
+    running.images['set:lab'].inspection = { ...running.images['set:lab'].inspection, verdict: 'pending' };
+    view.rerender(<CastAndSetsReferenceProgress stage={running} onReinspectImage={onReinspectImage} onAcknowledgeImage={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Accept unchecked' })).toBeNull();
+    view.rerender(<CastAndSetsReferenceProgress stage={stage} onReinspectImage={onReinspectImage} onAcknowledgeImage={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Retry vision' })).toBeNull();
   });
 });
