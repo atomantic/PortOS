@@ -27,6 +27,8 @@ const nodeUpdateSchema = z.object({
   version: z.string().regex(/^v\d+\.\d+\.\d+$/, 'version must look like v26.12.1')
 });
 
+const softwareQuerySchema = z.object({ fresh: z.enum(['0', '1']).optional() });
+
 const syncForkSchema = z.object({
   branch: z.string().min(1).max(255).regex(/^[A-Za-z0-9._/-]+$/, 'branch contains invalid characters').optional()
 });
@@ -204,6 +206,14 @@ router.post('/execute', asyncHandler(async (req, res) => {
 // security releases, nvm, pm2 (shipped, daemon, terminal CLI) and the boot script.
 router.get('/node-runtime', asyncHandler(async (req, res) => {
   res.json(await getNodeRuntimeStatus());
+}));
+
+// GET /api/update/software — every additional component PortOS manages, for
+// Settings › Software. Read-only; actions go to each component's own endpoint.
+router.get('/software', asyncHandler(async (req, res) => {
+  const { getSoftwareInventory } = await import('../services/softwareInventory.js');
+  const { fresh } = validateRequest(softwareQuerySchema, req.query);
+  res.json(await getSoftwareInventory({ fresh: fresh === '1' }));
 }));
 
 // GET /api/update/browser — the periodically observed managed Chrome version.

@@ -462,7 +462,12 @@ function launchJob(kind, io, work, { restart = true } = {}) {
       console.error(`❌ ${kind} failed: ${error.message}`);
       io?.emit('portos:update:error', { message: error.message, step: kind });
     })
-    .finally(() => { currentJob = null; runtimeUpdateEvents.emit('changed'); });
+    .finally(() => {
+      currentJob = null;
+      runtimeUpdateEvents.emit('changed');
+      // After the job slot clears, so a status read on this event sees it finished.
+      io?.emit('portos:node-runtime:changed', { reason: 'job-finished', kind });
+    });
   // `restart: false` tells the Update tab not to wait for a restart.
   return { started: true, restart };
 }

@@ -73,6 +73,9 @@ export const executePortosUpdate = (opts) => {
 // boot script; the two actions restart PortOS through the update lifecycle.
 export const getNodeRuntimeStatus = (options) => request('/update/node-runtime', options);
 export const getBrowserUpdateStatus = (options) => request('/update/browser', options);
+// Settings › Software: every additional component PortOS manages, one row each.
+export const getSoftwareInventory = ({ fresh = false, ...options } = {}) =>
+  request(`/update/software${fresh ? '?fresh=1' : ''}`, options);
 export const updateNodeRuntime = (version) => request('/update/node-runtime', {
   method: 'POST',
   body: JSON.stringify({ version })
