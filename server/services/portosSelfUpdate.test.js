@@ -56,6 +56,12 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     updateChecker.getUpdateStatus.mockResolvedValue(inSyncStatus());
     launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
   });
+  it('preserves a late interruption-consent refusal in the async UI error', async () => {
+    launchUpdate.mockResolvedValueOnce({ started: true, completion: Promise.resolve({ success: false,
+      errorCode: 'UPDATE_INTERRUPTION_REQUIRED', errorMessage: 'Save your work before continuing' }) });
+    await startPortosSelfUpdate({ io, mode: 'refresh' });
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({ code: 'UPDATE_INTERRUPTION_REQUIRED' })));
+  });
 
   it('runs on an in-sync install, where a reconcile would refuse', async () => {
     // The Git tab has already pulled the checkout by the time it hands off, so

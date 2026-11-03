@@ -16,6 +16,24 @@ const { launchUpdate } = await import('./updateExecutor.js');
 afterAll(cleanupTempDataRoots);
 
 describe.skipIf(process.platform === 'win32')('service launch through the real detached supervisor', () => {
+  it('keeps a late manual-consent refusal typed through detached completion and allows explicit continuation', async () => {
+    installUpdateTestSupervisor(PATHS.root);
+    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
+    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
+    await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch consent-applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    const admission = createMaintenanceAdmission(PATHS.data);
+    const render = admission.admit('render:example', 'project-example');
+    try {
+      const initial = await launchUpdate('v0.0.0', vi.fn(), { admission, monitorIntervalMs: 50 });
+      expect(initial.started).toBe(true);
+      await expect(initial.completion).resolves.toMatchObject({ success: false, errorCode: 'UPDATE_INTERRUPTION_REQUIRED' });
+      expect(existsSync(join(PATHS.root, 'consent-applied'))).toBe(false);
+      expect(Object.keys(admission.deferredUpdate.get().result)).toHaveLength(4);
+      const continued = await launchUpdate('v0.0.0', vi.fn(), { admission, acknowledgeInterruption: true, monitorIntervalMs: 50 });
+      await expect(continued.completion).resolves.toMatchObject({ success: true });
+      expect(existsSync(join(PATHS.root, 'consent-applied'))).toBe(true);
+    } finally { await render.finish(); }
+  });
   it('replaces a prior waiting owner, refuses duplicate reuse, and waits for a racing render to save', async () => {
     installUpdateTestSupervisor(PATHS.root);
     const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
@@ -57,7 +75,8 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
       await vi.waitFor(() => expect(admission.deferredUpdate.operation()?.phase).toBe('waiting'), { timeout: 10000 });
       const manual = await launchUpdate('v0.0.0', vi.fn(), { admission, acknowledgeInterruption: true, monitorIntervalMs: 50 });
       expect(manual.started).toBe(true);
-      await expect(automatic.completion).resolves.toMatchObject({ success: false, superseded: true });
+      const outcome = await automatic.completion;
+      expect(outcome, JSON.stringify({ outcome, steps: report.mock.calls })).toMatchObject({ success: false, superseded: true });
       await expect(manual.completion).resolves.toMatchObject({ success: true });
       expect(report.mock.calls.some(([, status]) => status === 'error')).toBe(false);
       expect(existsSync(join(PATHS.root, 'manual-applied'))).toBe(true);

@@ -391,16 +391,19 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
   return new Promise((resolve, reject) => {
     let timer, done = false;
     const finish = result => { if (!done) { done = true; clearTimeout(timer); resolve(result); } };
+    const finishSuperseded = async () => {
+      if (!beginFinalization()) return;
+      try { await child.stopTailing?.(); }
+      catch (error) { console.warn(`⚠️ Could not stop superseded update log tailing: ${error.message}`); }
+      untrackControl();
+      finish({ success: false, superseded: true, interrupted: true });
+    };
     completion.then(finish, error => { if (!done) { done = true; clearTimeout(timer); reject(error); } });
     const poll = async () => {
       if (done) return;
       try {
         if (supersededUpdates.has(ticket)) {
-          if (!beginFinalization()) return;
-          try { await child.stopTailing?.(); }
-          catch (error) { console.warn(`⚠️ Could not stop superseded update log tailing: ${error.message}`); }
-          untrackControl();
-          finish({ success: false, superseded: true, interrupted: true });
+          await finishSuperseded();
           return;
         }
         const pending = admission.deferredUpdate.launch();
@@ -424,6 +427,7 @@ function watchSupervisor({ admission, ticket, child, completion, emit, targetVer
           gone = Number.isFinite(observed?.startedAt) && (observed.startedAt > observedAt || explicitOther);
         }
         if (done) return;
+        if (supersededUpdates.has(ticket)) { await finishSuperseded(); return; }
         if (gone) {
           const absentOwner = pid => pid === child.pid ? true : absent(pid);
           const state = admission.deferredUpdate.reconcile({ absent: absentOwner });
@@ -473,9 +477,11 @@ function retryPendingLaunchBinding(admission, id, childPid) {
 }
 
 async function waitForClaimedUpdate(admission, id, existingResult, targetVersion, emit) {
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   let result = existingResult;
   while (!result) {
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
     let state;
     try { state = admission.deferredUpdate.reconcile(); }
     catch (error) {
@@ -487,6 +493,17 @@ async function waitForClaimedUpdate(admission, id, existingResult, targetVersion
     else return { success: false, uncertain: true, failedStep: 'starting', errorMessage: 'Update outcome is unavailable' };
   }
   let version = targetVersion;
+  let errorCode;
+  if (!result.success) {
+    try {
+      const refusal = JSON.parse(await readFile(join(admission.directory, `update-refusal-${id}.json`), 'utf8'));
+      if (refusal.id === id && refusal.code === 'UPDATE_INTERRUPTION_REQUIRED') errorCode = refusal.code;
+    } catch { /* Older scripts have no typed refusal metadata. */ }
+  }
+  const errorMessage = errorCode === 'UPDATE_INTERRUPTION_REQUIRED'
+    ? 'Updating restarts PortOS and Chrome. Active work may fail or lose unsaved progress. Save your work, then explicitly continue the update.'
+    : 'The update did not finish successfully';
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   let completedAt = result.completedAt;
   const markerPath = join(PATHS.data, 'update-complete.json');
   if (result.success) {
@@ -497,13 +514,14 @@ async function waitForClaimedUpdate(admission, id, existingResult, targetVersion
     } catch { version = await getCurrentVersion().catch(() => targetVersion); }
   }
   const recorded = await recordUpdateResult({ version, success: result.success, completedAt,
-    log: result.success ? '' : 'The update did not finish successfully' }).then(() => true, () => false);
+    log: result.success ? '' : errorMessage }).then(() => true, () => false);
+  if (supersededUpdates.has(id)) return { success: false, superseded: true, interrupted: true };
   if (recorded && result.success) await unlink(markerPath).catch(() => {});
   try {
     if (result.success) emit('complete', 'done', 'Update complete — restarting');
-    else emit('starting', 'error', 'The update did not finish successfully');
+    else emit('starting', 'error', errorMessage);
   } catch (error) { console.error(`❌ Could not report update outcome: ${error.message}`); }
-  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage: 'The update did not finish successfully' };
+  return result.success ? { success: true, version } : { success: false, failedStep: 'starting', errorMessage, ...(errorCode ? { errorCode } : {}) };
 }
 
 /**

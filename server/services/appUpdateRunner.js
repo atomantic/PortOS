@@ -90,11 +90,6 @@ export async function runAppUpdate({
     // fork) so App Management can't restart out from under them just because it
     // dispatches through this path instead (#5984).
     if (app.id === PORTOS_APP_ID) {
-      const activityRefusal = await checkManualUpdateActivity({ automatic, acknowledgeInterruption, ignoreAppId: app.id }).then(() => null, err => err);
-      if (activityRefusal) {
-        endAppOperation(io, app.id, 'cancellation'); operatingAppId = null;
-        return { ok: false, reason: 'refused', appId: app.id, code: activityRefusal.code, message: activityRefusal.message };
-      }
       const refusal = await checkPortosUpdatePreflight({
         acknowledgeFork,
         acknowledgePersistentMindImageBackup,
@@ -104,6 +99,11 @@ export async function runAppUpdate({
         endAppOperation(io, app.id, 'cancellation');
         operatingAppId = null;
         return { ok: false, reason: 'refused', appId: app.id, code: refusal.code || null, message: refusal.message };
+      }
+      const activityRefusal = await checkManualUpdateActivity({ automatic, acknowledgeInterruption, ignoreAppId: app.id }).then(() => null, err => err);
+      if (activityRefusal) {
+        endAppOperation(io, app.id, 'cancellation'); operatingAppId = null;
+        return { ok: false, reason: 'refused', appId: app.id, code: activityRefusal.code, message: activityRefusal.message };
       }
     }
 
@@ -181,6 +181,8 @@ export async function runAppUpdate({
       // A supervisor can fail before replacing this server. Clear this exact
       // progress row when it exits; a later operation must not be removed.
       result.completion?.then(outcome => {
+        if (!outcome?.success && !outcome?.superseded) io.emit('app:update:error', { appId: app.id,
+          code: outcome?.errorCode || null, message: outcome?.errorMessage || 'The update did not complete' });
         endAppOperation(io, app.id, outcome?.success ? 'completion' : 'failure', operation);
       }).catch(() => endAppOperation(io, app.id, 'failure', operation));
     } else if (operatingAppId) {

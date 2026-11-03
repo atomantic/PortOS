@@ -1,3 +1,8 @@
+vi.mock('../services/activeProcessing.js', () => ({ getSystemActivity: vi.fn(async () => ({
+  jobs: [], agents: { trusted: true, active: getActiveAgentIds().length + mockSpawningTasks.size, queued: 0 },
+  mind: { trusted: true, thinking: false, queued: 0 }, llm: { trusted: true, active: 0, directCallsTracked: true },
+  extras: { imageTo3d: [] }, appOperations: [], renders: (await import('./renderActivity.js')).listActiveRenders(), backup: { inProgress: false },
+})) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -109,34 +114,40 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     }));
   });
 
-  it('defers the API update while Git-tab checkout mutation still refuses live agents', async () => {
+  it('requires explicit manual consent for live agents on both API and Git paths', async () => {
     getActiveAgentIds.mockReturnValue(['agent-1']);
 
     const routeRes = await request(makeRouteApp()).post('/api/update/execute').send({});
-    expect(routeRes.status).toBe(200);
-    expect(launchUpdate).toHaveBeenCalled();
+    expect(routeRes.status).toBe(409);
+    expect(routeRes.body.code).toBe('UPDATE_INTERRUPTION_REQUIRED');
+    expect(launchUpdate).not.toHaveBeenCalled();
 
     const { fireUpdate, emitted } = makeSocketHarness();
     await fireUpdate({ appId: PORTOS_APP_ID });
     const errorEvent = emitted.find((e) => e.event === 'app:update:error');
     expect(errorEvent).toBeTruthy();
-    expect(errorEvent.payload.code).toBe('AGENTS_ACTIVE');
+    expect(errorEvent.payload.code).toBe('UPDATE_INTERRUPTION_REQUIRED');
     expect(appUpdaterUpdateApp).not.toHaveBeenCalled();
+    const continued = await request(makeRouteApp()).post('/api/update/execute').send({ acknowledgeInterruption: true });
+    expect(continued.status).toBe(200);
+    appUpdaterUpdateApp.mockResolvedValue({ success: true, steps: [] });
+    await fireUpdate({ appId: PORTOS_APP_ID, acknowledgeInterruption: true });
+    expect(appUpdaterUpdateApp).toHaveBeenCalledWith(portosApp, expect.any(Function), expect.objectContaining({ acknowledgeInterruption: true }));
   });
 
-  it('defers API renders while Git-tab checkout mutation still refuses them', async () => {
+  it('requires explicit manual consent for renders on both paths', async () => {
     const { trackedRenderMap } = await import('./renderActivity.js');
     const renders = trackedRenderMap('parity-test', { noun: 'music video render' });
     renders.set('project-example', 'job-example');
     try {
       const routeRes = await request(makeRouteApp()).post('/api/update/execute').send({});
-      expect(routeRes.status).toBe(200);
-      expect(launchUpdate).toHaveBeenCalled();
+      expect(routeRes.status).toBe(409);
+      expect(launchUpdate).not.toHaveBeenCalled();
 
       const { fireUpdate, emitted } = makeSocketHarness();
       await fireUpdate({ appId: PORTOS_APP_ID });
       const errorEvent = emitted.find((e) => e.event === 'app:update:error');
-      expect(errorEvent.payload.code).toBe('RENDERS_ACTIVE');
+      expect(errorEvent.payload.code).toBe('UPDATE_INTERRUPTION_REQUIRED');
       expect(appUpdaterUpdateApp).not.toHaveBeenCalled();
     } finally {
       renders.delete('project-example');
@@ -186,7 +197,7 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     const { fireUpdate: fireAckUpdate } = makeSocketHarness();
     await fireAckUpdate({ appId: PORTOS_APP_ID, acknowledgeFork: true });
     expect(appUpdaterUpdateApp).toHaveBeenCalledWith(portosApp, expect.any(Function), {
-      syncFork: false, acknowledgeFork: true, acknowledgePersistentMindImageBackup: false,
+      syncFork: false, acknowledgeFork: true, acknowledgePersistentMindImageBackup: false, automatic: false, acknowledgeInterruption: false,
     });
   });
 

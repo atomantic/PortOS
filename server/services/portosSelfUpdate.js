@@ -132,7 +132,7 @@ async function startSelfUpdate({
     const result = launch.result;
     io?.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
     throw new ServerError(result.errorMessage || 'PortOS update failed to launch',
-      { status: 409, code: 'UPDATE_LAUNCH_FAILED' });
+      { status: 409, code: result.errorCode || 'UPDATE_LAUNCH_FAILED' });
   }
 
   // Observe the lifetime without awaiting it: the script normally kills this
@@ -149,7 +149,7 @@ async function startSelfUpdate({
         versionKnown: !!result.version,
       });
     } else {
-      io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
+      io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown', ...(result.errorCode ? { code: result.errorCode } : {}) });
     }
   }).catch(reportFailure);
 

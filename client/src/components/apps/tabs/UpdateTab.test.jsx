@@ -200,6 +200,20 @@ describe('UpdateTab reconcile flow', () => {
 });
 
 describe('UpdateTab — active CoS manual update availability', () => {
+  it('offers late asynchronous continuation and retains reconcile, fork and image-backup acknowledgments', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({ ...OUT_OF_SYNC_STATUS,
+      remoteInfo: { isFork: true, hasOrigin: true, fullName: 'example/PortOS' } });
+    mockExecutePortosUpdate.mockRejectedValueOnce(Object.assign(new Error('Back up image work first'), { code: 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' }))
+      .mockResolvedValue({ started: true });
+    render(<UpdateTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile from Fork As-Is' }));
+    fireEvent.click(await screen.findByRole('button', { name: /I backed up image work/ }));
+    await waitFor(() => expect(mockExecutePortosUpdate).toHaveBeenCalledTimes(2));
+    act(() => handlers.get('portos:update:error')({ code: 'UPDATE_INTERRUPTION_REQUIRED', message: 'Active work may be interrupted. Save your work.' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update now and interrupt active work' }));
+    await waitFor(() => expect(mockExecutePortosUpdate).toHaveBeenLastCalledWith({ reconcile: true, acknowledgeFork: true,
+      acknowledgePersistentMindImageBackup: true, acknowledgeInterruption: true }));
+  });
   it('shows the risk and sends interruption acknowledgment only after explicit continuation', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({ ...OUT_OF_SYNC_STATUS, activeCosAgents: 1 });
     mockExecutePortosUpdate.mockRejectedValueOnce(Object.assign(new Error('Active work may lose unsaved progress. Save your work before continuing.'), { code: 'UPDATE_INTERRUPTION_REQUIRED' }))

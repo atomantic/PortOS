@@ -116,11 +116,11 @@ export function usePortosRestartWatch({ enabled = true, active = false, onRestar
   useEffect(() => {
     if (!enabled) return undefined;
 
-    const fail = (message) => {
+    const fail = (message, code) => {
       activeRef.current = false;
       stopPolling();
       toast.dismiss(TOAST_ID);
-      callbacksRef.current.onFailure?.({ message });
+      callbacksRef.current.onFailure?.({ message, ...(code ? { code } : {}) });
     };
 
     const handleStep = ({ step, status }) => {
@@ -137,7 +137,7 @@ export function usePortosRestartWatch({ enabled = true, active = false, onRestar
       if (activeRef.current) arm();
     };
 
-    const handleError = ({ message }) => fail(message || 'Update failed');
+    const handleError = ({ message, code }) => fail(message || 'Update failed', code);
 
     const handleDisconnect = () => {
       if (!activeRef.current) return;

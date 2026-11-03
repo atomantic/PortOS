@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Download, XCircle, Check, Loader, Loader2, AlertTriangle, Trash2, ExternalLink, Tag, GitFork, GitBranch } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -54,6 +54,7 @@ export default function UpdateTab() {
   const [steps, setSteps] = useState([]);
   const [updateError, setUpdateError] = useState(null);
   const [interruptionRequest, setInterruptionRequest] = useState(null);
+  const lastUpdateRequest = useRef(null);
   const [syncingFork, setSyncingFork] = useState(false);
   const [forkSyncError, setForkSyncError] = useState(null);
 
@@ -63,9 +64,11 @@ export default function UpdateTab() {
   const { polling, captureBaseline } = usePortosRestartWatch({
     active: updating,
     onRestart: () => setUpdating(false),
-    onFailure: ({ message }) => {
+    onFailure: ({ message, code }) => {
       setUpdating(false);
       if (message) setUpdateError(message);
+      if (code === 'UPDATE_INTERRUPTION_REQUIRED' && lastUpdateRequest.current)
+        setInterruptionRequest({ ...lastUpdateRequest.current, acknowledgment: 'acknowledgeInterruption' });
     },
   });
 
@@ -103,6 +106,7 @@ export default function UpdateTab() {
   // `launch` lets the Node runtime panel start its restart through the same
   // baseline, step list and restart watch as a release update.
   const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = api.executePortosUpdate) => {
+    lastUpdateRequest.current = launch === api.executePortosUpdate ? { opts, fromStatus, launch } : null;
     const s = fromStatus || status;
     // Record the version and uptime of the still-running server, so even an
     // instant restart (whose first post-restart poll already reports a small

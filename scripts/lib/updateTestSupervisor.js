@@ -38,7 +38,7 @@ else {
   const controller = new AbortController();
   process.on('SIGTERM', () => controller.abort());
   process.on('SIGINT', () => controller.abort());
-  process.exitCode = await runDeferredUpdate({ admission, cwd: ${JSON.stringify(repo)}, signal: controller.signal, policy: command === '--interrupt' ? 'interrupt' : 'automatic' });
+  process.exitCode = await runDeferredUpdate({ admission, cwd: ${JSON.stringify(repo)}, signal: controller.signal, policy: command === '--interrupt' ? 'interrupt' : command === '--automatic' ? 'automatic' : 'manual' });
 }
 `);
 }

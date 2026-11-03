@@ -300,6 +300,16 @@ describe('app socket handlers', () => {
   });
 
   describe('PortOS self-update handoff', () => {
+    it('publishes typed asynchronous consent refusal before removing the Git update operation', async () => {
+      const done = deferred();
+      appUpdater.updateApp.mockResolvedValueOnce({ success: true, selfUpdateStarted: true,
+        supervisorPid: 12345, completion: done.promise, steps: [] });
+      const client = connect(bus);
+      await client.fire('app:update', { appId: PORTOS_APP_ID });
+      done.resolve({ success: false, errorCode: 'UPDATE_INTERRUPTION_REQUIRED', errorMessage: 'Save work before continuing' });
+      await vi.waitFor(() => expect(client.last('app:update:error')?.payload.code).toBe('UPDATE_INTERRUPTION_REQUIRED'));
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
     it('lets a manual Git update replace a handed-off waiting automatic operation', async () => {
       const done = deferred();
       const waiting = maintenance.deferredUpdate.request();

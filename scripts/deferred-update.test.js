@@ -32,25 +32,38 @@ const completedLaunch = admission => (_command, _args, options) => {
 };
 
 describe('deferred update admission', () => {
+  it('allows the first handoff activity cache to refresh before asking an idle manual caller to interrupt', async () => {
+    const { admission } = fixture(); let clock = 0;
+    const confirmInterruption = vi.fn(async () => false);
+    await expect(runDeferredUpdate({ admission, policy: 'manual', launch: completedLaunch(admission),
+      recoverReservations: async () => { if (clock < 5000) throw new Error('initial handoff activity is cached'); },
+      legacyRunning: async () => false, wait: async () => { clock += 1000; }, confirmInterruption, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    expect(confirmInterruption).not.toHaveBeenCalled();
+  });
   it.each([false, true])('gives a transferred childless waiter time to exit while protecting real installer=%s', async realInstaller => {
     const { root, admission } = fixture();
     const previous = admission.deferredUpdate.request();
     createMaintenanceJournal(join(root, 'data')).transaction(state => { state.operations.find(op => op.id === previous.id).pid = 2468; });
+    const reconcile = admission.deferredUpdate.reconcile;
+    vi.spyOn(admission.deferredUpdate, 'reconcile').mockImplementation(options => reconcile({ ...options,
+      absent: pid => pid === 2468 ? false : processAbsent(pid) }));
     let waiting = true;
+    const wait = vi.fn(async () => { waiting = false; });
     const launch = vi.fn(completedLaunch(admission));
     const options = { admission, cwd: root, policy: 'interrupt', launch, emit: vi.fn(),
       legacySnapshot: async () => [
         { pid: process.pid, ppid: 1, state: 'S', command: 'node updater' },
-        ...(waiting ? [{ pid: 2468, ppid: 1, state: 'S', command: `node ${root}/scripts/deferred-update.mjs --automatic` }] : []),
+        ...(waiting ? [{ pid: 2468, ppid: 1, state: 'S', command: 'node scripts/deferred-update.mjs --automatic' }] : []),
         ...(realInstaller ? [{ pid: 2469, ppid: 2468, state: 'S', command: 'npm install' }] : []),
       ], legacyCwds: async () => new Map([[2468, root], [2469, root]]), legacyGroups: async () => [],
-      wait: async () => { waiting = false; }, absent: () => true };
+      wait, absent: () => true };
     if (realInstaller) {
       await expect(runDeferredUpdate(options)).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
       expect(launch).not.toHaveBeenCalled();
     } else {
       await expect(runDeferredUpdate(options)).resolves.toBe(0);
       expect(launch).toHaveBeenCalledOnce();
+      expect(wait).toHaveBeenCalledOnce();
     }
   });
   it.each(['node start.js', 'node --watch start.js', 'node "C:\\npm\\pm2\\lib\\ProcessContainerFork.js"'])('attributes a Windows runtime without a cwd by its actual listener: %s', async command => {

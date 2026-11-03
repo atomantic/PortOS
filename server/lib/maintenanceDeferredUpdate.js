@@ -226,9 +226,17 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
   });
   // Only the owning supervisor calls this after its child closes and its
   // process group drains. A crashed supervisor uses reconcile(), never age.
-  const finish = (id, success) => transaction(state => {
+  const finish = (id, success, { errorCode } = {}) => transaction(state => {
     const operation = current(state, id);
     if (operation.ownerPid !== process.pid) stale();
+    if (errorCode === 'UPDATE_INTERRUPTION_REQUIRED') {
+      // Per-attempt metadata keeps the four-field result readable by older
+      // running servers during a bootstrap update.
+      const fd = io.openSync(join(directory, `update-refusal-${id}.json`), 'wx', 0o600);
+      try { io.writeFileSync(fd, JSON.stringify({ id, code: errorCode }) + '\n'); io.fsyncSync(fd); }
+      finally { io.closeSync(fd); }
+      syncDirectory(directory, io);
+    }
     return settle(state, operation, success, false);
   });
   return { inspect, operation, launch, get, reconcile, request, reserveLaunch, claimLaunch, bindLaunch, cancelLaunch, acquire, enter, settleInterrupted, terminal, finish };

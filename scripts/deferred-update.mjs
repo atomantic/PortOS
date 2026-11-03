@@ -178,7 +178,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       if (policy === 'manual') {
         // Let the API finish binding its self-update handoff before deciding
         // whether this manual launch needs an interruption acknowledgment.
-        if (++manualChecks < 5) { await wait(); continue; }
+        if (++manualChecks < 6) { await wait(); continue; }
         emit('STEP:waiting:warning:Work is active or activity is unavailable. Updating restarts PortOS and Chrome; active agents, renders and provider calls may fail or lose unsaved progress.');
         if (await confirmInterruption()) { policy = 'interrupt'; continue; }
         throw Object.assign(new Error('Manual update needs acknowledgment. Re-run update.sh/update.ps1 with --interrupt to continue, or --automatic to wait for idle.'), { code: 'UPDATE_INTERRUPTION_REQUIRED' });
@@ -230,7 +230,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   } catch (err) {
     // A spawn error proves no child started. Once launched, unknown settlement
     // remains held for the process-group reconciler instead of timing out.
-    if (!childStarted || err.code === 'ENOENT' || err.code === 'EACCES') admission.deferredUpdate.finish(operation.id, false);
+    if (!childStarted || err.code === 'ENOENT' || err.code === 'EACCES') admission.deferredUpdate.finish(operation.id, false, { errorCode: err.code });
     throw err;
   } finally {
     await recovery?.close();
