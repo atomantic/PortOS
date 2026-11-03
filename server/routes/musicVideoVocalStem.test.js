@@ -95,7 +95,7 @@ describe.skipIf(!ffmpeg)('music-video vocal stem routes', () => {
     const stem = res.body.vocalStemFilename;
     expect(stem).toMatch(/\.wav$/);
     expect(existsSync(join(MUSIC(), stem))).toBe(true);
-    expect((await projects.getProject(project.id)).vocalStemFilename).toBe(stem);
+    expect(await projects.getProject(project.id)).toMatchObject({ vocalStemFilename: stem, vocalStemMasterFilename: 'song.wav', vocalStemDerived: false });
 
     const removed = await request(app).delete(`/api/music-video/${project.id}/vocal-stem`);
     expect(removed.status).toBe(200);
@@ -190,24 +190,25 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     expect(demucsRuns.length).toBe(2);
   }, 20000);
 
-  it('reuses a working venv, and refuses a separated stem that does not match the song', async () => {
+  it('reuses a working venv, and attaches a separated stem whose length differs from the song\'s container duration', async () => {
     mkdirSync(dirname(PYTHON()), { recursive: true });
     writeFileSync(PYTHON(), '');
+    // demucs decodes the master itself, so its output is on the master's
+    // timebase even when the two durations disagree (an estimated MP3 length).
     const calls = demucsDouble({ stemSeconds: 5 });
-    const before = libraryFiles();
     const res = await request(app).post(`/api/music-video/${project.id}/vocal-stem/separate`).send({});
     expect(res.status).toBe(202);
     // The stream ends once the job is cleaned up; its last frame is the verdict.
     const events = await request(app).get(`/api/music-video/vocal-stem/separate/${res.body.jobId}/events`);
     expect(events.status).toBe(200);
-    expect(events.text).toContain('"type":"error"');
-    expect(events.text).toContain('MUSIC_VIDEO_VOCAL_STEM_TIMEBASE');
+    expect(events.text).toContain('"type":"complete"');
     expect(calls.some((argv) => argv[2] === 'venv' || argv[2] === 'pip')).toBe(false);
-    expect((await projects.getProject(project.id)).vocalStemFilename).toBeUndefined();
-    expect(libraryFiles()).toEqual(before);
+    expect(await projects.getProject(project.id)).toMatchObject({
+      vocalStemFilename: expect.stringMatching(/\.wav$/), vocalStemMasterFilename: 'song.wav', vocalStemDerived: true,
+    });
   }, 20000);
 
-  it('shares one separation between concurrent alignment callers and propagates attachment failures', async () => {
+  it('shares one separation between concurrent alignment callers', async () => {
     const calls = demucsDouble();
     const onProgress = vi.fn();
     const [first, second] = await Promise.all([
@@ -217,8 +218,6 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     expect((await projects.getProject(project.id)).vocalStemFilename).toBe(first.vocalStemFilename);
     expect(calls.filter((argv) => argv[2] === 'demucs')).toHaveLength(1);
     expect(onProgress).toHaveBeenCalledWith(expect.objectContaining({ stage: 'attaching' }));
-    demucsDouble({ stemSeconds: 5 });
-    await expect(separateProjectVocals(project.id)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_VOCAL_STEM_TIMEBASE' });
   }, 20000);
 
   it('404s for a missing project and 400s for a project with no song, before any job starts', async () => {

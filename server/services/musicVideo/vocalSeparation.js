@@ -9,8 +9,8 @@
  * and demucs fetches its own weights on first use. Separation picks the best
  * device (Apple Silicon → mps, NVIDIA → cuda, otherwise cpu) and retries on the
  * CPU when the accelerator run fails. The result goes through the same
- * `attachVocalStem` as an uploaded stem, so the timebase check still applies
- * and the file lands in the shared music library like any other stem.
+ * `attachVocalStem` as an uploaded stem, marked as derived from the master (so
+ * it is not length-checked against it), and the file lands in the shared music library like any other stem.
  *
  * Job shape mirrors audioMidiTranscription.js: kickoff returns `{ jobId }`,
  * the work runs detached and streams `{ type: 'progress' | 'complete' |
@@ -246,7 +246,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
         throw new ServerError('The project\'s song changed while the vocals were separating. Run Separate vocals again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
       }
       progress({ stage: 'attaching', percent: 100 });
-      const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project) });
+      const updated = await d.attachVocalStem(projectId, { tempPath: vocals, originalName: stemName(project), derived: true });
       console.log(`✅ Vocal separation ${shortId(jobId)} attached ${updated?.vocalStemFilename} to ${projectId}`);
       broadcastSse(job, { type: 'complete', project: updated });
       return { project: updated };

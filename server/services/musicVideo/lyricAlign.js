@@ -11,6 +11,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideoValidation.js';
 import { getProject, updateProject } from './projects.js';
+import { vocalStemMasterChanged } from './vocalStem.js';
 import {
   alignDirectorWords,
   lyricAlignFfmpegArgs,
@@ -89,6 +90,11 @@ export async function alignProjectLyrics(projectId, options = {}) {
     resolveTranscriber,
     forceAlign: async (...args) => (await import('./lyricForcedAlign.js')).forceAlignLyrics(...args),
     separateVocals: async (...args) => (await import('./vocalSeparation.js')).separateProjectVocals(...args),
+    stemOfOldSong: async (record) => {
+      if (!record.vocalStemFilename || !record.vocalStemMasterFilename) return false;
+      const { resolveMasterAudioPath } = await import('./render.js');
+      return vocalStemMasterChanged(record, await resolveMasterAudioPath(record));
+    },
     ...options.deps,
   };
   const cueId = options.cueId || null;
@@ -102,7 +108,8 @@ export async function alignProjectLyrics(projectId, options = {}) {
   if (cueId && !cue) throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
 
   const expectedTextKey = textKey(cues);
-  if (!project.vocalStemFilename && options.separateVocals === true) {
+  // A stem of the song's previous file is re-separated from the current one.
+  if (options.separateVocals === true && (!project.vocalStemFilename || await deps.stemOfOldSong(project))) {
     onProgress({ stage: 'separating' });
     project = await deps.separateVocals(projectId, { onProgress, isCancelled: options.isCancelled });
     checkCancel();

@@ -1,5 +1,6 @@
 import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
  *
@@ -49,6 +50,9 @@ import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRo
 import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
 import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
+
+/** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
+export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -482,7 +486,7 @@ export function applyProjectPatch(project, patch) {
     ...(project.composition ? { composition: invalidateCompositionTiming(project.composition) } : {}),
     // A vocal stem is a bounce of the OLD song; conditioning a performance on
     // it against the new master would sing the wrong words (#8977).
-    ...(project.vocalStemFilename ? { vocalStemFilename: null } : {}),
+    ...(project.vocalStemFilename ? CLEARED_VOCAL_STEM : {}),
     performanceConditioningSource: 'master',
     ...mergedPatch,
     ...statusPatch,

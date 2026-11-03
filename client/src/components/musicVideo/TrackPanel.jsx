@@ -142,10 +142,14 @@ export default function TrackPanel({
  */
 export function AdvancedTrackControls({ project, tracks, renderBound, onProjectUpdated, separation = null }) {
   const midiFile = project.midiTranscription?.filename;
+  const masterFilename = project.trackId
+    ? (tracks || []).find((track) => track.id === project.trackId)?.audioFilename || null
+    : project.uploadedAudioFilename || null;
   return (
     <>
       <VocalStemControl
         project={project}
+        masterFilename={masterFilename}
         hasAudio={Boolean(project.trackId || project.uploadedAudioFilename)}
         onUpdated={onProjectUpdated}
         separation={separation}
