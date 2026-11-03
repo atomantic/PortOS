@@ -304,7 +304,7 @@ async function _doUpdate(app, emit, {
       // No `io`: App Management renders the run from its own `app:update:step`
       // frames (`onStep`), so mirroring the whole stream onto
       // `portos:update:*` as well would double the fan-out for no new reader.
-      await startPortosSelfUpdate({
+      const launch = await startPortosSelfUpdate({
         acknowledgeFork,
         acknowledgePersistentMindImageBackup,
         preflightAlreadyRun: true,
@@ -314,7 +314,8 @@ async function _doUpdate(app, emit, {
       const launched = 'PortOS update running — this process restarts as part of it';
       emit('app-update', 'running', launched);
       steps.push({ step: 'app-update', success: true, message: launched });
-      return { success: true, steps, selfUpdateStarted: true };
+      return { success: true, steps, selfUpdateStarted: true, supervisorPid: launch.supervisorPid,
+        completed: launch.completed, completion: launch.completion };
     }
     await runCommand(command.baseCommand, command.args, dir);
     emit('app-update', 'done', 'App update routine complete');

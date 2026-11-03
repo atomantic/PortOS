@@ -21,6 +21,7 @@ vi.mock('../../lib/detachedSpawn.js', () => ({
   reattachDetached: (...args) => fixture.attach(...args), spawnDetached: vi.fn(), reapDetached: vi.fn(), isReattachable: vi.fn(),
 }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
+  beginHeavyJobRecovery: vi.fn(() => () => {}),
   adoptHeavyLocalJob: (...args) => fixture.adopt(...args),
   claimHeavyLocalJob: vi.fn(),
 }));
@@ -39,6 +40,7 @@ vi.mock('./displayPower.js', () => ({ sleepDisplayForTraining: vi.fn(), wakeDisp
 const { runTraining, initLoraTraining, cancel, trainingEvents } = await import('./index.js');
 const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
 const { isReattachable, spawnDetached, reapDetached } = await import('../../lib/detachedSpawn.js');
+const { claimHeavyLocalJob } = await import('../../lib/heavyJobClaim.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
 let fixtureNumber = 0;
 beforeEach(() => {
@@ -55,6 +57,7 @@ beforeEach(() => {
     handoffTo: async () => {}, release: () => fixture.release() }));
   vi.mocked(isReattachable).mockReset().mockResolvedValue(false);
   fixture.release.mockReset().mockResolvedValue();
+  vi.mocked(claimHeavyLocalJob).mockReset();
   fixture.save.mockReset().mockResolvedValue();
   fixture.saveDataset.mockReset().mockResolvedValue();
 });
@@ -62,6 +65,78 @@ afterEach(() => { vi.useRealTimers(); trainingEvents.removeAllListeners(); });
 afterAll(cleanupTempDataRoots);
 
 describe('training physical settlement under maintenance', () => {
+  it('keeps a live survivor observable when a second historical run is replayed', async () => {
+    const first = fixture.child;
+    const second = new EventEmitter();
+    Object.assign(second, { pid: 102, exitCode: null, signalCode: null, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() });
+    fixture.attach.mockImplementation(async path => path.includes('second-run') ? second : first);
+    fixture.adopt.mockImplementation(async ({ id }) => id === 'second-job'
+      ? { ok: true, holder: { pid: second.pid }, release: fixture.release } : null);
+    vi.mocked(claimHeavyLocalJob).mockResolvedValue({ ok: false, message: 'busy' });
+    const firstPermit = fixture.admission.admit('media', 'example-job');
+    const secondPermit = fixture.admission.admit('media', 'second-job');
+    const failed = vi.fn();
+    trainingEvents.on('failed', failed);
+    await firstPermit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    await vi.waitFor(() => expect(claimHeavyLocalJob).toHaveBeenCalled());
+    await secondPermit.run(() => runTraining({ jobId: 'second-job', runId: 'second-run', reattach: true }));
+    expect(cancel('example-job')).toBe(true);
+    first.exitCode = 1;
+    first.emit('close', 1, 'SIGTERM');
+    second.exitCode = 1;
+    second.emit('close', 1, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await Promise.all([firstPermit.finish(), secondPermit.finish()]);
+  });
+  it('keeps an uncertain handoff claim until its observed child closes', async () => {
+    fixture.adopt.mockResolvedValueOnce(null);
+    const handoff = vi.fn().mockRejectedValue(new Error('sync failed'));
+    vi.mocked(claimHeavyLocalJob).mockResolvedValue({ ok: true, holder: { pid: 999 }, handoffTo: handoff, release: fixture.release });
+    const permit = fixture.admission.admit('media', 'example-job');
+    const failed = vi.fn();
+    trainingEvents.on('failed', failed);
+    await permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    await vi.waitFor(() => expect(handoff).toHaveBeenCalledOnce());
+    expect(fixture.release).not.toHaveBeenCalled();
+    fixture.child.exitCode = 1;
+    fixture.child.emit('close', 1, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(fixture.release).toHaveBeenCalledOnce();
+    await permit.finish();
+  });
+  it('retries a transient handoff while continuing to observe the survivor', async () => {
+    fixture.adopt.mockResolvedValueOnce(null);
+    const handoff = vi.fn().mockRejectedValueOnce(new Error('temporary')).mockResolvedValue();
+    vi.mocked(claimHeavyLocalJob).mockResolvedValue({ ok: true, holder: { pid: 999 }, handoffTo: handoff, release: fixture.release });
+    const permit = fixture.admission.admit('media', 'example-job');
+    const failed = vi.fn();
+    trainingEvents.on('failed', failed);
+    await permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true }));
+    await vi.waitFor(() => expect(handoff).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    expect(fixture.release).not.toHaveBeenCalled();
+    fixture.child.exitCode = 1;
+    fixture.child.emit('close', 1, null);
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce());
+    expect(fixture.release).toHaveBeenCalledOnce();
+    await permit.finish();
+  });
+  it('observes and can cancel a survivor while its accelerator claim is busy', async () => {
+    fixture.adopt.mockResolvedValueOnce(null);
+    vi.mocked(claimHeavyLocalJob).mockResolvedValue({ ok: false, message: 'busy' });
+    const permit = fixture.admission.admit('media', 'example-job');
+    const failed = vi.fn();
+    trainingEvents.on('failed', failed);
+    await expect(permit.run(() => runTraining({ jobId: 'example-job', runId: 'example-run', reattach: true })))
+      .resolves.toMatchObject({ observing: true });
+    await vi.waitFor(() => expect(claimHeavyLocalJob).toHaveBeenCalled());
+    expect(claimHeavyLocalJob).toHaveBeenCalledWith(expect.objectContaining({ pid: fixture.child.pid }));
+    expect(cancel('example-job')).toBe(true);
+    fixture.child.exitCode = 1;
+    fixture.child.emit('close', 1, 'SIGTERM');
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce(), { timeout: 3000 });
+    await permit.finish();
+    expect(fixture.save).toHaveBeenCalledWith('example-run', expect.objectContaining({ status: 'canceled' }));
+  });
   it.each([
     { terminal: 'canceled', code: 1, canceled: true, persistence: 'run' },
     { terminal: 'no result', code: 0, canceled: false, persistence: 'run' },
@@ -201,15 +276,13 @@ it('observes an orphan survivor without spawning/reaping and settles explicit ca
 });
 
 
-it.each(['database', 'attach', 'claim', 'refused claim'])('preserves a live orphan after %s failure and continues boot reconciliation', async failure => {
+it.each(['database', 'attach'])('preserves a live orphan after %s failure and continues boot reconciliation', async failure => {
   fixture.queueJob = null;
   fixture.run.status = 'running';
   fixture.active = [fixture.run, { id: 'next-run', status: 'queued' }];
   vi.mocked(isReattachable).mockImplementation(async path => path.includes('example-run'));
   if (failure === 'database') fixture.read.mockRejectedValueOnce(new Error('Database unavailable'));
   if (failure === 'attach') fixture.attach.mockRejectedValueOnce(new Error('Observer unavailable'));
-  if (failure === 'claim') fixture.adopt.mockRejectedValueOnce(new Error('Claim unavailable'));
-  if (failure === 'refused claim') fixture.adopt.mockResolvedValueOnce({ ok: false, message: 'Accelerator occupied' });
   const { mediaJobEvents } = await import('../mediaJobQueue/index.js');
   const before = mediaJobEvents.listenerCount('canceled');
   await expect(initLoraTraining()).resolves.toBeUndefined();

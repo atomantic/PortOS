@@ -149,7 +149,12 @@ async function startSelfUpdate({
     }
   }).catch(reportFailure);
 
-  return { started: true, tag };
+  const result = { started: true, tag };
+  Object.defineProperties(result, {
+    supervisorPid: { value: launch.supervisorPid }, completed: { value: launch.completed === true },
+    completion: { value: launch.completion },
+  });
+  return result;
 }
 
 export function startPortosSelfUpdate(options) {

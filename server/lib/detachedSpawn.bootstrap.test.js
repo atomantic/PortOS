@@ -4,6 +4,7 @@ vi.mock('./databaseWriterRegistry.js', () => ({ reserveDatabaseWriter: () => ({
 }) }));
 
 import { EventEmitter } from 'events';
+import { spawn as nativeSpawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -19,6 +20,7 @@ vi.mock('./childProcess.js', async (original) => ({
 
 let controlDir;
 let restorePlatform;
+const realWindows = process.platform === 'win32';
 beforeEach(async () => {
   controlDir = await mkdtemp(join(tmpdir(), 'bootstrap-test-'));
   restorePlatform = pinPlatform('win32');
@@ -40,6 +42,33 @@ function launcher(run) {
 const failure = (handle) => new Promise((resolve) => handle.once('error', resolve));
 
 describe('Windows detached bootstrap failure contract', () => {
+  it.skipIf(!realWindows)('keeps a started ticketed child alive if PID publication fails', async () => {
+    const marker = join(controlDir, 'child-completed');
+    const original = '[System.IO.File]::WriteAllText((Join-Path $dir \'pid\'), "$($p.Id)")';
+    const supervisor = __detachedSpawnTesting.WINDOWS_SUPERVISOR.replace(original, 'throw "synthetic PID write failure"');
+    expect(supervisor).not.toBe(__detachedSpawnTesting.WINDOWS_SUPERVISOR);
+    await writeFile(join(controlDir, 'supervisor.ps1'), supervisor);
+    await writeFile(join(controlDir, 'job.json'), JSON.stringify({ bin: process.execPath,
+      arguments: '-e "setTimeout(()=>require(\'fs\').writeFileSync(process.env.PORTOS_TEST_MARKER,\'ok\'),500)"',
+      cwd: controlDir, preserveStartedOnBootstrapError: true }));
+    const proc = nativeSpawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', join(controlDir, 'supervisor.ps1'), '-bootstrapStartedAt', String(Date.now())],
+    { env: { ...process.env, PORTOS_TEST_MARKER: marker }, windowsHide: true, stdio: 'ignore' });
+    await new Promise((resolve, reject) => { proc.once('error', reject); proc.once('close', resolve); });
+    await vi.waitFor(async () => expect(await readFile(marker, 'utf8')).toBe('ok'), { timeout: 10000, interval: 50 });
+    await expect(readFile(join(controlDir, 'exit'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 15000);
+  it('does not cancel a supervisor that claimed its update before PID publication', async () => {
+    launcher(child => { child.emit('spawn'); child.emit('exit', 0); });
+    const handle = await spawnDetached('example-job', [], { controlDir, pollMs: 1, pidTimeoutMs: 20,
+      onLaunchTimeout: () => ({ state: 'claimed', ownerPid: 1234 }) });
+    const error = await failure(handle);
+    expect(handle.launchTimeoutResult).toEqual({ state: 'claimed', ownerPid: 1234 });
+    expect(error.message).toContain('cancellation=not-requested');
+    await expect(readFile(join(controlDir, 'launch-cancelled'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(JSON.parse(await readFile(join(controlDir, 'job.json'), 'utf8')).preserveStartedOnBootstrapError).toBe(true);
+    expect(await readFile(join(controlDir, 'supervisor.ps1'), 'utf8')).toContain('if ($started -and !$preserveStarted -and !$p.HasExited)');
+  });
   it('retains cancellation and bounded diagnostics when supervisor shutdown is unconfirmed', async () => {
     launcher(async (child) => {
       await writeFile(join(controlDir, 'launcher-bootstrap.log'), 'supervisor-started hresult=0');

@@ -23,7 +23,10 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async job => { state.enqueued = job; return { jobId: state.jobId, status: 'queued' }; }),
   getJob: () => ({ ...state.job, result: state.result }),
   listJobs: () => state.related || [],
-  updateJobResult: async (id, patch) => { state.updates.push({ id, patch }); Object.assign(state.result, patch); return true; },
+  updateJobResult: async (id, patch) => {
+    if (state.failResultPersistence) throw new Error('synthetic result persistence failure');
+    state.updates.push({ id, patch }); Object.assign(state.result, patch); return true;
+  },
 }));
 vi.mock('../../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: async fn => fn() }));
 vi.mock('../../lib/ffmpeg.js', () => ({
@@ -43,7 +46,7 @@ vi.mock('./upscaleFfmpeg.js', () => ({
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { quoteTopaz } = await import('./topazQuote.js');
 const { topazPreparedPath, registerStaging, releaseTopazStaging, cleanupTopazStaging, cleanupOrphanTopazStaging } = await import('./topazStaging.js');
-const { enqueueTopazUpscale, runVideoUpscale, cancel, recoverTopazResult } = await import('./topazJob.js');
+const { enqueueTopazUpscale, runVideoUpscale, cancel, recoverTopazResult, reconcileTopazStatus } = await import('./topazJob.js');
 const { videoGenEvents } = await import('./events.js');
 const sourceId = '11111111-1111-4111-8111-111111111111';
 const requestId = '22222222-2222-4222-8222-222222222222';
@@ -55,6 +58,7 @@ beforeEach(async () => {
   state.jobId = jobId;
   state.key = 'test-key'; state.rows = [{ id: sourceId, filename: 'source.mp4' }]; state.result = {}; state.job = {}; state.related = []; state.updates = []; state.fetches = []; state.audio = true; state.invalid = false; state.failPreparedProbe = false; state.invalidOutput = false; state.failHistoryOnce = false; state.pixelAspect = { numerator: 1, denominator: 1 };
   Object.assign(state, { finalInfo: null, finalDuration: null, finalAudio: undefined, squarePixels: true });
+  state.failResultPersistence = false;
   await mkdir(PATHS.videos, { recursive: true });
   await unlink(join(PATHS.videos, `${jobId}.mp4`)).catch(() => {});
   await writeFile(join(PATHS.videos, 'source.mp4'), 'source');
@@ -79,6 +83,26 @@ async function queued() {
 }
 
 describe('Topaz job boundary', () => {
+  it('checks and persists an existing terminal request without resubmitting or canceling', async () => {
+    state.job = { kind: 'video-upscale', status: 'failed', params: { mode: 'topaz', requestId } };
+    state.result = { topazUncertain: true };
+    await expect(reconcileTopazStatus(jobId)).resolves.toMatchObject({ status: 'complete' });
+    expect(state.result).toMatchObject({ topazUncertain: false, topazProviderStatus: 'complete', topazRecoveryAvailable: true });
+    expect(state.fetches).toEqual([[`https://api.topazlabs.com/video/${requestId}/status`, 'GET']]);
+  });
+
+  it('retains an uncertain request when the provider is still running or persistence fails', async () => {
+    state.job = { kind: 'video-upscale', status: 'failed', params: { mode: 'topaz', requestId } };
+    state.result = { topazUncertain: true };
+    vi.stubGlobal('fetch', vi.fn(async () => response({ status: 'processing' })));
+    await expect(reconcileTopazStatus(jobId)).resolves.toMatchObject({ status: 'processing' });
+    expect(state.result.topazUncertain).toBe(true);
+    state.failResultPersistence = true;
+    vi.stubGlobal('fetch', vi.fn(async () => response({ status: 'complete' })));
+    await expect(reconcileTopazStatus(jobId)).rejects.toThrow('persistence failure');
+    expect(state.result.topazUncertain).toBe(true);
+    expect(fetch.mock.calls.every(([, options]) => !options.method || options.method === 'GET')).toBe(true);
+  });
   it.each([true, false])('estimates without upload, then preserves the original with audio=%s', async audio => {
     state.audio = audio;
     const { estimate, params } = await queued();

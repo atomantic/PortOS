@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy } from './dataManagerBusy.js';
+import { trackUpdateControl } from './updateControlActivity.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'datamanager-busy-test-'));
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
@@ -132,6 +133,27 @@ describe('trainingRunsBusy', () => {
 });
 
 describe('updateDetachedBusy', () => {
+  it('protects per-launch control files while an update is being handed off', async () => {
+    const admission = { status: () => ({ state: 'normal' }),
+      deferredUpdate: { launch: () => ({ id: 'ticket' }), operation: () => null } };
+    await expect(updateDetachedBusy({ controlDir: join(TEST_ROOT, 'never-created'), admission }))
+      .resolves.toMatchObject({ busy: true });
+  });
+
+  it('protects a supervisor still writing its per-launch exit after journal settlement', async () => {
+    const dir = controlDir('pending-sentinel');
+    const attempt = join(dir, '00000000-0000-4000-8000-000000000001');
+    mkdirSync(attempt);
+    writeFileSync(join(attempt, 'pid'), '2147483647');
+    const admission = { status: () => ({ state: 'normal' }), deferredUpdate: { launch: () => null, operation: () => null } };
+    const snapshot = async () => [{ pid: 101, state: 'S', command: `sh supervisor ${attempt}` }];
+    await expect(updateDetachedBusy({ controlDir: dir, admission, snapshot })).resolves.toMatchObject({ busy: true });
+    const untrack = trackUpdateControl(attempt);
+    writeFileSync(join(attempt, 'exit'), '0');
+    await expect(updateDetachedBusy({ controlDir: dir, admission, snapshot })).resolves.toMatchObject({ busy: true });
+    untrack();
+    await expect(updateDetachedBusy({ controlDir: dir, admission, snapshot })).resolves.toEqual({ busy: false, reason: null });
+  });
 
   it('is idle when there is no control dir at all', async () => {
     await expect(updateDetachedBusy({ controlDir: join(TEST_ROOT, 'never-created') }))

@@ -23,11 +23,11 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
     await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
     const admission = createMaintenanceAdmission(PATHS.data);
     const render = admission.admit('render:example', 'project-example');
-    const launch = await launchUpdate('v0.0.0', vi.fn());
+    const launch = await launchUpdate('v0.0.0', vi.fn(), { admission });
     expect(launch.started).toBe(true);
     try {
     await vi.waitFor(() => expect(admission.deferredUpdate.operation()?.phase).toBe('waiting'), { timeout: 10000 });
-    const duplicate = await launchUpdate('v0.0.0', vi.fn());
+    const duplicate = await launchUpdate('v0.0.0', vi.fn(), { admission });
     expect(duplicate.started).toBe(false);
     expect(existsSync(join(PATHS.root, 'applied'))).toBe(false);
     await render.finish();

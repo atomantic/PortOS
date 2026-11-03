@@ -30,6 +30,54 @@ vi.mock('./bufferedSpawn.js', async (importOriginal) => ({
 
 const execFileAsync = promisify(execFile);
 
+describe('stopping a detached log tailer', () => {
+  it('waits for an in-flight open before closing files and ending streams', async () => {
+    let release;
+    const opening = new Promise(resolve => { release = resolve; });
+    const handles = [];
+    const openLog = vi.fn(async () => {
+      await opening;
+      const file = { read: vi.fn(async () => ({ bytesRead: 0 })), close: vi.fn(async () => {}) };
+      handles.push(file);
+      return file;
+    });
+    const handle = new EventEmitter();
+    handle.stdout = new EventEmitter();
+    handle.stderr = new EventEmitter();
+    const end = vi.fn();
+    handle.stdout.on('end', end);
+    const tailer = __detachedSpawnTesting.createLogTailer(handle, { controlDir: '/tmp/example-control', pollMs: 20, openLog });
+    const ticking = tailer.tick();
+    const stopping = tailer.stop();
+    expect(end).not.toHaveBeenCalled();
+    release();
+    await Promise.all([ticking, stopping]);
+    expect(handles).toHaveLength(2);
+    expect(handles.every(file => file.close.mock.calls.length === 1)).toBe(true);
+    expect(end).toHaveBeenCalledOnce();
+  });
+
+  it('waits for final log draining already underway before releasing the control files', async () => {
+    let release;
+    const opening = new Promise(resolve => { release = resolve; });
+    const file = { read: vi.fn(async () => ({ bytesRead: 0 })), close: vi.fn(async () => {}) };
+    const openLog = vi.fn(async () => { await opening; return file; });
+    const handle = new EventEmitter();
+    handle.stdout = new EventEmitter();
+    handle.stderr = new EventEmitter();
+    const end = vi.fn();
+    handle.stdout.on('end', end);
+    const tailer = __detachedSpawnTesting.createLogTailer(handle, { controlDir: '/tmp/example-control', pollMs: 20, openLog });
+    const finishing = tailer.finish();
+    const stopping = tailer.stop();
+    expect(end).not.toHaveBeenCalled();
+    release();
+    await Promise.all([finishing, stopping]);
+    expect(file.close).toHaveBeenCalledTimes(2);
+    expect(end).toHaveBeenCalledOnce();
+  });
+});
+
 // Both platforms produce the same control-dir contract (pid/exit sentinels,
 // reap, re-attach, survive-the-restart) — but by different mechanisms: a POSIX
 // `sh` double-fork, and a powershell launcher+supervisor on Windows. Tests that
@@ -1293,6 +1341,17 @@ describe('isDetachedRunning', () => {
 });
 
 describe.runIf(IS_POSIX)('reattachDetached', () => {
+  it('can defer replay until its owner has attached listeners', async () => {
+    const controlDir = await tmpControlDir();
+    const original = await spawnDetached('sh', ['-c', 'printf "RESULT:ok\\n"; exit 0'], { controlDir, pollMs: 25 });
+    await onClose(original);
+    const reattached = await reattachDetached(controlDir, { pollMs: 25, deferTail: true });
+    const getOut = collect(reattached.stdout);
+    const closed = onClose(reattached);
+    reattached.startTail();
+    expect((await closed).code).toBe(0);
+    expect(getOut()).toBe('RESULT:ok\n');
+  });
   it('replays a still-running survivor from the start and closes with its exit code', async () => {
     const controlDir = await tmpControlDir();
     const release = join(controlDir, 'go');
@@ -1397,7 +1456,7 @@ describe.runIf(IS_POSIX)('snapshotProcesses', () => {
   it('reports the ps state of each row and includes this process', async () => {
     const { snapshotProcesses } = await import('./detachedSpawn.js');
     const own = (await snapshotProcesses()).find(row => row.pid === process.pid);
-    expect(own).toMatchObject({ pgid: expect.any(Number), state: expect.stringMatching(/^[A-Za-z]/) });
+    expect(own).toMatchObject({ ppid: process.ppid, pgid: expect.any(Number), state: expect.stringMatching(/^[A-Za-z]/) });
     expect(Number.isFinite(own.startedAt)).toBe(true);
   });
 });

@@ -31,6 +31,7 @@ vi.mock('./dataManagerBusy.js', () => ({
 
 const { imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy } = await import('./dataManagerBusy.js');
 const { purgeCategory, getDataOverview, getCategoryDetail, CATEGORIES } = await import('./dataManager.js');
+const { withUpdateControlLock } = await import('./updateControlActivity.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -55,6 +56,21 @@ beforeEach(() => {
 const busyWith = (reason) => () => Promise.resolve({ busy: true, reason });
 
 describe('purgeCategory — CATEGORY_BUSY refusal', () => {
+  it('serializes an update launch against the final control-directory purge', async () => {
+    let releaseProbe, enteredProbe;
+    const entered = new Promise(resolve => { enteredProbe = resolve; });
+    const pause = new Promise(resolve => { releaseProbe = resolve; });
+    updateDetachedBusy.mockImplementation(async () => { enteredProbe(); await pause; return { busy: false }; });
+    const purge = purgeCategory('update-detached');
+    await entered;
+    let launched = false;
+    const launch = withUpdateControlLock(async () => { launched = true; seed('update-detached', 'new-attempt'); });
+    await Promise.resolve();
+    expect(launched).toBe(false);
+    releaseProbe();
+    await Promise.all([purge, launch]);
+    expect(existsSync(dataPath('update-detached', 'new-attempt'))).toBe(true);
+  });
   const cases = [
     ['image-clean-tmp', () => imageCleanTmpBusy, 'init-0000.png', 'an image render is in flight'],
     ['update-detached', () => updateDetachedBusy, 'pid', 'an update is running'],

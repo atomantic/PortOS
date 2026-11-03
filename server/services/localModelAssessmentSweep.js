@@ -74,6 +74,7 @@ import {
   runAssessment,
 } from './localModelAssessments.js';
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 // One sweep at a time. This is a re-entrancy guard, not a concurrency control:
 // PortOS serves one user, and the thing being prevented is a second click (or a
@@ -361,14 +362,19 @@ export async function startSweep({ scope = 'unmeasured', backend, modelId, tunin
   // `sweep` is published (and the `running` check covers the slot) or the start
   // was refused and the slot is free again.
   startingSweep = true;
+  let permit;
+  let handedOff = false;
   try {
-    return await beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange });
+    permit = maintenance.admit('heavy-job', 'local-model-assessment-sweep');
+    return await permit.run(() => beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange,
+      permit, handOff: () => { handedOff = true; } }));
   } finally {
     startingSweep = false;
+    if (permit && !handedOff) await permit.finish();
   }
 }
 
-async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange }) {
+async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange, permit, handOff }) {
   const resolvedScope = SWEEP_SCOPES.includes(scope) ? scope : 'unmeasured';
   const named = backend && modelId ? { backend, modelId } : null;
 
@@ -506,6 +512,7 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
   emit({ scope: 'assessment-sweep', event: 'start', total: targets.length, completed: 0, message: `Measuring ${what}…` });
 
   // Detached on purpose: the caller is an HTTP handler that must return now.
+  handOff();
   runSweepLoop(run, targets, contextTokens, emit)
     .catch((err) => {
       run.error = err?.message || 'sweep failed';
@@ -529,7 +536,8 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
         run.restoreError = err?.message || 'the launch configuration could not be put back';
         console.error(`❌ Local LLM: could not restore the launch configuration after the sweep: ${run.restoreError}`);
       }))
-    .finally(() => {
+    .finally(async () => {
+      await permit.finish();
       run.status = run.cancelRequested ? 'cancelled' : (run.error ? 'failed' : 'complete');
       run.finishedAt = nowIso();
       run.current = null;

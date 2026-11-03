@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pinPlatform } from '../lib/testHelper.js';
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -25,6 +28,7 @@ vi.mock('./updateChecker.js', () => ({
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { readFile } from 'fs/promises';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
+import { createMaintenanceAdmission, maintenance } from '../lib/maintenanceAdmission.js';
 import { executeUpdate, launchUpdate } from './updateExecutor.js';
 
 // The spawnDetached handle deliberately has NO unref (its launcher already
@@ -73,9 +77,118 @@ beforeEach(() => {
   getCurrentVersion.mockResolvedValue('1.0.0');
   // Default: no prior update script still running
   isDetachedRunning.mockResolvedValue(false);
+  vi.spyOn(maintenance.deferredUpdate, 'reserveLaunch').mockReturnValue('00000000-0000-4000-8000-000000000001');
+  vi.spyOn(maintenance.deferredUpdate, 'bindLaunch').mockReturnValue(true);
+  vi.spyOn(maintenance.deferredUpdate, 'cancelLaunch').mockReturnValue({ state: 'canceled' });
 });
 
 describe('executeUpdate', () => {
+  it('retires an unclaimed ticket when a PID-bearing child fails before the supervisor starts', async () => {
+    const child = createMockChild();
+    spawnDetached.mockResolvedValue(child);
+    const { promise } = await startUpdate('v1.0.0', () => {});
+    child.emit('error', new Error('cannot load supervisor'));
+    expect(await promise).toMatchObject({ success: false, failedStep: 'starting' });
+    expect(maintenance.deferredUpdate.cancelLaunch).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000001');
+  });
+
+  it.each([true, false])('reports the actual result of a PID-less supervisor that already finished: %s', async success => {
+    const child = createMockChild();
+    child.pid = null;
+    spawnDetached.mockResolvedValue(child);
+    maintenance.deferredUpdate.cancelLaunch.mockReturnValue({ state: 'finished',
+      result: { id: '00000000-0000-4000-8000-000000000001', success, completedAt: '2026-11-03T00:00:00.000Z' } });
+    const emit = vi.fn();
+    const launch = await launchUpdate('v1.0.0', emit);
+    child.emit('error', new Error('late launcher timeout'));
+    expect(launch.started).toBe(success);
+    expect(recordUpdateResult).toHaveBeenCalledWith(expect.objectContaining({ success }));
+    expect(emit).toHaveBeenCalledWith(success ? 'complete' : 'starting', success ? 'done' : 'error', expect.any(String));
+    if (success) await expect(launch.completion).resolves.toMatchObject({ success: true });
+    else expect(launch.result).toMatchObject({ success: false });
+  });
+
+  it('observes a claimed PID-less supervisor until its journal transaction has settled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'update-ticket-test-'));
+    const admission = createMaintenanceAdmission(root);
+    const child = createMockChild();
+    child.pid = null;
+    let ticket;
+    spawnDetached.mockImplementationOnce(async (_cmd, _args, options) => {
+      ticket = options.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
+      admission.deferredUpdate.claimLaunch(ticket);
+      return child;
+    });
+    vi.useFakeTimers();
+    try {
+      let dead = false;
+      const launched = await launchUpdate('v1.0.0', () => {}, { admission, monitorIntervalMs: 1000,
+        supervisorAbsent: () => dead, supervisorSnapshot: async () => [{ pid: process.pid,
+          startedAt: Date.now() - 1000, command: 'node /mock/scripts/deferred-update.mjs' }] });
+      expect(launched.started).toBe(true);
+      child.emit('error', new Error('late launcher timeout'));
+      let resolved = false;
+      launched.completion.then(() => { resolved = true; });
+      writeFileSync(join(admission.directory, 'update-result.json'), JSON.stringify({ id: ticket, success: true,
+        interrupted: false, completedAt: new Date().toISOString() }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(resolved).toBe(false);
+      expect(admission.deferredUpdate.acquire(ticket)).toBe(true);
+      admission.deferredUpdate.finish(ticket, true);
+      dead = true;
+      vi.spyOn(admission.deferredUpdate, 'reconcile').mockImplementationOnce(() => {
+        throw Object.assign(new Error('another reconciler won'), { code: 'MAINTENANCE_STALE' });
+      });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(launched.completion).resolves.toMatchObject({ success: true });
+    } finally {
+      vi.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('handles a cancellation lookup failure without an unhandled child error', async () => {
+    const child = createMockChild();
+    child.pid = null;
+    spawnDetached.mockResolvedValue(child);
+    maintenance.deferredUpdate.cancelLaunch.mockImplementation(() => { throw new Error('journal unavailable'); });
+    await expect(launchUpdate('v1.0.0', () => {})).rejects.toMatchObject({ code: 'UPDATE_LAUNCH_UNCERTAIN' });
+    expect(() => child.emit('error', new Error('late launcher timeout'))).not.toThrow();
+  });
+
+  it.each(['/usr/bin/nodejs', '/opt/renamed-runtime'])('keeps a live supervisor with %s and a seconds-truncated start time', async executable => {
+    const root = mkdtempSync(join(tmpdir(), 'update-live-supervisor-'));
+    const admission = createMaintenanceAdmission(root);
+    const child = createMockChild();
+    child.pid = 2147483647;
+    spawnDetached.mockResolvedValue(child);
+    vi.useFakeTimers();
+    try {
+      const startedAt = Math.floor(Date.now() / 1000) * 1000;
+      const launched = await launchUpdate('v1.0.0', () => {}, { admission, monitorIntervalMs: 10,
+        supervisorAbsent: () => false, supervisorSnapshot: async () => [{ pid: child.pid,
+          startedAt, command: `${executable} /mock/scripts/deferred-update.mjs` }] });
+      await vi.advanceTimersByTimeAsync(30);
+      expect(admission.deferredUpdate.launch()?.id).toBeTruthy();
+      child.emit('error', new Error('synthetic stop'));
+      await expect(launched.completion).resolves.toMatchObject({ success: false });
+    } finally {
+      vi.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed launch when the detached handle never obtained a PID', async () => {
+    const child = createMockChild();
+    child.pid = null;
+    spawnDetached.mockResolvedValue(child);
+    const result = launchUpdate('v1.0.0', () => {});
+    await flush();
+    child.emit('error', new Error('supervisor failed'));
+    await expect(result).resolves.toMatchObject({ started: false, result: { success: false, failedStep: 'starting' } });
+  });
   // Windows goes through spawnDetached too — its supervisor launcher is what
   // makes update.ps1 survive. The plain `spawn(..., { detached: true })` this
   // replaced meant DETACHED_PROCESS, which denies powershell a console:

@@ -108,7 +108,7 @@ export async function syncRunnerAgents() {
     // acknowledgement/ledger write. Its controller owns startup already, even
     // though it has not registered in activeAgents yet.
     if (spawningTasks.has(agent.taskId)) continue;
-    maintenance.recoverOwned('agent', agent.id);
+    maintenance.recoverOwned('agent', agent.id, { observeIfOwned: true });
     if (runnerAgents.get(agent.id)?.startupErrorAnalysis) {
       await stopInterruptedStartup(agent.id);
       continue;

@@ -12,8 +12,21 @@
  */
 
 import { noteSystemActivity } from './systemActivityNotify.js';
+import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { settleAdmissionEventually } from '../lib/maintenanceSettlementRetry.js';
 
 const activeAppOperations = new Map();
+const admissionByOperation = new WeakMap();
+
+export const appOperationResource = (repoPath, appId) => {
+  if (appId) return appId;
+  let path = resolve(repoPath);
+  try { path = realpathSync(path); } catch { /* The operation will report an invalid path itself. */ }
+  return path.length <= 256 ? path : `path-sha256-${createHash('sha256').update(path).digest('hex')}`;
+};
 
 const END_PHASES = new Set(['completion', 'failure', 'cancellation']);
 
@@ -55,25 +68,58 @@ export const claimAppOperation = (io, app, type) => {
   const inFlight = findConflictingOperation(app);
   if (inFlight) return { ok: false, inFlight };
   const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
-  for (const key of operationKeys(app)) setOperationKey(key, operation);
-  io.emit('app:operations:active', activeOperationsPayload());
-  noteSystemActivity('appOperations', 'start');
-  return { ok: true, operation };
+  const permit = maintenance.admit('app-operation', String(app.id).slice(0, 256));
+  admissionByOperation.set(operation, { permit, supervisorPid: null });
+  try {
+    for (const key of operationKeys(app)) setOperationKey(key, operation);
+    io.emit('app:operations:active', activeOperationsPayload());
+    noteSystemActivity('appOperations', 'start');
+    return { ok: true, operation };
+  } catch (error) {
+    for (const [key, op] of activeAppOperations) if (op === operation) activeAppOperations.delete(key);
+    void settleAdmissionEventually(permit, 'App operation');
+    throw error;
+  }
 };
 
 // A PortOS self-update deliberately leaves its operation registered: the
 // process is about to be replaced, so the map dies with it. A test driving that
 // path has no process boundary, so it needs a way back to an empty set.
-export const __resetAppOperations = () => activeAppOperations.clear();
+export const __resetAppOperations = () => {
+  for (const op of new Set(activeAppOperations.values())) void settleAdmissionEventually(admissionByOperation.get(op)?.permit, 'App operation');
+  activeAppOperations.clear();
+};
+
+// A self-update remains visible until this server exits. Its admission covers
+// preflight/pull, then the exact detached supervisor takes over ownership.
+export async function handOffAppOperation(operation, supervisorPid) {
+  const admission = admissionByOperation.get(operation);
+  if (!admission || !Number.isSafeInteger(supervisorPid) || supervisorPid <= 0)
+    throw new Error('The self-update supervisor identity is unavailable.');
+  admission.supervisorPid = supervisorPid;
+  const settled = await settleAdmissionEventually(admission.permit, 'App update');
+  if (settled) admission.permit = null;
+}
+
+export function isSoleDeferredUpdateAppOperation(snapshot, supervisorPid) {
+  const active = [...new Set(activeAppOperations.values())];
+  if (active.length !== 1 || !Array.isArray(snapshot) || snapshot.length !== 1) return false;
+  const op = active[0];
+  return admissionByOperation.get(op)?.supervisorPid === supervisorPid
+    && snapshot[0].appId === op.appId && snapshot[0].type === op.type && snapshot[0].startedAt === op.startedAt;
+}
+
+export const runAppOperation = (operation, fn) => admissionByOperation.get(operation).permit.run(fn);
 
 // Clear every key this operation holds, and only the keys pointing at THIS
 // operation — a run that already finished must not evict a live sibling.
-export const endAppOperation = (io, appId, phase = 'completion') => {
+export const endAppOperation = (io, appId, phase = 'completion', expected = null) => {
   const operation = activeAppOperations.get(appId);
-  if (!operation) return;
+  if (!operation || (expected && operation !== expected)) return;
   for (const [key, op] of activeAppOperations) {
     if (op === operation) activeAppOperations.delete(key);
   }
+  void settleAdmissionEventually(admissionByOperation.get(operation)?.permit, 'App operation');
   io.emit('app:operations:active', activeOperationsPayload());
   const activityPhase = END_PHASES.has(phase) ? phase : 'completion';
   noteSystemActivity('appOperations', activityPhase);

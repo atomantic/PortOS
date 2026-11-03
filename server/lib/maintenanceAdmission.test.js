@@ -107,6 +107,54 @@ describe('durable graceful maintenance', () => {
     expect(admission.recoverOwned('media', 'new')).toHaveProperty('completeRecovery');
   });
 
+  it('does not invalidate a live same-process owner when sync observes it again', async () => {
+    const { admission } = gate();
+    const original = admission.admit('agent', 'agent-observed');
+    admission.recoverOwned('agent', 'agent-observed', { observeIfOwned: true });
+    expect(await original.finish()).toBe(true);
+    expect(admission.status().blockers).toEqual([]);
+  });
+
+  it('keeps a live uncertain agent owner during runner observation', async () => {
+    const { admission } = gate();
+    const original = admission.admit('agent', 'agent-uncertain');
+    original.markUnsettled();
+    admission.recoverOwned('agent', 'agent-uncertain', { observeIfOwned: true });
+    const child = await original.run(() => admission.admit('settlement', 'Output publication', { continuation: true }));
+    await child.finish();
+    expect(await original.finish()).toBe(true);
+    expect(admission.operations().find(op => op.id === original.id)).toMatchObject({ unsettled: true });
+  });
+
+  it('allows an independent timeline when its live ambient parent is not an eligible continuation', async () => {
+    const { admission } = gate();
+    const parent = admission.admit('settlement', 'Output publication');
+    const child = await parent.run(() => admission.admit('music-video', 'timeline', { continuation: true, parentKinds: ['media'] }));
+    await child.finish();
+    const hold = admission.begin({ reason: 'Drain', owner: 'Operator' }).hold;
+    expect(() => parent.run(() => admission.admit('music-video', 'timeline', { continuation: true, parentKinds: ['media'] })))
+      .toThrowError(expect.objectContaining({ code: 'MAINTENANCE_HELD' }));
+    await parent.finish();
+    admission.resume({ id: hold.id, revision: hold.revision });
+  });
+
+  it('invalidates a settled media permit when a new owner adopts it', async () => {
+    const { admission } = gate();
+    const old = admission.admit('media', 'same-process-media');
+    const adopted = admission.recoverOwned('media', 'same-process-media');
+    expect(await old.finish()).toBe(false);
+    expect(admission.operations().some(op => op.id === adopted.id)).toBe(true);
+    expect(adopted.completeRecovery()).toBe(true);
+  });
+
+  it('records local completion when an uncertain resource finishes without an ambient context', async () => {
+    const { admission } = gate();
+    const owner = admission.admit('agent', 'agent-finished');
+    owner.markUnsettled();
+    await admission.finishResource('agent', 'agent-finished');
+    expect(admission.isLocallyFinished(admission.operations().find(op => op.id === owner.id))).toBe(true);
+  });
+
   it('completes only the captured recovered operation and preserves the hold and failed settlement child', async () => {
     const { admission } = gate();
     const original = admission.admit('media', 'peer-render');
@@ -189,11 +237,13 @@ describe('durable graceful maintenance', () => {
 
   it('accounts for strict old-reader rejection instead of treating stamped v1 journals as rollback compatible', () => {
     const { admission } = gate();
-    const work = admission.admit('media', 'peer-render');
+    admission.admit('media', 'peer-render');
     const file = join(admission.directory, 'state.json');
     const readOperation = () => JSON.parse(fs.readFileSync(file, 'utf8')).operations[0];
     expect(legacyOperation.safeParse(readOperation()).success).toBe(true);
-    work.markUnsettled();
+    const adopted = admission.recoverOwned('media', 'peer-render');
+    expect(legacyOperation.safeParse(readOperation()).success).toBe(true);
+    adopted.markUnsettled();
     expect(legacyOperation.safeParse(readOperation()).success).toBe(false);
     expect(admission.status().blockers).toContainEqual(expect.objectContaining({ resource: 'peer-render', unsettled: true }));
   });

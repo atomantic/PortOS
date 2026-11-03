@@ -15,6 +15,7 @@ import {
 } from './dataManagerBusy.js';
 import { getEidoversePaths } from './eidoverse.js';
 import { getAllApps } from './apps.js';
+import { withUpdateControlLock } from './updateControlActivity.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -640,7 +641,8 @@ async function archiveCategoryUncached(categoryKey, options) {
 
 export async function purgeCategory(categoryKey, options = {}) {
   try {
-    return await purgeCategoryUncached(categoryKey, options);
+    const purge = () => purgeCategoryUncached(categoryKey, options);
+    return await (categoryKey === 'update-detached' ? withUpdateControlLock(purge) : purge());
   } finally {
     invalidateOverviewScan();
   }
