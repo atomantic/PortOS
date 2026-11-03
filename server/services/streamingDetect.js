@@ -260,6 +260,9 @@ function ecosystemAppBlocks(content) {
       name = mutation && tokens[value]?.t === 'id' ? tokens[value].v : null;
     }
   };
+  // A member or index write under module.exports changes the exported value
+  // itself, which has no binding to drop.
+  let exportedMutated = false;
   const invalidateTarget = index => {
     let root = index;
     let mutation = false;
@@ -274,12 +277,23 @@ function ecosystemAppBlocks(content) {
         mutation = true;
       } else break;
     }
+    if (isWord(root, 'module') && punctuation(root + 1) === '.' && isWord(root + 2, 'exports') && index > root + 2) exportedMutated = true;
+    if (isWord(root, 'exports') && !['.', '?.'].includes(punctuation(root - 1)) && index > root) exportedMutated = true;
     invalidate(root, mutation);
+  };
+  // The last token of a member chain such as `alias.env.PORT` or `apps[0]`.
+  const memberEnd = start => {
+    let end = start;
+    for (;;) {
+      if (['.', '?.'].includes(punctuation(end + 1)) && tokens[end + 2]?.t === 'id') end += 2;
+      else if (punctuation(end + 1) === '[' && matching.has(end + 1)) end = matching.get(end + 1);
+      else return end;
+    }
   };
   for (let i = 0; i < tokens.length; i++) {
     if (['++', '--'].includes(punctuation(i))) {
       invalidateTarget(i - 1);
-      invalidate(i + 1);
+      if (tokens[i + 1]?.t === 'id') invalidateTarget(memberEnd(i + 1));
     }
     if (punctuation(i) !== '=' || ['=', '>'].includes(punctuation(i + 1)) ||
         ['=', '!'].includes(punctuation(i - 1)) ||
@@ -321,7 +335,7 @@ function ecosystemAppBlocks(content) {
     return found;
   };
 
-  if (exported === null || !isCompleteStatementValue(exported)) return [];
+  if (exported === null || exportedMutated || !isCompleteStatementValue(exported)) return [];
   const config = resolve(exported);
   if (config === null) return [];
   const appsProperty = punctuation(config) === '{' ? property(config, 'apps') : null;
