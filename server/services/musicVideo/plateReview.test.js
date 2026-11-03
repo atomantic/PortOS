@@ -5,7 +5,9 @@ const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisi
   resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
 const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));
 const ollama = vi.hoisted(() => ({ getBaseUrl: vi.fn(() => 'http://localhost:11434'), getModelCapabilities: vi.fn(), getInstalledModels: vi.fn() }));
+const prerequisites = vi.hoisted(() => ({ getProviderPrerequisiteReadinessMap: vi.fn(async (_all, { candidates }) => Object.fromEntries(candidates.map((p) => [p.id, { status: 'ready' }]))) }));
 vi.mock('../providers.js', () => providers);
+vi.mock('../providerPrerequisites.js', () => prerequisites);
 vi.mock('../promptRunner.js', () => runner);
 vi.mock('../ollamaManager.js', () => ollama);
 vi.mock('sharp', () => ({ default: () => ({ resize: () => ({ png: () => ({ toBuffer: async () => Buffer.alloc(1) }) }), composite: () => ({ png: () => ({ toFile: async () => {} }) }) }) }));
@@ -75,6 +77,13 @@ describe('plate evidence admission', () => {
     expect(await resolvePlateReviewer({})).toMatchObject({ provider: codex, model: 'codex-model', costUsd: null });
     providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [localCodex, api, { ...codex, enabled: false }] });
     expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    // An enabled but uninstalled or signed-out Codex must not displace a working API reviewer.
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [api, codex] });
+    prerequisites.getProviderPrerequisiteReadinessMap.mockResolvedValueOnce({ codex: { status: 'blocked', reasonCodes: ['runtime'] } });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: api });
+    const pathCodex = { ...codex, command: '/usr/local/bin/codex' };
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'vision-api', providers: [api, pathCodex] });
+    expect(await resolvePlateReviewer({})).toMatchObject({ provider: pathCodex });
     runner.resolveProviderAndModel.mockResolvedValue({ provider: localCodex, selectedModel: 'local-model' });
     await expect(resolvePlateReviewer({ providerId: 'codex-ollama' })).rejects.toThrow(/No enabled vision reviewer/);
     runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'claude', type: 'cli', command: 'claude', enabled: true }, selectedModel: 'm' });

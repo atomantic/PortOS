@@ -219,6 +219,9 @@ describe('localModelHeuristics', () => {
     it('accepts codex / claude CLI providers', () => {
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
+      // A path-configured binary must pass, or an image review it ran is rejected as image-blind.
+      expect(isVisionCapableCliProvider({ type: 'cli', command: '/usr/local/bin/codex' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'C:\\tools\\Codex.exe' })).toBe(true);
     });
 
     it('rejects non-vision CLI commands and non-CLI providers', () => {

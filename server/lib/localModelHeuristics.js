@@ -126,8 +126,9 @@ const VISION_CLI_COMMANDS = new Set(['codex', 'claude']);
  * @returns {boolean}
  */
 export function isVisionCapableCliProvider(provider) {
-  if (!provider || provider.type !== 'cli') return false;
-  return VISION_CLI_COMMANDS.has(provider.command);
+  if (!provider || provider.type !== 'cli' || typeof provider.command !== 'string') return false;
+  // Basename, as the client does, so a path-configured `/usr/local/bin/codex` qualifies.
+  return VISION_CLI_COMMANDS.has(provider.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, ''));
 }
 
 /**

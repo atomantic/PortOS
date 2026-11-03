@@ -59,6 +59,18 @@ async function resolveOllamaVisionModel(provider, selectedModel, pinned) {
 const isCodexVisionReviewer = (provider) => provider?.type === 'cli' && isCodexSubscriptionProvider(provider) && isAuthoringOneShotProvider(provider);
 const canReviewImages = (provider) => (provider?.type === 'api' && isToolFreeOneShotProvider(provider)) || isCodexVisionReviewer(provider);
 
+// `enabled` alone doesn't mean the binary is installed: a scaffolded Codex must not
+// displace a working API reviewer when these runs refuse fallback.
+async function readyCodexReviewer() {
+  const { getAllProviders } = await import('../providers.js');
+  const configured = (await getAllProviders().catch(() => null))?.providers || [];
+  const candidates = configured.filter((entry) => entry.enabled !== false && isCodexVisionReviewer(entry));
+  if (!candidates.length) return null;
+  const { getProviderPrerequisiteReadinessMap } = await import('../providerPrerequisites.js');
+  const readiness = await getProviderPrerequisiteReadinessMap(configured, { candidates }).catch(() => ({}));
+  return candidates.find((entry) => readiness[entry.id]?.status === 'ready') || null;
+}
+
 export async function resolvePlateReviewer(reviewer = {}) {
   const { resolveProviderAndModel, resolveEffectiveModel } = await import('../promptRunner.js');
   let provider;
@@ -67,9 +79,7 @@ export async function resolvePlateReviewer(reviewer = {}) {
     ({ provider, selectedModel } = await resolveProviderAndModel(reviewer));
   } else {
     // Codex caught real render defects that every local vision model missed (#14814), so an enabled Codex is the default.
-    const { getAllProviders } = await import('../providers.js');
-    const configured = (await getAllProviders().catch(() => null))?.providers || [];
-    provider = configured.find((entry) => entry.enabled !== false && isCodexVisionReviewer(entry));
+    provider = await readyCodexReviewer();
     if (!provider) provider = await (await import('../aiProvider.js')).resolveAPIProvider();
     selectedModel = provider ? resolveEffectiveModel(provider, reviewer.model) : null;
   }
