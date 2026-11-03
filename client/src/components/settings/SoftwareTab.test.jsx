@@ -72,14 +72,14 @@ describe('Settings › Software', () => {
     expect(toast.success).not.toHaveBeenCalled();
     await act(async () => fire('portos:node-runtime:changed', { reason: 'pm2-cli' }));
     expect(toast.success).not.toHaveBeenCalled();
-    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished' }));
+    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished', kind: 'pm2-update' }));
     expect(toast.success).toHaveBeenCalledWith('pm2 updated');
     await waitFor(() => expect(sync).not.toBeDisabled());
 
     fireEvent.click(sync);
     await waitFor(() => expect(sync).toBeDisabled());
-    await act(async () => fire('portos:update:error', { message: 'npm failed' }));
-    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished' }));
+    await act(async () => fire('portos:update:error', { message: 'npm failed', step: 'pm2-update' }));
+    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished', kind: 'pm2-update' }));
     expect(toast.error).toHaveBeenCalledWith('pm2 update failed: npm failed');
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
@@ -91,13 +91,30 @@ describe('Settings › Software', () => {
     const sync = await screen.findByRole('button', { name: /Sync terminal pm2/ });
     fireEvent.click(sync);
     await waitFor(() => expect(updatePm2Runtime).toHaveBeenCalled());
-    await act(async () => fire('portos:update:error', { message: 'npm failed' }));
-    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished' }));
+    await act(async () => fire('portos:update:error', { message: 'npm failed', step: 'pm2-update' }));
+    await act(async () => fire('portos:node-runtime:changed', { reason: 'job-finished', kind: 'pm2-update' }));
     expect(toast.error).not.toHaveBeenCalled();
     await act(async () => respond({ started: true, restart: false }));
     expect(toast.error).toHaveBeenCalledWith('pm2 update failed: npm failed');
     expect(toast.success).not.toHaveBeenCalled();
     await waitFor(() => expect(sync).not.toBeDisabled());
+  });
+
+  it('ignores unrelated update errors and clears a job whose events were lost once the inventory shows it idle', async () => {
+    updatePm2Runtime.mockResolvedValue({ started: true, restart: false });
+    const busy = { ...inventory, components: inventory.components.map((row) => (row.id === 'pm2' ? { ...row, busy: 'pm2 update running' } : row)) };
+    renderTab();
+    const sync = await screen.findByRole('button', { name: /Sync terminal pm2/ });
+    getSoftwareInventory.mockResolvedValue(busy);
+    fireEvent.click(sync);
+    await waitFor(() => expect(screen.getByText('pm2 update running')).toBeInTheDocument());
+    await act(async () => fire('portos:update:error', { message: 'git pull failed', step: 'git-pull' }));
+    expect(toast.error).not.toHaveBeenCalled();
+    getSoftwareInventory.mockResolvedValue(inventory);
+    await act(async () => fire('review:queue:changed'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Sync terminal pm2/ })).not.toBeDisabled());
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('shows a retryable failure instead of an empty page', async () => {

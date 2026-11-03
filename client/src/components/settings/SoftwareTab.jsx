@@ -36,7 +36,8 @@ const ACTIONS = {
 };
 
 // Actions whose request returns `started` while the work continues on the server.
-const BACKGROUND_JOBS = new Set(['pm2-sync']);
+// Maps to the server job kind its events carry.
+const BACKGROUND_JOBS = { 'pm2-sync': 'pm2-update' };
 
 const rank = (row) => STATE_ORDER.indexOf(row.state);
 
@@ -110,25 +111,26 @@ export default function SoftwareTab() {
   // the request and its outcome recorded until the response says it started.
   const [backgroundJob, setBackgroundJob] = useState(null);
   const jobRef = useRef(null);
-  const settleJob = (job) => {
+  const settleJob = (job, { quiet = false } = {}) => {
     if (jobRef.current !== job) return;
     jobRef.current = null;
     setBackgroundJob(null);
+    if (quiet) return;
     if (job.error !== undefined) toast.error(`${job.name} update failed${job.error ? `: ${job.error}` : ''}`);
     else toast.success(`${job.name} updated`);
   };
   const settleRef = useRef(settleJob);
   settleRef.current = settleJob;
   useEffect(() => {
-    const onError = ({ message } = {}) => {
+    const onError = ({ message, step } = {}) => {
       const job = jobRef.current;
-      if (!job || job.error !== undefined) return;
+      if (!job || step !== job.serverKind || job.error !== undefined) return;
       job.error = message || '';
       if (job.started) settleRef.current(job);
     };
-    const onChanged = ({ reason } = {}) => {
+    const onChanged = ({ reason, kind } = {}) => {
       const job = jobRef.current;
-      if (reason !== 'job-finished' || !job) return;
+      if (reason !== 'job-finished' || !job || kind !== job.serverKind) return;
       job.finished = true;
       if (job.started) settleRef.current(job);
     };
@@ -139,6 +141,15 @@ export default function SoftwareTab() {
       socket.off('portos:node-runtime:changed', onChanged);
     };
   }, []);
+  // A refetch (including the one on reconnect) is authoritative: a started job
+  // whose row no longer reports a running job has ended, even if its events were
+  // lost. Without them the outcome is unknown, so the row's state speaks for it.
+  useEffect(() => {
+    const job = jobRef.current;
+    if (!job?.started) return;
+    const row = data?.components?.find((component) => component.id === job.id);
+    if (row && !row.busy) settleRef.current(job, { quiet: !job.finished && job.error === undefined });
+  }, [data]);
   const { captureBaseline } = usePortosRestartWatch({
     active: restarting,
     onRestart: () => setRestarting(false),
@@ -160,7 +171,8 @@ export default function SoftwareTab() {
       await captureBaseline();
       setRestarting(true);
     }
-    const job = BACKGROUND_JOBS.has(row.action.kind) && !row.action.restarts ? { id: row.id, name: row.name } : null;
+    const job = BACKGROUND_JOBS[row.action.kind] && !row.action.restarts
+      ? { id: row.id, name: row.name, serverKind: BACKGROUND_JOBS[row.action.kind] } : null;
     jobRef.current = job;
     const result = await launch(row.action).catch(() => null);
     if (!result || result.restart === false) setRestarting(false);
