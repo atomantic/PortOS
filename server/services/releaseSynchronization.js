@@ -352,6 +352,15 @@ export function resetReleaseSynchronization(identity, reason, actor, checkouts =
   });
 }
 
+/** An owner deleting the continuation task abandons its checkpoint. Record the
+ * operator reset first (unless it was already verified or reset) so dispatch
+ * stops waiting on the deleted row; the outbox keeps the publication receipt. */
+export async function retireReleaseSynchronizationForDeletion(identity, actor) {
+  const entry = (await readOutbox()).publications[identity];
+  if (!entry || releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified') return null;
+  return resetReleaseSynchronization(identity, 'Owner deleted the synchronization task', actor);
+}
+
 async function parkRetiredContinuation(entry) {
   const { getTaskById, updateTask } = await import('./cosTaskStore.js');
   const task = await getTaskById(entry.task.id);

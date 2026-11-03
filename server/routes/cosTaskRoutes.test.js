@@ -75,8 +75,11 @@ vi.mock('../services/apps.js', () => ({ getAppById: vi.fn(), getAppWorkTracker: 
 vi.mock('../services/appProcessTypes.js', () => ({ NON_PM2_TYPES: new Set() }));
 vi.mock('../services/instances.js', () => ({ getAssignableInstances: vi.fn() }));
 vi.mock('../services/managedAppRepositories.js', () => ({ resolveManagedAppIssueTarget: vi.fn() }));
+const retireReleaseSynchronizationForDeletion = vi.hoisted(() => vi.fn());
+vi.mock('../services/releaseSynchronization.js', () => ({ retireReleaseSynchronizationForDeletion }));
 vi.mock('../services/goalFidelityCalibration.js', () => ({ reportGoalFidelityFalsePositive: vi.fn() }));
 
+import { ServerError } from '../lib/errorHandler.js';
 import { addTask, approveTask, deleteTask, findTaskWithSource, getAllTasks, getCosTasks, getTaskById, getTaskView, getUserTasks, updateTask } from '../services/cosTaskStore.js';
 import { forceSpawnTask } from '../services/cos.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
@@ -150,7 +153,31 @@ describe('CoS task collection selectors', () => {
     const res = await request(buildApp()).delete('/api/cos/tasks/sys-example?type=internal');
 
     expect(res.status).toBe(200);
-    expect(deleteTask).toHaveBeenCalledWith('sys-example', 'internal');
+    expect(deleteTask).toHaveBeenCalledWith('sys-example', 'internal', { releaseSynchronizationRetired: false });
+    expect(retireReleaseSynchronizationForDeletion).not.toHaveBeenCalled();
+  });
+
+  it('retires a release synchronization checkpoint before the owner deletes its task', async () => {
+    const identity = 'a'.repeat(64);
+    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', description: 'Synchronize v1.2.3', metadata: { releaseSynchronization: { identity } } });
+    deleteTask.mockResolvedValue({ success: true, taskId: 'task-release-sync-example' });
+    retireReleaseSynchronizationForDeletion.mockResolvedValue(null);
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/task-release-sync-example?type=internal');
+
+    expect(res.status).toBe(200);
+    expect(retireReleaseSynchronizationForDeletion).toHaveBeenCalledWith(identity, 'local-operator');
+    expect(deleteTask).toHaveBeenCalledWith('task-release-sync-example', 'internal', { releaseSynchronizationRetired: true });
+  });
+
+  it('keeps a release synchronization task when its checkpoint cannot be retired', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', metadata: { releaseSynchronization: { identity: 'a'.repeat(64) } } });
+    retireReleaseSynchronizationForDeletion.mockRejectedValue(new ServerError('A release or synchronization is still active', { status: 409, code: 'RELEASE_SYNC_HANDOFF_UNVERIFIED' }));
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/task-release-sync-example?type=internal');
+
+    expect(res.status).toBe(409);
+    expect(deleteTask).not.toHaveBeenCalled();
   });
 });
 

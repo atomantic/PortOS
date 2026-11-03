@@ -617,7 +617,14 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   // `.catch` because this read only supplies a LABEL — a task file that will not
   // parse must not turn a working delete into a 500.
   const doomed = await getTaskById(id).catch(() => null);
-  const result = await deleteTask(id, type);
+  // Deleting a release continuation is the owner's decision to abandon it.
+  // The reset refuses (409) while a release or synchronization is still active.
+  const releaseIdentity = doomed?.metadata?.releaseSynchronization?.identity;
+  if (releaseIdentity) {
+    const { retireReleaseSynchronizationForDeletion } = await import('../services/releaseSynchronization.js');
+    await retireReleaseSynchronizationForDeletion(releaseIdentity, req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator');
+  }
+  const result = await deleteTask(id, type, { releaseSynchronizationRetired: Boolean(releaseIdentity) });
   if (result?.error) {
     throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
   }

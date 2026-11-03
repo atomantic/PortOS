@@ -1355,11 +1355,13 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
 /**
  * Delete a task
  */
-export async function deleteTask(taskId, taskType = 'user') {
+export async function deleteTask(taskId, taskType = 'user', { releaseSynchronizationRetired = false } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   return withStateLock(async () => {
     const stored = await getStoredTask(taskId, taskType);
-    if (stored?.task.metadata?.releaseSynchronization) return { error: 'Release synchronization owns a durable publication obligation; retain its task history' };
+    // The publication receipt lives in the release outbox; the row may go once
+    // the caller has retired (or verified) that checkpoint.
+    if (stored?.task.metadata?.releaseSynchronization && !releaseSynchronizationRetired) return { error: 'Release synchronization owns a durable publication obligation; retain its task history' };
     // One row delete, whether the task is in the working set or old history. It
     // bumps the queue version, which is what makes the next read reload.
     if (await deleteStoredTask(taskId, taskType) === 0) return { error: 'Task not found' };
