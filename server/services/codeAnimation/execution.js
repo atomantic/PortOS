@@ -20,6 +20,7 @@ import { getSettings, updateSettings } from '../settings.js';
 import { cdpRequest } from '../browserService.js';
 import { currentContainmentMechanism, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
 import { probeBlenderRender } from './blenderProbe.js';
+import { blenderSeries } from '../../lib/blenderVersion.js';
 
 const SETTINGS_KEY = 'codeAnimationExecution';
 const WORKSPACE_DIR = 'code-animation-workspaces';
@@ -260,6 +261,12 @@ async function runProbe() {
   return lastProbe;
 }
 
+/** Version from this process's last passing Blender check, or null. Memory only; spawns nothing. */
+export function lastCheckedBlenderVersion() {
+  const evidence = lastProbe?.tools?.blender;
+  return evidence?.passed ? evidence.version : null;
+}
+
 /** Run the adversarial self-test on demand; concurrent requests share one run. */
 export async function probeCodeAnimationExecution() {
   probing ??= runProbe().finally(() => { probing = null; });
@@ -275,8 +282,9 @@ export async function resolveBlenderExecution(renderer, expected = null) {
   }
   const tool = execution.tools.blender;
   const evidence = execution.probe.tools.blender;
-  if (renderer.version !== evidence.version || (renderer.engine || 'CYCLES') !== tool.engine) {
-    throw new ServerError('The project Blender version and engine must match the successful execution check', { status: 409, code: 'CODE_ANIMATION_BLENDER_RUNTIME_MISMATCH' });
+  // Same major.minor series is enough: a patch update must not strand saved projects.
+  if (blenderSeries(renderer.version) !== blenderSeries(evidence.version) || (renderer.engine || 'CYCLES') !== tool.engine) {
+    throw new ServerError(`The project targets Blender ${renderer.version} with ${renderer.engine || 'CYCLES'}, but the execution check passed Blender ${evidence.version} with ${tool.engine}. Set the project's renderer version to ${evidence.version} or check a matching executable.`, { status: 409, code: 'CODE_ANIMATION_BLENDER_RUNTIME_MISMATCH' });
   }
   const executableFingerprint = createHash('sha256').update(tool.fingerprint).digest('hex');
   const binding = createHash('sha256').update(JSON.stringify([executableFingerprint, tool.executionMode, tool.engine, evidence.version, execution.probe.probedAt])).digest('hex');

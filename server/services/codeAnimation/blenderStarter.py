@@ -150,7 +150,7 @@ def build_scene(config):
             obj.keyframe_insert('rotation_euler', frame=frame)
             obj.keyframe_insert('scale', frame=frame)
     for obj in [lantern, *sparks]:
-        for curve in obj.animation_data.action.fcurves:
+        for curve in action_fcurves(obj):
             for point in curve.keyframe_points:
                 point.interpolation = 'CONSTANT'
     bpy.ops.object.camera_add(location=(0, -18, 5))
@@ -168,7 +168,7 @@ def build_scene(config):
         camera.rotation_euler = (Vector((0, 0, 2.2)) - camera.location).to_track_quat('-Z', 'Y').to_euler()
         camera.keyframe_insert('location', frame=frame)
         camera.keyframe_insert('rotation_euler', frame=frame)
-    for curve in camera.animation_data.action.fcurves:
+    for curve in action_fcurves(camera):
         for point in curve.keyframe_points:
             point.interpolation = 'LINEAR'
     # Cool moon-side fill against the warm lantern: the colour contrast carries the mood.

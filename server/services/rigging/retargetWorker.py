@@ -108,6 +108,26 @@ def _actions_on(objects):
     return seen
 
 
+def _action_curves(action):
+    """Every F-curve of an action. Blender 5 removed `Action.fcurves`; a layered action
+    keeps its curves in per-slot channelbags, so walk those instead."""
+    if hasattr(action, "fcurves"):
+        return list(action.fcurves)
+    return [curve for layer in action.layers for strip in layer.strips
+            for bag in strip.channelbags for curve in bag.fcurves]
+
+
+def _curve_factory(armature, action):
+    """`new(data_path, index, group)` for the action assigned to `armature`, on either API."""
+    if hasattr(action, "fcurves"):
+        return lambda path, index, group: action.fcurves.new(path, index=index, action_group=group)
+    from bpy_extras import anim_utils
+    slot = armature.animation_data.action_slot or action.slots.new(id_type="OBJECT", name=armature.name)
+    armature.animation_data.action_slot = slot
+    bag = anim_utils.action_ensure_channelbag_for_slot(action, slot)
+    return lambda path, index, group: bag.fcurves.new(path, index=index, group_name=group)
+
+
 def _scene_objects(bpy, kind):
     return [o for o in bpy.data.objects if o.type == kind]
 
@@ -139,7 +159,7 @@ def probe(job):
     animated = []
     for action in bpy.data.actions:
         report["clips"].append({"name": action.name, "duration": _action_duration(action)})
-        for curve in action.fcurves:
+        for curve in _action_curves(action):
             name = _bone_name_from_path(curve.data_path)
             if name and name not in animated:
                 animated.append(name)
@@ -230,7 +250,7 @@ def _rebind_to_nearest_zone_bone(mesh_object, armature, zone_bones, vertex_indic
 # ------------------------------------------------------------ apply pass: the retarget
 
 
-def _copy_curves(source_action, target_action, name_by_source, translation_scale, root_targets):
+def _copy_curves(source_action, new_curve, name_by_source, translation_scale, root_targets):
     """Copy the source clip's curves onto the target armature's bone names.
 
     Orientation channels transfer verbatim. `location` is copied ONLY for a root bone,
@@ -239,7 +259,7 @@ def _copy_curves(source_action, target_action, name_by_source, translation_scale
     position from its parent anyway.
     """
     copied = 0
-    for curve in source_action.fcurves:
+    for curve in _action_curves(source_action):
         source_bone = _bone_name_from_path(curve.data_path)
         target_bone = name_by_source.get(source_bone) if source_bone else None
         if not target_bone:
@@ -253,9 +273,7 @@ def _copy_curves(source_action, target_action, name_by_source, translation_scale
             scale = 1.0
         else:
             continue
-        target_curve = target_action.fcurves.new(
-            _POSE_CHANNEL % (target_bone, channel), index=curve.array_index, action_group=target_bone,
-        )
+        target_curve = new_curve(_POSE_CHANNEL % (target_bone, channel), curve.array_index, target_bone)
         target_curve.keyframe_points.add(count=len(curve.keyframe_points))
         for slot, key in zip(target_curve.keyframe_points, curve.keyframe_points):
             slot.co = (key.co[0], key.co[1] * scale)
@@ -418,7 +436,8 @@ def apply_clip(job):  # noqa: PLR0911, PLR0915 -- one linear pipeline; each retu
     if armature.animation_data is None:
         armature.animation_data_create()
     armature.animation_data.action = target_action
-    copied = _copy_curves(source_action, target_action, name_by_source, translation_scale, root_targets)
+    new_curve = _curve_factory(armature, target_action)
+    copied = _copy_curves(source_action, new_curve, name_by_source, translation_scale, root_targets)
 
     for obj in imported:
         bpy.data.objects.remove(obj, do_unlink=True)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
+import { LATEST_BLENDER_VERSION } from '../../../../server/lib/blenderVersion.js';
 
 const inputClass = 'w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm';
 const budgets = { iterations: 8, timeSeconds: 900, tokens: 128000, renderSeconds: 300, diskBytes: 512 * 1024 * 1024 };
@@ -50,7 +51,7 @@ export default function ProductionProjectForm({ project, onSave, busy, onDirtyCh
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label htmlFor="cap-renderer" className="mb-1 block text-xs text-gray-400">Renderer</label>
-          <select id="cap-renderer" className={inputClass} value={manifest.renderer.kind} onChange={event => setManifest(previous => ({ ...previous, renderer: { kind: event.target.value, version: event.target.value === 'blender' ? '4.2.0' : 'code-animation-html-v1', engine: event.target.value === 'blender' ? 'CYCLES' : null } }))}>
+          <select id="cap-renderer" className={inputClass} value={manifest.renderer.kind} onChange={event => setManifest(previous => ({ ...previous, renderer: { kind: event.target.value, version: event.target.value === 'blender' ? LATEST_BLENDER_VERSION : 'code-animation-html-v1', engine: event.target.value === 'blender' ? 'CYCLES' : null } }))}>
             <option value="browser">Browser</option><option value="blender">Blender</option>
           </select>
         </div>

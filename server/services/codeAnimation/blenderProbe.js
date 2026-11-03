@@ -3,25 +3,22 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { RIGGING_RUNTIME } from '../rigging/runtime.js';
+import { BLENDER_COMPAT_PY, MIN_BLENDER_SERIES, isSupportedBlenderVersion } from '../../lib/blenderVersion.js';
 import { runContainedWorker } from './containedWorker.js';
 
-// Match the existing supported bpy baseline; this is not a claim that an import
-// or a newer Blender version proves render compatibility.
-const VERSION = RIGGING_RUNTIME.moduleVersion;
+const SUPPORTED = `Blender ${MIN_BLENDER_SERIES.join('.')} or newer`;
 const reportSchema = engine => z.object({
-  version: z.literal(VERSION), engine: z.literal(engine), device: z.literal(engine === 'CYCLES' ? 'CPU' : 'GPU'),
+  version: z.string().refine(isSupportedBlenderVersion), engine: z.literal(engine), device: z.literal(engine === 'CYCLES' ? 'CPU' : 'GPU'),
   backend: engine === 'CYCLES' ? z.literal('CPU') : z.enum(['OPENGL', 'METAL', 'VULKAN']), width: z.literal(64), height: z.literal(64),
   seed: z.literal(0), samples: z.literal(8), frame: z.literal(1),
 }).strict();
 
 const sceneSource = engine => `import bpy, json, os
 from mathutils import Vector
-if bpy.app.version_string != ${JSON.stringify(VERSION)}:
-    raise RuntimeError("Unsupported Blender version; expected ${VERSION}")
+${BLENDER_COMPAT_PY}
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
-scene.render.engine = ${JSON.stringify(engine)}
+portos_set_engine(scene, ${JSON.stringify(engine)})
 scene.cycles.device = 'CPU'
 scene.cycles.samples = 8
 scene.cycles.seed = 0
@@ -52,7 +49,7 @@ if scene.render.engine != 'CYCLES':
     import gpu
     device, backend = 'GPU', gpu.platform.backend_type_get()
 with open(os.path.join(out, 'report.json'), 'w') as handle:
-    json.dump(dict(version=bpy.app.version_string, engine=scene.render.engine,
+    json.dump(dict(version=portos_version(), engine=${JSON.stringify(engine)},
         device=device, backend=backend, width=scene.render.resolution_x,
         height=scene.render.resolution_y, seed=scene.cycles.seed,
         samples=scene.cycles.samples, frame=scene.frame_current), handle)
@@ -101,7 +98,7 @@ export async function probeBlenderRender({ executable, fingerprint }, workspaceR
     render: passed ? evidence : null,
     durationMs: run.durationMs ?? null,
     detail: passed
-      ? `Blender ${VERSION} rendered a 64 × 64 scene with ${engine} / ${evidence.device} / ${evidence.backend} in ${executionMode} mode. ${executionMode === 'trusted-local' ? 'Host access is not contained. ' : ''}This proves fixed-scene readiness; production-sequence acceptance remains separate. CPU Cycles may be slow.`
-      : `Blender render check failed: expected ${VERSION}, ${engine} and a valid nonblank 64 × 64 PNG in ${executionMode} mode. A version banner or bpy import is insufficient; no fallback was attempted.`,
+      ? `Blender ${evidence.version} rendered a 64 × 64 scene with ${engine} / ${evidence.device} / ${evidence.backend} in ${executionMode} mode. ${executionMode === 'trusted-local' ? 'Host access is not contained. ' : ''}This proves fixed-scene readiness; production-sequence acceptance remains separate. CPU Cycles may be slow.`
+      : `Blender render check failed: expected ${SUPPORTED}, ${engine} and a valid nonblank 64 × 64 PNG in ${executionMode} mode. A version banner or bpy import is insufficient; no fallback was attempted.`,
   };
 }

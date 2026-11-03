@@ -190,9 +190,11 @@ of those may contain PortOS data or the home directory.
   cancellation limits with an empty process group. A configured Blender is then
   asked to build and render a fixed 64 × 64 cube scene in the saved mode using
   `--background --factory-startup --disable-autoexec --python-exit-code 1`.
-  The baseline is Blender 4.2.0, matching the existing pinned rigging runtime,
-  with the selected Cycles / CPU or EEVEE / GPU engine, eight samples and seed zero. Other versions remain
-  unverified and fail this probe. The check decodes the PNG, requires the exact
+  Blender 4.2 or newer is accepted (`server/lib/blenderVersion.js`; 5.2.3 is the
+  newest checked release), with the selected Cycles / CPU or EEVEE / GPU engine, eight
+  samples and seed zero. Older versions fail this probe. Projects match the checked
+  executable by `major.minor` series, so a patch update keeps saved projects renderable
+  while each run still records the exact version. The check decodes the PNG, requires the exact
   dimensions and nonblank pixels, validates the runtime/engine/device report,
   and records its image SHA-256 and elapsed time. A version banner, successful
   exit or `bpy` import alone cannot pass. No generated project code runs here;
@@ -218,7 +220,7 @@ twos with anticipation/squash and sparks that lag on threes, a warm lantern ligh
 against a cool moon-side fill, dark foreground leaves, and a continuously keyed
 perspective camera with shallow focus on the lantern. No external assets,
 downloads, add-ons, provider calls or rendering occur on import. The default
-format is 10 seconds at 1920 × 1080 / 24 fps, Blender 4.2.0 / Cycles CPU. The
+format is 10 seconds at 1920 × 1080 / 24 fps, Cycles CPU, on the checked Blender version (5.2.3 when none has been checked). The
 project's authoring provider remains independent from its renderer.
 
 After an explicit production start, the existing stage controller runs native
@@ -249,18 +251,25 @@ workers never fall back to browser rendering or a different engine.
 Runtime/format/cadence fixtures test these contracts but do not constitute real
 Blender acceptance. That is established by
 `scripts/code-animation-blender-acceptance.js`, which drives the production
-`renderBlenderSequence` against an operator-supplied Blender 4.2.0 executable and
+`renderBlenderSequence` against an operator-supplied Blender executable (pass its version with `--blender-version`, default 5.2.3) and
 writes an `evidence.json` verdict. It refuses to reuse an output directory, never
 writes machine settings, fingerprints the executable rather than recording its
 path, and `--mode trusted-local` prints the no-containment warning.
 
 ```bash
-node scripts/code-animation-blender-acceptance.js --executable <Blender 4.2.0> --out <new dir> \
+node scripts/code-animation-blender-acceptance.js --executable <Blender 4.2+> --blender-version 5.2.3 --out <new dir> \
   --mode trusted-local --phase pilot|final            # full 10 s sequence
 node scripts/code-animation-blender-acceptance.js ... --repeat --times 1,5,9   # repeat sampled frames
 node scripts/code-animation-blender-acceptance.js ... --cancel-after 40        # real cancellation
 node scripts/code-animation-blender-acceptance.js ... --engine BLENDER_EEVEE_NEXT --backend METAL
 ```
+
+**Blender 5 compatibility.** PortOS keeps `BLENDER_EEVEE_NEXT` as its EEVEE engine id;
+the driver and probe map it to Blender 5's renamed `BLENDER_EEVEE`. Blender 5 also removed
+`Action.fcurves`, so the driver gives scene code an `action_fcurves(obj)` helper that reads
+an object's keyframe curves on either API; the starter uses it. The starter and the rigging
+workers were run against `bpy` 5.2.3 (Cycles CPU) on 2026-11-03; EEVEE on 5.x and the full
+acceptance sequence still need a run on a GPU host.
 
 **Acceptance run, 2026-10-02.** Official Blender 4.2.0 macOS arm64 build (the
 download's SHA-256 matched the published checksum), Apple Silicon host, explicit

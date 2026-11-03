@@ -1060,3 +1060,4 @@ export * from './greyboxSequence.js';
 
 export * from './ecosystemPortEdits.js';
 export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal.js';
+export * from './blenderVersion.js';
