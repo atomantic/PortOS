@@ -630,6 +630,8 @@ export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
+export const inspectMusicVideoCastAndSetsImages = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/inspect`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const acknowledgeMusicVideoCastAndSetsImage = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/acknowledge-image`, { method: 'POST', body: JSON.stringify(body), ...options });
 

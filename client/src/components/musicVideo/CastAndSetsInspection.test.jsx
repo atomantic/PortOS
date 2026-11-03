@@ -19,6 +19,15 @@ describe('Cast & Sets inspection card', () => {
     expect(onAcknowledgeImage).toHaveBeenCalledWith({ inputs, inspectionId: 'inspection-1' });
   });
 
+  it('offers a vision re-check for an acknowledged image on an approved stage', () => {
+    const onReinspectImages = vi.fn();
+    const approved = { ...stage, status: 'approved', images: { 'set:lab': { ...image, inspection: { id: 'inspection-4', inputs, verdict: 'unreviewed', discrepancy: 'Vision unavailable: Provider example is unavailable' },
+      inspectionAcknowledgement: { inputs, inspectionId: 'inspection-4' } } } };
+    render(<CastAndSetsReferenceProgress stage={approved} onReinspectImages={onReinspectImages} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check with vision' }));
+    expect(onReinspectImages).toHaveBeenCalledWith(['set:lab']);
+  });
+
   it('names a failed render-quality check as a rendering defect', () => {
     const defect = { ...stage, images: { 'set:lab': { ...image, inspection: { id: 'inspection-3', inputs, verdict: 'mismatch',
       discrepancy: 'Rendering defect: Chairs are molded into the table rim.', checks: [{ id: 'render-quality', status: 'fail', note: 'Chairs are molded into the table rim.' }] } } } };
