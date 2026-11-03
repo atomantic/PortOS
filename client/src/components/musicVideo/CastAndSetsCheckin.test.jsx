@@ -768,7 +768,7 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     expect(within(choices).getByText('Use these images as they are.')).toBeInTheDocument();
     expect(within(choices).getByText(/Redo the direction from the current inputs.*Faces can drift/)).toBeInTheDocument();
     // The note never promises a rebuild the panel doesn't show (#14796).
-    expect(screen.queryByText(/or rebuild it from the current inputs/)).toBeNull();
+    expect(screen.queryByText(/rebuild it from the current inputs|Rebuild below/)).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Rebuild' })).toHaveLength(1);
     await act(async () => { fireEvent.click(within(choices).getByRole('button', { name: 'Rebuild' })); });
     expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
