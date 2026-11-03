@@ -57,6 +57,7 @@ export const launchUpdate = (tag, emit, options = {}) => withUpdateControlLock((
 
 async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecution, acknowledgePersistentMindImageBackup = false,
   automatic = false, acknowledgeInterruption = false,
+  expectedRefusalId,
   admission = maintenance, supervisorAbsent = processAbsent, monitorIntervalMs = 5000,
   supervisorSnapshot = async () => (await import('./maintenanceProcessInventory.js')).snapshotMaintenanceProcesses() } = {}) {
   let ticket = null;
@@ -148,8 +149,9 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
 
   if (peerExecution) assertPeerExecutionCapability(peerExecution.capability, { action: 'portos.update' },
     createHash('sha256').update(canonicalStringify(peerExecution.evidence)).digest('hex'));
-  if (!peerExecution) await reconcileReusedLaunch(admission, supervisorSnapshot);
-  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true }); }
+  if (!peerExecution && expectedRefusalId === undefined) await reconcileReusedLaunch(admission, supervisorSnapshot);
+  try { ticket = peerExecution ? null : admission.deferredUpdate.reserveLaunch({ recoverWaiting: true,
+    ...(expectedRefusalId !== undefined ? { expectedRefusalId } : {}) }); }
   catch (error) {
     if (error.code !== 'MAINTENANCE_STALE') throw error;
     const errorMessage = 'A previous update is still running — wait for it to finish before starting another update';

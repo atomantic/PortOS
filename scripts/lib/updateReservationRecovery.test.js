@@ -1,16 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../server/lib/mockPathsDataRoot.js';
 import { createMaintenanceAdmission } from '../../server/lib/maintenanceAdmission.js';
 import { createMaintenanceJournal } from '../../server/lib/maintenanceJournal.js';
 import { assertNoScopedLegacyProcesses } from '../../server/services/maintenanceScopedProcesses.js';
 import { runDeferredUpdate } from '../deferred-update.mjs';
 import { createUpdateReservationRecovery } from './updateReservationRecovery.mjs';
+import { continueManualUpdateRecovery } from './manualUpdateRecovery.mjs';
 
 vi.mock('../../server/lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => join(lazyTempDataRoot('update-recovery-auth-'), 'data'),
@@ -77,8 +79,8 @@ async function fixture({ stale = true, authenticated = false } = {}) {
   return { root, data, gate, journal, update, state, recovery, options, mintSession, revoke };
 }
 
-describe('fresh updater recovery against an older running server', () => {
-  it('recovers through authenticated HTTP and the saved runner URL, then runs the update without restarting the old server first', async () => {
+describe('fresh updater recovery against a running server', () => {
+  it('recovers through authenticated HTTP and the saved runner URL when activity is fully instrumented', async () => {
     const f = await fixture({ authenticated: true });
     const { state, gate, root, data } = f;
     state.apps['portos-default'] = { repoPath: root };
@@ -104,6 +106,48 @@ describe('fresh updater recovery against an older running server', () => {
     expect(f.mintSession).toHaveBeenCalledOnce();
     await f.recovery.close();
     expect(f.revoke).toHaveBeenCalledOnce();
+  });
+
+  it('offers an older UI a private-attempt browser confirmation instead of inventing missing provider telemetry', async () => {
+    const f = await fixture({ stale: false });
+    delete f.state.activity.llm.directCallsTracked;
+    writeFileSync(join(f.root, 'package.json'), JSON.stringify({ version: '0.0.0', type: 'module' }));
+    mkdirSync(join(f.root, 'client', 'dist'), { recursive: true });
+    writeFileSync(join(f.root, 'client', 'dist', 'index.html'), 'Old UI');
+    const git = args => execFileSync('git', args, { cwd: f.root, stdio: 'pipe' });
+    git(['init', '--quiet']); git(['add', 'package.json']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture']);
+    vi.stubEnv('PORTOS_FORCE_CLEAN_WORKSPACES', 'client,invalid,server');
+    vi.stubEnv('PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED', '1');
+    const launch = vi.fn(); const emit = vi.fn();
+    try {
+      await expect(runDeferredUpdate({ admission: f.gate, cwd: f.root, policy: 'manual', launch,
+        recoverReservations: () => f.recovery.run(), legacyRunning: async () => false,
+        wait: async () => { f.state.clock += 1000; }, confirmInterruption: async () => false, emit }))
+        .rejects.toMatchObject({ code: 'UPDATE_INTERRUPTION_REQUIRED' });
+    } finally { vi.unstubAllEnvs(); }
+    expect(launch).not.toHaveBeenCalled();
+    const id = f.gate.deferredUpdate.get().result.id;
+    expect(emit).toHaveBeenCalledWith(expect.stringContaining(`/manual-update.html?attempt=${id}`));
+    const page = readFileSync(join(f.root, 'client', 'dist', 'manual-update.html'), 'utf8');
+    expect(page).not.toContain(f.root);
+    expect(page).not.toContain(id);
+    const continued = vi.fn(async () => ({ started: true, completion: Promise.resolve({ success: true }) }));
+    const otherRoot = join(f.root, 'other-checkout');
+    git(['clone', '--quiet', '--no-hardlinks', f.root, otherRoot]);
+    await expect(continueManualUpdateRecovery({ id, root: otherRoot, directory: f.gate.directory, launch: continued })).rejects.toThrow('different PortOS checkout');
+    expect(continued).not.toHaveBeenCalled();
+    await continueManualUpdateRecovery({ id, root: f.root, directory: f.gate.directory, launch: continued });
+    expect(continued).toHaveBeenCalledWith('v0.0.0', expect.any(Function), {
+      acknowledgeInterruption: true, expectedRefusalId: id, forceCleanWorkspaces: ['client', 'server'], acknowledgePersistentMindImageBackup: true,
+    });
+    const path = join(f.gate.directory, `update-manual-${id}.json`);
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
+    const resultPath = join(f.gate.directory, 'update-result.json');
+    const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+    writeFileSync(resultPath, JSON.stringify({ ...result, id: randomUUID() }));
+    await expect(continueManualUpdateRecovery({ id, root: f.root, directory: f.gate.directory, launch: continued })).rejects.toThrow('newer update attempt');
+    expect(continued).toHaveBeenCalledOnce();
   });
 
   it('keeps an unfinished app-update handoff blocking, including during the retry cooldown', async () => {

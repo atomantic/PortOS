@@ -132,9 +132,13 @@ export function createDeferredUpdateAdmission({ transaction, read, makeId, error
   });
   // A launch ticket allows a timed-out parent to cancel a late supervisor
   // before it mutates the install. Claim and cancellation share the journal.
-  const reserveLaunch = ({ recoverWaiting = false } = {}) => {
-    reconcile();
+  const reserveLaunch = ({ recoverWaiting = false, expectedRefusalId } = {}) => {
+    if (expectedRefusalId === undefined) reconcile();
     return transaction(state => {
+      if (expectedRefusalId !== undefined) {
+        const result = readResult();
+        if (!uuid(expectedRefusalId) || result?.id !== expectedRefusalId || result.success || result.interrupted || inspect(state)) stale();
+      }
       if (state.hold || state.exclusive || (!recoverWaiting && inspect(state))
         || state.operations.some(op => ['deferred-update-launch', 'harness-action', 'harness-action-wake'].includes(op.kind))) stale();
       const id = makeId();

@@ -33,7 +33,7 @@ describe('system activity routes', () => {
   it('serves run metadata and cached Ollama residency through the activity route', async () => {
     const response = await request(app).get('/api/system/activity');
     expect(response.status).toBe(200);
-    expect(response.body.llm).toEqual({ trusted: true, active: 1, runs: await deps.runs() });
+    expect(response.body.llm).toEqual({ trusted: true, active: 1, directCallsTracked: true, runs: await deps.runs() });
     expect(response.body.llm.runs[0]).not.toHaveProperty('prompt');
     expect(response.body.ollama).toMatchObject({ trusted: true, models: [{ name: 'example:7b' }] });
     expect(response.body.activity.idle).toBe(false);

@@ -20,6 +20,18 @@ a noninteractive invocation exits with an actionable message. Use
 `npm run update -- --interrupt` to explicitly continue. This also recovers an
 older/offline runtime whose activity API cannot report every provider call.
 
+An already-running older UI cannot render the new confirmation controls. When
+its activity API lacks complete provider counters, the fresh updater puts a
+confirmation URL in the waiting-step output. Open that URL on the same PortOS
+instance, sign in, and explicitly continue in the browser. The generic page
+uses the existing authenticated command endpoint and the normal detached
+updater. Its private attempt retains the previous image-backup acknowledgment
+and reconcile options, bound to the originating checkout. A newer pending or
+completed attempt, or a changed checkout, invalidates the confirmation.
+Command acceptance or a server disconnect does not claim update success.
+The normal client build removes this temporary page. Installations without a
+served production client can use the terminal confirmation or `--interrupt`.
+
 Automatic callers use `--automatic`. They wait for actual running work, while
 queued durable jobs remain queued across restart. The scheduler passes this
 policy explicitly; an automatic waiting owner does not prevent an acknowledged
