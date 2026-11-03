@@ -23,6 +23,7 @@ const effects = vi.hoisted(() => ({
   createAgent: vi.fn(async (data) => ({ id: 'example-agent', ...data })),
   clearCooldown: vi.fn(async () => ({ cooldownUntil: null })),
   healthCheck: vi.fn(async () => ({ healthy: true })),
+  claimSelection: vi.fn(async () => ({ recorded: true, issues: [42] })),
   backfill: vi.fn(async () => 0),
   resetLearning: vi.fn(async (taskType) => ({ reset: true, taskType })),
   resetSchedule: vi.fn(async () => ({ success: true })),
@@ -61,6 +62,7 @@ vi.mock('../services/agentPersonalityGenerator.js', () => ({}));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../services/appActivity.js', () => ({ clearAppCooldown: effects.clearCooldown }));
 vi.mock('../services/cosHealthMonitor.js', () => ({ runHealthCheck: effects.healthCheck }));
+vi.mock('../services/cosClaimSelection.js', () => ({ recordClaimSelection: effects.claimSelection }));
 vi.mock('../services/taskLearning.js', () => ({
   backfillFromHistory: effects.backfill, resetTaskTypeLearning: effects.resetLearning,
 }));
@@ -133,6 +135,7 @@ const operations = [
   }, effects.createAgent, 201],
   ['post', '/api/cos/app-activity/example-app/clear-cooldown', {}, effects.clearCooldown, 200],
   ['post', '/api/cos/health/check', {}, effects.healthCheck, 200],
+  ['post', '/api/cos/claim-selection', { agentId: 'example-picker', issueNumber: 42 }, effects.claimSelection, 200],
   ['post', '/api/cos/learning/backfill', {}, effects.backfill, 200],
   ['post', '/api/cos/learning/reset/task:example', {}, effects.resetLearning, 200],
   ['post', '/api/cos/schedule/reset', { taskType: 'example-task' }, effects.resetSchedule, 200],

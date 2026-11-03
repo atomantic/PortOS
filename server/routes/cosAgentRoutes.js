@@ -102,6 +102,15 @@ router.post('/claim-ownership', asyncHandler(async (req, res) => {
   res.json(input.action === 'check' ? await checkReconcileOwnership(input) : await updateClaimOwnership(input));
 }));
 
+router.post('/claim-selection', asyncHandler(async (req, res) => {
+  const input = validateRequest(z.object({
+    agentId: z.string().min(1).max(200),
+    issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).strict(), req.body ?? {});
+  const { recordClaimSelection } = await import('../services/cosClaimSelection.js');
+  res.json(await recordClaimSelection(input));
+}));
+
 // `reason` is persisted into task metadata + interpolated into logs; guard the
 // shape so a non-string body can't store `[object Object]`.
 const pauseBodySchema = z.object({ reason: z.string().max(500).optional() });

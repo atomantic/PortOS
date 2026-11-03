@@ -615,6 +615,10 @@ function buildClaimOwnershipSection(agentId) {
     payload: JSON.stringify({ agentId, action, branch: 'BRANCH' }) });
   return [
     '## Claim ownership binding',
+    'When an unpinned issue picker stands down on a specific checked issue because it is operator-parked or resolved, record that issue BEFORE reporting no-action-needed, without creating a branch, worktree, assignment or claim markers. Do not record in-flight or otherwise skipped candidates. Replace 123 with the checked issue number and require parsed JSON with recorded:true:',
+    '```bash', agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-selection',
+      payload: JSON.stringify({ agentId, issueNumber: 123 }) }), '```',
+    'This records selection only; it grants no checkout, merge or cleanup authority. Completion independently checks the recorded issue in the configured repository and the clean source checkout against the live default branch. Bound child claims always take precedence; no parked selection can hide unfinished siblings. A refusal or unreadable response is an unmet completion prerequisite, not permission to fabricate a claim. Pinned issues and runs that already bound a claim keep their existing binding workflow.',
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
     'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there. This records the server-observed physical checkout generation; a refusal means preserve it and report the blocker. An existing resumed checkout is captured by its initial bind.',
