@@ -211,6 +211,7 @@ async function generateVideoPrepared({
   grokPath, aspectRatio, prompt = '', negativePrompt, width, height,
   sourceImagePath = null, duration,
   uploadedTempPath = null,
+  uploadedTempPaths = [],
   jobId: providedJobId = null,
   promptAdditions = [],
   guidanceImagePath = null, referenceImagePaths = [],
@@ -279,7 +280,7 @@ async function generateVideoPrepared({
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Spawning grok…');
 
   runGrokVideo(job, jobId, bin, args, {
-    useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath,
+    useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath, uploadedTempPaths,
   }).catch((err) => {
     console.error(`❌ grok video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -292,22 +293,23 @@ async function generateVideoPrepared({
 }
 
 async function runGrokVideo(job, jobId, bin, args, {
-  useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath,
+  useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath, uploadedTempPaths = [],
 }) {
   const retainOwnership = (error) => {
     maintenance.markCurrentUnsettled();
     maintenance.markResourceUnsettled('media', jobId);
     console.error(`❌ Grok video settlement failed [${jobId.slice(0, 8)}]: ${error?.message || error}`);
   };
-  // The route stages a multipart source image into data/uploads and hands us
-  // its path — the provider owns unlinking it on every terminal path (same
+  // The route stages a multipart source image (uploadedTempPath) and any extra
+  // reference images (uploadedTempPaths) into data/uploads and hands us their
+  // paths — the provider owns unlinking them on every terminal path (same
   // contract as videoGen/local.js; the queue only cleans up when the
   // provider throws before spawning, or on boot-restore of a dead job).
   let cleanupPromise;
   const cleanup = () => cleanupPromise ||= Promise.allSettled([
     Promise.resolve().then(() => cleanupPromptFile({ throwOnError: true })),
     Promise.resolve().then(() => rmGuarded(scratchDir, { recursive: true, force: true })),
-    Promise.resolve().then(() => uploadedTempPath && unlinkGuarded(uploadedTempPath)),
+    ...[uploadedTempPath, ...uploadedTempPaths].filter(Boolean).map((path) => Promise.resolve().then(() => unlinkGuarded(path))),
   ]).then(results => {
     for (const result of results) {
       if (result.status === 'rejected' && result.reason?.code !== 'ENOENT') retainOwnership(result.reason);

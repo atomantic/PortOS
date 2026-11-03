@@ -70,7 +70,7 @@ import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS } from '../services/videoGen/requestFields.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
@@ -182,9 +182,9 @@ export const isAudioMime = (mime, filename) => {
 // slots (REFERENCE_AUDIO_FIELDS). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
-    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
+    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage' || VIDEO_REFERENCE_IMAGE_FIELDS.includes(file.fieldname);
     const isAudioField = file.fieldname === 'audioFile' || REFERENCE_AUDIO_FIELDS.includes(file.fieldname);
     const isVideoField = ['icReference', 'runwayVideo', 'runwayCharacterVideo'].includes(file.fieldname);
     const okImage = isImageField && file.mimetype.startsWith('image/');
@@ -299,7 +299,13 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.CONTINUITY_STRATEGY]: z.enum(['frame', 'window']).optional(),
 });
 
+// Short caption for one `referenceImageN` upload (what the image shows).
+const referenceLabel = z.string().max(MAX_VIDEO_REFERENCE_LABEL_LENGTH).optional();
+
 const generateBodySchema = z.object({
+  referenceLabel1: referenceLabel,
+  referenceLabel2: referenceLabel,
+  referenceLabel3: referenceLabel,
   promptAdditions: promptAdditionsSchema,
   // Render backend: the local runtimes (default), the Grok Build CLI's
   // image-first image_to_video flow (#2859 phase 2), fal.ai's queue REST API

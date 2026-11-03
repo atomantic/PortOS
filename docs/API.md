@@ -803,6 +803,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/character` | Character management |
 | `/api/tools` | Agent tool registry |
 | `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
+| `POST /api/video-gen` (Grok reference images) | With `backend=grok` and a `sourceImage` (or `sourceImageFile`), a multipart request may add up to 3 reference images: files `referenceImage1`..`referenceImage3` (`image/*` only), each with an optional text `referenceLabel1`..`referenceLabel3` (what the image shows, max 120 chars, default empty). They are staged in slot order as the job's `castReferences` (`[{ path, label }]`), so Grok runs `reference_to_video` with the source image as `first_frame` instead of `image_to_video`; any Music Video sheets come first and uploads follow. Another backend, no source image, a 4th image (`referenceImage4`) or a label without its image is a `400` (`VIDEO_REFERENCE_IMAGES_GROK_ONLY`, `_NEED_SOURCE`, `_TOO_MANY`, `VIDEO_REFERENCE_LABEL_ORPHANED`) and every upload is removed. Staged files are deleted by the Grok worker when the job completes, fails or is canceled, and by the queue if the job never starts. `POST /api/video-gen/prompt-preview` previews them via `previewUploads: ['sourceImage', 'referenceImage1', …]` |
 | `/api/devtools/video-download` | Video download |
 | `/api/video-timeline` | Video timeline editor |
 | `/api/html-composition` | Offline seekable HTML-to-MP4 rendering; [contract and job endpoints](./HTML_COMPOSITIONS.md) |

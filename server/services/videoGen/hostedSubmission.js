@@ -14,6 +14,7 @@ import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
 import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
+import { videoReferenceImageSlots } from './requestFields.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -30,9 +31,19 @@ const assertAnchoredReference = (backend, params) => {
   );
 };
 
-// Grok and reactor take no staged inputs beyond the source frame the caller
-// already owns.
+// Reactor takes no staged inputs beyond the source frame the caller already owns.
 const NO_STAGED_INPUTS = async () => ({});
+
+// Grok's extra reference images (referenceImage1..3): staged durably in slot
+// order, each paired with its label. The queue owns the copies (uploadedTempPaths)
+// and the Grok worker removes them on every terminal path.
+async function stageGrokReferenceImages({ body, uploads, stageUploadDurable }) {
+  const castReferences = [];
+  for (const { file, label } of videoReferenceImageSlots(uploads, body)) {
+    castReferences.push({ path: await stageUploadDurable(file, 'reference'), label });
+  }
+  return castReferences.length ? { castReferences, uploadedTempPaths: castReferences.map((ref) => ref.path) } : {};
+}
 
 // fal end frame: refuse a model whose catalog entry takes none, then stage an
 // upload durably (the queue owns the copy) or resolve a gallery pick. Throws
@@ -149,7 +160,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       const grok = settings.imageGen?.grok || {};
       return { usable: grok.enabled, extras: { grok } };
     },
-    stageInputs: NO_STAGED_INPUTS,
+    stageInputs: stageGrokReferenceImages,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GROK, params),
     errorCode: 'GROK_IMAGEGEN_DISABLED',
     errorMessage: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
@@ -159,6 +170,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       width: body.width,
       height: body.height,
       duration: body.grokDuration,
+      ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       ...storyboardGuidanceJobParams(prepared),
     }),
   },

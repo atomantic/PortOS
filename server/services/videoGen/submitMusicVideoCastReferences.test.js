@@ -96,6 +96,21 @@ describe('Music Video cast references at video submission', () => {
     expect(m.enqueue.mock.calls[0][0].params.mode).toBe('grok');
   });
 
+  it('appends caller-uploaded reference images after the Music Video sheets on a Grok render', async () => {
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/lead.png', label: 'Lead' }]);
+    const referenceImage1 = { path: '/tmp/one.png', originalname: 'one.png' };
+    const referenceImage2 = { path: '/tmp/two.png', originalname: 'two.png' };
+    await submitVideoGenJob(body({ backend: 'grok', referenceLabel1: 'first', referenceLabel2: 'second' }), { referenceImage2, referenceImage1 });
+    const { castReferences, uploadedTempPaths } = m.enqueue.mock.calls[0][0].params;
+    expect(castReferences).toEqual([
+      { path: '/mock/images/lead.png', label: 'Lead' },
+      { path: expect.stringMatching(/^\/mock\/uploads\/video-reference-/), label: 'first' },
+      { path: expect.stringMatching(/^\/mock\/uploads\/video-reference-/), label: 'second' },
+    ]);
+    expect(uploadedTempPaths).toEqual(castReferences.slice(1).map((ref) => ref.path));
+    expect(m.copy.mock.calls.map(([from]) => from)).toEqual(['/tmp/one.png', '/tmp/two.png']);
+  });
+
   it('keeps a chained local shot renderable without adding incompatible references', async () => {
     await submitVideoGenJob(body({ backend: 'local', chunks: 2 }), {});
     expect(m.localReferences).not.toHaveBeenCalled();

@@ -193,6 +193,20 @@ describe('videoGen/grok — generateVideo', () => {
     await closeChild();
   });
 
+  it.each(['fails', 'is canceled'])('removes the staged source and every staged reference image when the render %s', async (outcome) => {
+    const paths = ['source.png', 'ref-1.png', 'ref-2.png'].map((name) => join(TEST_ROOT, name));
+    await Promise.all(paths.map((path) => writeFile(path, 'synthetic image')));
+    const [source, ...references] = paths;
+    const { jobId } = await grok.generateVideo({
+      prompt: 'a subject steps into view', sourceImagePath: source, uploadedTempPath: source, uploadedTempPaths: references,
+      castReferences: [{ path: references[0], label: 'First — front' }, { path: references[1], label: 'Second' }],
+    });
+    expect(posixPath(promptOf())).toContain('reference_to_video');
+    if (outcome === 'is canceled') expect(grok.cancel(jobId)).toBe(true);
+    await closeChild();
+    await vi.waitFor(() => expect(paths.map((path) => existsSync(path))).toEqual([false, false, false]));
+  });
+
   it('keeps image_to_video for a still with no cast, and for a clip with no still', async () => {
     await grok.generateVideo({ prompt: 'gentle pan', sourceImagePath: '/abs/frame.png', castReferences: [] });
     expect(promptOf()).not.toContain('reference_to_video');
