@@ -1,8 +1,14 @@
 /** Shared tool-free, prompt-bound inspection for generated reference images. */
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { RENDER_DEFECTS } from '../lib/imageRenderQuality.js';
+import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
 
 const CHECKS = ['subject', 'setting', 'empty-set', 'render-quality'];
+
+// A local Ollama vision model invented most of its render-quality failures on a
+// hand-checked 16-image set (#14795), so its verdict informs the user but must
+// never drive an automatic retake. Cloud API reviewers keep their authority.
+export const isAdvisoryVisionReviewer = isOllamaBackedProvider;
 
 export async function reviewRenderedImage({ inputs, reviewer, beforeExecute, source = 'music-video-cast-sets-inspection' }) {
   if (typeof inputs.planPrompt !== 'string' || !inputs.planPrompt.trim()) throw new Error('The exact saved image prompt is unavailable');
@@ -19,6 +25,6 @@ export async function reviewRenderedImage({ inputs, reviewer, beforeExecute, sou
     || checks.some((c) => !['pass', 'fail', 'unverified'].includes(c.status) || typeof c.note !== 'string' || !c.note.trim() || c.note.length > 500)) throw new Error('Vision returned an incomplete inspection');
   return { verdict: checks.some((c) => c.status === 'fail') ? 'mismatch' : checks.every((c) => c.status === 'pass') ? 'pass' : 'unreviewed',
     discrepancy: checks.filter((c) => c.status !== 'pass').map((c) => (c.id === 'render-quality' && c.status === 'fail' ? `Rendering defect: ${c.note}` : c.note)).join(' ').slice(0, 1500), checks,
-    providerId: reviewer.provider.id, model: result.model || reviewer.model, providerRunId: result.runId || null };
+    advisory: isAdvisoryVisionReviewer(reviewer.provider), providerId: reviewer.provider.id, model: result.model || reviewer.model, providerRunId: result.runId || null };
 }
 

@@ -23,6 +23,14 @@ describe('Cast & Sets vision transport contract', () => {
     expect(await reviewCastSetsImage({ inputs, reviewer, beforeExecute })).toMatchObject({ verdict: 'pass' });
   });
 
+  it('marks a local Ollama vision reviewer advisory and a cloud API reviewer authoritative (#14795)', async () => {
+    const local = { provider: { id: 'ollama', type: 'api', timeout: 1000 }, model: 'vision-model' };
+    runner.runPromptThroughProvider.mockResolvedValueOnce({ ...response('pass', 'fail'), provider: local.provider });
+    expect(await reviewCastSetsImage({ inputs, reviewer: local })).toMatchObject({ verdict: 'mismatch', advisory: true });
+    runner.runPromptThroughProvider.mockResolvedValueOnce(response('pass', 'fail'));
+    expect(await reviewCastSetsImage({ inputs, reviewer })).toMatchObject({ verdict: 'mismatch', advisory: false });
+  });
+
   it('asks for AI rendering defects and flags a fused object as a mismatch even when the prompt matches', async () => {
     runner.runPromptThroughProvider.mockResolvedValueOnce(response('pass', 'fail'));
     expect(await reviewCastSetsImage({ inputs, reviewer })).toMatchObject({ verdict: 'mismatch', discrepancy: 'Rendering defect: The stool is fused into the bench.' });

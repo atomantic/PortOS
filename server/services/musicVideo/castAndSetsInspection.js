@@ -71,7 +71,7 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
       publish(projectId, settled.project);
       const checks = outcome.checks || [];
       const defect = checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
-      if (project.castAndSets.productionRunId && outcome.verdict === 'mismatch'
+      if (project.castAndSets.productionRunId && outcome.verdict === 'mismatch' && !outcome.advisory
         && defect
         && ['subject', 'setting', 'empty-set'].every((checkId) => checks.some((check) => check.id === checkId && check.status === 'pass'))) {
         await retryImage({ key, inputs, inspectionId: id,

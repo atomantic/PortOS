@@ -2364,14 +2364,14 @@ describe('editing a saved Cast & Sets image', () => {
 
 describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
   const defect = 'The stool is fused into the bench.';
-  function inspectWithDefect({ persistent = false, promptMismatch = false } = {}) {
+  function inspectWithDefect({ persistent = false, promptMismatch = false, advisory = false } = {}) {
     const calls = new Map();
     service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
       await beforeExecute();
       const n = (calls.get(inputs.key) || 0) + 1;
       calls.set(inputs.key, n);
       const failed = inputs.key === 'set:lab' && (persistent || n === 1);
-      return { verdict: failed ? 'mismatch' : 'pass', discrepancy: failed ? `Rendering defect: ${defect}` : '',
+      return { verdict: failed ? 'mismatch' : 'pass', advisory, discrepancy: failed ? `Rendering defect: ${defect}` : '',
         checks: ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id,
           status: failed && (id === 'render-quality' || (promptMismatch && id === 'setting')) ? 'fail' : 'pass', note: defect })) };
     } }));
@@ -2397,6 +2397,16 @@ describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
     expect(stage.images['set:lab'].history).toContain(`${takes[0].id}.png`);
     expect(saved.productionRuns[0].usage).toEqual({ generations: count + 1, spentUsd: (count + 1) * 0.25 });
     expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin' && step.sceneId === 'set:lab').map((step) => step.status)).toEqual(['completed', 'completed']);
+  });
+
+  // Uniquely catches an auto-retake (and its generation charge) driven by an advisory local reviewer (#14795).
+  it('never retakes on a defect reported by an advisory reviewer, and keeps the verdict for the director', async () => {
+    inspectWithDefect({ persistent: true, advisory: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    const saved = await current(project.id);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(1);
+    expect(saved.castAndSets.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', advisory: true, discrepancy: `Rendering defect: ${defect}` });
   });
 
   it('parks a second defect with its evidence, and a new manual revision gets one fresh automatic retake', async () => {
