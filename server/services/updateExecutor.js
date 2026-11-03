@@ -91,6 +91,7 @@ async function launchUpdateLocked(tag, report, { forceCleanWorkspaces, peerExecu
   else delete childEnv.PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED;
   delete childEnv.PORTOS_DEFERRED_UPDATE_ID;
   delete childEnv.PORTOS_UPDATE_INTERRUPT;
+  delete childEnv.PORTOS_UPDATE_STOP_FIRST;
   delete childEnv.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
   delete childEnv.PORTOS_PEER_UPDATE_OPERATION_ID;
   delete childEnv.PORTOS_PEER_UPDATE_TARGET_SHA;

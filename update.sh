@@ -7,7 +7,7 @@ trap '' PIPE
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
-# The supervisor serializes installation; acknowledged manual updates stop work before source changes.
+# The supervisor serializes installation; manual updates stop PortOS before source changes.
 if [ -n "${PORTOS_PEER_UPDATE_OPERATION_ID:-}" ]; then
   node scripts/deferred-update.mjs --peer-enter "$PORTOS_PEER_UPDATE_OPERATION_ID"
 elif [ -z "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
@@ -236,7 +236,7 @@ log ""
 
 }
 
-if [ "${PORTOS_UPDATE_INTERRUPT:-}" = "1" ]; then
+if [ "${PORTOS_UPDATE_STOP_FIRST:-${PORTOS_UPDATE_INTERRUPT:-}}" = "1" ]; then
   stop_portos_apps
   node scripts/deferred-update.mjs --stopped "$PORTOS_DEFERRED_UPDATE_ID"
 fi
@@ -299,8 +299,8 @@ fi
 # refusal AFTER the checkout advances leaves the running (old) code over a new
 # working tree and old node_modules — any later single-process restart then
 # boots an unsupported, partly installed revision. So evaluate the target's own
-# gate from `git archive` before pulling or changing dependencies. Idle updates
-# have not stopped apps; acknowledged continuation restores them on exit.
+# gate from `git archive` before pulling or changing dependencies. Automatic updates
+# have not stopped apps; manual updates restore them on exit.
 # The package.json rides along because its `"type": "module"` is what lets the ESM gate load.
 # An unresolvable target (fetch failed, no upstream) or a target that predates
 # the gate skips this; the pull below then fails or the post-pull gate decides.
@@ -364,13 +364,13 @@ log ""
 # Runtime preflight: the pulled target owns its Node support range (it may have
 # just been raised), and npm's engines field only warns. Ask the target's own
 # gate — the same one `npm start`/`npm run setup` run — before touching dependencies.
-# Idle updates have not stopped apps; acknowledged continuation restores them
+# Automatic updates have not stopped apps; manual updates restore them
 # on failure. The pre-check above already refused an unsupported runtime before
 # HEAD moved, so this is the second line of defence.
 step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
 if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
   log "$node_gate_output"
-  # Idle updates leave apps up; acknowledged continuation restores them on exit.
+  # Automatic updates leave apps up; manual updates restore them on exit.
   # A checkout left on the rejected revision would crash-loop the next restart
   # (memory limit,
   # crash, reboot). Put the tree back; untracked files are the

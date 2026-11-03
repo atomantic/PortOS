@@ -10,7 +10,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../se
 import { createMaintenanceAdmission } from '../../server/lib/maintenanceAdmission.js';
 import { createMaintenanceJournal } from '../../server/lib/maintenanceJournal.js';
 import { assertNoScopedLegacyProcesses } from '../../server/services/maintenanceScopedProcesses.js';
-import { runDeferredUpdate } from '../deferred-update.mjs';
+import { runDeferredUpdate, settleInterruptedUpdate } from '../deferred-update.mjs';
 import { createUpdateReservationRecovery } from './updateReservationRecovery.mjs';
 import { continueManualUpdateRecovery } from './manualUpdateRecovery.mjs';
 
@@ -56,6 +56,7 @@ async function fixture({ stale = true, authenticated = false } = {}) {
     }
     let value;
     if (req.method === 'DELETE' && req.url.startsWith('/api/auth/sessions/')) {
+      if (state.refuseRevoke) { res.statusCode = 503; return res.end('{"error":"Unavailable"}'); }
       await (state.revokeSession ?? revoke)(req.url.split('/').at(-1));
       value = { success: true };
     } else if (req.url === '/api/system/maintenance') {
@@ -108,10 +109,9 @@ describe('fresh updater recovery against a running server', () => {
     expect(f.revoke).toHaveBeenCalledOnce();
   });
 
-  it.each(['unknown legacy', 'confirmed active'])('offers a private-attempt browser confirmation for %s activity', async activity => {
+  it('offers a private-attempt browser confirmation for positively observed work', async () => {
     const f = await fixture({ stale: false });
-    if (activity === 'unknown legacy') delete f.state.activity.llm.directCallsTracked;
-    else f.state.activity.agents.active = 1;
+    f.state.activity.observedWork = { renders: [{ kind: 'image', noun: 'image render' }] };
     writeFileSync(join(f.root, 'package.json'), JSON.stringify({ version: '0.0.0', type: 'module' }));
     mkdirSync(join(f.root, 'client', 'dist'), { recursive: true });
     writeFileSync(join(f.root, 'client', 'dist', 'index.html'), 'Old UI');
@@ -123,7 +123,7 @@ describe('fresh updater recovery against a running server', () => {
     const launch = vi.fn(); const emit = vi.fn();
     try {
       await expect(runDeferredUpdate({ admission: f.gate, cwd: f.root, policy: 'manual', launch,
-        recoverReservations: () => f.recovery.run(), legacyRunning: async () => false,
+        observeWork: operation => f.recovery.observeManualWork(operation), legacyRunning: async () => false,
         wait: async () => { f.state.clock += 1000; }, confirmInterruption: async () => false, emit }))
         .rejects.toMatchObject({ code: 'UPDATE_INTERRUPTION_REQUIRED' });
     } finally { vi.unstubAllEnvs(); }
@@ -149,6 +149,56 @@ describe('fresh updater recovery against a running server', () => {
     writeFileSync(resultPath, JSON.stringify({ ...result, id: randomUUID() }));
     await expect(continueManualUpdateRecovery({ id, root: f.root, directory: f.gate.directory, launch: continued })).rejects.toThrow('newer update attempt');
     expect(continued).toHaveBeenCalledOnce();
+  });
+
+  it.each(['old API', 'unavailable API', 'temporary cleanup failure'])('updates without a prompt for lost records and %s', async mode => {
+    const f = await fixture({ authenticated: mode === 'temporary cleanup failure' });
+    f.state.refuseRevoke = mode === 'temporary cleanup failure';
+    delete f.state.activity.llm.directCallsTracked;
+    f.state.activity.agents.active = 3;
+    f.state.activity.jobs = [{ id: 'lost-job', status: 'running' }];
+    f.state.activity.mind.thinking = true;
+    const recovery = mode !== 'unavailable API' ? f.recovery : await createUpdateReservationRecovery({ ...f.options,
+      fetcher: async () => { throw new Error('Unavailable'); } });
+    cleanups.push(() => recovery.close());
+    const factory = mode === 'temporary cleanup failure'
+      ? vi.spyOn(await import('./updateReservationRecovery.mjs'), 'createUpdateReservationRecovery').mockResolvedValue(recovery) : null;
+    const confirmInterruption = vi.fn(async () => false);
+    const launch = (_command, _args, options) => {
+      const child = new EventEmitter(); child.pid = 4321;
+      const id = options.env.PORTOS_DEFERRED_UPDATE_ID;
+      expect(options.env.PORTOS_UPDATE_INTERRUPT).toBeUndefined();
+      expect(options.env.PORTOS_UPDATE_STOP_FIRST).toBe('1');
+      f.state.refuseRevoke = false;
+      f.gate.deferredUpdate.enter(id, child.pid);
+      setImmediate(async () => {
+        await settleInterruptedUpdate(id, { admission: f.gate, cwd: f.root, snapshot: async () => [], probeCwds: async () => new Map(), listeners: async () => [] });
+        f.gate.deferredUpdate.terminal(id, child.pid, true); child.emit('close', 0);
+      });
+      return child;
+    };
+    try {
+      await expect(runDeferredUpdate({ admission: f.gate, cwd: f.root, policy: 'manual', launch, confirmInterruption,
+        ...(factory ? {} : { observeWork: operation => recovery.observeManualWork(operation) }),
+        legacyRunning: async () => false, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
+    } finally { factory?.mockRestore(); f.state.refuseRevoke = false; }
+    expect(confirmInterruption).not.toHaveBeenCalled(); expect(f.gate.operations()).toEqual([]);
+    if (mode === 'temporary cleanup failure') { expect(f.mintSession).toHaveBeenCalledOnce(); expect(f.revoke).toHaveBeenCalledOnce(); }
+  });
+
+  it('observes real work on authenticated installs without an agent key, minting only one temporary session', async () => {
+    const f = await fixture({ authenticated: true });
+    f.state.activity.observedWork = { llm: { active: 1 } };
+    await expect(f.recovery.observeManualWork(f.update)).resolves.toEqual([{ kind: 'llm-running', label: '1 LLM run running', count: 1 }]);
+    expect(f.mintSession).toHaveBeenCalledOnce();
+    await f.recovery.close(); expect(f.revoke).toHaveBeenCalledOnce();
+  });
+
+  it('does not discard a fresh live runner when the server observation missed it', async () => {
+    const f = await fixture();
+    f.state.activity.observedWork = { agents: { active: 0 } };
+    f.state.runnerAgents = [{ id: 'running-agent', processActive: true }];
+    await expect(f.recovery.observeManualWork(f.update)).resolves.toEqual([{ kind: 'agents-running', label: '1 CoS agent running', count: 1 }]);
   });
 
   it('keeps an unfinished app-update handoff blocking, including during the retry cooldown', async () => {

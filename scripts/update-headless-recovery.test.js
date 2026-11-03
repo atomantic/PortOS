@@ -159,7 +159,7 @@ if (${stallDelete} && args.startsWith('delete')) {
 
 // The three runs share no state, so they go out concurrently rather than
 // serializing three full update scripts.
-function runUpdate(sandbox, { onStart } = {}) {
+function runUpdate(sandbox, { onStart, automatic = false } = {}) {
   return new Promise((resolve) => {
     const env = { ...process.env, PORTOS_DATA_ROOT: sandbox.repo, PATH: `${sandbox.bin}:${process.env.PATH}` };
     if (sandbox.forceClean) env.PORTOS_FORCE_CLEAN_WORKSPACES = '.';
@@ -168,7 +168,7 @@ function runUpdate(sandbox, { onStart } = {}) {
       env.PORTOS_PEER_UPDATE_TARGET_SHA = sandbox.aheadSha;
       env.PORTOS_PEER_UPDATE_EXPECTED_SHA = sandbox.headSha;
     }
-    const child = spawn('bash', [join(sandbox.repo, 'update.sh')], { cwd: sandbox.repo, env });
+    const child = spawn('bash', [join(sandbox.repo, 'update.sh'), ...(automatic ? ['--automatic'] : [])], { cwd: sandbox.repo, env });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stdout += d; });
@@ -206,6 +206,7 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       unhealthy: { healthy: false },
       // A target whose Node requirement the installed runtime no longer meets.
       oldNode: { nodeVersion: '22.12.0' },
+      manualOldNode: { nodeVersion: '22.12.0' },
       // Same, with a pull pending: the refusal must come before HEAD moves, on
       // both the upstream and the peer-target (ff-only merge) paths.
       oldNodeAhead: { nodeVersion: '22.12.0', origin: true, originAhead: true },
@@ -222,7 +223,8 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
       sandboxes[name] = await makeSandbox(options);
     }));
     await Promise.all(Object.keys(cases).map(async (name) => {
-      results[name] = await runUpdate(sandboxes[name]);
+      const automatic = ['preDelete', 'oldNode', 'oldNodeAhead', 'oldNodePeer', 'postPullRefusal'].includes(name);
+      results[name] = await runUpdate(sandboxes[name], { automatic });
     }));
   }, 180000);
 
@@ -295,7 +297,7 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     }
   }, 120000);
 
-  it('refuses an unsupported Node runtime before stopping apps or installing', () => {
+  it('refuses an unsupported Node runtime before stopping apps or installing on an automatic update', () => {
     const { status, stdout } = results.oldNode;
     expect(status).toBe(1);
     expect(stdout).toContain('STEP:runtime-preflight:failed:');
@@ -303,6 +305,16 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(stdout).not.toContain('STEP:pm2-stop:');
     expect(stdout).not.toContain('STEP:npm-install:');
     expect(pm2Calls(sandboxes.oldNode)).toEqual([]);
+  });
+
+  it('restarts the gracefully stopped services when a manual update refuses the target runtime', () => {
+    const { status, stdout } = results.manualOldNode;
+    const calls = pm2Calls(sandboxes.manualOldNode);
+    expect(status).toBe(1);
+    expect(stdout.indexOf('STEP:pm2-stop:running:')).toBeLessThan(stdout.indexOf('STEP:runtime-preflight:failed:'));
+    expect(stdout).not.toContain('STEP:npm-install:');
+    expect(stdout).toContain('STEP:restart:warning:');
+    expect(calls.filter(c => c.startsWith('start ecosystem.config.cjs'))).toHaveLength(1);
   });
 
   it.each(['oldNodeAhead', 'oldNodePeer'])('refuses an unsupported runtime before the checkout moves (%s)', (name) => {
@@ -355,10 +367,10 @@ describe.skipIf(process.platform === 'win32' || SKIP_HEAVY_INTEGRATION)('update.
     expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(aheadSha);
   });
 
-  it('passes the runtime preflight on a supported runtime without changing the flow', () => {
+  it('checks the target runtime after gracefully stopping services for a manual update', () => {
     expect(results.clean.stdout).toContain('STEP:runtime-preflight:done:');
     expect(results.clean.stdout.indexOf('STEP:runtime-preflight:done:'))
-      .toBeLessThan(results.clean.stdout.indexOf('STEP:pm2-stop:running:'));
+      .toBeGreaterThan(results.clean.stdout.indexOf('STEP:pm2-stop:running:'));
   });
 
   it('does not touch PM2 when the update aborts before the delete', () => {

@@ -72,6 +72,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
     await writeFile(join(PATHS.root, 'update.sh'), `${header}\ntouch consent-applied\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
     const admission = createMaintenanceAdmission(PATHS.data);
     const render = admission.admit('render:example', 'project-example');
+    await writeFile(join(PATHS.root, 'observed-running-work'), 'render');
     try {
       const initial = await launchUpdate('v0.0.0', vi.fn(), { admission, monitorIntervalMs: 50 });
       expect(initial.started).toBe(true);
@@ -81,7 +82,7 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
       const continued = await launchUpdate('v0.0.0', vi.fn(), { admission, acknowledgeInterruption: true, monitorIntervalMs: 50 });
       await expect(continued.completion).resolves.toMatchObject({ success: true });
       expect(existsSync(join(PATHS.root, 'consent-applied'))).toBe(true);
-    } finally { await render.finish(); }
+    } finally { await render.finish(); await (await import('node:fs/promises')).unlink(join(PATHS.root, 'observed-running-work')); }
   });
   it('replaces a prior waiting owner, refuses duplicate reuse, and waits for a racing render to save', async () => {
     installUpdateTestSupervisor(PATHS.root);

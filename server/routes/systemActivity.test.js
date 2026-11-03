@@ -4,8 +4,10 @@ import { request } from '../lib/testHelper.js';
 
 const deps = vi.hoisted(() => ({ loaded: vi.fn(), loadedError: vi.fn(), runs: vi.fn(), count: vi.fn() }));
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: async () => ({ status: 'absent', gpus: [] }) }));
-vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => [], getRunningJob: () => null }));
-vi.mock('../services/imageTo3d/models.js', () => ({ listGeneratingModelSummaries: async () => [] }));
+vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => [], getRunningJob: () => null, getQueueCapacity: () => ({ byKind: {} }) }));
+vi.mock('../services/imageTo3d/models.js', () => ({ listGeneratingModelSummaries: async () => [], getActiveModelOperationCount: () => 0 }));
+vi.mock('../services/persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: () => false }));
+vi.mock('../services/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => [] }));
 vi.mock('../services/ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: deps.loadedError }));
 vi.mock('../services/cos.js', () => ({}));
 vi.mock('../services/cosTaskStore.js', () => ({ getPendingTaskIds: async () => [] }));
@@ -34,6 +36,7 @@ describe('system activity routes', () => {
     const response = await request(app).get('/api/system/activity');
     expect(response.status).toBe(200);
     expect(response.body.llm).toEqual({ trusted: true, active: 1, directCallsTracked: true, runs: await deps.runs() });
+    expect(response.body.observedWork.llm.active).toBe(1);
     expect(response.body.llm.runs[0]).not.toHaveProperty('prompt');
     expect(response.body.ollama).toMatchObject({ trusted: true, models: [{ name: 'example:7b' }] });
     expect(response.body.activity.idle).toBe(false);

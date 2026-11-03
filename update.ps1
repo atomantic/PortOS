@@ -301,7 +301,7 @@ Write-SafeHost ""
 
 }
 
-if ($env:PORTOS_UPDATE_INTERRUPT -eq "1") {
+if ($env:PORTOS_UPDATE_STOP_FIRST -eq "1" -or $env:PORTOS_UPDATE_INTERRUPT -eq "1") {
     Stop-PortosApps
     & node scripts/deferred-update.mjs --stopped $env:PORTOS_DEFERRED_UPDATE_ID
     if ($LASTEXITCODE -ne 0) { Stop-UpdateScript 1 }
@@ -380,8 +380,8 @@ if (-not (Repair-StaleSubmodules)) {
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
 # Runtime pre-check (see update.sh): evaluate the TARGET revision's own Node gate
-# from `git archive` before pulling or changing dependencies. Idle updates have
-# not stopped apps; acknowledged continuation restores them on exit.
+# from `git archive` before pulling or changing dependencies. Automatic updates have
+# not stopped apps; manual updates restore them on exit.
 # package.json rides along for its "type": "module".
 # An unresolvable target or one that predates the gate skips this check.
 if ($env:PORTOS_PEER_UPDATE_TARGET_SHA) {
@@ -461,7 +461,7 @@ Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
 # Runtime preflight (see update.sh): run the pulled target's own Node gate before
-# dependency changes; idle updates have not stopped apps. The pre-check above
+# dependency changes; automatic updates have not stopped apps. The pre-check above
 # already refused an unsupported runtime before HEAD moved; this is the second
 # line of defence.
 Step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
@@ -469,8 +469,8 @@ if (Test-Path "scripts/checkNodeVersion.js") {
     $nodeGateOutput = (node scripts/checkNodeVersion.js 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
         Write-SafeHost $nodeGateOutput
-        # Roll the checkout back (see update.sh). Idle updates leave apps up;
-        # acknowledged continuation restores them on exit. Leaving the rejected
+        # Roll the checkout back (see update.sh). Automatic updates leave apps up;
+        # manual updates restore them on exit. Leaving the rejected
         # tree would crash-loop the next restart.
         # Untracked files are the user's, so nothing is cleaned.
         $rolledBack = $false

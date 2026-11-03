@@ -9,7 +9,7 @@ import { assertUpdateImageSafety } from '../server/lib/updateImageGuard.js';
 import { createMaintenanceJournal, maintenanceError, syncMaintenanceDirectory } from '../server/lib/maintenanceJournal.js';
 import { createDeferredUpdateAdmission, processAbsent, reconcileReusedLaunch } from '../server/lib/maintenanceDeferredUpdate.js';
 import * as fs from 'node:fs';
-import { legacyLauncherGroups, legacyProcessCwds, observedDatabaseRestoreProcess, observedLegacyUpdate, observedLocalMediaProcesses, portosServiceListeners, snapshotLegacyProcesses } from './lib/legacyUpdateActivity.mjs';
+import { legacyLauncherGroups, legacyProcessCwds, observedDatabaseRestoreProcess, observedLegacyUpdate, observedLocalMediaProcesses, snapshotLegacyProcesses } from './lib/legacyUpdateActivity.mjs';
 import { isCompletedLocalClaim, isEmptyLegacyMediaJob, remoteMediaRecoveryPending } from '../server/lib/mediaRecoveryActivity.js';
 import { parseCommandArgs } from '../server/lib/commandSecurity.js';
 import { offerManualUpdateRecovery } from './lib/manualUpdateRecovery.mjs';
@@ -86,7 +86,7 @@ export function legacyHeavyClaimPending(admission, processes, absent = processAb
 export async function runDeferredUpdate({ admission = maintenance, launch = spawn, cwd = root,
   platform = process.platform, wait = () => delay(1000), absent = processAbsent, launchId = process.env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID,
   legacySnapshot = snapshotLegacyProcesses, legacyCwds = legacyProcessCwds, legacyGroups = legacyLauncherGroups,
-  signal, emit = message => console.log(message), legacyRunning, recoverReservations, policy = 'automatic',
+  signal, emit = message => console.log(message), legacyRunning, recoverReservations, observeWork, policy = 'automatic',
   confirmInterruption = async () => {
     if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
     const input = createInterface({ input: process.stdin, output: process.stdout });
@@ -96,12 +96,13 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   if (!['automatic', 'manual', 'interrupt'].includes(policy)) throw new Error('Invalid update policy');
   let reportedLegacyLimit = false;
   const heavyObservation = {};
+  let manualLegacyWork = false;
   const checkLegacy = legacyRunning ?? (async () => {
     const control = join(admission.directory, '..', 'update-detached');
-    const raw = (await readControl(join(control, 'pid'))).trim();
-    const pid = raw ? Number(raw) : null;
-    if (raw && (!Number.isSafeInteger(pid) || pid <= 0)) throw new Error('Invalid prior updater process identity');
-    const priorAt = raw ? (await fs.promises.stat(join(control, 'pid'))).mtimeMs : null;
+    const raw = (await readControl(join(control, 'pid')).catch(() => '')).trim();
+    const candidate = Number(raw);
+    const pid = raw && Number.isSafeInteger(candidate) && candidate > 0 ? candidate : null;
+    const priorAt = pid ? await fs.promises.stat(join(control, 'pid')).then(stat => stat.mtimeMs, () => null) : null;
     // The old control file is history. Only a currently observed updater or
     // update child keeps it blocking; the file is retained without a success claim.
     let groupInspectionUnavailable = false;
@@ -112,12 +113,21 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     const rows = await legacySnapshot(platform);
     const observed = await observedLegacyUpdate({ root: cwd, priorPid: pid, priorAt, groups, platform,
       snapshot: async () => rows, probeCwds: legacyCwds });
-    if (policy === 'interrupt') return observed.running || observedDatabaseRestoreProcess(rows);
+    const exclusive = observed.running || observedDatabaseRestoreProcess(rows);
+    if (exclusive && (observed.limitations.length || groupInspectionUnavailable) && !reportedLegacyLimit) {
+      reportedLegacyLimit = true;
+      emit('STEP:waiting:running:Some legacy work could not be inspected fully');
+    }
+    if (exclusive || policy === 'interrupt') return exclusive;
     const localMedia = await observedLocalMediaProcesses(rows, savedMediaJobs(admission), resolve(admission.directory, '..'),
       { platform, probeCwds: legacyCwds });
     if ((observed.limitations.length || localMedia.limitations.length || groupInspectionUnavailable) && !reportedLegacyLimit) {
       reportedLegacyLimit = true;
       emit('STEP:waiting:running:Some legacy work could not be inspected fully');
+    }
+    if (policy === 'manual') {
+      manualLegacyWork = localMedia.running;
+      return observed.running || observedDatabaseRestoreProcess(rows);
     }
     return observed.running || localMedia.running || observedDatabaseRestoreProcess(rows);
   });
@@ -133,11 +143,33 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     const transferred = handoff ? JSON.parse(handoff) : null;
     const waitingTakeover = transferred?.successorId === operation.id && transferred.previous?.phase === 'waiting'
       && transferred.previous.childPid === null && transferred.previous.holdId === null;
-    emit(`STEP:waiting:running:${policy === 'interrupt' ? 'Manual continuation: work may be interrupted during shutdown' : 'Waiting for admitted work to finish saving and cleanup'}`);
+    emit(`STEP:waiting:running:${policy === 'interrupt' ? 'Manual continuation: work may be interrupted during shutdown' : policy === 'manual' ? 'Checking current running work' : 'Waiting for admitted work to finish saving and cleanup'}`);
+    const observedWork = async () => {
+      try {
+        if (observeWork) return await observeWork(operation);
+        recovery ??= await import('./lib/updateReservationRecovery.mjs').then(module => module.createUpdateReservationRecovery({
+          directory: admission.directory, root: cwd, signal,
+        }));
+        return await recovery.observeManualWork(operation);
+      } catch { signal?.throwIfAborted(); return []; }
+    };
+    const requestInterruption = async blockers => {
+      emit(`STEP:waiting:warning:${blockers.map(blocker => blocker.label).join(', ')}. Updating restarts PortOS and Chrome; active work may be interrupted.`);
+      if (await confirmInterruption()) { policy = 'interrupt'; return; }
+      const page = await offerManualUpdateRecovery({ root: cwd, directory: admission.directory, id: operation.id }).catch(() => null);
+      if (page) emit(`STEP:waiting:warning:Open ${page} in this PortOS instance to review and explicitly continue the update in your browser.`);
+      throw Object.assign(new Error(`Running work needs interruption acknowledgment. ${page ? `Open ${page} to continue in your browser. ` : ''}Re-run update.sh/update.ps1 with --interrupt to continue, or --automatic to wait for idle.`), { code: 'UPDATE_INTERRUPTION_REQUIRED' });
+    };
+    const checkExclusiveWork = async () => {
+      manualLegacyWork = false;
+      try { return await checkLegacy(); }
+      catch (error) { signal?.throwIfAborted(); if (policy === 'automatic') throw error; return false; }
+    };
+    const legacyWork = () => manualLegacyWork ? [{ kind: 'media-worker', label: 'A media worker is running', count: 1 }] : [];
     for (;;) {
       signal?.throwIfAborted();
       let recoveryBlocked = false;
-      if (policy !== 'interrupt' && (admission === maintenance || recoverReservations)) {
+      if (policy === 'automatic' && (admission === maintenance || recoverReservations)) {
         try {
           if (recoverReservations) await recoverReservations();
           else {
@@ -156,11 +188,20 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
           }
         }
       }
-      const externalWorkPending = recoveryBlocked || await checkLegacy();
+      const externalWorkPending = recoveryBlocked || await checkExclusiveWork();
+      if (policy === 'manual') {
+        const blockers = [...await observedWork(), ...legacyWork()];
+        if (blockers.length) {
+          if (++manualChecks < 6) { await wait(); continue; }
+          await requestInterruption(blockers);
+          continue;
+        }
+      }
+      const stopFirst = policy !== 'automatic';
       const heavyPath = join(admission.directory, '..', 'heavy-local-job.claim.json');
-      const processes = fs.existsSync(heavyPath) ? await legacySnapshot(platform) : [];
+      const processes = !stopFirst && fs.existsSync(heavyPath) ? await legacySnapshot(platform) : [];
       const acquired = admission.deferredUpdate.acquire(operation.id, {
-        externalWorkPending, interrupt: policy === 'interrupt', checkExternal: () => {
+        externalWorkPending, interrupt: policy === 'interrupt', stopFirst, checkExternal: () => {
           try {
             const dbRecovery = join(admission.directory, '..', 'database-restore-recovery.json');
             const dbMaintenance = join(admission.directory, '..', 'database-maintenance');
@@ -169,27 +210,21 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
             let databasePending;
             try { fs.lstatSync(dbRecovery); databasePending = true; }
             catch (error) { if (error.code !== 'ENOENT') throw error; databasePending = false; }
-            if (databasePending && policy === 'interrupt') throw maintenanceError('MAINTENANCE_HELD', 'Database restore recovery must finish before updating.');
-            return databasePending || (policy !== 'interrupt' && (savedMediaPending(admission) || legacyHeavyClaimPending(admission, processes, absent, heavyObservation, emit)));
+            if (databasePending && stopFirst) throw maintenanceError('MAINTENANCE_HELD', 'Database restore recovery must finish before updating.');
+            return databasePending || (!stopFirst && (savedMediaPending(admission) || legacyHeavyClaimPending(admission, processes, absent, heavyObservation, emit)));
           }
           catch (error) { if (error.code === 'MAINTENANCE_HELD') throw error; throw maintenanceError('MAINTENANCE_STALE', 'Saved work inventory could not be inspected.'); }
         },
       });
-      if (acquired) break;
-      if (policy === 'manual') {
-        // Let the API finish binding its self-update handoff before deciding
-        // whether this manual launch needs an interruption acknowledgment.
-        if (++manualChecks < 6) { await wait(); continue; }
-        emit('STEP:waiting:warning:Work is active or activity is unavailable. Updating restarts PortOS and Chrome; active agents, renders and provider calls may fail or lose unsaved progress.');
-        if (await confirmInterruption()) { policy = 'interrupt'; continue; }
-        const page = await offerManualUpdateRecovery({ root: cwd, directory: admission.directory, id: operation.id }).catch(() => null);
-        if (page) emit(`STEP:waiting:warning:Open ${page} in this PortOS instance to review and explicitly continue the update in your browser.`);
-        throw Object.assign(new Error(`Manual update needs acknowledgment. ${page ? `Open ${page} in this PortOS instance to continue in your browser. ` : ''}Re-run update.sh/update.ps1 with --interrupt to continue, or --automatic to wait for idle.`), { code: 'UPDATE_INTERRUPTION_REQUIRED' });
+      if (acquired) {
+        if (stopFirst && await checkExclusiveWork()) throw maintenanceError('MAINTENANCE_HELD', 'Another installer or database restore is still running; no update was started.');
+        if (policy === 'manual') {
+          const raced = [...await observedWork(), ...legacyWork()];
+          if (raced.length) await requestInterruption(raced);
+        }
+        break;
       }
-      if (policy === 'interrupt') {
-        // The previous childless supervisor may still be finishing an activity
-        // read. Let it observe the transferred ownership and exit; actual
-        // installer processes remain protected by the unchanged inspection.
+      if (stopFirst) {
         if (waitingTakeover && ++takeoverChecks <= 30) { await wait(); continue; }
         throw maintenanceError('MAINTENANCE_HELD', 'Another installer or database restore is still running; no update was started.');
       }
@@ -197,12 +232,14 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
       await wait();
     }
     signal?.throwIfAborted();
-    await recovery?.close();
-    recovery = null;
-    emit(`STEP:waiting:done:${policy === 'interrupt' ? 'Manual continuation acknowledged; closing intake and stopping PortOS before changing the checkout' : 'Install idle; update admission acquired'}`);
+    try { await recovery?.close(); recovery = null; }
+    catch (error) { if (policy === 'automatic') throw error; }
+    emit(`STEP:waiting:done:${policy === 'automatic' ? 'Install idle; update admission acquired' : 'Closing intake and stopping PortOS before changing the checkout'}`);
     const windows = platform === 'win32';
     const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(cwd, 'update.ps1')] : [join(cwd, 'update.sh')];
     const env = { ...process.env, PORTOS_DEFERRED_UPDATE_ID: operation.id };
+    if (policy !== 'automatic') env.PORTOS_UPDATE_STOP_FIRST = '1';
+    else delete env.PORTOS_UPDATE_STOP_FIRST;
     if (policy === 'interrupt') env.PORTOS_UPDATE_INTERRUPT = '1';
     else delete env.PORTOS_UPDATE_INTERRUPT;
     delete env.PORTOS_DEFERRED_UPDATE_LAUNCH_ID;
@@ -236,7 +273,11 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
     if (!childStarted || err.code === 'ENOENT' || err.code === 'EACCES') admission.deferredUpdate.finish(operation.id, false, { errorCode: err.code });
     throw err;
   } finally {
-    await recovery?.close();
+    try { await recovery?.close(); }
+    catch (error) {
+      if (policy === 'automatic') throw error;
+      emit('STEP:cleanup:warning:Temporary activity session cleanup could not be verified');
+    }
   }
 }
 
@@ -246,19 +287,18 @@ export function enterUpdate(id, childPid, admission = maintenance) {
   admission.deferredUpdate.enter(id, childPid);
 }
 
-export async function settleInterruptedUpdate(id, { admission = maintenance, cwd = root, snapshot = snapshotLegacyProcesses, probeCwds = legacyProcessCwds,
-  listeners = portosServiceListeners, platform = process.platform } = {}) {
+export async function settleInterruptedUpdate(id, { admission = maintenance, cwd = root, snapshot = snapshotLegacyProcesses, probeCwds = legacyProcessCwds } = {}) {
   for (const name of ['database-maintenance', 'database-restore-recovery.json']) {
     try { fs.lstatSync(join(admission.directory, '..', name)); throw new Error('Database restore or cutover is active; no reservations were retired.'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  const rows = await snapshot();
-  if (!Array.isArray(rows) || !rows.some(row => row.pid === process.pid)) throw new Error('The post-shutdown process snapshot is unavailable; no reservations were retired.');
+  const rows = await Promise.resolve().then(snapshot).catch(() => []);
+  const inspected = Array.isArray(rows) ? rows : [];
   const services = ['server/start.js', 'server/index.js', 'server/cos-runner/index.js', 'browser/server.js', 'autofixer/server.js', 'autofixer/ui.js'];
-  const alive = rows.filter(row => !String(row.state ?? '').startsWith('Z'));
+  const alive = inspected.filter(row => !String(row.state ?? '').startsWith('Z'));
   const nodes = alive.map(row => ({ row, args: parseCommandArgs(String(row.command ?? '')) }))
     .filter(({ args }) => /^node(?:js|\.exe)?$/i.test(basename((args[0] ?? '').replaceAll('\\', '/'))));
-  const cwds = await probeCwds(nodes.map(({ row }) => row.pid));
+  const cwds = await Promise.resolve().then(() => probeCwds(nodes.map(({ row }) => row.pid))).catch(() => new Map());
   const canonical = path => { try { return fs.realpathSync(path); } catch { return resolve(path); } };
   const servicePaths = services.map(path => canonical(join(cwd, path)));
   const survivor = nodes.find(({ row, args }) => {
@@ -266,25 +306,14 @@ export async function settleInterruptedUpdate(id, { admission = maintenance, cwd
     return script && (isAbsolute(script) || cwds.has(row.pid)) && servicePaths.includes(canonical(isAbsolute(script) ? script : resolve(cwds.get(row.pid), script)));
   });
   if (survivor) throw new Error(`PortOS runtime PID ${survivor.row.pid} is still running outside the stopped PM2 apps. Stop that runtime, then retry the update; the checkout has not changed.`);
-  if (observedDatabaseRestoreProcess(rows)) throw new Error('A database restore process is still running; update stopped.');
+  if (observedDatabaseRestoreProcess(inspected)) throw new Error('A database restore process is still running; update stopped.');
   const state = createMaintenanceJournal(resolve(admission.directory, '..')).readForStatus();
-  const uncertainNodes = nodes.filter(({ row }) => !cwds.has(row.pid) && row.pid !== process.pid);
-  if (uncertainNodes.length) {
-    let bound;
-    try { bound = await listeners(cwd, { platform }); }
-    catch { throw new Error('Service listener ownership could not be inspected after shutdown. No reservations were retired; verify PortOS has stopped before retrying.'); }
-    const surviving = uncertainNodes.find(({ row }) => bound.some(listener => listener.pid === row.pid)
-      || state.operations.some(op => op.id !== id && op.pid === row.pid && (!Number.isFinite(row.startedAt) || row.startedAt <= Date.parse(op.startedAt) + 2000)));
-    if (surviving) {
-      const port = bound.find(listener => listener.pid === surviving.row.pid)?.port;
-      throw new Error(`PortOS runtime PID ${surviving.row.pid}${port ? ` still owns service port ${port}` : ' still owns admitted work'}. Stop that runtime, then retry; the checkout has not changed.`);
-    }
-  }
   const preserveIds = state.operations.filter(op => op.id !== id && alive.some(row =>
-    (row.pid === op.pid && (!Number.isFinite(row.startedAt) || row.startedAt <= Date.parse(op.startedAt) + 2000))
-    || (/^(?:agent-|mv-|[a-f0-9-]{30,})/i.test(op.resource) && String(row.command ?? '').includes(op.resource))))
+    (/^(?:agent-|mv-|[a-f0-9-]{30,})/i.test(op.resource) && String(row.command ?? '').includes(op.resource))
+    || (row.pid === op.pid && Number.isFinite(row.startedAt) && Math.abs(row.startedAt - Date.parse(op.startedAt)) <= 10000
+      && /(?:^|[\s/\\])(?:ffmpeg|python[0-9.]*)(?:[\s]|$)/i.test(String(row.command ?? '')))))
     .map(op => op.id);
-  admission.deferredUpdate.settleInterrupted(id, { preserveIds });
+  return admission.deferredUpdate.settleInterrupted(id, { preserveIds });
 }
 
 async function enterPeerUpdate(id) {

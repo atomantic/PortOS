@@ -67,7 +67,7 @@ async function startUpdate(...args) {
 // process.platform.
 let restorePlatform = () => {};
 
-afterEach(() => restorePlatform());
+afterEach(() => { restorePlatform(); vi.unstubAllEnvs(); });
 
 beforeEach(() => {
   restorePlatform = pinPlatform('linux');
@@ -258,6 +258,8 @@ describe('executeUpdate', () => {
   // before it could run the final `pm2 start`. POSIX must launch through
   // spawnDetached's double-fork (reparent to init) instead.
   it('launches via spawnDetached with a control dir on POSIX', async () => {
+    vi.stubEnv('PORTOS_UPDATE_STOP_FIRST', '1');
+    vi.stubEnv('PORTOS_UPDATE_INTERRUPT', '1');
     const child = createMockChild();
     spawnDetached.mockResolvedValue(child);
 
@@ -267,6 +269,9 @@ describe('executeUpdate', () => {
     emitStep(child);
     child.emit('close', 0);
     await promise;
+
+    expect(spawnDetached.mock.calls[0][2].env).not.toHaveProperty('PORTOS_UPDATE_STOP_FIRST');
+    expect(spawnDetached.mock.calls[0][2].env).not.toHaveProperty('PORTOS_UPDATE_INTERRUPT');
 
     expect(isDetachedRunning).toHaveBeenCalledWith(
       expect.stringContaining('update-detached'),
