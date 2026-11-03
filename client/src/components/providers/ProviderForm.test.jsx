@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { request } from '../../services/apiCore.js';
 
@@ -152,6 +153,148 @@ describe('ProviderForm', () => {
     switchTab('Connection');
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({ ultraModel: 'frontier-model' })));
+  });
+
+  it.each(['cli', 'tui'])('searches and saves a listed default model for a %s preset', async (type) => {
+    const user = userEvent.setup();
+    renderForm({ provider: {
+      id: `example-${type}`, name: 'Example', type, command: 'example',
+      models: ['vendor/alpha', 'vendor/beta', 'vendor/gamma'], defaultModel: 'vendor/alpha',
+    } });
+    switchTab('Models');
+    const model = screen.getByRole('combobox', { name: 'Default Model' });
+    expect(model).toHaveValue('vendor/alpha');
+    await user.click(model);
+    await user.clear(model);
+    await user.type(model, 'BETA');
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(1);
+    expect(model).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name: 'vendor/beta' }).id);
+    await user.keyboard('{Enter}');
+    expect(model).toHaveValue('vendor/beta');
+    expect(model).toHaveAttribute('aria-expanded', 'false');
+    // The input stays focused after selection. Reopening it must reactivate
+    // the selected model rather than the empty "None" option.
+    await user.click(model);
+    expect(model).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name: 'vendor/beta' }).id);
+    await user.keyboard('{Enter}');
+    expect(model).toHaveValue('vendor/beta');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith(`example-${type}`, expect.objectContaining({ defaultModel: 'vendor/beta' })));
+  });
+
+  it('keeps the chosen model when a search is cancelled or has no match', async () => {
+    const user = userEvent.setup();
+    renderForm({ provider: {
+      id: 'example-cli', name: 'Example', type: 'cli', command: 'example',
+      models: ['vendor/alpha', 'vendor/beta'], defaultModel: 'vendor/alpha',
+    } });
+    switchTab('Models');
+    const model = screen.getByRole('combobox', { name: 'Default Model' });
+    await user.click(model);
+    await user.clear(model);
+    await user.type(model, 'missing-model');
+    expect(screen.getByText('No matching models')).toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(api.updateProvider).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(model).toHaveValue('vendor/alpha');
+    await user.click(model);
+    await user.clear(model);
+    await user.type(model, 'not-a-selection');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-cli', expect.objectContaining({ defaultModel: 'vendor/alpha' })));
+  });
+
+  it('moves between matching models with arrow keys without submitting the form', async () => {
+    const user = userEvent.setup();
+    renderForm({ provider: {
+      id: 'example-cli', name: 'Example', type: 'cli', command: 'example',
+      models: ['vendor/alpha', 'vendor/beta', 'vendor/gamma'], defaultModel: 'vendor/alpha',
+    } });
+    switchTab('Models');
+    const model = screen.getByRole('combobox', { name: 'Default Model' });
+    await user.click(model);
+    await user.clear(model);
+    await user.type(model, 'vendor/');
+    await user.keyboard('{ArrowDown}');
+    expect(model).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name: 'vendor/beta' }).id);
+    await user.keyboard('{Enter}');
+    expect(model).toHaveValue('vendor/beta');
+    expect(api.updateProvider).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a saved model absent from the current catalog on Enter', async () => {
+    const user = userEvent.setup();
+    renderForm({ provider: {
+      id: 'example-cli', name: 'Example', type: 'cli', command: 'example',
+      models: ['vendor/current'], defaultModel: 'vendor/older',
+    } });
+    switchTab('Models');
+    const model = screen.getByRole('combobox', { name: 'Default Model' });
+    expect(model).toHaveValue('vendor/older');
+    await user.click(model);
+    expect(model).not.toHaveAttribute('aria-activedescendant');
+    await user.keyboard('{Enter}');
+    expect(model).toHaveValue('vendor/older');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-cli', expect.objectContaining({ defaultModel: 'vendor/older' })));
+  });
+
+  it('still saves custom model IDs when there is no available catalog', async () => {
+    const user = userEvent.setup();
+    const fallback = { id: 'fallback', name: 'Fallback', type: 'cli', command: 'example', models: [] };
+    renderForm({ provider: {
+      id: 'example-cli', name: 'Example', type: 'cli', command: 'example', models: [],
+      fallbackProvider: 'fallback',
+    }, allProviders: [fallback] });
+    switchTab('Models');
+    await user.type(screen.getByLabelText('Default Model'), 'custom/main');
+    await user.type(screen.getByLabelText('Fallback Model'), 'custom/backup');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-cli', expect.objectContaining({
+      defaultModel: 'custom/main', fallbackProvider: 'fallback', fallbackModel: 'custom/backup',
+    })));
+  });
+
+  it('keeps unavailable pins visible, supports inheritance and uses the selected fallback provider catalog', async () => {
+    const user = userEvent.setup();
+    const fallbackA = { id: 'fallback-a', name: 'Fallback A', type: 'cli', command: 'example', models: ['backup/one', 'backup/two'] };
+    const fallbackB = { id: 'fallback-b', name: 'Fallback B', type: 'cli', command: 'example', models: ['other/model'] };
+    renderForm({ provider: {
+      id: 'example-cli', name: 'Example', type: 'cli', command: 'example',
+      models: ['small', 'large', 'codex-configured-default'], defaultModel: 'large', lightModel: 'small',
+      modelHardwareCompatibility: { large: { state: 'unavailable' } },
+      fallbackProvider: fallbackA.id, fallbackModel: 'backup/one',
+    }, allProviders: [fallbackA, fallbackB] });
+    switchTab('Models');
+    const defaultModel = screen.getByRole('combobox', { name: 'Default Model' });
+    expect(defaultModel).toHaveValue('large (unavailable on this machine)');
+    await user.click(defaultModel);
+    const unavailable = screen.getByRole('option', { name: 'large (unavailable on this machine)' });
+    expect(unavailable).toBeDisabled();
+    expect(defaultModel).toHaveAttribute('aria-activedescendant', unavailable.id);
+    await user.keyboard('{Enter}');
+    expect(defaultModel).toHaveValue('large (unavailable on this machine)');
+    expect(defaultModel).toHaveAttribute('aria-expanded', 'true');
+    await user.click(screen.getByRole('option', { name: "Use the CLI's configured default" }));
+    const light = screen.getByRole('combobox', { name: 'Light (fast)' });
+    await user.click(light);
+    await user.click(screen.getByRole('option', { name: 'Inherit Default Model' }));
+    const fallback = screen.getByRole('combobox', { name: 'Fallback Model' });
+    await user.click(fallback);
+    await user.clear(fallback);
+    await user.type(fallback, 'two');
+    await user.click(screen.getByRole('option', { name: 'backup/two' }));
+    expect(fallback).toHaveValue('backup/two');
+    await user.selectOptions(screen.getByLabelText('Fallback Provider'), 'fallback-b');
+    expect(screen.getByRole('combobox', { name: 'Fallback Model' })).toHaveValue('');
+    await user.click(screen.getByRole('combobox', { name: 'Fallback Model' }));
+    expect(screen.getByRole('option', { name: 'other/model' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'backup/two' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-cli', expect.objectContaining({
+      defaultModel: 'codex-configured-default', lightModel: '', fallbackProvider: 'fallback-b', fallbackModel: '',
+    })));
   });
 
   it('explains the Claude credential path for a blank-command SGLang harness', () => {
@@ -347,8 +490,11 @@ describe('ProviderForm model access', () => {
     } });
     switchTab('Models');
     const select = screen.getByLabelText('Default Model');
-    expect([...select.options].map(option => option.value)).toEqual(['', 'alpha', 'Beta', 'Zulu']);
-    expect(select.value).toBe('Beta');
+    expect(select).toHaveValue('Beta');
+    fireEvent.focus(select);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map(option => option.textContent))
+      .toEqual(['None', 'alpha', 'Beta', 'Zulu']);
+    fireEvent.blur(select);
     expect(screen.getAllByRole('button').filter(button => button.hasAttribute('aria-pressed'))
       .map(button => button.textContent)).toEqual(['alpha', 'Beta', 'Zulu']);
     fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
@@ -424,9 +570,10 @@ describe('ProviderForm model access', () => {
     renderForm({ provider: scopedProvider });
     switchTab('Models');
     const defaultModelSelect = screen.getByLabelText('Default Model');
-    const optionValues = Array.from(defaultModelSelect.options).map(o => o.value);
-    expect(optionValues).toContain('meta/llama-3.3-70b-instruct');
-    expect(optionValues).not.toContain('nvidia/nemotron-4-340b-instruct');
+    fireEvent.focus(defaultModelSelect);
+    const list = within(screen.getByRole('listbox'));
+    expect(list.getByRole('option', { name: 'meta/llama-3.3-70b-instruct' })).toBeInTheDocument();
+    expect(list.queryByRole('option', { name: 'nvidia/nemotron-4-340b-instruct' })).not.toBeInTheDocument();
   });
 
   it('keeps an already-configured default model selectable even if the policy now hides it', () => {
