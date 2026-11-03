@@ -136,6 +136,29 @@ it saves the choice without running a provider; **Regenerate** renders the new
 plates before they can be approved. Capturing an image or selecting a camera
 alone never starts generation.
 
+## Render it in Blender (Photoreal tab)
+
+The Environment's **Photoreal** tab rebuilds the saved greybox parts in Blender and
+renders the cameras you tick. **EEVEE preview** takes seconds per camera on a GPU;
+**Cycles final** path traces (Metal, OptiX, CUDA, HIP or oneAPI when present,
+otherwise CPU) at a 1920-pixel long edge. Samples default per engine and the last
+choice is remembered on this device. Progress arrives live; a render keeps running
+if you leave the tab.
+
+Blender comes from **Code Animation › Production › Blender execution**: set the
+executable there and run its check first (Blender 4.2 through 5.2; 5.2.3 is the
+target). The render runs PortOS's own script with the greybox passed as data, in
+the same contained or trusted-local worker mode as Code Animation. A greybox
+showing an attached .glb is not rebuilt yet; switch its layout source to the saved
+parts.
+
+Each render attaches to the Environment as a reference image tagged for that
+camera and replaces the camera's previous render unless that one is a photo plate.
+**Use as photo plate** makes the newest render the camera's plate (see above).
+**Download .blend** gives the latest built scene, with parts grouped by zone,
+landmarks and anchors as empties, and every saved camera, ready to dress in
+Blender.
+
 ## Create or edit with AI
 
 Choose **Provider › model › effort**, or leave it at the active provider default.

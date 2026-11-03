@@ -274,6 +274,24 @@ export async function probeCodeAnimationExecution() {
   return getCodeAnimationExecution();
 }
 
+/**
+ * The checked Blender tool for PortOS-owned scripts (no project package), e.g. the
+ * Environments photoreal blockout. Same readiness gate and worker mode as a project.
+ */
+export async function resolveBlenderTool() {
+  const execution = await getCodeAnimationExecution();
+  if (!execution.lanes.blender.ready) {
+    throw new ServerError(execution.lanes.blender.reason, { status: 409, code: 'CODE_ANIMATION_BLENDER_NOT_READY' });
+  }
+  const tool = execution.tools.blender;
+  return {
+    executable: tool.executable,
+    executionMode: tool.executionMode,
+    version: execution.probe.tools.blender.version,
+    worker: tool.executionMode === 'trusted-local' ? runTrustedLocalWorker : runContainedWorker,
+  };
+}
+
 /** Resolve only saved operator authority; packages cannot select a worker mode. */
 export async function resolveBlenderExecution(renderer, expected = null) {
   const execution = await getCodeAnimationExecution();

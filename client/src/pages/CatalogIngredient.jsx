@@ -11,7 +11,7 @@ import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibra
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2 } from 'lucide-react';
+import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2, Aperture } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
@@ -56,6 +56,7 @@ import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/C
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
+import PhotorealPanel from '../components/catalog/PhotorealPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogDesignPanel from '../components/catalog/CatalogDesignPanel';
 import CharacterDetailEditor from '../components/universe/CharacterDetailEditor';
@@ -101,6 +102,7 @@ const DETAIL_TAB_ICONS = {
   looks: Shirt,
   plates: Clapperboard,
   greybox: Box,
+  photoreal: Aperture,
   references: Images,
   images: ImageIcon,
 };
@@ -1176,6 +1178,19 @@ function IngredientEditor() {
             onBusyChange={setGreyboxBusy}
             onSaved={handleGreyboxSaved}
             onCaptured={refreshMedia}
+          />
+        )}
+
+        {activeTab === 'photoreal' && mediaReady && (
+          <PhotorealPanel
+            key={record.id}
+            record={record}
+            media={media}
+            readOnly={identityReadOnly}
+            disabled={saving}
+            onBusyChange={setGreyboxBusy}
+            onSaved={handleGreyboxSaved}
+            onRendered={refreshMedia}
           />
         )}
 

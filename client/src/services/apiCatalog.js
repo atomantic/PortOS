@@ -324,6 +324,14 @@ export const saveCatalogGreybox = (id, greybox, { source, ...options } = {}) =>
 export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/capture`, { method: 'POST', body: JSON.stringify({ dataBase64 }), ...options });
 
+// Environments › Photoreal: the place's greybox built in Blender and rendered
+// from saved cameras. Status reads memory and files only; render starts Blender.
+export const getCatalogPhotoreal = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal`, options);
+
+export const startCatalogPhotorealRender = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/render`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const refineCatalogDraft = (id, body, { preview = false, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/refine${preview ? '/compose' : ''}`, { method: 'POST', body: JSON.stringify(body), ...options });
 
