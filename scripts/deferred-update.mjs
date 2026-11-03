@@ -128,7 +128,6 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   let recovery, recoveryMessage;
   let manualChecks = 0;
   let takeoverChecks = 0;
-  let legacyManualConsent = false;
   try {
     const handoff = await readControl(join(admission.directory, `update-handoff-${operation.id}.json`));
     const transferred = handoff ? JSON.parse(handoff) : null;
@@ -151,7 +150,6 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
         } catch (error) {
           signal?.throwIfAborted();
           recoveryBlocked = true;
-          legacyManualConsent ||= error.legacyManualConsent === true;
           if (error.message !== recoveryMessage) {
             recoveryMessage = error.message;
             emit(`STEP:waiting:running:Recovery is waiting: ${error.message}`);
@@ -184,8 +182,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
         if (++manualChecks < 6) { await wait(); continue; }
         emit('STEP:waiting:warning:Work is active or activity is unavailable. Updating restarts PortOS and Chrome; active agents, renders and provider calls may fail or lose unsaved progress.');
         if (await confirmInterruption()) { policy = 'interrupt'; continue; }
-        const page = legacyManualConsent ? await offerManualUpdateRecovery({ root: cwd, directory: admission.directory, id: operation.id })
-          .catch(() => null) : null;
+        const page = await offerManualUpdateRecovery({ root: cwd, directory: admission.directory, id: operation.id }).catch(() => null);
         if (page) emit(`STEP:waiting:warning:Open ${page} in this PortOS instance to review and explicitly continue the update in your browser.`);
         throw Object.assign(new Error(`Manual update needs acknowledgment. ${page ? `Open ${page} in this PortOS instance to continue in your browser. ` : ''}Re-run update.sh/update.ps1 with --interrupt to continue, or --automatic to wait for idle.`), { code: 'UPDATE_INTERRUPTION_REQUIRED' });
       }

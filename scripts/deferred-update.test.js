@@ -33,9 +33,9 @@ const completedLaunch = admission => (_command, _args, options) => {
 
 describe('deferred update admission', () => {
   it('allows the first handoff activity cache to refresh before asking an idle manual caller to interrupt', async () => {
-    const { admission } = fixture(); let clock = 0;
+    const { root, admission } = fixture(); let clock = 0;
     const confirmInterruption = vi.fn(async () => false);
-    await expect(runDeferredUpdate({ admission, policy: 'manual', launch: completedLaunch(admission),
+    await expect(runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch: completedLaunch(admission),
       recoverReservations: async () => { if (clock < 5000) throw new Error('initial handoff activity is cached'); },
       legacyRunning: async () => false, wait: async () => { clock += 1000; }, confirmInterruption, absent: () => true, emit: vi.fn() })).resolves.toBe(0);
     expect(confirmInterruption).not.toHaveBeenCalled();
@@ -117,9 +117,9 @@ describe('deferred update admission', () => {
   });
 
   it('returns an actionable manual warning instead of waiting indefinitely on unavailable activity', async () => {
-    const { admission } = fixture();
+    const { root, admission } = fixture();
     const launch = vi.fn();
-    await expect(runDeferredUpdate({ admission, policy: 'manual', launch, recoverReservations: async () => { throw new Error('unavailable'); },
+    await expect(runDeferredUpdate({ admission, cwd: root, policy: 'manual', launch, recoverReservations: async () => { throw new Error('unavailable'); },
       legacyRunning: async () => false, wait: async () => {}, confirmInterruption: async () => false, emit: vi.fn() }))
       .rejects.toMatchObject({ code: 'UPDATE_INTERRUPTION_REQUIRED' });
     expect(launch).not.toHaveBeenCalled();

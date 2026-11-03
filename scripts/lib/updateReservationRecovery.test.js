@@ -108,9 +108,10 @@ describe('fresh updater recovery against a running server', () => {
     expect(f.revoke).toHaveBeenCalledOnce();
   });
 
-  it('offers an older UI a private-attempt browser confirmation instead of inventing missing provider telemetry', async () => {
+  it.each(['unknown legacy', 'confirmed active'])('offers a private-attempt browser confirmation for %s activity', async activity => {
     const f = await fixture({ stale: false });
-    delete f.state.activity.llm.directCallsTracked;
+    if (activity === 'unknown legacy') delete f.state.activity.llm.directCallsTracked;
+    else f.state.activity.agents.active = 1;
     writeFileSync(join(f.root, 'package.json'), JSON.stringify({ version: '0.0.0', type: 'module' }));
     mkdirSync(join(f.root, 'client', 'dist'), { recursive: true });
     writeFileSync(join(f.root, 'client', 'dist', 'index.html'), 'Old UI');

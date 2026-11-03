@@ -2025,7 +2025,9 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(['package.json'], { trackedFiles });
 
     expect(plan.full).toBe(true);
-    expect(plan.browserFiles).toEqual(BROWSER_SUITES);
+    // Planning sorts selectors; the registry separately preserves execution
+    // order so adding coverage need not rebalance existing browser shards.
+    expect(plan.browserFiles).toEqual([...BROWSER_SUITES].sort());
   });
 
   it('selects nothing when the diff names no browser suite, and ignores a deleted suite', () => {

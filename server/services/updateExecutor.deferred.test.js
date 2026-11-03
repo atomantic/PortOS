@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { installUpdateTestSupervisor } from '../../scripts/lib/updateTestSupervisor.js';
 import { continueManualUpdateRecovery, offerManualUpdateRecovery } from '../../scripts/lib/manualUpdateRecovery.mjs';
+import { requestManualUpdate } from '../../scripts/manual-update-recovery.mjs';
 
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => join(lazyTempDataRoot('update-service-'), 'data'),
@@ -18,6 +19,18 @@ const { launchUpdate } = await import('./updateExecutor.js');
 afterAll(cleanupTempDataRoots);
 
 describe.skipIf(process.platform === 'win32')('service launch through the real detached supervisor', () => {
+  it('lets the existing UI Command Runner request a detached manual update without granting interruption consent', async () => {
+    installUpdateTestSupervisor(PATHS.root);
+    await writeFile(join(PATHS.root, 'package.json'), JSON.stringify({ type: 'module', version: '0.0.0' }));
+    const source = await readFile(new URL('../../update.sh', import.meta.url), 'utf8');
+    const header = source.slice(0, source.indexOf('mkdir -p "$ROOT_DIR/data"'));
+    await writeFile(join(PATHS.root, 'update.sh'), `${header}\nprintf '%s' "\${PORTOS_UPDATE_INTERRUPT:-}" > request-consent\nnode scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" 0\n`);
+    const admission = createMaintenanceAdmission(PATHS.data);
+    const launch = await requestManualUpdate({ args: ['--request'], root: PATHS.root,
+      launch: (tag, emit, options) => launchUpdate(tag, emit, { ...options, admission, monitorIntervalMs: 50 }), emit: vi.fn() });
+    await expect(launch.completion).resolves.toMatchObject({ success: true });
+    expect(await readFile(join(PATHS.root, 'request-consent'), 'utf8')).toBe('');
+  });
   it('continues a legacy browser confirmation through the real detached update with its prior acknowledgments', async () => {
     installUpdateTestSupervisor(PATHS.root);
     await writeFile(join(PATHS.root, 'package.json'), JSON.stringify({ type: 'module', version: '0.0.0' }));
