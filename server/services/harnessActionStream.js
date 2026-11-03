@@ -23,6 +23,8 @@ import { createLineReader } from '../lib/streamLines.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
+import { escapeRegExp } from '../lib/textUtils.js';
 import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { processAbsent } from '../lib/maintenanceDeferredUpdate.js';
@@ -33,6 +35,7 @@ import {
   describeRuntimeInstall,
   getProviderRuntime,
   getProviderRuntimeStatus,
+  getRuntimeUninstallTarget,
   RUNTIME_ACTIONS,
   spawnRuntimeInstaller,
   stopRuntimeInstaller,
@@ -124,9 +127,11 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   const emit = (event) => { installLog.onEvent(event); send(event); };
   // An exact PATH executable is internal review evidence and may include the
   // account name. Do not echo that path through spawn error messages.
-  const startError = (err) => reviewed
+  const startError = (err) => err?.code === 'UNVERIFIED_NPM_UNINSTALL'
+    ? 'The executable or npm package changed. Refresh and try again.'
+    : reviewed
     ? (/^[A-Z0-9_]+$/.test(err?.code || '') ? err.code : 'The reviewed updater could not be started.')
-    : err.message;
+    : action === 'uninstall' ? 'The uninstaller could not be started.' : err.message;
   let child = null;
   let finished = false;
   let clientGone = false;
@@ -217,6 +222,11 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
     send({ type: 'error', message: status.blockedReason || `PortOS cannot ${action} ${status.label} on this host.` });
     return safeEnd();
   }
+  const uninstallTarget = action === 'uninstall' ? getRuntimeUninstallTarget(row.id) : null;
+  if (action === 'uninstall' && !uninstallTarget) {
+    send({ type: 'error', message: `PortOS cannot verify that the selected \`${row.command}\` belongs to a matching global npm package. Nothing was removed; use the installation's own package manager or vendor instructions.` });
+    return safeEnd();
+  }
   if (actionInFlight) {
     send({ type: 'error', message: 'Another harness install is already running. Wait for it to finish or restart PortOS.' });
     return safeEnd();
@@ -275,7 +285,9 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   }
 
   send({ type: 'stage', stage: action, message: `${copy.verb} ${status.label}.` });
-  emit({ type: 'log', message: `Running ${describeRuntimeInstall(row.id, action)}.` });
+  emit({ type: 'log', message: action === 'uninstall'
+    ? 'Running npm uninstall for the verified global package.'
+    : `Running ${describeRuntimeInstall(row.id, action)}.` });
   installLog.start();
   // `spawn` can throw synchronously (a rejected argv shape, an OS-level spawn
   // refusal). Two things must happen here that letting it bubble would not do:
@@ -285,8 +297,8 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   // middleware can no longer send JSON to this response.
   try {
     child = CAN_SUPERVISE
-      ? spawnHarnessActionSupervisor({ ownerId: owner.id, runtime: row.id, action, ...(reviewed ? { reviewed } : {}) })
-      : spawnRuntimeInstaller(row.id, { action });
+      ? spawnHarnessActionSupervisor({ ownerId: owner.id, runtime: row.id, action, ...(reviewed ? { reviewed } : {}), ...(uninstallTarget ? { uninstallTarget } : {}) })
+      : spawnRuntimeInstaller(row.id, { action, ...(uninstallTarget ? { uninstallTarget } : {}) });
   } catch (err) {
     await releaseOrRetry(null);
     finished = true;
@@ -348,7 +360,16 @@ export async function streamHarnessAction(req, res, { runtime: runtimeId, action
   }
 
   const onLine = (line) => {
-    const text = line.trimEnd();
+    let text = line.trimEnd();
+    if (uninstallTarget) {
+      const prefix = uninstallTarget.prefix;
+      if (prefix.length > 3) {
+        for (const spelling of new Set([prefix, prefix.replaceAll('\\', '/')])) {
+          text = text.replace(new RegExp(escapeRegExp(spelling), 'gi'), '<npm-prefix>');
+        }
+      }
+      text = redactPii(text);
+    }
     if (text) emit({ type: 'log', message: text });
   };
   // npm runs with `--no-progress`, which suppresses its usual redraws. Keep the
@@ -416,9 +437,10 @@ function terminalFrame({ action, code, status, copy, command, before }) {
     return { type: 'error', message: `${status.label} ${copy.noun} exited with code ${code}.` };
   }
   if (action === 'uninstall') {
+    if (status.probeState === 'missing') return { type: 'complete', message: `${status.label} has been removed. Providers that used it will show as needing setup.` };
     return status.installed
-      ? { type: 'error', message: `The uninstall finished, but PortOS can still run \`${command}\`. Another copy is on this machine's PATH — one installed by Homebrew or a vendor script, which PortOS did not write and will not delete.` }
-      : { type: 'complete', message: `${status.label} has been removed. Providers that used it will show as needing setup.` };
+      ? { type: 'error', message: `The uninstall finished, but PortOS can still run \`${command}\`. Check the remaining installation before removing it.` }
+      : { type: 'error', message: `The npm uninstall finished, but PortOS could not verify whether \`${command}\` remains available. Refresh its status before retrying.` };
   }
   if (!status.installed) {
     return { type: 'error', message: `The ${copy.noun} finished, but PortOS still cannot run \`${command}\`. npm wrote it to a bin directory that is not on this machine's PATH — run \`npm prefix -g\` in a terminal, add that directory (plus \`/bin\` off Windows) to your PATH, then restart PortOS.` };

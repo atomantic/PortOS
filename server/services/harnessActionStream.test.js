@@ -23,6 +23,7 @@ const statusOf = (id, overrides) => ({
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
+  getRuntimeUninstallTarget: vi.fn(),
   spawnRuntimeInstaller: vi.fn(),
   stopRuntimeInstaller: vi.fn(),
   describeRuntimeInstall: vi.fn(),
@@ -49,7 +50,7 @@ const supervised = ['darwin', 'linux'].includes(process.platform);
 const launch = supervised ? supervisor.spawnHarnessActionSupervisor : installer.spawnRuntimeInstaller;
 const expectLaunch = (id, action) => supervised
   ? expect(launch).toHaveBeenCalledWith(expect.objectContaining({ ownerId: 'fixture-owner', runtime: id, action }))
-  : expect(launch).toHaveBeenCalledWith(id, { action });
+  : expect(launch).toHaveBeenCalledWith(id, expect.objectContaining({ action }));
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -90,6 +91,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetHarnessActionGuard();
   installer.getProviderRuntime.mockImplementation((id) => RUNTIMES[id] || null);
+  installer.getRuntimeUninstallTarget.mockReturnValue({ prefix: '/fixture/private-prefix' });
   installer.describeRuntimeInstall.mockImplementation((id, action) => `${id} ${action}`);
   installer.buildRuntimeActionCommand.mockImplementation((id) => (RUNTIMES[id] ? { command: id, args: [] } : null));
   gate.active = null;
@@ -194,9 +196,7 @@ describe('streamHarnessAction — uninstall', () => {
     expect(changed).toHaveBeenCalledWith({ removedHarness: 'opencode' });
   });
 
-  // "npm said ok" is not "PortOS can no longer run it": a Homebrew or vendor
-  // script copy PortOS never wrote is still on PATH, and reporting success
-  // would leave the user believing a removal that did not happen.
+  // A second executable can win PATH after the selected package is removed.
   it('reports a survivor on PATH as an error, not a success', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
 
@@ -204,6 +204,29 @@ describe('streamHarnessAction — uninstall', () => {
 
     expect(response.text).toContain('"type":"error"');
     expect(response.text).toContain('can still run');
+    expect(response.text).not.toContain('Homebrew');
+  });
+
+  it('refuses an executable whose npm package cannot be verified', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode'));
+    installer.getRuntimeUninstallTarget.mockReturnValue(null);
+
+    const response = await request(app()).post('/action?runtime=opencode&action=uninstall');
+
+    expect(response.text).toContain('Nothing was removed');
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when the remaining executable cannot be probed', async () => {
+    installer.getProviderRuntimeStatus
+      .mockResolvedValueOnce(statusOf('opencode'))
+      .mockResolvedValueOnce(statusOf('opencode', { installed: false, probeState: 'unavailable' }));
+
+    const response = await runAction('runtime=opencode&action=uninstall', { stdout: 'npm error /fixture/private-prefix/bin\n' });
+
+    expect(response.text).toContain('could not verify');
+    expect(response.text).not.toContain('has been removed');
+    expect(response.text).not.toContain('/fixture/private-prefix');
   });
 });
 

@@ -18,6 +18,7 @@ const statusOf = (id, overrides) => ({ ...RUNTIMES[id], installed: false, method
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
+  getRuntimeUninstallTarget: vi.fn(),
   getProviderRuntimeStatuses: vi.fn(),
   spawnRuntimeInstaller: vi.fn(),
   stopRuntimeInstaller: vi.fn(),
