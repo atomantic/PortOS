@@ -44,7 +44,7 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideoLayers.js';
 import { assertSongAudioCurrent } from '../../lib/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
@@ -923,7 +923,8 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   const composed = project.composition?.mode === 'composed';
   // The cold open (shots marked before the song) is cut on its own clock; the
   // song's pipeline below never sees those shots.
-  const song = withSongScenesOnly(project);
+  const songOnly = withSongScenesOnly(project);
+  const song = { ...songOnly, scenes: wordTimedScenes(songOnly.scenes) };
   const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
   const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);

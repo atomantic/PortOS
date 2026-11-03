@@ -537,7 +537,6 @@ function buildScene(input, { order }) {
     beatAligned: input.beatAligned ?? false,
     ...(input.beatNeedsReview ? { beatNeedsReview: true } : {}),
     ...(input.pacingCut ? { pacingCut: true } : {}),
-    ...(input.wordCut ? { wordCut: true } : {}),
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
     // #8964: a new shot never silently repeats its clip to fill a span — looping
@@ -758,7 +757,7 @@ export function applyStoryboardShotSync(project, plan) {
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
-const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'wordCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel'];
@@ -1132,14 +1131,10 @@ export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {})
     next = split.project;
     split.scenes.slice(1).forEach((piece, i) => { anchors.set(piece.sceneId, kept[i]); from[piece.sceneId] = sceneId; });
   }
-  // Every shot whose span the cut set plays it exactly in the render: the anchored
-  // shots, and the shots before them that now end on a word.
-  const ordered = timedSongScenes(next);
-  const owned = new Set(ordered.filter((scene, i) => anchors.has(scene.sceneId) || anchors.has(ordered[i + 1]?.sceneId)).map((scene) => scene.sceneId));
+  // A board with word cuts renders every timed shot at its saved span (musicVideoLayers.wordTimedScenes).
   const scenes = next.scenes.map((scene) => {
     const cut = anchors.get(scene.sceneId);
-    const timed = owned.has(scene.sceneId) ? { ...scene, wordCut: true } : scene;
-    return cut ? { ...timed, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : timed;
+    return cut ? { ...scene, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : scene;
   });
   next = carryStoryboardApproval(project, touch(next, { scenes }), 'Cut shots on lyric words');
   return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from };

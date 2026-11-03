@@ -94,8 +94,20 @@ export function sceneHasAuthoredSpan(scene) {
 }
 
 /** Fixed shot timing is independent of whether its boundaries landed on beats. A word cut (#14820) owns its span too. */
-export const sceneUsesAuthoredTiming = (scene) => Boolean(scene?.pacingCut || scene?.wordCut || scene?.beatAligned
+export const sceneUsesAuthoredTiming = (scene) => Boolean(scene?.pacingCut || scene?.wordCut || scene?.lyricAnchor || scene?.beatAligned
   || (Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0));
+
+/**
+ * The render's view of a board cut on sung words (#14820): the render lays clips
+ * end to end, so a word cut lands on its word only when every shot before it
+ * plays its saved span. Once any shot carries a word anchor, every timed shot is
+ * marked `wordCut` (exact span, no length floor). Other boards are unchanged.
+ */
+export function wordTimedScenes(scenes) {
+  const list = Array.isArray(scenes) ? scenes : [];
+  if (!list.some((scene) => scene?.lyricAnchor)) return list;
+  return list.map((scene) => (sceneHasAuthoredSpan(scene) ? { ...scene, wordCut: true } : scene));
+}
 
 /**
  * Whether the render can include this scene as-is: footage needs its clip, a

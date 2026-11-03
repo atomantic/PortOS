@@ -1809,8 +1809,6 @@ export const musicVideoSceneCreateSchema = z.object({
   beatAligned: z.boolean().optional(),
   beatNeedsReview: z.boolean().optional(),
   pacingCut: z.boolean().optional(),
-  // #14820: the span was cut on sung words, so the render plays it exactly.
-  wordCut: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
@@ -1857,8 +1855,6 @@ export const musicVideoSceneUpdateSchema = z.object({
   beatAligned: z.boolean().optional(),
   beatNeedsReview: z.boolean().optional(),
   pacingCut: z.boolean().optional(),
-  // #14820: the span was cut on sung words, so the render plays it exactly.
-  wordCut: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.

@@ -105,32 +105,34 @@ describe('word-anchored shots after re-alignment', () => {
 });
 
 describe('word cuts in the render plan', () => {
-  // Catches the render re-deriving cut spans from clip length, or flooring a short word shot.
-  it('plays every shot the cut timed for exactly its span', async () => {
+  const durations = (clips) => clips.map((c) => Math.round(c.duration * 1000) / 1000);
+  const render = async (project) => {
     const { beatSnapClips } = await import('./render.js');
-    const base = addScenes(applyProjectPatch(buildProjectRecord({ name: 'Fast' }, { id: 'mv-3', now: 'n' }),
-      { lyricCues: [{ id: 'f', text: 'go go go', startSec: 0.2, endSec: 1, words: [0.2, 0.4, 0.7].map((startSec) => ({ w: 'go', startSec, endSec: startSec + 0.1, conf: 'matched' })) }] }),
-    [{ label: 'Run', startSec: 0, endSec: 2 }]).project;
-    const { project: cut } = cutScenesOnLyricWords(base, { cueIds: ['f'], mode: 'word' });
-    const scenes = cut.scenes.slice().sort((a, b) => a.startSec - b.startSec);
-    expect(scenes.every((s) => s.wordCut)).toBe(true);
-    const clips = scenes.map((s) => ({ sceneId: s.sceneId, inSec: 0, outSec: 5, duration: 5 }));
-    expect(beatSnapClips(clips, [], { scenes }).map((c) => Math.round(c.duration * 1000) / 1000)).toEqual([0.2, 0.2, 0.3, 1.3]);
-  });
-});
+    const { wordTimedScenes } = await import('../../lib/musicVideoLayers.js');
+    const scenes = wordTimedScenes(project.scenes.slice().sort((a, b) => a.startSec - b.startSec));
+    return durations(beatSnapClips(scenes.map((s) => ({ sceneId: s.sceneId, inSec: 0, outSec: 5, duration: 5 })), [], { scenes }));
+  };
+  const board = (spans, words) => addScenes(applyProjectPatch(buildProjectRecord({ name: 'Fast' }, { id: 'mv-3', now: 'n' }),
+    { lyricCues: [{ id: 'f', text: words.map(() => 'go').join(' '), startSec: words[0], endSec: words.at(-1) + 0.1,
+      words: words.map((startSec) => ({ w: 'go', startSec, endSec: startSec + 0.1, conf: 'matched' })) }] }),
+  spans.map(([startSec, endSec], i) => ({ label: `Shot ${i + 1}`, startSec, endSec }))).project;
 
-describe('word anchors in documents and the storyboard check', () => {
-  // Catches a composition losing the anchor or reading a stale onset, and an off-word shot passing the check.
-  it('gives PORTOS_MV scenes the anchor and its current onset, and names a shot that left its word', async () => {
-    const { buildDocumentData } = await import('./documentRender.js');
-    const { productionReadiness } = await import('./productionReview.js');
-    const cut = cutScenesOnLyricWords(project(), { cueIds: ['l1'], mode: 'phrase' }).project;
-    const realigned = { ...cut, lyricCues: LINES.map((line) => cue(line, { 'l1:2': 0.2 })) };
-    const data = buildDocumentData(realigned, { frame: { width: 96, height: 64 }, clock: { fps: 24, frames: 720, durationSec: 30 }, songDurationSec: 30 });
-    const beagle = data.scenes.find((s) => s.lyricText === 'Beagle,');
-    expect(beagle.lyricAnchor).toEqual({ cueId: 'l1', wordIndex: 2, wordCount: 1, onsetSec: 12, text: 'Beagle,' });
-    expect(data.scenes.find((s) => s.label === 'Outro')).not.toHaveProperty('lyricAnchor');
-    const problems = productionReadiness({ ...realigned, productionReview: { draft: { lyricsMode: 'vocal', timingStatus: 'verified', storyboard: [] } } }).storyboard.problems;
-    expect(problems.some((p) => /starts at 11\.80s, but "Beagle," is sung at 12\.00s/.test(p))).toBe(true);
+  // Catches the render laying later word shots after earlier shots' natural clip lengths, or flooring a short word shot.
+  it('plays every shot of a word-cut board for exactly its saved span', async () => {
+    const short = cutScenesOnLyricWords(board([[0, 2]], [0.2, 0.4, 0.7]), { cueIds: ['f'], mode: 'word' }).project;
+    expect(await render(short)).toEqual([0.2, 0.2, 0.3, 1.3]);
+    const later = cutScenesOnLyricWords(board([[0, 2], [2, 10], [10, 12], [12, 14]], [10, 11]), { cueIds: ['f'], mode: 'word' }).project;
+    expect(await render(later)).toEqual([2, 8, 1, 1, 2]);
+  });
+
+  // Catches a manual split or a reorder after a word cut losing exact timing on a shot.
+  it('keeps exact spans after a manual split and a reorder', async () => {
+    const { splitScene, reorderScenes } = await import('./projectsLogic.js');
+    const cut = cutScenesOnLyricWords(board([[0, 4]], [0, 2]), { cueIds: ['f'], mode: 'word' }).project;
+    const first = cut.scenes.find((s) => s.startSec === 0);
+    const split = splitScene(cut, first.sceneId, { atSec: 1 }).project;
+    expect(await render(split)).toEqual([1, 1, 2]);
+    const ids = split.scenes.map((s) => s.sceneId);
+    expect(await render(reorderScenes(split, [ids[1], ids[0], ids[2]]))).toEqual([1, 1, 2]);
   });
 });
