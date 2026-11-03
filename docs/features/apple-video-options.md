@@ -11,6 +11,15 @@ Video Gen offers these complementary paths:
 | FastH3 V2 INT6/INT8 | Eight-step joint video and audio | 80% VSA with reference attention; text-to-video only. Image-to-video stays on MiniMax H3 MLX |
 | FastH3 Omni INT6 | Eight-step reference-to-video and audio | Input image plus up to 8 more gallery reference images (9 total); no text-only mode |
 | MiniMax H3 MLX 4/6/8-bit | Original H3 reference | Dense attention, very slow; smaller quantization is not a speed guarantee |
+| Pika H3 Flex MLX (experimental profile) | Six-update joint video and audio | Select MiniMax H3 MLX 8-bit, then Advanced → Speed → Pika H3 Flex; text or first-image clips only |
+
+Pika H3 Flex uses the existing MiniMax H3 MLX runtime and its conservative
+128 GB RAM requirement. Choose 640×384, 1024×576 or 1344×768, then explicitly
+download the additional 2.77 GB adapter using the Speed control. Quality remains
+the default. This local profile does not offer Pika's hosted upscaling or separate
+audio stems, and PortOS has no measured speed or full-render quality benchmark
+for it. Its pinned six-update sampler, license, supported inputs and validation
+limits are documented in [Pika H3 Flex on MLX](../MINIMAX_H3_LIGHTX2V.md#pika-h3-flex-on-mlx).
 
 The V2 choices share the official source snapshot at
 `3da2ddfe1954d9cda4c05b643dc0f26007a655c5`, approximately 147.9 GB total.

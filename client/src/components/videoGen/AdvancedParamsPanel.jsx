@@ -9,6 +9,7 @@
 import { Dice5 } from 'lucide-react';
 import { FormField } from '../ui/FormField';
 import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
+import { formatDownloadGb } from '../../utils/formatters.js';
 import {
   isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
   isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
@@ -141,6 +142,7 @@ export default function AdvancedParamsPanel({
   const activeSpeedProfile = showSpeedProfiles
     ? speedProfiles.find((p) => p.id === speedProfileId) || null
     : null;
+  const speedAdapterEstimate = formatDownloadGb(Number((activeSpeedProfile?.adapter?.sizeBytes / 1e9).toFixed(2)));
   const selectedH3Profile = h3Profiles.find((p) => p.id === speedProfileId);
   const incompatibleH3Profile = selectedH3Profile && !activeSpeedProfile;
   // A profile drives steps AND CFG together, exactly as a samplerLocked model
@@ -381,7 +383,7 @@ export default function AdvancedParamsPanel({
                   <p className="mt-1 text-xs text-gray-500 break-all">{activeSpeedProfile.adapter.file} · alpha {activeSpeedProfile.adapter.alpha}/rank {activeSpeedProfile.adapter.rank} · shifts {activeSpeedProfile.videoShift}/{activeSpeedProfile.audioShift}. No fallback.</p>
                   {onSpeedProfileDownload
                     ? <ModelDownloadBadge status={speedProfileStatus} onDownload={onSpeedProfileDownload}
-                        onCancel={onCancelSpeedProfileDownload} estimateLabel="1.38 GB adapter" />
+                        onCancel={onCancelSpeedProfileDownload} estimateLabel={speedAdapterEstimate ? `${speedAdapterEstimate} adapter` : undefined} />
                     : <p className="text-xs text-gray-500">Manage this adapter download on the Video Gen page.</p>}
                   {speedProfileStatus?.cached && onSpeedProfileDownload && <button type="button" onClick={onSpeedProfileDownload} className="text-xs text-port-accent">Download adapter again</button>}
                   {speedProfileDownloadError && <p role="alert" className="text-xs text-port-error">{speedProfileDownloadError}</p>}
