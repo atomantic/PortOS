@@ -1458,6 +1458,67 @@ describe('codeReview helpers', () => {
       expect(withoutKey).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['key field'] })
     })
 
+    // Overturned finding: a recurring catalog refresh that added three sourced
+    // entries was judged fix-first for "not removing deprecated ones" and "not
+    // verifying status" — a conditional clause and PR-body research.
+    it('ships an incremental catalog refresh without removals, but not a refresh that adds no catalog entry', async () => {
+      const heading = '[Improvement: PortOS] Refresh the bundled local-LLM suggested-models catalog'
+      const prompt = [
+        heading,
+        '',
+        'Verify the pull id actually exists before adding it (cite your source in the PR body).',
+        'Update `LOCAL_LLM_CATALOG`:',
+        '- Add newly-prominent models, refresh `params`/`size`/`description` on existing entries, and remove models that are clearly deprecated/superseded.',
+        'Review `EDITORIAL_FAMILY_RANK`. Only adjust it if a new family clearly belongs or an existing one should move.',
+      ].join('\n')
+      // The autonomous-job shape: description is the prompt's first line.
+      const objective = taskObjective({ description: heading, metadata: { prompt } })
+      expect(objective).toBe(prompt)
+      const regexHunk = [
+        'diff --git a/server/lib/aiToolkit/internal/providerCatalogService.js b/server/lib/aiToolkit/internal/providerCatalogService.js',
+        "-  'lfm2', 'ornith',",
+        "+  'lfm[23]', 'ornith',",
+      ].join('\n')
+      const refreshDiff = [
+        regexHunk,
+        'diff --git a/server/lib/localLlmCatalog.js b/server/lib/localLlmCatalog.js',
+        '+  {',
+        "+    key: 'example-refresh-1b',",
+        "+    name: 'Example Refresh 1B',",
+        "+    category: 'lightweight',",
+        "+    ollama: 'example-refresh:1b',",
+        '+  },',
+      ].join('\n')
+
+      const rubrics = []
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        rubrics.push(rubric)
+        const recognizes = rubric.includes('are alternatives, not a checklist')
+          && rubric.includes('cite in the PR body, outside the diff')
+          && rubric.includes('a diff that adds or refreshes no catalog entry')
+        const addsEntry = request.messages[1].content.includes('+    key:')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(recognizes && addsEntry
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'added catalog entries with regression assertions; test execution is not established' }
+            : { verdict: 'fix-first', missing: ['local LLM catalog refresh as requested'], unrequested: [], evidence: 'no catalog entry changed' }) } }],
+        })
+      })
+
+      const refreshed = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: refreshDiff })
+      const regexOnly = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: regexHunk })
+
+      expect(refreshed).toMatchObject({ ok: true, verdict: 'ship', missing: [] })
+      expect(regexOnly).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['local LLM catalog refresh as requested'] })
+
+      // The refresh rubric is scoped to refreshing the catalog itself; a fix
+      // that merely mentions a refresh keeps the standard rubric.
+      await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: 'Fix the `LOCAL_LLM_CATALOG` picker so its refresh button reloads the list.', diff: refreshDiff })
+      expect(rubrics.at(-1)).not.toContain('are alternatives, not a checklist')
+      expect(rubrics.at(-1)).toContain('the entry\'s identifier is its `key` field')
+    })
+
     it('does not demand agent resume behavior for a Resume agent-... objective', async () => {
       const objective = 'Resume agent-cd760882'
       const diff = [
