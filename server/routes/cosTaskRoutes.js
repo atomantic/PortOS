@@ -619,7 +619,8 @@ router.delete('/tasks/:id', asyncHandler(async (req, res) => {
   const doomed = await getTaskById(id).catch(() => null);
   // Deleting a release continuation is the owner's decision to abandon it.
   // The reset refuses (409) while a release or synchronization is still active.
-  const releaseIdentity = doomed?.metadata?.releaseSynchronization?.identity;
+  // Only the task in the requested queue is retired; any other is a 404 below.
+  const releaseIdentity = doomed?.taskType === type ? doomed.metadata?.releaseSynchronization?.identity : null;
   if (releaseIdentity) {
     const { retireReleaseSynchronizationForDeletion } = await import('../services/releaseSynchronization.js');
     await retireReleaseSynchronizationForDeletion(releaseIdentity, req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator');

@@ -146,5 +146,5 @@ it('retires an unfinished checkpoint once when the owner deletes its task', asyn
   expect(await retireReleaseSynchronizationForDeletion(identity, 'local-operator')).toBeNull();
   expect(await releaseTaskDispatchDisposition(entry.task)).toBe('retired-continuation');
 
-  expect(await retireReleaseSynchronizationForDeletion('0'.repeat(64), 'local-operator')).toBeNull();
+  await expect(retireReleaseSynchronizationForDeletion('0'.repeat(64), 'local-operator')).rejects.toThrow('not recorded on this instance');
 });

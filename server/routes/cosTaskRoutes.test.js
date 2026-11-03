@@ -159,7 +159,7 @@ describe('CoS task collection selectors', () => {
 
   it('retires a release synchronization checkpoint before the owner deletes its task', async () => {
     const identity = 'a'.repeat(64);
-    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', description: 'Synchronize v1.2.3', metadata: { releaseSynchronization: { identity } } });
+    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', taskType: 'internal', description: 'Synchronize v1.2.3', metadata: { releaseSynchronization: { identity } } });
     deleteTask.mockResolvedValue({ success: true, taskId: 'task-release-sync-example' });
     retireReleaseSynchronizationForDeletion.mockResolvedValue(null);
 
@@ -171,13 +171,24 @@ describe('CoS task collection selectors', () => {
   });
 
   it('keeps a release synchronization task when its checkpoint cannot be retired', async () => {
-    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', metadata: { releaseSynchronization: { identity: 'a'.repeat(64) } } });
+    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', taskType: 'internal', metadata: { releaseSynchronization: { identity: 'a'.repeat(64) } } });
     retireReleaseSynchronizationForDeletion.mockRejectedValue(new ServerError('A release or synchronization is still active', { status: 409, code: 'RELEASE_SYNC_HANDOFF_UNVERIFIED' }));
 
     const res = await request(buildApp()).delete('/api/cos/tasks/task-release-sync-example?type=internal');
 
     expect(res.status).toBe(409);
     expect(deleteTask).not.toHaveBeenCalled();
+  });
+
+  it('leaves the checkpoint alone when the delete names another queue', async () => {
+    getTaskById.mockResolvedValue({ id: 'task-release-sync-example', taskType: 'internal', metadata: { releaseSynchronization: { identity: 'a'.repeat(64) } } });
+    deleteTask.mockResolvedValue({ error: 'Task not found' });
+
+    const res = await request(buildApp()).delete('/api/cos/tasks/task-release-sync-example');
+
+    expect(res.status).toBe(404);
+    expect(retireReleaseSynchronizationForDeletion).not.toHaveBeenCalled();
+    expect(deleteTask).toHaveBeenCalledWith('task-release-sync-example', 'user', { releaseSynchronizationRetired: false });
   });
 });
 

@@ -357,7 +357,9 @@ export function resetReleaseSynchronization(identity, reason, actor, checkouts =
  * stops waiting on the deleted row; the outbox keeps the publication receipt. */
 export async function retireReleaseSynchronizationForDeletion(identity, actor) {
   const entry = (await readOutbox()).publications[identity];
-  if (!entry || releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified') return null;
+  // The outbox is machine-local; a synced copy is retired where it was published.
+  if (!entry) refuse('Release synchronization is not recorded on this instance; delete it on the instance that published the release');
+  if (releaseSynchronizationReset(entry) || effectiveReleaseSynchronization(entry)?.status === 'verified') return null;
   return resetReleaseSynchronization(identity, 'Owner deleted the synchronization task', actor);
 }
 
