@@ -752,6 +752,10 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
     expect(screen.getByText('approved · stale')).toBeInTheDocument();
     expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
+    // Nothing is revertible, so the note names only Keep approved and the Rebuild button that is really there (#14796).
+    expect(screen.getByText(/changed since: concept, style\. Keep the sheet approved as it is or use Rebuild below to build a new sheet from the current inputs\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/revert a changed input/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Rebuild' })).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
     expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
   });
@@ -760,6 +764,7 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const onRevertApproval = vi.fn();
     const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
+    expect(screen.getByText(/Keep the sheet approved as it is, revert a changed input to the value you approved, or use Rebuild below/)).toBeInTheDocument();
     // Keep approved sits in the same row as Revert, right under the stale note.
     expect(screen.getByRole('button', { name: 'Keep approved' }).parentElement).toBe(screen.getByRole('button', { name: 'Revert concept' }).parentElement);
     fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));

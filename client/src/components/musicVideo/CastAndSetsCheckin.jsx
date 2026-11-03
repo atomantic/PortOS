@@ -79,6 +79,19 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
   );
 }
 
+// Names only the ways out the panel actually shows: Keep approved and each Revert sit
+// under this line, Rebuild in the action row below (#14796).
+function staleChoicesText({ keep, revert, rebuild }) {
+  const choices = [
+    keep && 'keep the sheet approved as it is',
+    revert && 'revert a changed input to the value you approved',
+    rebuild && 'use Rebuild below to build a new sheet from the current inputs',
+  ].filter(Boolean);
+  if (!choices.length) return '';
+  const text = choices.length === 1 ? choices[0] : `${choices.slice(0, -1).join(', ')}${choices.length > 2 ? ',' : ''} or ${choices.at(-1)}`;
+  return `${text[0].toUpperCase()}${text.slice(1)}.`;
+}
+
 /**
  * The Cast & Sets check-in's state on the Autopilot card: progress while the
  * server works, "Waiting for your check-in" with the sheet one click away,
@@ -130,7 +143,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
       {staleText && (
         <p className="text-xs text-port-warning">
-          {staleText} Keep the sheet approved as it is, or rebuild it from the current inputs.
+          {staleText} {staleChoicesText({ keep: !!onReconfirm, revert: !!onRevert && stale?.revertible?.length > 0, rebuild: !!onRebuild })}
         </p>
       )}
       {staleText && (
