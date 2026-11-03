@@ -2054,6 +2054,42 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
     expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
   });
 
+  it('re-checks a stale Vision-unavailable verdict on an approved stage without re-rendering or changing approval', async () => {
+    let outage = true;
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ beforeExecute }) => {
+      await beforeExecute();
+      if (outage) throw new Error('Provider example is unavailable');
+      return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' };
+    } }));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const project = await seed({ automation: { checkins: { castAndSets: 'auto' } } });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const before = (await current(project.id)).castAndSets;
+    const key = Object.keys(before.plan)[0];
+    expect(before.images[key].inspection.discrepancy).toMatch(/Vision unavailable/);
+    const ack = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: before.images[key].inspection.inputs, inspectionId: before.images[key].inspection.id });
+    expect(ack.status).toBe(200);
+    for (const k of Object.keys(before.plan)) {
+      const ev = (await current(project.id)).castAndSets.images[k].inspection;
+      await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: ev.inputs, inspectionId: ev.id });
+    }
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+    const approved = (await current(project.id)).castAndSets;
+    expect(approved.status).toBe('approved');
+    outage = false;
+    const res = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: [key] });
+    expect(res.status).toBe(200);
+    const after = (await current(project.id)).castAndSets;
+    expect(after.images[key].inspection).toMatchObject({ verdict: 'pass' });
+    expect(after.status).toBe('approved');
+    expect(after.revision).toBe(approved.revision);
+    expect(after.images[key].imageId).toBe(approved.images[key].imageId);
+    const bad = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: ['nope'] });
+    expect(bad.status).toBe(404);
+  });
+
   it('records unavailable vision distinctly after one retry, with no silent pass or unbounded provider work', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     onTestFinished(() => log.mockRestore());

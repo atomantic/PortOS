@@ -75,6 +75,7 @@ export default function CastSetsStage({ board }) {
           onOpenPreview={board.openPreview}
           onApprove={board.approveCastAndSets}
           onAcknowledgeImage={castSets.acknowledgeImage}
+          onReinspectImages={castSets.reinspectImages}
           onRegenerate={() => castSets.regenerate()}
           onRegenerateImages={castSets.regenerateImages}
           onEditDirection={castSets.editDirection}

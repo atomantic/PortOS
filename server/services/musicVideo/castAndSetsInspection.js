@@ -1,5 +1,6 @@
 /** Vision work belongs only to an explicitly initiated, process-owned check-in. */
 import { randomUUID } from 'crypto';
+import { ServerError } from '../../lib/errorHandler.js';
 import { castSetsInspectionInputs, currentCastSetsInspection, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
 import { requireProject } from './requireProject.js';
 import { mutateProjectRecord } from './projects.js';
@@ -79,4 +80,61 @@ export async function inspectCastAndSetsImages(projectId, { processId, resolveRe
       if (outcome.verdict !== 'unreviewed' || attempts >= MAX_ATTEMPTS) break;
     }
   }
+}
+
+/**
+ * Re-run vision on images already in the stage (review or approved) — for a verdict left
+ * stale by an infrastructure failure. Replaces only `inspection`; status, image ids and
+ * project references are untouched, so an approved stage stays approved.
+ */
+export async function reinspectCastAndSetsImages(projectId, { keys, resolveReviewer, reviewImage, publish }) {
+  const original = await requireProject(projectId);
+  const stage = original.castAndSets;
+  if (!stage || !['review', 'approved'].includes(stage.status)) throw new ServerError('Wait for the check-in to finish before re-checking images', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+  const known = Object.keys(stage.plan || {});
+  const unknown = (keys || []).filter((key) => !known.includes(key));
+  if (unknown.length) throw new ServerError(`Unknown image slot: ${unknown.join(', ')}`, { status: 404, code: 'NOT_FOUND' });
+  const targets = (keys || known).filter((key) => castSetsInspectionInputs(stage, key)
+    && (keys || currentCastSetsInspection(stage, key)?.verdict !== 'pass'));
+  const revision = stage.revision;
+  const live = (p, inputs) => p.castAndSets?.revision === revision && ['review', 'approved'].includes(p.castAndSets.status)
+    && sameCastSetsInspectionInputs(inputs, castSetsInspectionInputs(p.castAndSets, inputs.key));
+  for (const key of targets) {
+    const inputs = castSetsInspectionInputs((await requireProject(projectId)).castAndSets, key);
+    if (!inputs) continue;
+    const id = randomUUID();
+    const pending = await mutateProjectRecord(projectId, (current) => {
+      if (!live(current, inputs)) return { project: current, changed: false };
+      const image = current.castAndSets.images[key];
+      return { project: { ...current, castAndSets: { ...current.castAndSets, images: { ...current.castAndSets.images,
+        [key]: { ...image, inspection: { id, inputs, stageRevision: revision, verdict: 'pending', attempts: 1 } } } } }, changed: true };
+    });
+    if (!pending.changed) continue;
+    publish(projectId, pending.project);
+    let reviewer;
+    const outcome = await (async () => {
+      reviewer = await resolveReviewer({});
+      const beforeExecute = async (execution) => {
+        if (execution?.provider && (execution.provider.id !== reviewer.provider.id || (reviewer.model && execution.model !== reviewer.model))) throw new Error('The selected vision reviewer changed');
+        const current = await requireProject(projectId);
+        if (!live(current, inputs) || current.castAndSets.images[key].inspection?.id !== id) throw new Error('Cast & Sets image changed during inspection');
+      };
+      return reviewImage({ inputs, reviewer, beforeExecute });
+    })().catch((error) => {
+      const message = String(error?.message || error || 'Unknown inspection failure');
+      const reason = (reviewer?.provider?.apiKey ? message.split(reviewer.provider.apiKey).join('[redacted]') : message).replace(/\s+/g, ' ').slice(0, 300);
+      const log = error?.status >= 400 && error.status < 500 ? console.log : console.error;
+      log(`${error?.status >= 400 && error.status < 500 ? '🚫' : '❌'} Cast & Sets vision re-check failed (provider: ${reviewer?.provider?.id || 'unresolved'}): ${reason}`);
+      return { verdict: 'unreviewed', discrepancy: `Vision unavailable: ${reason}`, providerId: reviewer?.provider?.id || null, model: reviewer?.model || null };
+    });
+    const settled = await mutateProjectRecord(projectId, (current) => {
+      const image = current.castAndSets?.images?.[key];
+      if (!live(current, inputs) || image?.inspection?.id !== id) return { project: current, changed: false };
+      return { project: { ...current, castAndSets: { ...current.castAndSets, images: { ...current.castAndSets.images,
+        [key]: { ...image, inspection: { ...image.inspection, ...outcome, inspectedAt: new Date().toISOString() } } } } }, changed: true };
+    });
+    if (settled.changed) publish(projectId, settled.project);
+  }
+  const fresh = await requireProject(projectId);
+  return { project: fresh, reinspected: targets };
 }

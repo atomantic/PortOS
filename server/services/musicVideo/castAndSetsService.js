@@ -840,6 +840,12 @@ export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
   return { project: out.project };
 }
 
+/** Re-run vision on existing images (all unreviewed/mismatched when `keys` is omitted) without touching approval. */
+export async function reinspectCastAndSetsImages(projectId, { keys } = {}) {
+  const { reinspectCastAndSetsImages: run } = await import('./castAndSetsInspection.js');
+  return run(projectId, { keys, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish });
+}
+
 /** Adopt a gallery take without re-rendering it or approving uninspected pixels. */
 export async function useCastAndSetsImage(projectId, { key, imageId }) {
   const out = await mutateProjectRecord(projectId, (current) => {

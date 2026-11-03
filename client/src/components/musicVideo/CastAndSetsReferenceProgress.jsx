@@ -66,8 +66,9 @@ function ReviseLookLink({ ingredientId }) {
     <Wand2 size={12} aria-hidden="true" /> Revise look</Link>;
 }
 
-function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, busy }) {
+function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, onReinspectImages, busy }) {
   const image = stage.images?.[item.key] || {};
+  const canRecheck = !!onReinspectImages && ['review', 'approved'].includes(stage.status);
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
   const live = useMediaJobProgress(image.status === 'queued' ? image.jobId : null);
@@ -125,6 +126,12 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
           </p>
           {inspection?.discrepancy && <p className="break-words">{inspection.discrepancy}</p>}
           {accepted && inspection?.verdict !== 'pass' && <p>Explicitly acknowledged for this image.</p>}
+          {canRecheck && inspection?.verdict !== 'pass' && inspection?.verdict !== 'pending' && (
+            <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent"
+              onClick={() => onReinspectImages([item.key])}>
+              Re-check with vision
+            </button>
+          )}
           {!accepted && stage.status === 'review' && onAcknowledgeImage && (
             <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent"
               onClick={() => onAcknowledgeImage({ inputs: castSetsInspectionInputs(stage, item.key), inspectionId: inspection?.id || null })}>
@@ -167,13 +174,23 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
  * `actions` ({ busy, onRegenerate, onEdit }) adds each card's Regenerate / Edit /
  * Remove; the check-in passes it only while the stage is idle.
  */
-export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [], onAcknowledgeImage, busy }) {
+export default function CastAndSetsReferenceProgress({ stage, onOpenPreview, actions = null, subjects = [], olderLookKeys = [], onAcknowledgeImage, onReinspectImages, busy }) {
   const items = Object.values(stage.plan || {});
   if (!items.length) return null;
+  const stale = onReinspectImages && ['review', 'approved'].includes(stage.status)
+    ? items.filter((item) => castSetsInspectionInputs(stage, item.key) && currentCastSetsInspection(stage, item.key)?.verdict !== 'pass').map((item) => item.key) : [];
   return (
+    <>
+    {stale.length > 1 && (
+      <button type="button" disabled={busy} className="min-h-[44px] rounded border border-port-border px-2 text-xs text-port-accent"
+        onClick={() => onReinspectImages()}>
+        Re-check all {formatCount(stale.length)} unreviewed images with vision
+      </button>
+    )}
     <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,15rem),1fr))] gap-2" aria-label="Cast and set references">
       {items.map((item) => <ReferenceCard key={item.key} item={item} stage={stage} onOpenPreview={onOpenPreview} actions={actions}
-        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} onAcknowledgeImage={onAcknowledgeImage} busy={busy} />)}
+        subjects={subjects} olderLook={olderLookKeys.includes(item.key)} onAcknowledgeImage={onAcknowledgeImage} onReinspectImages={onReinspectImages} busy={busy} />)}
     </div>
+    </>
   );
 }

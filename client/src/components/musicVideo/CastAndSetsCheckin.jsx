@@ -98,7 +98,7 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onAcknowledgeImage, onRegenerate, onRegenerateImages, onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onAcknowledgeImage, onReinspectImages, onRegenerate, onRegenerateImages, onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [greyboxesOpen, setGreyboxesOpen] = useState(() => (project.castAndSets?.direction?.sets || []).some((set) => set.setReference?.greyboxShotId));
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
@@ -173,7 +173,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         </details>
       )}
       {greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
-      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage} busy={busy}
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage} onReinspectImages={onReinspectImages} busy={busy}
         subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
         actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh } : null} />
