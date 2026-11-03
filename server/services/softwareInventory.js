@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { resolveCondaEnvPython } from '../lib/condaEnv.js';
 import { compareHarnessVersions } from '../lib/harnessOutput.js';
+import { isSupportedBlenderVersion, LATEST_BLENDER_VERSION } from '../lib/blenderVersion.js';
 
 const PROBE_TIMEOUT_MS = 20_000;
 const UPDATE_HOME = { path: `/apps/${PORTOS_APP_ID}/update`, label: 'PortOS update' };
@@ -165,15 +166,55 @@ async function readBlenderVersion(executable, { read = readFile } = {}) {
   return executable.match(/blender-(\d+\.\d+(?:\.\d+)?)/i)?.[1] || null;
 }
 
-async function blenderRow(execution, deps) {
+const versionBehind = (version, target) => {
+  const [x, y] = [version, target].map((v) => v.split('.').map(Number));
+  for (let i = 0; i < 3; i += 1) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+};
+
+/**
+ * @param {object} execution `getCodeAnimationExecution()`
+ * @param {{offer?: object|null, job?: object|null, candidates?: Array<{executable: string, version: string}>,
+ *   checkedVersion?: string|null, platform?: string, read?: Function}} [context]
+ */
+async function blenderRow(execution, { offer = null, job = null, candidates = [], checkedVersion = null, platform = process.platform, read } = {}) {
   const blender = execution.tools?.blender || {};
   const lane = execution.lanes?.blender || {};
+  const version = (await readBlenderVersion(blender.executable, { read })) || checkedVersion;
+  const latest = offer?.version || LATEST_BLENDER_VERSION;
+  const unsupported = Boolean(version) && !isSupportedBlenderVersion(version);
+  const behind = Boolean(version) && versionBehind(version, latest);
+  const found = !blender.executable ? candidates[0] : null;
+  const state = !blender.executable ? (found ? 'attention' : 'missing')
+    : unsupported ? 'attention'
+      : behind ? 'update'
+        : lane.ready ? 'current' : 'attention';
+  const newerSeries = offer?.newestSeries && offer.newestSeries !== offer.series && !versionBehind(offer.newestSeries, offer.series)
+    ? ` Blender ${offer.newestSeries} is out; PortOS is checked against ${offer.series}.` : '';
+  const summary = (!blender.executable
+    ? (found ? `Blender ${found.version} is installed at ${found.executable}, but Code Animation has no Blender selected.` : blender.problem)
+    : unsupported ? `Blender ${version} is older than the 4.2 series Code Animation supports.`
+      : lane.ready ? `Renders in ${blender.executionMode} mode.` : lane.reason) + newerSeries;
+  const offerable = platform === 'darwin' && offer && !job && (!blender.executable || unsupported || behind);
   return entry({
     id: 'blender', name: 'Blender', group: 'Media tools', home: HOMES.codeAnimation,
-    installed: blender.executable ? true : null, version: await readBlenderVersion(blender.executable, deps),
-    state: !blender.executable ? 'missing' : lane.ready ? 'current' : 'attention',
-    summary: !blender.executable ? blender.problem : lane.ready ? `Renders in ${blender.executionMode} mode.` : lane.reason,
+    installed: blender.executable || found ? true : null, version: version || found?.version || null, latest, state, summary,
+    busy: job ? `Installing Blender ${job.version}` : null,
+    action: offerable
+      ? { kind: 'blender-install', label: blender.executable ? `Update to ${offer.version}` : `Install Blender ${offer.version}`, restarts: false }
+      : null,
   });
+}
+
+async function readBlender({ fresh }) {
+  const [execution, installer] = await Promise.all([import('./codeAnimation/execution.js'), import('./blenderInstaller.js')]);
+  const darwin = process.platform === 'darwin';
+  const [status, offer, candidates] = await Promise.all([
+    execution.getCodeAnimationExecution(),
+    darwin ? installer.getBlenderOffer({ fresh }) : null,
+    darwin ? installer.findInstalledBlenderApps({ readVersion: (path) => readBlenderVersion(path) }) : [],
+  ]);
+  return blenderRow(status, { offer, candidates, job: installer.getBlenderJob(), checkedVersion: execution.lastCheckedBlenderVersion() });
 }
 
 const SUPERCOLLIDER_STATES = Object.freeze({
@@ -229,7 +270,7 @@ const COLLECTORS = [
   { id: 'yt-dlp', name: 'yt-dlp', group: 'Media tools', home: HOMES.ytdlp,
     read: async () => [ytDlpRow(await (await import('./ytdlpUpdate.js')).getYtDlpUpdateStatus())] },
   { id: 'blender', name: 'Blender', group: 'Media tools', home: HOMES.codeAnimation,
-    read: async () => [await blenderRow(await (await import('./codeAnimation/execution.js')).getCodeAnimationExecution())] },
+    read: async ({ fresh }) => [await readBlender({ fresh })] },
   { id: 'supercollider', name: 'SuperCollider / Docker', group: 'Media tools', home: HOMES.music,
     read: async () => superColliderRows(await (await import('./superColliderRuntime.js')).getSuperColliderStatus()) },
   { id: 'conda', name: 'conda environments', group: 'Environments', home: null,
@@ -251,4 +292,4 @@ export async function getSoftwareInventory({ fresh = false, collectors = COLLECT
   return { components, groups: SOFTWARE_GROUPS, checkedAt: new Date().toISOString() };
 }
 
-export const __testing = { nodeRows, browserRow, ytDlpRow, readBlenderVersion, condaRows };
+export const __testing = { nodeRows, browserRow, ytDlpRow, readBlenderVersion, blenderRow, condaRows };

@@ -1186,6 +1186,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/update/node-runtime',
   'POST /api/update/node-runtime/startup',
   'POST /api/update/pm2',
+  // Managed Blender: downloads and copies an app bundle, then switches the renderer.
+  'POST /api/update/software/blender',
 
   // Brain links (#8742): git clone/pull in the linked repo, opening a host
   // app, or queuing a CoS malware-scan/repo-study agent. `buckets` CRUD,

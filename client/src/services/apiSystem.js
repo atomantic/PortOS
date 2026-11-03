@@ -76,11 +76,23 @@ export const getBrowserUpdateStatus = (options) => request('/update/browser', op
 // Settings › Software: every additional component PortOS manages, one row each.
 export const getSoftwareInventory = ({ fresh = false, ...options } = {}) =>
   request(`/update/software${fresh ? '?fresh=1' : ''}`, options);
-export const updateNodeRuntime = (version) => request('/update/node-runtime', {
+// `acknowledgeBusy` proceeds although PortOS is busy (the owner override).
+export const updateNodeRuntime = (version, { acknowledgeBusy = false, ...options } = {}) => request('/update/node-runtime', {
   method: 'POST',
-  body: JSON.stringify({ version })
+  body: JSON.stringify({ version, ...(acknowledgeBusy ? { acknowledgeBusy } : {}) }),
+  ...options,
 });
-export const updatePm2Runtime = () => request('/update/pm2', { method: 'POST' });
+export const updatePm2Runtime = ({ acknowledgeBusy = false, ...options } = {}) => request('/update/pm2', {
+  method: 'POST',
+  ...(acknowledgeBusy ? { body: JSON.stringify({ acknowledgeBusy }) } : {}),
+  ...options,
+});
+// Managed Blender (macOS): download, verify, select for Code Animation, re-check.
+export const installManagedBlender = ({ acknowledgeBusy = false, ...options } = {}) => request('/update/software/blender', {
+  method: 'POST',
+  body: JSON.stringify(acknowledgeBusy ? { acknowledgeBusy } : {}),
+  ...options,
+});
 export const repairNodeStartup = () => request('/update/node-runtime/startup', { method: 'POST' });
 export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/sync-fork', {
   method: 'POST',

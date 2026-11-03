@@ -11,7 +11,7 @@ import { useSocketResource } from '../../hooks/useSocketResource';
 import { usePortosRestartWatch } from '../../hooks/usePortosRestartWatch';
 import { formatDateTime } from '../../utils/formatters';
 
-const EVENTS = ['portos:node-runtime:changed', 'review:queue:changed'];
+const EVENTS = ['portos:node-runtime:changed', 'review:queue:changed', 'software:changed'];
 const readInventory = () => api.getSoftwareInventory({ silent: true });
 
 const STATE_ORDER = ['security', 'attention', 'update', 'unknown', 'current', 'missing', 'unsupported'];
@@ -28,16 +28,29 @@ const HIDDEN_BY_DEFAULT = new Set(['missing', 'unsupported']);
 
 // Each action is the component home's own endpoint, so guards (busy install,
 // pinned formula, unsupported platform) behave exactly as they do there.
+// `opts` carries `silent` and the owner's `acknowledgeBusy` override.
 const ACTIONS = {
-  'node-update': (action) => api.updateNodeRuntime(action.version),
-  'pm2-sync': () => api.updatePm2Runtime(),
-  'ytdlp-update': () => api.updateYtDlp(),
-  'ollama-upgrade': () => api.upgradeLocalLlmBackend('ollama'),
+  'node-update': (action, opts) => api.updateNodeRuntime(action.version, opts),
+  'pm2-sync': (_action, opts) => api.updatePm2Runtime(opts),
+  'ytdlp-update': (_action, { silent }) => api.updateYtDlp({ silent }),
+  'ollama-upgrade': (_action, { silent }) => api.upgradeLocalLlmBackend('ollama', { silent }),
+  'blender-install': (_action, opts) => api.installManagedBlender(opts),
 };
 
-// Actions whose request returns `started` while the work continues on the server.
-// Maps to the server job kind its events carry.
-const BACKGROUND_JOBS = { 'pm2-sync': 'pm2-update' };
+// Actions whose request answers `started` while the work continues on the server,
+// and the socket events that end it (`error` before `finish` when it failed).
+const BACKGROUND_JOBS = {
+  'pm2-sync': {
+    error: ['portos:update:error', (frame) => frame.step === 'pm2-update'],
+    finish: ['portos:node-runtime:changed', (frame) => frame.reason === 'job-finished' && frame.kind === 'pm2-update'],
+  },
+  'blender-install': {
+    error: ['software:blender', (frame) => frame.step === 'error'],
+    finish: ['software:changed', (frame) => frame.reason === 'blender'],
+    progress: 'software:blender',
+  },
+};
+const JOB_EVENTS = [...new Set(Object.values(BACKGROUND_JOBS).flatMap((spec) => [spec.error[0], spec.finish[0], spec.progress].filter(Boolean)))];
 
 const rank = (row) => STATE_ORDER.indexOf(row.state);
 
@@ -52,7 +65,7 @@ function Versions({ row }) {
   );
 }
 
-function SoftwareRow({ row, pending, onAction }) {
+function SoftwareRow({ row, pending, progress, busyPrompt, onAction, onDismissBusy }) {
   const state = STATES[row.state] || STATES.unknown;
   return (
     <li className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:gap-3">
@@ -64,6 +77,15 @@ function SoftwareRow({ row, pending, onAction }) {
           {row.busy && <Pill tone="warning" size="xs">{row.busy}</Pill>}
         </div>
         {row.summary && <p className="text-xs text-gray-400 break-words">{row.summary}</p>}
+        {progress && <p className="text-xs text-port-accent break-words">{progress}</p>}
+        {busyPrompt && (
+          <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/30 bg-port-warning/10 px-2 py-1.5 text-xs text-port-warning">
+            <span className="min-w-0 flex-1 break-words">{busyPrompt}</span>
+            <button type="button" onClick={() => onAction(row, { acknowledgeBusy: true })}
+              className="min-h-[32px] rounded border border-port-warning/50 px-2 hover:bg-port-warning/20">Update anyway</button>
+            <button type="button" onClick={onDismissBusy} className="min-h-[32px] px-2 text-gray-400 hover:text-white">Cancel</button>
+          </div>
+        )}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         {row.action && (
@@ -104,17 +126,19 @@ export default function SoftwareTab() {
   const [pending, setPending] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // A Node/pm2 job that answered `started` without a restart keeps running on
-  // the server; it ends with `portos:node-runtime:changed` reason job-finished,
-  // preceded by `portos:update:error` when it failed.
-  // Events can arrive before the start response, so the job is tracked before
-  // the request and its outcome recorded until the response says it started.
+  // A job that answered `started` keeps running on the server and ends with the
+  // socket events its BACKGROUND_JOBS spec names. Events can arrive before the
+  // start response, so the job is tracked before the request and its outcome
+  // recorded until the response says it started.
   const [backgroundJob, setBackgroundJob] = useState(null);
+  const [progress, setProgress] = useState(null);
+  const [busyPrompt, setBusyPrompt] = useState(null);
   const jobRef = useRef(null);
   const settleJob = (job, { quiet = false } = {}) => {
     if (jobRef.current !== job) return;
     jobRef.current = null;
     setBackgroundJob(null);
+    setProgress(null);
     if (quiet) return;
     if (job.error !== undefined) toast.error(`${job.name} update failed${job.error ? `: ${job.error}` : ''}`);
     else toast.success(`${job.name} updated`);
@@ -122,24 +146,22 @@ export default function SoftwareTab() {
   const settleRef = useRef(settleJob);
   settleRef.current = settleJob;
   useEffect(() => {
-    const onError = ({ message, step } = {}) => {
+    const handlers = JOB_EVENTS.map((event) => [event, (frame = {}) => {
       const job = jobRef.current;
-      if (!job || step !== job.serverKind || job.error !== undefined) return;
-      job.error = message || '';
-      if (job.started) settleRef.current(job);
-    };
-    const onChanged = ({ reason, kind } = {}) => {
-      const job = jobRef.current;
-      if (reason !== 'job-finished' || !job || kind !== job.serverKind) return;
-      job.finished = true;
-      if (job.started) settleRef.current(job);
-    };
-    socket.on('portos:update:error', onError);
-    socket.on('portos:node-runtime:changed', onChanged);
-    return () => {
-      socket.off('portos:update:error', onError);
-      socket.off('portos:node-runtime:changed', onChanged);
-    };
+      if (!job) return;
+      const { error, finish, progress: progressEvent } = job.spec;
+      if (event === error[0] && error[1](frame) && job.error === undefined) {
+        job.error = frame.message || '';
+        if (job.started) settleRef.current(job);
+      } else if (event === finish[0] && finish[1](frame)) {
+        job.finished = true;
+        if (job.started) settleRef.current(job);
+      } else if (event === progressEvent && frame.message) {
+        setProgress({ id: job.id, message: frame.message });
+      }
+    }]);
+    for (const [event, handler] of handlers) socket.on(event, handler);
+    return () => { for (const [event, handler] of handlers) socket.off(event, handler); };
   }, []);
   // A refetch (including the one on reconnect) is authoritative: a started job
   // whose row no longer reports a running job has ended, even if its events were
@@ -163,20 +185,26 @@ export default function SoftwareTab() {
     setRefreshing(false);
   };
 
-  const runAction = async (row) => {
+  const runAction = async (row, { acknowledgeBusy = false } = {}) => {
     const launch = ACTIONS[row.action.kind];
     if (!launch) return;
+    setBusyPrompt(null);
     setPending(row.id);
     if (row.action.restarts) {
       await captureBaseline();
       setRestarting(true);
     }
-    const job = BACKGROUND_JOBS[row.action.kind] && !row.action.restarts
-      ? { id: row.id, name: row.name, serverKind: BACKGROUND_JOBS[row.action.kind] } : null;
+    const spec = BACKGROUND_JOBS[row.action.kind];
+    const job = spec && !row.action.restarts ? { id: row.id, name: row.name, spec } : null;
     jobRef.current = job;
-    const result = await launch(row.action).catch(() => null);
+    const result = await launch(row.action, { silent: true, acknowledgeBusy }).catch((err) => {
+      // The busy guard warns; the owner decides whether to go ahead anyway.
+      if (err?.code === 'SYSTEM_BUSY') setBusyPrompt({ id: row.id, message: err.message });
+      else toast.error(err?.message || `${row.name} update failed`);
+      return null;
+    });
     if (!result || result.restart === false) setRestarting(false);
-    if (job && result?.started && result.restart === false) {
+    if (job && result?.started && result.restart !== true) {
       job.started = true;
       if (job.finished || job.error !== undefined) settleJob(job);
       else setBackgroundJob(job);
@@ -233,7 +261,17 @@ export default function SoftwareTab() {
         <section key={group} className="overflow-hidden rounded-lg border border-port-border bg-port-card">
           <h3 className="border-b border-port-border px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-400">{group}</h3>
           <ul className="divide-y divide-port-border/60">
-            {rows.map((row) => <SoftwareRow key={row.id} row={row} pending={pending ?? backgroundJob?.id ?? null} onAction={runAction} />)}
+            {rows.map((row) => (
+              <SoftwareRow
+                key={row.id}
+                row={row}
+                pending={pending ?? backgroundJob?.id ?? null}
+                progress={progress?.id === row.id ? progress.message : null}
+                busyPrompt={busyPrompt?.id === row.id ? busyPrompt.message : null}
+                onAction={runAction}
+                onDismissBusy={() => setBusyPrompt(null)}
+              />
+            ))}
           </ul>
         </section>
       ))}

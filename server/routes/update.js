@@ -23,7 +23,11 @@ const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
 });
 
-const nodeUpdateSchema = z.object({
+// `acknowledgeBusy`: the owner proceeds although PortOS is busy (the guard
+// warns with what is running; it does not lock the owner out).
+const acknowledgeBusySchema = z.object({ acknowledgeBusy: z.boolean().optional() });
+
+const nodeUpdateSchema = acknowledgeBusySchema.extend({
   version: z.string().regex(/^v\d+\.\d+\.\d+$/, 'version must look like v26.12.1')
 });
 
@@ -226,8 +230,8 @@ router.get('/browser', asyncHandler(async (req, res) => {
 // PortOS on it. Refuses while anything a restart would kill is running.
 // Progress streams on `portos:update:step`.
 router.post('/node-runtime', asyncHandler(async (req, res) => {
-  const { version } = validateRequest(nodeUpdateSchema, req.body || {});
-  res.status(202).json(await startNodeUpdate({ version, io: req.app.get('io') }));
+  const { version, acknowledgeBusy } = validateRequest(nodeUpdateSchema, req.body || {});
+  res.status(202).json(await startNodeUpdate({ version, acknowledgeBusy, io: req.app.get('io') }));
 }));
 
 // POST /api/update/node-runtime/startup — repoint the macOS pm2 LaunchAgent at
@@ -245,7 +249,17 @@ router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
 // POST /api/update/pm2 — align the terminal's pm2 CLI and the daemon with the
 // pm2 PortOS ships; restarts PortOS only when the daemon is behind.
 router.post('/pm2', asyncHandler(async (req, res) => {
-  res.status(202).json(await startPm2Update({ io: req.app.get('io') }));
+  const { acknowledgeBusy } = validateRequest(acknowledgeBusySchema, req.body || {});
+  res.status(202).json(await startPm2Update({ acknowledgeBusy, io: req.app.get('io') }));
+}));
+
+// POST /api/update/software/blender — download the newest verified Blender of the
+// series PortOS is checked against (macOS), select it for Code Animation and re-run
+// its execution check. Progress streams on `software:blender`.
+router.post('/software/blender', asyncHandler(async (req, res) => {
+  const { acknowledgeBusy } = validateRequest(acknowledgeBusySchema, req.body || {});
+  const { startBlenderInstall } = await import('../services/blenderInstaller.js');
+  res.status(202).json(await startBlenderInstall({ acknowledgeBusy, io: req.app.get('io') }));
 }));
 
 export default router;
