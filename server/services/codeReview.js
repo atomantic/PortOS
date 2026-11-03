@@ -1515,7 +1515,10 @@ function classifyGoalFidelityObjective(objective) {
     && /\b(?:pick|implement|fix)\s+(?:one|a single)\b[^.\n]{0,60}\b(?:finding|improvement|fix)\b/i.test(objective)
     && !/\bextended regular audit\b/i.test(objective)
   const backfill = oneFindingAudit && /\bbackfill(?:FromHistory)?\b/i.test(objective)
-  const catalogRefresh = /\brefresh\b/i.test(objective) && /\bLOCAL_LLM_CATALOG\b/.test(objective)
+  // The refresh must be OF the local-LLM catalog: a bug about a refresh button
+  // in the catalog picker keeps the standard rubric.
+  const catalogRefresh = /\brefresh(?:es|ing)?\s+(?:the\s+)?(?:bundled\s+)?local[- ]LLM\b[^.\n]{0,40}\bcatalog\b/i.test(objective)
+    && /\bLOCAL_LLM_CATALOG\b/.test(objective)
   return {
     kind: disclosure ? 'disclosure' : oneFindingAudit ? 'audit' : catalogRefresh ? 'catalogRefresh' : 'standard',
     // Audit scope can coexist with a disclosure objective in a later paragraph.

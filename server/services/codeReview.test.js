@@ -1512,9 +1512,9 @@ describe('codeReview helpers', () => {
       expect(refreshed).toMatchObject({ ok: true, verdict: 'ship', missing: [] })
       expect(regexOnly).toMatchObject({ ok: true, verdict: 'fix-first', missing: ['local LLM catalog refresh as requested'] })
 
-      // The refresh rubric is scoped to refresh objectives; adding one named
-      // model keeps the standard rubric and its entry clause.
-      await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: 'Add Example Model 2 to `LOCAL_LLM_CATALOG`.', diff: refreshDiff })
+      // The refresh rubric is scoped to refreshing the catalog itself; a fix
+      // that merely mentions a refresh keeps the standard rubric.
+      await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective: 'Fix the `LOCAL_LLM_CATALOG` picker so its refresh button reloads the list.', diff: refreshDiff })
       expect(rubrics.at(-1)).not.toContain('are alternatives, not a checklist')
       expect(rubrics.at(-1)).toContain('the entry\'s identifier is its `key` field')
     })
