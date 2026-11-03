@@ -604,6 +604,10 @@ The selected work is split across parallel jobs:
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
   Non-PR runs and pull requests into `release` always run it. Pregate reports
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
+- **macOS native release-agent supervision** — runs the launchd-coalition
+  release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
+  pull request only when the `macos_native` output is true; see
+  "macOS native release-agent supervision" below.
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
   (`server/services/superColliderRender.live.test.js`) against real Docker on
@@ -743,6 +747,36 @@ still test shipping ownership/retirement behavior on the primary runner. Their
 broad real-Git histories/configuration fixtures are not native CLI contracts.
 Native Git child ownership and settlement remain independently exercised on
 Windows; a failure there must still be fixed, not hidden by this boundary.
+
+### macOS native release-agent supervision
+
+macOS is the primary interactive target, and release agents there run under
+the launchd-coalition supervisor (`server/lib/darwinAgentSupervisor.py`). Its
+real-process boundary suite, `server/lib/windowsAgentProcess.darwin.test.js`,
+and the macOS arm of `supervised native release recovery` in
+`server/services/releaseCandidateRecovery.test.js` skip on every other
+platform. The `macos-native` job (`macos-latest`) runs exactly those two files
+(`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so a change that breaks
+macOS release recovery cannot pass every required check.
+
+macOS runners are the scarcest hosted capacity, so the job is gated by an
+explicit path list (`MACOS_NATIVE_PATH_RE`), not an import closure: the
+recovery suite's closure reaches most of the server. On a pull request the
+`macos_native` output is true only when the diff touches
+`server/lib/windowsAgentProcess*.js`, `server/lib/darwinAgentSupervisor.py`,
+`server/services/releaseCandidateRecovery*.js`,
+`server/services/releaseCandidateSettlement.js`, the server Vitest harness
+(`server/vitest.config.js`, `server/vitest.setup.js`,
+`scripts/vitestTempRootSetup.js`), the install inputs
+(`server/package.json`, `server/package-lock.json`,
+`scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
+`release` always run it. It is part of `CI Gate`; a skipped run passes.
+
+Before the suites, the job runs the supervisor's own `--probe`: a real
+single-use launchd job round trip. A runner whose user domain refuses
+`launchctl bootstrap` fails that named step rather than an assertion inside
+the suite. Pregate reports the job as CI-only; on a Mac, run
+`npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js`.
 
 ### Windows selection for mixed changes
 

@@ -55,6 +55,7 @@ const planWith = (overrides = {}) => ({
   linuxContainment: false,
   supercolliderLive: false,
   dockerContainmentLive: false,
+  macosNative: false,
   ...overrides,
 });
 
@@ -1417,6 +1418,8 @@ describe('uncoveredSuites', () => {
       .toEqual([{ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive }]);
     expect(uncoveredSuites(planWith({ dockerContainmentLive: true })))
       .toEqual([{ suite: 'dockerContainmentLive', reason: 'needs a real Docker engine and pulls the pinned Node image', remedy: UNCOVERED_SUITES.dockerContainmentLive }]);
+    expect(uncoveredSuites(planWith({ macosNative: true })))
+      .toEqual([{ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative }]);
     expect(uncoveredSuites(planWith())).toEqual([]);
   });
 

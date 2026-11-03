@@ -42,7 +42,7 @@ describe('Dependabot maintainer release', () => {
     expect(ci.impact.indexOf('node scripts/ci-dependabot-admission.js'))
       .toBeLessThan(ci.impact.indexOf('node scripts/ci-base-sha.js'));
     expect(ci.impact).not.toContain('continue-on-error: true');
-    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment', 'docker-containment-live', 'supercollider-live']) {
+    for (const name of ['prompt-history', 'server', 'client', 'lint', 'database', 'browser', 'windows-server', 'node-minimum', 'linux-containment', 'docker-containment-live', 'macos-native', 'supercollider-live']) {
       expect(ci[name]).toContain('needs: impact');
     }
     expect(ci.gate).toContain('if: always()');
