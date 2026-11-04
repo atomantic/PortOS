@@ -204,10 +204,25 @@ export default function SceneCard({
   const referenceModel = referenceBackend === 'fal'
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
     : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
-  const referenceCapacity = musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
+  // them after the storyboard's first frame has landed instead.
+  const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
+  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
+    && renderSettings?.generationMode !== 'audioReactive';
+  const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
+  const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
+  const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
   const variantId = scene.characterVariant?.ingredientId;
   const guidesPending = referenceCapacity > 0 && variantId && castMedia && castMedia[variantId] === undefined;
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
+  const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
+  const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
+  const referenceSheetPrefix = `Reference sheet: ${referenceLabels.join(', ')}.\n\nGenerated video: `;
+  const previewRequest = useLtxReferences ? { ...cardRequest,
+    prompt: `${referenceSheetPrefix}${cardRequest.prompt}`,
+    promptAdditions: [{ id: 'ltx-reference-sheet', label: 'Reference sheet', text: referenceSheetPrefix.trim() }, ...cardRequest.promptAdditions],
+  } : cardRequest;
   const missingReference = referenceCapacity > 0 && Array.isArray(scene.clipReferenceIds)
     && scene.clipReferenceIds.some((id) => !availableReferences.some((ref) => ref.id === id));
   // Hosted cutaways cannot use the Local project's supplied-audio default. Preserve
@@ -227,16 +242,22 @@ export default function SceneCard({
   const referenceRefusal = clipReferenceSaveState === 'saving' ? 'Saving clip references…'
     : clipReferenceSaveState === 'failed' ? 'Save the clip references before rendering'
       : guidesPending ? 'Cast guides are still loading'
-        : missingReference ? 'A selected clip reference is unavailable' : null;
+        : missingReference ? 'A selected clip reference is unavailable'
+          : useLtxReferences && ltxReferencesGreyboxBlocked ? 'Clear the greybox reference before using LTX reference images'
+            : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
+              : useLtxReferences && !cardRequest.authored?.trim() ? 'Add a shot prompt first' : null;
   const videoRefusal = greyboxRefusal || referenceRefusal || otherRefusal;
   const sendRender = () => {
     const { endFrame, wholeLine } = cardRequest;
     const card = {
-      prompt: cardRequest.authored,
+      prompt: useLtxReferences
+        ? `${referenceSheetPrefix}${cardRequest.authored}`
+        : cardRequest.authored,
       ...(endFrame ? { endFrame: endFrame.state === 'on' } : {}),
       ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
-      expectedClipReferenceFiles: musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity }).map((ref) => ref.imageId),
+      expectedClipReferenceFiles: selectedClipReferences.map((ref) => ref.imageId),
       ...songAudioField,
+      ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
@@ -247,7 +268,6 @@ export default function SceneCard({
   };
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
-  const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
   const storyboardRefusal = storyboardDefault ? greyboxRefusal || referenceRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
@@ -647,15 +667,30 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
               options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
-              saved={falVideoSettings || {}} disabled={!!generatingVideo} />
+              saved={falVideoSettings || {}} disabled={!!generatingVideo} minFrames={useLtxReferences ? 121 : null} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
+          {layer === 'footage' && canUseLtxReferences && (
+            <label className="flex items-center gap-2 text-xs text-port-text-muted">
+              <input type="checkbox" checked={useLtxReferences} disabled={!!generatingVideo || ltxReferencesGreyboxBlocked}
+                onChange={(event) => setRenderInputs((prev) => ({ ...prev, ltxReferences: event.target.checked,
+                  ...(event.target.checked ? { songAudio: false, endFrame: false } : {}) }))} />
+              Use LTX reference images (requires Ingredients adapter; at least 121 frames)
+            </label>
+          )}
+          {storyboardDefault && ltxReferencesAvailable && (
+            <p className="text-xs text-port-text-muted">Generate the storyboard frame first to use LTX reference images.</p>
+          )}
+          {canUseLtxReferences && ltxReferencesGreyboxBlocked && (
+            <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
+          )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : undefined} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (
-            <SceneRenderInputs id={fieldId('inputs')} request={cardRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch }))}
+            <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
+              ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
               grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,

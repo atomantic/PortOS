@@ -23,7 +23,7 @@ import { assertSafeLoraFilename, getLoraKeyLayout } from '../loras.js';
 import { LORA_EFFECT_PROBE_BUDGET_MS, probeLoraEffect } from '../loraEffectProbe.js';
 import { videoLoraFamily, isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
-  isIcLoraMode, icLoraSpecForMode, assertIcReferenceCount, icResolutionIssue,
+  isIcLoraMode, icLoraSpecForMode, icLoraSupportsRuntime, icLoraFrameIssue, assertIcReferenceCount, icResolutionIssue,
 } from '../../lib/icLoraWeights.js';
 import { continuationContract } from '../../lib/videoContinuity.js';
 import { videoModeContractError, videoReferenceModeError, videoContinuityContractError } from './modeContract.js';
@@ -361,6 +361,16 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     : (!mode && hasMultiKeyframes) ? 'fflf'
     : (!mode && sourceImagePath) ? 'image'
     : 'text';
+  if (helperMode === 'ic' && !icLoraSupportsRuntime(icLoraSpecForMode(mode), model.runtime)) {
+    throw new ServerError(`${mode} is not compatible with ${model.runtime}.`,
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' });
+  }
+  const icFrameIssue = icLoraFrameIssue(icLoraSpecForMode(mode), numFrames);
+  if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+  if (mode === 'ic-ingredients-25' && icSkipStage2) {
+    throw new ServerError('LTX 2.5 References requires the refinement stage.',
+      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
+  }
   if (helperMode === 'fflf' && !hasMultiKeyframes && (!sourceImagePath || !lastImagePath)) {
     throw new ServerError(
       'FFLF mode on the ltx2 runtime requires either a keyframes array (length >= 2) or BOTH a start image and an end image.',
@@ -546,6 +556,7 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     if (sourceImagePath) args.push('--image', sourceImagePath);
   }
   if (helperMode === 'ic') {
+    if (mode === 'ic-ingredients-25' && sourceImagePath) args.push('--image', sourceImagePath);
     args.push(...icLoraArgs({
       mode, width, height, icReferencePaths, icLoraWeightPath,
       icStrength, icAttentionStrength, icSkipStage2,

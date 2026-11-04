@@ -151,6 +151,25 @@ export const IC_LORA_MODES = Object.freeze({
     // user must pre-download the weight through PortOS' single-file path first.
     requiresPreDownload: true,
   }),
+  'ingredients-25': Object.freeze({
+    id: 'ingredients-25',
+    mode: 'ic-ingredients-25',
+    baseModel: 'ltx-2.5',
+    revision: null,
+    label: 'LTX 2.5 References',
+    description: 'Keep characters, props and locations consistent with a reference sheet',
+    uploadLabel: 'Choose a character, prop or location reference',
+    repo: 'Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients',
+    filename: 'ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors',
+    // Measured from the official downloaded safetensors file.
+    sizeBytes: 1_308_787_472,
+    referenceDownscaleFactor: 1,
+    minReferences: 1,
+    maxReferences: 8,
+    referenceKind: 'image',
+    gated: true,
+    requiresPreDownload: true,
+  }),
   // NOT a remix mode (`mode: null`) and NOT on the remix base model — the
   // Pixel Spatial Upscaler is a 2x reference-conditioned upscale adapter for
   // LTX-2.5, reached from the video upscale flow (#6502) rather than the render
@@ -201,10 +220,22 @@ export const IC_LORA_MODES = Object.freeze({
 // directly so the container shape stays private.
 export const listIcLoraWeights = () => Object.values(IC_LORA_MODES);
 
-// A weight is offered as a render remix mode only if it both carries a `mode`
-// value and targets the base model the remix pipeline is pinned to. A weight
-// failing either test is still provisioned, just never rendered with.
-const isRemixSpec = (spec) => !!spec?.mode && spec.baseModel === IC_LORA_REMIX_BASE_MODEL;
+// A render mode must name a supported LTX generation; upscale-only weights
+// remain available through the separate provisioning flow.
+const isRemixSpec = (spec) => !!spec?.mode && ['ltx-2.3', 'ltx-2.5'].includes(spec.baseModel);
+
+/** Do not fuse an adapter trained for one model generation into another. */
+export const icLoraSupportsRuntime = (spec, runtime) => (
+  !!spec && ((spec.baseModel === 'ltx-2.3' && runtime === 'ltx2')
+    || (spec.baseModel === 'ltx-2.5' && runtime === 'ltx25'))
+);
+
+export const icLoraFrameIssue = (spec, numFrames) => {
+  if (spec?.mode !== 'ic-ingredients-25') return null;
+  const frames = Number(numFrames);
+  return Number.isInteger(frames) && frames >= 121 && (frames - 1) % 8 === 0
+    ? null : 'LTX 2.5 References requires at least 121 frames on the 8n+1 frame grid.';
+};
 
 export const listIcLoraRemixModes = () => listIcLoraWeights().filter(isRemixSpec);
 
@@ -257,7 +288,7 @@ export const IC_LORA_WEIGHT_KEYS = Object.freeze(listIcLoraWeights().map(icLoraW
 // aggregate mirror reports `cached` off any unrelated resident weight) and for
 // a revision-pinned spec (a repo-wide check would happily accept a different
 // commit's snapshot). Both cases also make an unscoped integrity walk wrong.
-export const icLoraProbesExactFile = (spec) => !!(spec && (spec.mirrorRepo || spec.revision));
+export const icLoraProbesExactFile = (spec) => !!(spec && (spec.mirrorRepo || spec.revision || spec.requiresPreDownload));
 
 // Every IC-LoRA HF repo, for the integrity-scan / status surface. The mirror
 // repos are deliberately EXCLUDED: an unscoped integrity scan walks each repo's

@@ -1,4 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import sharp from 'sharp';
 
 const { execFileMock, findFfmpegMock, routesToWindowsHelperMock } = vi.hoisted(() => ({
   execFileMock: vi.fn((...args) => {
@@ -89,5 +93,34 @@ describe('prepareVideoConditioningMedia', () => {
     await prepareVideoConditioningMedia(imageInput('mlx_video'));
     expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(crfCalls()).toHaveLength(0);
+  });
+
+  it('combines LTX 2.5 stills into one ordered sheet and a clip as long as the output', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ltx-sheet-test-'));
+    const first = join(dir, 'first.png');
+    const second = join(dir, 'second.png');
+    const jobId = 'sheet-' + Date.now();
+    const sheet = join(tmpdir(), 'ic-sheet-' + jobId + '.png');
+    let result;
+    try {
+      await sharp({ create: { width: 8, height: 8, channels: 3, background: '#ff0000' } }).png().toFile(first);
+      await sharp({ create: { width: 8, height: 8, channels: 3, background: '#0000ff' } }).png().toFile(second);
+      result = await prepareVideoConditioningMedia({
+        model: { runtime: 'ltx25' }, mode: 'ic-ingredients-25',
+        icReferencePaths: [first, second], w: 64, h: 64, parsedFps: 24,
+        parsedNumFrames: 129, jobId, uploadedTempPaths: [],
+      });
+      expect(result.resolvedIcReferencePaths).toEqual([join(tmpdir(), 'ic-sheet-' + jobId + '.mp4')]);
+      const [, args] = execFileMock.mock.calls.find(([, argv]) => argv.includes('-loop'));
+      expect(args[args.indexOf('-frames:v') + 1]).toBe('129');
+      const { data, info } = await sharp(sheet).raw().toBuffer({ resolveWithObject: true });
+      const pixel = (x, y) => [...data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3)];
+      expect(pixel(16, 32)).toEqual([255, 0, 0]);
+      expect(pixel(48, 32)).toEqual([0, 0, 255]);
+    } finally {
+      await result?.cleanupTempFiles();
+      await rm(dir, { recursive: true, force: true });
+      await rm(sheet, { force: true });
+    }
   });
 });

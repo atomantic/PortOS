@@ -27,7 +27,7 @@ const CONDITIONING_CRF_BY_RUNTIME = Object.freeze({ mlx_video: 33 });
  */
 export async function prepareVideoConditioningMedia({
   model, mode, sourceImagePath, lastImagePath, keyframes, icReferencePaths,
-  w, h, parsedFps, jobId, uploadedTempPath, uploadedTempPaths, audioFilePath,
+  w, h, parsedFps, parsedNumFrames, jobId, uploadedTempPath, uploadedTempPaths, audioFilePath,
 }) {
   // Resize conditioning images to match the model resolution. mlx_video and
   // ltx2 both require exact dimensions (they don't auto-pad), and pixie-forge
@@ -174,7 +174,7 @@ export async function prepareVideoConditioningMedia({
     })));
   };
   const resolvedIcReferencePaths = await materializeIngredientsReferences({
-    mode, icReferencePaths, ffmpeg, w, h, parsedFps, jobId,
+    mode, icReferencePaths, ffmpeg, w, h, parsedFps, parsedNumFrames, jobId,
     icReferenceTempPaths, cleanupTempFiles,
   });
   return {
@@ -185,7 +185,7 @@ export async function prepareVideoConditioningMedia({
 
 /** Materialize Ingredients stills, settling every encode before failure cleanup. */
 async function materializeIngredientsReferences({
-  mode, icReferencePaths, ffmpeg, w, h, parsedFps, jobId,
+  mode, icReferencePaths, ffmpeg, w, h, parsedFps, parsedNumFrames, jobId,
   icReferenceTempPaths, cleanupTempFiles,
 }) {
   if (isIcLoraMode(mode) && icLoraSpecForMode(mode)?.referenceKind === 'image'
@@ -197,6 +197,40 @@ async function materializeIngredientsReferences({
         'ffmpeg is required to prepare still references for Ingredients mode — install it (brew install ffmpeg) and retry.',
         { status: 400, code: 'IC_LORA_STILL_NEEDS_FFMPEG' },
       );
+    }
+    // LTX 2.5 Ingredients was trained on one composite sheet, represented as a
+    // static reference video at least as long as the output (minimum 121 frames).
+    // The older 2.3 adapter instead receives individual short reference clips.
+    if (mode === 'ic-ingredients-25') {
+      const sheetPath = join(tmpdir(), `ic-sheet-${jobId}.png`);
+      const clipPath = join(tmpdir(), `ic-sheet-${jobId}.mp4`);
+      icReferenceTempPaths.push(sheetPath, clipPath);
+      try {
+        const { default: sharp } = await import('sharp');
+        const columns = icReferencePaths.length === 1 ? 1 : Math.ceil(Math.sqrt(icReferencePaths.length * w / h));
+        const rows = Math.ceil(icReferencePaths.length / columns);
+        const cellWidth = Math.floor(w / columns);
+        const cellHeight = Math.floor(h / rows);
+        const overlays = await Promise.all(icReferencePaths.map(async (path, i) => ({
+          input: await sharp(path).rotate().resize(cellWidth, cellHeight, {
+            fit: 'contain', background: '#000000',
+          }).png().toBuffer(),
+          left: (i % columns) * cellWidth,
+          top: Math.floor(i / columns) * cellHeight,
+        })));
+        await sharp({ create: { width: w, height: h, channels: 3, background: '#000000' } })
+          .composite(overlays).png().toFile(sheetPath);
+        const count = Math.max(121, Number(parsedNumFrames) || 121);
+        await execFileAsync(stillFfmpeg, [
+          '-loop', '1', '-i', sheetPath, '-frames:v', String(count),
+          '-r', String(parsedFps), '-pix_fmt', 'yuv420p', '-an', '-y', clipPath,
+        ], safeChildProcessOptions({ timeout: 60000 }));
+        return [clipPath];
+      } catch (error) {
+        await cleanupTempFiles();
+        throw new ServerError(`Failed to prepare the LTX 2.5 reference sheet: ${error.message}`,
+          { status: 400, code: 'IC_LORA_STILL_PREP_FAILED' });
+      }
     }
     // Register EVERY target path up-front, before any encode starts, and settle
     // all of them before deciding. `Promise.all` + push-on-success would reject

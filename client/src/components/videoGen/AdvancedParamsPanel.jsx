@@ -12,7 +12,7 @@ import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import { formatDownloadGb } from '../../utils/formatters.js';
 import {
   isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
-  isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
+  isIcLoraMode, isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
   contextFrameOptionsForModel, selectedContextFramesForModel, supportsContextWindow,
   DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode,
   videoChainChunkModes,
@@ -63,10 +63,10 @@ export default function AdvancedParamsPanel({
   const showFrames = !(mode === 'a2v' && currentModel?.audioDurationDriven === true);
   // Chunk chaining seeds chunk N+1 from chunk N's last frame, so it needs i2v —
   // the same predicate the picker uses, not a second reading of supportedModes.
-  const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
+  const showChunks = mode !== 'a2v' && !isIcLoraMode(mode) && isModelAllowedForMode(currentModel, 'image');
   // ltx2 extend conditions on the source's latent rather than a single frame,
   // so image strength is meaningless for it.
-  const showImageStrength = mode === 'image' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));
+  const showImageStrength = mode === 'image' || mode === 'ic-ingredients-25' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));
   // The reference-mode promise (#4874) is an image-mode question only, and only
   // a runtime that carries per-image conditioning strength can keep anything but
   // the default. Rendering it read-only elsewhere would imply a choice that does
@@ -462,7 +462,7 @@ export default function AdvancedParamsPanel({
           {showImageStrength && (
             <div className="col-span-2 sm:col-span-3">
               <div className="flex items-center justify-between gap-3 mb-1">
-                <label htmlFor={fieldId('video-image-strength')} className="block text-xs font-medium text-gray-400">Image Strength</label>
+                <label htmlFor={fieldId('video-image-strength')} className="block text-xs font-medium text-gray-400">{mode === 'ic-ingredients-25' ? 'Opening Frame Strength' : 'Image Strength'}</label>
                 <span className="text-[11px] text-gray-500">{hasExplicitStrength || effectiveImageStrength != null ? String(displayedImageStrength) : '1.0'}</span>
               </div>
               <input

@@ -42,7 +42,7 @@ import {
   publicVideoTextEncoderOptions, resolveVideoTextEncoder,
 } from '../../lib/videoTextEncoders.js';
 import {
-  isIcLoraMode, resolveIcLoraWeight,
+  isIcLoraMode, icLoraSpecForMode, icLoraSupportsRuntime, icLoraFrameIssue, resolveIcLoraWeight,
 } from '../../lib/icLoraWeights.js';
 import {
   BYOV_VIDEO_RUNTIMES,
@@ -629,6 +629,17 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   // argument when the caller deliberately leaves the resolution unset.
   ({ width, height } = resolveVideoDimensions(model, width, height));
   numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  const icSpec = icLoraSpecForMode(mode);
+  if (icSpec && !icLoraSupportsRuntime(icSpec, model.runtime)) {
+    throw new ServerError(mode + ' requires a ' + icSpec.baseModel + ' model.',
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' });
+  }
+  const icFrameIssue = icLoraFrameIssue(icSpec, numFrames);
+  if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+  if (mode === 'ic-ingredients-25' && icSkipStage2) {
+    throw new ServerError('LTX 2.5 References requires the refinement stage.',
+      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
+  }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
   const {
@@ -676,6 +687,10 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
     }
     icLoraWeightPath = resolved.path;
+    if (!resolved.path && mode === 'ic-ingredients-25') {
+      throw new ServerError('Download ' + resolved.spec.label + ' from the model panel first.',
+        { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' });
+    }
     if (!resolved.cached && resolved.path) {
       console.log(`⬇️  IC-LoRA weight not cached — ${resolved.spec.repo} will download at render time`);
     }
@@ -776,7 +791,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
     hasMultiKeyframes, ffmpeg, ffprobe, cleanupTempFiles,
   } = await prepareVideoConditioningMedia({
     model, mode, sourceImagePath, lastImagePath, keyframes, icReferencePaths,
-    w, h, parsedFps, jobId, uploadedTempPath, uploadedTempPaths, audioFilePath,
+    w, h, parsedFps, parsedNumFrames, jobId, uploadedTempPath, uploadedTempPaths, audioFilePath,
   });
 
   const createdAt = new Date().toISOString();

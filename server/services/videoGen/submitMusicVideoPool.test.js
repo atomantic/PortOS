@@ -44,6 +44,13 @@ beforeEach(() => {
 });
 
 describe('Music Video supplied-audio submission integration', () => {
+  it('rejects combining LTX reference images with a saved greybox', async () => {
+    m.project.scenes[0].setReference = { greyboxShotId: 'greybox' };
+    await expect(submitVideoGenJob({ ...body(), mode: 'ic-ingredients-25',
+      musicVideo: { ...body().musicVideo, songAudio: false } }, {}))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_LTX_REFERENCES_UNSUPPORTED' });
+    expect(m.enqueue).not.toHaveBeenCalled();
+  });
   it('keeps the selected target, exact provenance, scene binding and revision guard in the normal queue path', async () => {
     await expect(submitVideoGenJob(body(), {})).resolves.toMatchObject({ mediaProviderPeerId: peerId, status: 'queued' });
     expect(m.slice).toHaveBeenCalledWith(expect.objectContaining({ fps: 24, numFrames: 25 }));

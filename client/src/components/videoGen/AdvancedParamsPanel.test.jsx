@@ -69,6 +69,11 @@ describe('AdvancedParamsPanel', () => {
     expect(screen.getByLabelText('Frames')).toBeTruthy();
   });
 
+  it('does not offer chunking for an LTX reference render', () => {
+    renderPanel({ mode: 'ic-ingredients-25', chunks: 2, currentModel: { runtime: 'ltx25', supportedModes: MLX_MODES } });
+    expect(screen.queryByLabelText('Chunks')).toBeNull();
+  });
+
   it('hides the manual frame picker when A2V follows the uploaded audio duration', () => {
     renderPanel({
       mode: 'a2v',
@@ -110,6 +115,15 @@ describe('AdvancedParamsPanel', () => {
 
     renderPanel({ mode: 'image' });
     expect(screen.getByLabelText('Image Strength')).toBeTruthy();
+  });
+
+  it('shows the opening frame strength used by LTX reference renders', () => {
+    const onImageStrengthChange = vi.fn();
+    renderPanel({ mode: 'ic-ingredients-25', imageStrength: '0.35', onImageStrengthChange });
+    const strength = screen.getByLabelText('Opening Frame Strength');
+    expect(strength.value).toBe('0.35');
+    fireEvent.change(strength, { target: { value: '0.8' } });
+    expect(onImageStrengthChange).toHaveBeenCalledWith('0.8');
   });
 
   it('hides image strength for an ltx2 extend render', () => {

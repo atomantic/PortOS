@@ -1,8 +1,34 @@
 import { describe, expect, it } from 'vitest';
 import { appendSceneTakes, rejectUnusedTakes, swapSceneFrames } from './takes.js';
-import { captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
+import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
+
+it('keeps an LTX take as a candidate when its selected guide changes during rendering', () => {
+  const item = { id: 'mv-1', visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character' },
+    { id: 'other', imageId: 'other.png', role: 'character' },
+  ] }, scenes: [{ sceneId: 's1', referenceImageId: 'start.png', clipReferenceIds: ['rider'] }] };
+  const dependencies = captureTakeDependencies(item.scenes[0]);
+  dependencies.references.push(captureClipReferenceDependency(item, item.scenes[0]));
+  const take = { kind: 'video', assetId: 'clip', source: 'generated', dependencies };
+  expect(appendSceneTakes(item, 's1', [take]).scene.videoHistoryId).toBe('clip');
+  item.scenes[0].clipReferenceIds = ['other'];
+  const result = appendSceneTakes(item, 's1', [take]).scene;
+  expect(result.videoHistoryId).toBeUndefined();
+  expect(result.takes.at(-1).status).toBe('candidate');
+});
+
+it('does not auto-select a candidate when its external cast guide cannot be tracked', () => {
+  const item = { id: 'mv-1', scenes: [{ sceneId: 's1', referenceImageId: 'start.png',
+    characterVariant: { ingredientId: 'rider' }, clipReferenceIds: ['mvr-guide-rider.png'] }] };
+  const dependency = captureClipReferenceDependency(item, item.scenes[0]);
+  expect(dependency.untrackedCastGuides).toBe(true);
+  const { scene } = appendSceneTakes(item, 's1', [{ kind: 'video', assetId: 'clip', source: 'generated',
+    dependencies: { version: 1, references: [dependency] }, autoSelect: false }]);
+  expect(scene.videoHistoryId).toBeUndefined();
+  expect(scene.takes.at(-1).status).toBe('candidate');
+});
 
 describe('take generation cost (#10157)', () => {
   it('stores a finite quote and its spend kind, and omits both when unpriced or invalid', () => {

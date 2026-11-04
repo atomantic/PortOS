@@ -10,7 +10,7 @@ import { basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoBriefAllowsVideo } from '../../lib/musicVideoMediumPlan.js';
 import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideoActionContract.js';
-import { captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { captureClipReferenceDependency, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
@@ -98,11 +98,12 @@ async function assertSourceAudioCurrent({ project, prepared }) {
   await assertCurrentSourceAudioWindow(project, prepared.audio.audioConditioning);
 }
 
-function captureDependencies({ body, params, scene, prepared }) {
+function captureDependencies({ body, params, scene, prepared, project }) {
   if (!scene) return;
   // A style-break end frame (#11173) is a dependency too, so changing it stales the clip.
   const endImageId = body.lastImageFile && body.lastImageFile === scene.endImageId ? scene.endImageId : null;
   params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null, endImageId);
+  if (body.mode === 'ic-ingredients-25') params.musicVideoDependencies.references.push(captureClipReferenceDependency(project, scene));
   if (prepared.audio) params.musicVideoDependencies.references.push(...prepared.audio.audioDependencies.references);
 }
 
@@ -164,9 +165,26 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.');
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
+  let referencePromptPrefix = null;
+  if (body.mode === 'ic-ingredients-25' && scene) {
+    // Resolve against this exact project snapshot, then capture dependencies
+    // from it below. An earlier resolver may have seen an older selection.
+    const { musicVideoClipReferences } = await import('./clipCastReferences.js');
+    const current = await musicVideoClipReferences(musicVideo, 8, { project, excludePath: prepared.sourceImagePath || null, includePromptLabels: true });
+    const labels = current.map((ref) => ref.promptLabel);
+    const prefix = `Reference sheet: ${labels.join(', ')}.\n\nGenerated video: `;
+    const expectedLabels = musicVideo.expectedClipReferenceLabels;
+    if (JSON.stringify(current.map((ref) => ref.path)) !== JSON.stringify(params.icReferencePaths || [])
+      || (Array.isArray(expectedLabels) && (JSON.stringify(labels) !== JSON.stringify(expectedLabels)
+        || !params.prompt.startsWith(prefix)))) {
+      refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed while preparing the render. Review them and submit again.');
+    }
+    if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
+  }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
     const actual = backend === VIDEO_GEN_MODE.GROK ? (params.castReferences || []).map((ref) => basename(ref.path))
-      : (params.referenceImagePaths || []).map((path) => basename(path));
+      : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
+        .map((path) => basename(path));
     if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
       refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed or could not be loaded. Review them and render again.');
     }
@@ -188,10 +206,11 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
   }
   const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox });
+  if (referencePromptPrefix) params.prompt = referencePromptPrefix + params.prompt;
   assertShotTiming({ params, scene, performance, prepared });
   applyActionContract({ params, scene, performance });
   await assertSourceAudioCurrent({ project, prepared });
-  captureDependencies({ body, params, scene, prepared });
+  captureDependencies({ body, params, scene, prepared, project });
   stampSceneTakeCost({ body, params, scene, project, performance, backend });
   return composedAdditions;
 }

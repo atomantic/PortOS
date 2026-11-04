@@ -429,6 +429,16 @@ export const IC_LORA_MODES = [
     // gallery list rather than the single upload/history pair).
     referenceKind: 'image',
   },
+  {
+    mode: 'ic-ingredients-25',
+    label: 'LTX 2.5 References',
+    description: 'Keep characters, props and locations consistent with a reference sheet',
+    uploadLabel: 'Choose a character, prop or location reference',
+    referenceDownscaleFactor: 1,
+    minReferences: 1,
+    maxReferences: 8,
+    referenceKind: 'image',
+  },
 ];
 
 export const IC_LORA_MODE_VALUES = IC_LORA_MODES.map((m) => m.mode);
@@ -458,7 +468,8 @@ export const icResolutionIssue = (spec, width, height) => {
 export const isModelAllowedForMode = (model, mode) => {
   if (!model) return false;
   if (mode === 'a2v') return isAudioToVideoRuntime(model.runtime);
-  if (isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
+  if (isIcLoraMode(mode)) return mode === 'ic-ingredients-25'
+    ? model.runtime === 'ltx25' : model.runtime === 'ltx2';
   return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };
 

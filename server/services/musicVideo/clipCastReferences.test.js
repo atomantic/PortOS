@@ -9,7 +9,7 @@ vi.mock('../../lib/pathSafety.js', () => ({
   resolveImageInputPath: (file) => (file === 'gone.png' ? null : file === 'guide-refs.png' ? `/inputs/${file}` : `/gallery/${file}`),
 }));
 
-const { musicVideoClipCastReferences, musicVideoLocalReferencePaths } = await import('./clipCastReferences.js');
+const { musicVideoClipReferences, musicVideoClipCastReferences, musicVideoLocalReferencePaths } = await import('./clipCastReferences.js');
 
 const project = (scene, references) => ({
   id: 'mv-1',
@@ -54,6 +54,15 @@ describe('musicVideoClipCastReferences', () => {
     scene.clipReferenceIds = [];
     expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([]);
     expect(scene.frameReferenceIds).toEqual(['mvr-cs-character']);
+  });
+
+  it('resolves from the supplied project snapshot instead of re-reading a different one', async () => {
+    const scene = { sceneId: 's1', clipReferenceIds: ['mvr-cs-character'] };
+    const snapshot = project(scene, REFS);
+    getProject.mockResolvedValue(project({ sceneId: 's1', clipReferenceIds: ['mvr-cs-cast-guest'] }, REFS));
+    const refs = await musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: snapshot });
+    expect(refs.map((ref) => ref.path)).toEqual(['/gallery/lead.png']);
+    expect(getProject).not.toHaveBeenCalled();
   });
 
   it('refuses a deleted explicit selection', async () => {

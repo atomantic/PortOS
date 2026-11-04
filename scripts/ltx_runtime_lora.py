@@ -235,7 +235,7 @@ def _apply(module, quantized: bool, down, up, strength: float, stage_policy=None
             object.__setattr__(module, _ADAPTERS_ATTR, [])
         module.__dict__[_ADAPTERS_ATTR].append(entry)
         if stage_policy is not None:
-            module.__dict__.setdefault(_STAGED_ATTR, []).append((entry, down, up, strength, dtype))
+            module.__dict__.setdefault(_STAGED_ATTR, []).append((entry, down, up, strength, dtype, stage_policy))
         return
     module.weight = _fused_weight(module.weight, [(down, up, strength)])
 
@@ -483,6 +483,15 @@ def detach_runtime_adapters(model) -> int:
     return count
 
 
+def set_staged_adapter_multiplier(model, policy: dict, multiplier: float) -> None:
+    """Update staged adapter slots without changing the packed base weights."""
+    policy["multiplier"] = multiplier
+    for _name, module in model.named_modules():
+        for entry, down, up, strength, dtype, entry_policy in module.__dict__.get(_STAGED_ATTR, []):
+            if entry_policy is policy:
+                entry[:] = _runtime_pair(down, up, strength, dtype, multiplier)
+
+
 def load_ltx_adapter(path: str) -> dict:
     """Read an adapter with the runtime's own key renaming, so targets match the DiT."""
     from ltx_core_mlx.loader import LTXV_LORA_COMFY_RENAMING_MAP, SafetensorsStateDictLoader
@@ -616,9 +625,7 @@ def install_pipeline_adapters(
         policy["multiplier"] = strengths[index]
         dit = getattr(pipe, "dit", None)
         if dit is not None:
-            for _name, module in dit.named_modules():
-                for entry, down, up, strength, dtype in module.__dict__.get(_STAGED_ATTR, []):
-                    entry[:] = _runtime_pair(down, up, strength, dtype, policy["multiplier"])
+            set_staged_adapter_multiplier(dit, policy, policy["multiplier"])
         # Reuse the application summaries; reporting never retains tensors/models.
         for (path, _strength), application in applications.items():
             summary = {**application, "strength": application["selectedStrength"] * policy["multiplier"],

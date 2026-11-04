@@ -28,7 +28,7 @@
 
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join, extname } from 'path';
+import { join, extname, basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_IMAGES, videoReferenceImageSlots } from './requestFields.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
@@ -47,7 +47,7 @@ import { minimaxH3ControlError } from './minimaxH3Controls.js';
 import { wan22FrameCountError } from './wan22Controls.js';
 import { resolveContextFrames, resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import {
-  IC_LORA_MODE_VALUES, icLoraSpecForMode,
+  IC_LORA_MODE_VALUES, icLoraSpecForMode, icLoraSupportsRuntime, icLoraFrameIssue,
   assertIcReferenceCount, describeIcReferenceRange,
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
@@ -225,11 +225,11 @@ export async function validateVideoRetryParams(params = {}) {
     }
   }
   if ((mode === 'a2v' && !isAudioToVideoRuntime(model.runtime))
-    || (icLoraSpecForMode(mode) && !isLtx2FamilyRuntime(model.runtime))) {
+    || (icLoraSpecForMode(mode) && !icLoraSupportsRuntime(icLoraSpecForMode(mode), model.runtime))) {
     throw new ServerError(
       mode === 'a2v'
         ? `a2v mode requires an audio-to-video runtime. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`
-        : `${mode} mode requires an ltx2-runtime model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
+        : `${mode} requires a ${icLoraSpecForMode(mode).baseModel} model. Model "${modelId}" runs on "${model.runtime || 'mlx_video'}".`,
       { status: 400, code: mode === 'a2v' ? 'A2V_RUNTIME_UNSUPPORTED' : 'IC_LORA_REQUIRES_LTX2' },
     );
   }
@@ -240,6 +240,12 @@ export async function validateVideoRetryParams(params = {}) {
     }
   }
   const numFrames = params.numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  const icFrameIssue = icLoraFrameIssue(icLoraSpecForMode(mode), numFrames);
+  if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+  if (mode === 'ic-ingredients-25' && (params.icSkipStage2 === true || params.icSkipStage2 === 'true')) {
+    throw new ServerError('LTX 2.5 References requires the refinement stage.',
+      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
+  }
   const fps = params.fps ?? 24;
   if (isMiniMaxH3Runtime(model.runtime)) {
     const controlError = minimaxH3ControlError({
@@ -924,13 +930,18 @@ function assertIcLoraRequest({ icSpec, body, uploads, effectiveModel, effectiveM
   assertIcReferenceCount(icSpec, refCount, (msg) => new ServerError(msg, {
     status: 400, code: 'IC_LORA_REFERENCE_COUNT',
   }));
-  // IC-LoRA remix is an LTX-2 primitive (ICLoraPipeline). Fail before enqueue
-  // so a bad modelId can't pollute the persisted queue with a doomed job.
-  if (effectiveModel && !isLtx2FamilyRuntime(effectiveModel.runtime)) {
+  // Fail before enqueue when the selected adapter and model generation differ.
+  if (effectiveModel && !icLoraSupportsRuntime(icSpec, effectiveModel.runtime)) {
     throw new ServerError(
-      `${icSpec.label} mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      `${icSpec.label} mode requires a ${icSpec.baseModel} model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
       { status: 400, code: 'IC_LORA_REQUIRES_LTX2' },
     );
+  }
+  const frameIssue = icLoraFrameIssue(icSpec, body.numFrames ?? effectiveModel?.defaultFrames ?? DEFAULT_NUM_FRAMES);
+  if (frameIssue) throw new ServerError(frameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+  if (icSpec.mode === 'ic-ingredients-25' && (body.icSkipStage2 === true || body.icSkipStage2 === 'true')) {
+    throw new ServerError('LTX 2.5 References requires the refinement stage.',
+      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
   }
   // Chained renders re-seed each chunk from the previous chunk's last frame;
   // an IC render is conditioned on a whole reference clip instead, so there's
@@ -953,6 +964,18 @@ async function resolveIcReferencePaths({
   icSpec, body, icReferenceUploadPath, getHistory, resolveHistoryVideoPath, cleanupStaged,
 }) {
   if (icSpec.referenceKind === 'image') {
+    if (icSpec.mode === 'ic-ingredients-25' && body.musicVideo?.sceneId) {
+      const { musicVideoClipReferences } = await import('../musicVideo/clipCastReferences.js');
+      const refs = await musicVideoClipReferences(body.musicVideo, icSpec.maxReferences, {
+        excludePath: body.sourceImageFile ? resolveGalleryImage(body.sourceImageFile) : null,
+      });
+      const actual = refs.map((ref) => basename(ref.path));
+      if (JSON.stringify(actual) !== JSON.stringify(body.icReferenceImageFiles)) {
+        throw new ServerError('The shot references changed. Review them and render again.',
+          { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+      }
+      return refs.map((ref) => ref.path);
+    }
     // Gallery-only, exactly like `keyframes` — same path-traversal guard, same
     // "reject up-front so the queue never accepts a doomed job" contract. The
     // service materializes each still into a VAE-compatible clip at render
@@ -1226,6 +1249,11 @@ async function resolvePreparedParams({
     uploadedTempPath = sourceImagePath;
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
+  }
+  if (declaredMode === 'ic-ingredients-25' && body.sourceImageFile && !sourceImagePath) {
+    await cleanupStaged();
+    throw new ServerError('The selected opening frame is missing or could not be resolved. Choose it again.',
+      { status: 400, code: 'IC_LORA_SOURCE_MISSING' });
   }
   // Re-run the same contract now that the gallery pick has been resolved to a
   // real path: the pre-staging pass only saw that a filename was *declared*, so

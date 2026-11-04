@@ -10,7 +10,7 @@ const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded b
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
 /** The extra images this model will receive alongside the shot's frame. */
-export default function SceneClipReferences({ project, scene, castMedia, backend, model, onEditLocal, onSave, onSaveState, saveState }) {
+export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, onEditLocal, onSave, onSaveState, saveState }) {
   const [adding, setAdding] = useState(false);
   const allChoices = musicVideoClipReferenceChoices(project, scene, castMedia);
   const choices = allChoices.filter((ref) => ref.imageId !== scene.referenceImageId);
@@ -20,7 +20,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const retained = (scene.clipReferenceIds || []).filter((id) => !chosenIds.includes(id));
   const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.clipReferenceIds);
-  const capacity = musicVideoClipReferenceCapacity(backend, model);
+  const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model);
   const unknownModel = !backend || (['local', 'fal'].includes(backend) && !model);
   const guideId = scene.characterVariant?.ingredientId;
   const locked = saveState === 'saving' || Boolean(castMedia && guideId && castMedia[guideId] === undefined);

@@ -553,6 +553,7 @@ const generateBodySchema = z.object({
       // Refuse if the saved shot no longer matches the mode the board priced.
       expectedShot: z.enum(['cutaway', 'lipsync', 'music']).optional(),
       expectedClipReferenceFiles: z.array(z.string().min(1).max(512)).max(MAX_REFERENCE_IMAGE_FILES).optional(),
+      expectedClipReferenceLabels: z.array(z.string().min(1).max(512)).max(MAX_REFERENCE_IMAGE_FILES).optional(),
       // The shot card's Whole sung line: a performance take's song slice covers
       // the full lyric line the shot sits in; its edit points still frame the shot.
       wholeLine: z.boolean().optional(),
@@ -1177,17 +1178,23 @@ const pickJobParams = (job) => {
   // from a basename alone (an upload isn't re-derivable), so this is display
   // only; the resumed render is already queued with the real path.
   if (Array.isArray(params.icReferencePaths)) {
-    const names = params.icReferencePaths
+    const references = params.icReferencePaths
       .filter((p) => typeof p === 'string' && p)
-      .map((p) => basename(p));
+      .map((path) => ({ path, name: basename(path) }));
+    const names = references.map((ref) => ref.name);
     if (names.length) out.icReferenceNames = names;
-    // For an IMAGE-kind weight the basename IS the gallery filename (references
-    // are gallery-only, never uploads), so unlike the clip case the resuming form
-    // CAN repopulate its picker and re-submit. Echo it under the submit field name
-    // so the client needs no per-kind translation.
-    if (names.length && icLoraSpecForMode(params.mode)?.referenceKind === 'image') {
+    // A Music Video cast guide can live outside the gallery. Only restore the
+    // whole set when every basename resolves to the SAME gallery path; a partial
+    // restore could submit a different identity or silently omit one.
+    if (names.length && icLoraSpecForMode(params.mode)?.referenceKind === 'image'
+      && references.every(({ path, name }) => resolveGalleryImage(name, { mustExist: false }) === path)) {
       out.icReferenceImageFiles = names;
     }
+  }
+  if (params.mode === 'ic-ingredients-25' && typeof params.sourceImagePath === 'string' && params.sourceImagePath) {
+    const name = basename(params.sourceImagePath);
+    if (resolveGalleryImage(name, { mustExist: false }) === params.sourceImagePath) out.sourceImageFile = name;
+    else out.unavailableSourceImageName = name;
   }
   // Same display-only echo as the IC references above: basenames only. They ARE
   // the gallery filenames, so the resuming form can repopulate its picker.

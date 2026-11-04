@@ -307,7 +307,7 @@ export default function VideoGen() {
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
     disableAudio, setDisableAudio, noMusic, setNoMusic,
-    sourceImageFile, sourceImageUpload, sourceUploadUrl,
+    sourceImageFile, sourceImageUpload, sourceUploadUrl, unavailableSourceImageName,
     pickSourceImage, uploadSourceImage, clearSourceImage,
     lastImageFile, lastImageUpload, lastUploadUrl,
     pickLastImage, uploadLastImage, clearLastImage, lastFrameIsAdvisory,
@@ -886,6 +886,8 @@ export default function VideoGen() {
   // pull before hitting Render.
   const modelDownload = useModelDownloadStatus({ kind: 'video' });
   const modelStatus = modelId ? modelDownload.getStatus(modelId) : null;
+  const ltx25ReferenceId = 'ic-ingredients-25';
+  const ltx25ReferenceStatus = currentModel?.runtime === 'ltx25' ? modelDownload.getStatus(ltx25ReferenceId) : null;
   const selectedH3SpeedProfile = currentModel?.speedProfiles?.find((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p));
   const speedProfileAssetId = selectedH3SpeedProfile ? speedProfileDownloadId(modelId, speedProfileId) : null;
   const speedProfileStatus = speedProfileAssetId ? modelDownload.getStatus(speedProfileAssetId) : null;
@@ -956,7 +958,8 @@ export default function VideoGen() {
   ], { loading: modelDownload.loading, downloading: modelDownload.downloading, enabled: !rendersOffMachine });
   const sharedEncoderAsset = assets.find(asset => asset.key === 'shared-encoder');
   const blockedAsset = assets.find(asset => asset.blocked);
-  const activeWeightErrorIds = assets.filter(asset => asset.applies).map(asset => asset.id).filter(Boolean);
+  const activeWeightErrorIds = [...assets.filter(asset => asset.applies).map(asset => asset.id).filter(Boolean),
+    ...(currentModel?.runtime === 'ltx25' ? [ltx25ReferenceId] : [])];
   const activeWeightError = activeWeightErrorIds.includes(modelDownload.lastError?.modelId)
     ? modelDownload.lastError
     : null;
@@ -1553,10 +1556,10 @@ export default function VideoGen() {
             />
           )}
 
-          {(mode === 'image' || (runwaySpecial && !runwayInputs.characterVideo) || (mode === 'fflf' && !keyframesActive)) && (
+          {(mode === 'image' || mode === 'ic-ingredients-25' || (runwaySpecial && !runwayInputs.characterVideo) || (mode === 'fflf' && !keyframesActive)) && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
               <FramePanel
-                label={runwayPerformance ? 'Character image' : runwaySpecial ? 'Guidance image (optional)' : mode === 'fflf' ? 'First frame' : 'Source image'}
+                label={runwayPerformance ? 'Character image' : runwaySpecial ? 'Guidance image (optional)' : mode === 'ic-ingredients-25' ? 'Opening frame (optional)' : mode === 'fflf' ? 'First frame' : 'Source image'}
                 file={sourceImageFile}
                 upload={sourceImageUpload}
                 uploadUrl={sourceUploadUrl}
@@ -1573,6 +1576,12 @@ export default function VideoGen() {
                   title: 'Only LTX-2.5 carries a per-image conditioning strength, which is what a loose (Inspire) reference needs. Every other runtime pins the supplied image as frame one.',
                 } : null}
               />
+              {mode === 'ic-ingredients-25' && unavailableSourceImageName && (
+                <p role="status" className="text-xs text-port-warning">
+                  The in-flight opening frame ({unavailableSourceImageName}) cannot be restored. Pick it again, or{' '}
+                  <button type="button" className="underline" onClick={clearSourceImage}>continue without it</button>.
+                </p>
+              )}
               {mode === 'fflf' && (
                 <FramePanel
                   label="Last frame"
@@ -1825,6 +1834,20 @@ export default function VideoGen() {
                     onCancel={modelDownload.cancel}
                     estimateLabel={deriveSizeEstimate(currentModel?.name)}
                   />
+                )}
+                {ltx25ReferenceStatus && !ltx25ReferenceStatus.cached && (
+                  <div className="mt-2 rounded-lg border border-port-border px-3 py-2 text-[11px] text-gray-400">
+                    <p>Optional: add reference images for characters, props and locations with the LTX 2.5 Ingredients adapter.</p>
+                    <p>Accept access on <a className="underline" href="https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients" target="_blank" rel="noreferrer">Hugging Face</a> and connect the same account before downloading.</p>
+                    <ModelDownloadBadge
+                      status={ltx25ReferenceStatus}
+                      onDownload={() => modelDownload.start(ltx25ReferenceId)}
+                      onCancel={modelDownload.cancel}
+                      disabled={modelDownload.downloading && modelDownload.activeModelId !== ltx25ReferenceId}
+                      disabledReason="Wait for the current download to finish"
+                      estimateLabel="~1.31 GB"
+                    />
+                  </div>
                 )}
                 {activeWeightError && (
                   <div role="status" className="mt-2 rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-2 text-[11px] text-port-error">
