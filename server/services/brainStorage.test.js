@@ -1229,6 +1229,26 @@ describe('brainStorage meta strict reads (#4115)', () => {
   });
 });
 
+it('serializes concurrent meta patches so disjoint settings both persist', async () => {
+  // Seed a cached snapshot before firing both public adapter calls together;
+  // without a shared read/modify/write queue each update can spread this same
+  // pre-image and the later save drops the earlier field.
+  await brainStorage.updateMeta({ existingSetting: 'preserved' });
+  const [first, second] = await Promise.all([
+    brainStorage.updateMeta({ firstConcurrentSetting: 'first' }),
+    brainStorage.updateMeta({ secondConcurrentSetting: 'second' }),
+  ]);
+
+  expect(first.firstConcurrentSetting).toBe('first');
+  expect(second.secondConcurrentSetting).toBe('second');
+  brainStorage.invalidateAllCaches();
+  await expect(brainStorage.loadMeta()).resolves.toMatchObject({
+    existingSetting: 'preserved',
+    firstConcurrentSetting: 'first',
+    secondConcurrentSetting: 'second',
+  });
+});
+
 it('keeps latest-ten defaults while allowing complete JSONL catch-up', async () => {
   const records = Array.from({ length: 1001 }, (_, i) => ({ id: 'digest-' + i, generatedAt: new Date(Date.UTC(2020, 0, i + 1)).toISOString() }));
   const dir = join(getTempRoot(), 'brain');
