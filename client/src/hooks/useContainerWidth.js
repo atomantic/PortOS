@@ -12,13 +12,15 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 export default function useContainerWidth() {
   const ref = useRef(null);
   const observedRef = useRef({ el: null, ro: null });
+  const measuredElRef = useRef(null);
   const [width, setWidth] = useState(0);
 
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el) {
+    if (el && el !== measuredElRef.current) {
+      measuredElRef.current = el;
       const initial = Math.floor(el.getBoundingClientRect().width || el.clientWidth || 0);
-      if (initial > 0 && initial !== width) {
+      if (initial > 0) {
         setWidth(initial);
       }
     }
