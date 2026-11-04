@@ -16,6 +16,7 @@ import {
 } from '../../services/apiMusicVideo.js';
 
 const FIELD = 'w-full min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-[32px]';
+const ICON_BUTTON = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border bg-port-bg text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px] sm:min-w-[32px]';
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
 const NEED_LABELS = { research: 'research', references: 'photos', still: 'still', variant: 'variant still' };
 const REFERENCE_ORIGIN_LABELS = { upload: 'Upload', gallery: 'Gallery', research: 'Research', shot: 'Shot' };
@@ -97,7 +98,7 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
             {cameo.stillImageId && <button type="button" className={BUTTON} onClick={() => save({ stillImageId: null })}>Clear still</button>}
           </div>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close cameo" className={BUTTON}><X size={14} aria-hidden="true" /></button>
+        <button type="button" onClick={onClose} aria-label="Close cameo" className={ICON_BUTTON}><X size={14} aria-hidden="true" /></button>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -160,7 +161,7 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
                   <button type="button" className={BUTTON} onClick={() => save({ stillImageId: ref.imageId })} disabled={cameo.stillImageId === ref.imageId}>
                     {cameo.stillImageId === ref.imageId ? 'Still' : 'Use as still'}
                   </button>
-                  <button type="button" className={BUTTON} aria-label="Remove photo"
+                  <button type="button" className={ICON_BUTTON} aria-label="Remove photo"
                     onClick={() => run(() => removeMusicVideoCameoReference(project.id, cameo.cameoId, ref.imageId, { silent: true }), 'Failed to remove the photo')}>
                     <X size={12} aria-hidden="true" />
                   </button>
@@ -187,7 +188,7 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
               <Thumb imageId={v.imageId} label={`${v.label} still`} />
               <span className="min-w-0 flex-1 truncate text-xs">{v.label}</span>
               <button type="button" className={BUTTON} onClick={() => setPicker({ kind: 'variant', variantId: v.variantId })}>Pick still</button>
-              <button type="button" className={BUTTON} aria-label={`Remove variant ${v.label}`}
+              <button type="button" className={ICON_BUTTON} aria-label={`Remove variant ${v.label}`}
                 onClick={() => run(() => deleteMusicVideoCameoVariant(project.id, cameo.cameoId, v.variantId, { silent: true }), 'Failed to remove the variant')}>
                 <Trash2 size={12} aria-hidden="true" />
               </button>
@@ -219,7 +220,7 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
               <li key={scene.sceneId} className="flex items-center gap-2">
                 <Thumb imageId={scene.referenceImageId} label="" className="h-8 w-12" />
                 <span className="min-w-0 flex-1 truncate text-xs">{shotName(scene)}{scene.cameoVariantId ? ` · ${variantName(scene.cameoVariantId) || 'variant'}` : ''}</span>
-                <button type="button" className={BUTTON} aria-label={`Unlink ${shotName(scene)}`}
+                <button type="button" className={ICON_BUTTON} aria-label={`Unlink ${shotName(scene)}`}
                   onClick={() => run(() => unlinkMusicVideoCameoShots(project.id, [scene.sceneId], { silent: true }), 'Failed to unlink the shot')}>
                   <X size={12} aria-hidden="true" />
                 </button>
@@ -319,7 +320,7 @@ function CameoPhotoReview({ project, cameos, coverageById, onApply, onOpen, disa
                             : <span className="min-w-0 truncate text-[11px] text-port-text-muted">{REFERENCE_ORIGIN_LABELS[ref.source] || 'No link'}</span>}
                           <button type="button" data-cameo-photo-remove disabled={disabled} aria-disabled={pending || undefined} aria-label={`Remove ${photoName}`}
                             onClick={(e) => remove(e.currentTarget, cameo.cameoId, ref.imageId)}
-                            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg hover:bg-port-border/40 disabled:opacity-50">
+                            className={`${ICON_BUTTON} shrink-0`}>
                             <X size={14} aria-hidden="true" />
                           </button>
                         </div>
