@@ -82,8 +82,8 @@ const RETRO_CSS = `
 .retro .stripes i:nth-child(2) { height: 5pt; width: 88%; }
 .retro .stripes i:nth-child(3) { height: 2pt; width: 76%; }
 .retro .byline { font-family: "Courier New", Courier, monospace; text-transform: uppercase; letter-spacing: 0.15em; }
-.retro .hero { position: relative; border-width: 4pt; border-radius: 10pt; }
-.retro .hero::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(to bottom, rgba(0,0,0,0.16) 0 1.2pt, transparent 1.2pt 3.6pt); pointer-events: none; }
+.retro .frame { border-width: 4pt; border-radius: 10pt; }
+.retro .frame::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(to bottom, rgba(0,0,0,0.16) 0 1.2pt, transparent 1.2pt 3.6pt); pointer-events: none; }
 .retro .tagline { font-family: "Courier New", Courier, monospace; font-size: 15pt; }
 .retro .scan { border-width: 4pt; border-radius: 10pt; background: repeating-linear-gradient(to bottom, #fff 0 15pt, #000 15pt 16pt); padding: 0.18in 0.22in; }
 .retro .scan .text { background: #fff; padding: 0.08in 0.1in; border: 2pt solid #000; }
@@ -92,6 +92,7 @@ const RETRO_CSS = `
 .retro .vhs b { background: #000; color: #fff; padding: 1pt 5pt; margin-right: 4pt; font-style: italic; }
 .retro .play { margin: 0.1in 0 0; font-family: "Courier New", Courier, monospace; font-size: 10pt; font-weight: 700; }
 .retro .qr { background: #fff; border: 2pt solid #000; }
+.retro .hero img { max-width: calc(100cqw - 8pt); max-height: calc(100cqh - 8pt); }
 .retro .qr.placeholder { border-style: dashed; }
 .retro .details { font-family: "Courier New", Courier, monospace; font-size: 11pt; }
 `;
@@ -126,15 +127,17 @@ body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .kicker { margin: 0; font-size: 15pt; font-weight: 700; letter-spacing: 0.3em; text-transform: uppercase; border-bottom: 3pt solid #000; padding-bottom: 0.08in; }
 h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-weight: 900; font-size: 58pt; line-height: 0.95; text-transform: uppercase; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .byline { margin: 0; font-size: 20pt; font-weight: 700; }
-.hero { flex: 1 1 auto; min-height: 0; border: 3pt solid #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.hero img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(1) contrast(1.15); }
+/* The hero takes the space left over; the framed image fits inside it whole (never cropped). */
+.hero { flex: 1 1 auto; min-height: 0; container-type: size; display: flex; align-items: center; justify-content: center; }
+.frame { position: relative; display: flex; border: 3pt solid #000; overflow: hidden; }
+.hero img { display: block; max-width: calc(100cqw - 6pt); max-height: calc(100cqh - 6pt); width: auto; height: auto; filter: grayscale(1) contrast(1.15); }
 .tagline { margin: 0; font-size: 17pt; line-height: 1.3; }
 .scan { display: flex; gap: 0.3in; align-items: center; border: 3pt solid #000; padding: 0.2in; }
 .scan .text { flex: 1 1 auto; min-width: 0; }
 .scan h2 { margin: 0 0 0.08in; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-size: 30pt; text-transform: uppercase; line-height: 1; }
 .url { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 13pt; overflow-wrap: anywhere; }
 .muted { color: #555; }
-.qr { width: 2.5in; height: 2.5in; flex: 0 0 auto; }
+.qr { width: 2.1in; height: 2.1in; flex: 0 0 auto; }
 .qr svg { width: 100%; height: 100%; display: block; }
 .qr.placeholder { border: 2pt dashed #000; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 13pt; font-weight: 700; text-transform: uppercase; line-height: 1.4; }
 .details { margin: 0; font-size: 12pt; line-height: 1.4; }
@@ -145,7 +148,7 @@ ${f.kicker ? `<p class="kicker">${escapeHtml(f.kicker)}</p>` : ''}
 ${f.title ? `<h1>${escapeHtml(f.title)}</h1>` : ''}
 ${retro ? '<div class="stripes" aria-hidden="true"><i></i><i></i><i></i></div>' : ''}
 ${f.byline ? `<p class="byline">${escapeHtml(f.byline)}</p>` : ''}
-${image ? `<div class="hero"><img src="${escapeHtml(image)}" alt=""></div>` : '<div class="hero" style="border:none"></div>'}
+${image ? `<div class="hero"><div class="frame"><img src="${escapeHtml(image)}" alt=""></div></div>` : '<div class="hero"></div>'}
 ${f.tagline ? `<p class="tagline">${lines(f.tagline)}</p>` : ''}
 <section class="scan"><div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>${qr}</section>
 ${f.details ? `<p class="details">${lines(f.details)}</p>` : ''}

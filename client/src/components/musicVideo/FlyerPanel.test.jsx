@@ -69,7 +69,11 @@ describe('FlyerPanel gallery image', () => {
     expect(screen.getByLabelText('Image')).toHaveValue('gallery');
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
     const flyer = resolveFlyer(project({ flyer: { image: 'gallery', imageFile: 'art.png' } }));
-    expect(buildFlyerHtml(flyer, { origin: 'https://host.example' })).toContain('src="https://host.example/data/images/art.png"');
+    const html = buildFlyerHtml(flyer, { origin: 'https://host.example' });
+    expect(html).toContain('src="https://host.example/data/images/art.png"');
+    // The art is fitted whole inside its frame, never cropped to fill it.
+    expect(html).not.toContain('object-fit: cover');
+    expect(html).toContain('max-height: calc(100cqh');
   });
 });
 
