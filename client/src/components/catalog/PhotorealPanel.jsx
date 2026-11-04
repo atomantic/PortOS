@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Aperture, Box, Check, Download, Film, Loader2 } from 'lucide-react';
+import { Aperture, Box, Check, Download, Film, Loader2, Wrench } from 'lucide-react';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import MediaImage from '../MediaImage';
@@ -244,10 +244,14 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         )}
       </div>
 
-      <p className="text-xs text-gray-400">
-        {status?.blenderVersion ? `Blender ${status.blenderVersion} checked. ` : 'Blender not checked yet. '}
-        Set up and check Blender under <Link to="/code-animation/production" className="text-port-accent hover:underline">Code Animation › Production › Blender execution</Link>.
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs text-gray-400">
+          {status?.blenderVersion ? `Blender ${status.blenderVersion} checked.` : 'Blender not checked yet.'}
+        </p>
+        <Link to="/code-animation/production#blender-execution" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-port-accent bg-port-accent/10 px-3 text-sm font-medium text-port-accent hover:bg-port-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent">
+          <Wrench size={16} aria-hidden="true" /> {status?.blenderVersion ? 'Blender settings' : 'Set up and check Blender'}
+        </Link>
+      </div>
 
       <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running}
         onBusyChange={onBusyChange} onSaved={onSaved} />

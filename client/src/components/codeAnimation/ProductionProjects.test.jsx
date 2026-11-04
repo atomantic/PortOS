@@ -205,6 +205,41 @@ describe('Production project rendered interactions', () => {
     expect(api.probeCodeAnimationExecution).not.toHaveBeenCalled();
   });
 
+  it('makes clear that passed supervision checks did not test an unconfigured Blender', async () => {
+    const user = userEvent.setup();
+    api.getCodeAnimationExecution.mockResolvedValue(execution({
+      executionMode: 'trusted-local',
+      tools: { blender: { executable: null, problem: 'Not configured.', engine: 'BLENDER_EEVEE_NEXT' } },
+      probe: { passed: true, contained: false, refused: null, tools: {}, checks: [
+        { id: 'time', passed: true, detail: 'Time limit passed.' },
+        { id: 'disk', passed: true, detail: 'Disk limit passed.' },
+        { id: 'memory', passed: true, detail: 'Memory limit passed.' },
+        { id: 'cancel', passed: true, detail: 'Cancellation passed.' },
+      ] },
+    }));
+    renderPage('/code-animation/production');
+    const path = await screen.findByLabelText('Blender executable (operator-owned)');
+    expect(path).toHaveValue('');
+    expect(path).toHaveAttribute('placeholder', 'Enter the Blender executable path');
+    expect(screen.getByText(/Enter a Blender executable path and select Save tool/)).toBeInTheDocument();
+    expect(screen.getByText('Supervision checks passed: 4 of 4')).toBeInTheDocument();
+    expect(screen.getByText('Blender test render: Not run.')).toBeInTheDocument();
+    const check = screen.getByRole('button', { name: 'Run execution check' });
+    expect(check).toBeDisabled();
+    await user.click(check);
+    expect(api.probeCodeAnimationExecution).not.toHaveBeenCalled();
+  });
+
+  it('shows the executable problem when a previously saved path is no longer valid', async () => {
+    api.getCodeAnimationExecution.mockResolvedValue(execution({
+      tools: { blender: { executable: null, problem: 'The executable was not found.' } },
+      lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: { ready: false, reason: 'Blender: The executable was not found.' } },
+    }));
+    renderPage('/code-animation/production');
+    expect(await screen.findByText(/The executable was not found\. Enter a Blender executable path and select Save tool/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
+  });
+
   it('reports refused containment and checks only a saved operator tool path', async () => {
     const user = userEvent.setup();
     renderPage('/code-animation/production');
@@ -222,14 +257,15 @@ describe('Production project rendered interactions', () => {
         tools: { blender: { passed: false, detail: 'Blender did not start under containment (failed: exit).' } } },
       lanes: { ...saved.lanes, blender: { ready: false, reason: 'Blender did not start under containment.' } } });
     await user.click(screen.getByRole('button', { name: 'Run execution check' }));
-    expect(await screen.findByText(/Containment proven: 1 of 1 checks/)).toBeInTheDocument();
+    expect(await screen.findByText('Containment checks passed: 1 of 1')).toBeInTheDocument();
+    expect(screen.getByText(/Blender test render: Failed/)).toBeInTheDocument();
     expect(screen.getByText('Blender did not start under containment.')).toBeInTheDocument();
     api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
       probe: { passed: true, refused: null, checks: [], tools: { blender: { passed: true, detail: 'Cycles / CPU test scene rendered.' } } },
       lanes: { ...saved.lanes, blender: { ready: true, reason: null } } });
     await user.click(screen.getByRole('button', { name: 'Run execution check' }));
     expect(await screen.findByText(/Ready for production rendering/)).toBeInTheDocument();
-    expect(screen.getByText('Cycles / CPU test scene rendered.')).toBeInTheDocument();
+    expect(screen.getByText(/Blender test render: Passed.*Cycles \/ CPU test scene rendered/)).toBeInTheDocument();
   });
 
   it('shows an empty state on the index and focuses the create form', async () => {
@@ -251,6 +287,21 @@ describe('Production project rendered interactions', () => {
     expect(await screen.findByRole('link', { name: 'New Production project' })).toHaveAttribute('href', '/code-animation/production');
     expect(screen.getAllByText('New Production project')).toHaveLength(1);
     expect(executionPanel().open).toBe(false);
+  });
+
+  it('opens a link to Blender execution while allowing the panel to be closed', async () => {
+    const user = userEvent.setup();
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    renderPage(`/code-animation/production/${project.id}#blender-execution`);
+    await screen.findByLabelText('Execution mode');
+    await waitFor(() => expect(executionPanel().open).toBe(true));
+    const summary = screen.getByText('Blender execution', { selector: 'summary', exact: false });
+    expect(scroll).toHaveBeenCalledWith({ block: 'start' });
+    expect(scroll.mock.instances).toContain(executionPanel());
+    expect(summary).toHaveFocus();
+    await user.click(summary);
+    await waitFor(() => expect(executionPanel().open).toBe(false));
+    scroll.mockRestore();
   });
 
   it('opens Blender execution when the selected project renders with Blender and the lane is not ready', async () => {
