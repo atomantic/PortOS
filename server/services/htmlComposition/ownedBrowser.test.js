@@ -16,7 +16,7 @@ vi.mock('node:fs/promises', async original => {
 });
 vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
-const { launchCompositionBrowser, resolveStartupMs } = await import('./ownedBrowser.js');
+const { launchCompositionBrowser } = await import('./ownedBrowser.js');
 const { drainBrowserProcessGroup, observeBrowserProcessGroup } = await import('./browserProcessGroup.js');
 
 let child;
@@ -172,12 +172,19 @@ describe('owned composition capture browser lifecycle', () => {
     expect(child.stderr.listenerCount('data')).toBe(0);
   });
 
-  it('names a browser that never produced output, and reads a startup override only when it is a positive integer', async () => {
+  it('names a browser that never produced output, and honors a startup override only when it is a positive integer', async () => {
+    const key = 'PORTOS_COMPOSITION_BROWSER_STARTUP_MS';
+    const prior = process.env[key];
     startup = () => { child.emit('spawn'); };
-    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(/phase=spawned-no-output/);
-    expect(resolveStartupMs({})).toBe(20000);
-    expect(resolveStartupMs({ PORTOS_COMPOSITION_BROWSER_STARTUP_MS: '60000' })).toBe(60000);
-    for (const bad of ['0', '-5', 'abc', '1.5', '']) expect(resolveStartupMs({ PORTOS_COMPOSITION_BROWSER_STARTUP_MS: bad })).toBe(20000);
+    try {
+      process.env[key] = '25';
+      await expect(launchCompositionBrowser()).rejects.toThrow(/deadlineMs=25, phase=spawned-no-output/);
+      // A malformed override falls back to the 20s default, so a tight explicit deadline is the only way out.
+      process.env[key] = 'abc';
+      await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(/deadlineMs=20,/);
+    } finally {
+      if (prior === undefined) delete process.env[key]; else process.env[key] = prior;
+    }
   });
 
   it('settles a spawn failure without trying to signal a nonexistent process', async () => {

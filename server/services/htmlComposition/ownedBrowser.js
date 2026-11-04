@@ -31,7 +31,7 @@ const ROOT_SANDBOX_REFUSAL = /Running as root without --no-sandbox is not suppor
 // browser-backed test raises it with PORTOS_COMPOSITION_BROWSER_STARTUP_MS
 // instead of every caller threading an option through its render stack.
 const DEFAULT_STARTUP_MS = 20000;
-export function resolveStartupMs(env = process.env) {
+function resolveStartupMs(env = process.env) {
   const configured = Number(env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS);
   return Number.isSafeInteger(configured) && configured > 0 ? configured : DEFAULT_STARTUP_MS;
 }
