@@ -40,6 +40,33 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(field()).toHaveValue(song);
   });
 
+  it('shows the answers saved on a row after a reload, and saves each edit with the project', () => {
+    vi.useFakeTimers();
+    try {
+      const savePostOptions = vi.fn(async () => true);
+      const publishing = hook({ savePostOptions });
+      const saved = project({ thumbnails: ['t1.jpg', 't2.jpg'], postOptions: { suno: { songUrl: 'https://suno.com/s/AbCdEf123', pin: false }, x: { storyImage: 't2.jpg' } } });
+      const { unmount } = render(<PublishPostingPanel project={saved} publishing={publishing} />);
+      expandAll();
+      const suno = row('Suno');
+      expect(within(suno).getByLabelText('Song URL (the take to publish)')).toHaveValue('https://suno.com/s/AbCdEf123');
+      expect(within(suno).getByLabelText('Pin to profile')).not.toBeChecked();
+      expect(within(row('X thread')).getByRole('radio', { name: 'Video frame 2' })).toHaveAttribute('aria-checked', 'true');
+      expect(savePostOptions).not.toHaveBeenCalled();
+
+      fireEvent.click(within(row('X thread')).getByRole('radio', { name: 'Video frame 1' }));
+      act(() => { vi.advanceTimersByTime(700); });
+      expect(savePostOptions).toHaveBeenCalledWith('mv-1', 'x', { storyImage: 't1.jpg' });
+
+      // A field typed just before the page goes away still saves.
+      fireEvent.change(within(suno).getByLabelText('Song URL (the take to publish)'), { target: { value: 'https://suno.com/s/Other999' } });
+      unmount();
+      expect(savePostOptions).toHaveBeenLastCalledWith('mv-1', 'suno', { songUrl: 'https://suno.com/s/Other999', pin: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fills a Reddit draft with the subreddit and post type, dropping blanks', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);

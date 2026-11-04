@@ -291,6 +291,14 @@ export async function updatePublishKitCopy(projectId, patch, deps = {}) {
       next.links = links;
     }
     if (patch?.flyer && typeof patch.flyer === 'object') next.flyer = { ...(kit.flyer || {}), ...patch.flyer };
+    if (patch?.postOptions && typeof patch.postOptions === 'object') {
+      const postOptions = { ...(kit.postOptions || {}) };
+      for (const [target, answers] of Object.entries(patch.postOptions)) {
+        const kept = Object.fromEntries(Object.entries(answers || {}).filter(([, v]) => v !== '' && v != null));
+        if (Object.keys(kept).length) postOptions[target] = kept; else delete postOptions[target];
+      }
+      next.postOptions = postOptions;
+    }
     if (patch?.draftOptions && typeof patch.draftOptions === 'object') {
       const prior = kit.draftOptions || {};
       next.draftOptions = {

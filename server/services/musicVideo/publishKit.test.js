@@ -411,6 +411,21 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit).not.toHaveProperty('copyEditedAt');
   });
 
+  it('keeps each platform row\'s answers, replacing that platform\'s and dropping blanks', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { postOptions: { suno: { songUrl: 'https://suno.com/s/AbCdEf123', pin: false }, x: { storyImage: 't2.jpg' } } });
+    let { project } = await kit.updatePublishKitCopy(id, { postOptions: { suno: { songUrl: 'https://suno.com/song/abc', prompt: '' } } });
+    expect(project.publishKit.postOptions).toEqual({ suno: { songUrl: 'https://suno.com/song/abc' }, x: { storyImage: 't2.jpg' } });
+    ({ project } = await kit.updatePublishKitCopy(id, { postOptions: { x: {} } }));
+    expect(project.publishKit.postOptions).toEqual({ suno: { songUrl: 'https://suno.com/song/abc' } });
+    expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+    // A half-typed link is kept; an unknown platform or answer, or `again`, is refused.
+    expect(validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { suno: { songUrl: 'https://su' } } }).postOptions.suno.songUrl).toBe('https://su');
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { myspace: {} } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { x: { color: 'red' } } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { x: { again: true } } })).toThrow();
+  });
+
   it('saves a Suno share link as the song page it opens, and keeps it as typed when it cannot be followed', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     const songId = '0a1b2c3d-1111-4222-8333-444455556666';

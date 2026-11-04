@@ -8,6 +8,7 @@ import {
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
+  updateMusicVideoPublishCopy,
   removeMusicVideoPublishPost,
   setMusicVideoPublishCrossLinks,
   prepareMusicVideoCrossLinkEdit,
@@ -143,6 +144,13 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .catch(() => { loadPlatforms(); return null; });
   };
 
+  // Save what the director typed or picked on a platform's row, so a reload or
+  // another tab shows it again. `forProjectId` is the row's project: a row that
+  // flushes as it unmounts on a project switch still saves to its own project.
+  const savePostOptions = (forProjectId, target, answers) => updateMusicVideoPublishCopy(forProjectId, { postOptions: { [target]: answers } })
+    .then((res) => { if (res?.project?.id && res.project.id === selection.current.projectId) replaceProject?.(res.project); return true; })
+    .catch(() => false);
+
   const recordPost = (target, body) => recordMusicVideoPublishPost(projectId, target, body)
     .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return res?.post || null; })
     .catch(() => null);
@@ -161,5 +169,5 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // null until the saved choice is known, so consumers never treat "unknown" as "none on".
   const enabledTargets = platforms ? Object.entries(platforms).filter(([, p]) => p?.enabled).map(([t]) => t) : null;
 
-  return { drafts, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
+  return { drafts, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

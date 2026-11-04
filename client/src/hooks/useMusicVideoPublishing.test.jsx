@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   updateMusicVideoPublishPlatforms: vi.fn(),
   recordMusicVideoPublishPost: vi.fn(),
   removeMusicVideoPublishPost: vi.fn(),
+  updateMusicVideoPublishCopy: vi.fn(async () => ({ project: { id: 'project-a', publishKit: {} } })),
 }));
 vi.mock('../services/apiMusicVideo.js', () => api);
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
@@ -53,6 +54,8 @@ describe('music-video publishing project boundary', () => {
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Post to YouTube' })).not.toBeInTheDocument();
     expect(within(row('Reddit')).getByLabelText('Subreddit')).toHaveValue('');
+    // The answer typed on the old project saves to that project, not the one now open.
+    expect(api.updateMusicVideoPublishCopy).toHaveBeenCalledWith('project-a', { postOptions: { reddit: { subreddit: 'example-community' } } });
     view.rerender(<Posting id="project-a" />);
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
   });

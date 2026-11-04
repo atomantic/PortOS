@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
 import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
@@ -428,20 +428,48 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const { target, label, note, linkPlaceholder } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
+    // What the director saved on this row wins over every prefill below.
+    const saved = kit.postOptions?.[target] || {};
     // Prefill Suno URL from autonomous run if available
     if ((target === 'suno' || target === 'sunoHook') && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
       const songId = project.autonomousRun.output.sunoSongIds[0];
-      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
+      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}`, ...saved };
     }
     if (target === 'distrokid') {
       // A song whose lyrics an LLM wrote in the autonomous run discloses AI lyrics by default.
-      return { songwriterFirst: '', songwriterLast: '', ...rememberedDistrokid(publishing.platforms?.distrokid), aiLyrics: !!project?.autonomousRun?.output?.lyrics };
+      return { songwriterFirst: '', songwriterLast: '', ...rememberedDistrokid(publishing.platforms?.distrokid), aiLyrics: !!project?.autonomousRun?.output?.lyrics, ...saved };
     }
-    return {};
+    return { ...saved };
   });
-  const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
+  // Every answer saves with the project as it is edited (briefly debounced, and at once
+  // when a field is left or the row goes away), so a reload or another tab shows it again.
+  const dirty = useRef(false);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const publishingRef = useRef(publishing);
+  publishingRef.current = publishing;
+  const projectId = project.id;
+  const flushOptions = () => {
+    if (!dirty.current) return;
+    dirty.current = false;
+    const answers = Object.fromEntries(Object.entries(optionsRef.current).filter(([, v]) => v !== '' && v != null));
+    const saving = publishingRef.current.savePostOptions?.(projectId, target, answers);
+    saving?.then((ok) => { if (!ok) dirty.current = true; });
+  };
+  const optionsKey = JSON.stringify(options);
+  useEffect(() => {
+    if (!dirty.current) return undefined;
+    const timer = setTimeout(flushOptions, 600);
+    return () => clearTimeout(timer);
+    // Keyed by the options' JSON; flushOptions reads the latest through refs.
+    // Dependency list is intentionally partial.
+  }, [optionsKey]);
+  // Dependency list is intentionally partial: flush once, as the row unmounts.
+  useEffect(() => () => flushOptions(), []);
+  const setOption = (key, value) => { dirty.current = true; setOptions((prev) => ({ ...prev, [key]: value })); };
   // Keep an answer that repeats across releases (or the account it names) in settings when the director leaves the field.
   const commitOption = (key, raw) => {
+    flushOptions();
     const value = typeof raw === 'string' ? raw.trim() : raw;
     const platform = publishing.platforms?.[target] || {};
     if (ACCOUNT_OPTION[target] === key) {
@@ -470,7 +498,11 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const draftSongUrl = draft?.songUrl;
   useEffect(() => {
     if (!draftSongUrl) return;
-    setOptions((prev) => (prev.songUrl && prev.songUrl !== draftSongUrl ? { ...prev, songUrl: draftSongUrl } : prev));
+    setOptions((prev) => {
+      if (!prev.songUrl || prev.songUrl === draftSongUrl) return prev;
+      dirty.current = true;
+      return { ...prev, songUrl: draftSongUrl };
+    });
   }, [draftSongUrl]);
   // A done platform folds to its header so the ones still to do are easy to reach.
   const [open, setOpen] = useState(() => !kit.posts?.[target]);
