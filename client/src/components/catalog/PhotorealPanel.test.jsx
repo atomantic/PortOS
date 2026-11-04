@@ -49,6 +49,26 @@ describe('PhotorealPanel', () => {
     expect(screen.getByText(/GPU \(METAL\)/)).toBeInTheDocument();
   });
 
+  // Catches a fly-through sent as stills, in the wrong camera order, or with no way to reach the saved MP4.
+  it('renders a fly-through through the cameras in list order and links the MP4 in Media History', async () => {
+    show();
+    const fly = await screen.findByRole('button', { name: /Render fly-through \(192 frames\)/ });
+    fireEvent.change(screen.getByLabelText('Seconds'), { target: { value: '4' } });
+    startCatalogPhotorealRender.mockResolvedValue({ id: 'pr-fly', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], flythroughSeconds: 4, startedAt: new Date().toISOString() });
+    fireEvent.click(screen.getByRole('button', { name: /Render fly-through \(96 frames\)/ }));
+    await waitFor(() => expect(startCatalogPhotorealRender).toHaveBeenCalledWith('plc-example',
+      { shotIds: ['wide', 'booth'], engine: 'eevee', samples: 32, flythroughSeconds: 4 }, { silent: true }));
+    expect(await screen.findByText(/fly-through, 4s \(96 frames\)/)).toBeInTheDocument();
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-fly', state: 'done', engine: 'eevee', shotIds: ['wide', 'booth'], flythroughSeconds: 4,
+      report: { version: '5.2.3', device: 'GPU', backend: 'METAL' }, video: { id: 'upload-abc123', filename: 'upload-abc123.mp4' } } }));
+    expect(screen.getByLabelText('Fly-through')).toHaveAttribute('src', '/data/videos/upload-abc123.mp4');
+    expect(screen.getByRole('link', { name: 'Open in Media History' })).toHaveAttribute('href', '/media/history?preview=video%3Aupload-abc123');
+
+    // One camera is not a path.
+    fireEvent.click(screen.getByLabelText(/Booth/));
+    expect(fly).toBeDisabled();
+  });
+
   it('keeps a finish frame that arrives before the start response', async () => {
     const onRendered = vi.fn();
     show({ onRendered });

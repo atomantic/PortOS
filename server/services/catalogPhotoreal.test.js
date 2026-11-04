@@ -117,6 +117,39 @@ describe('startPhotorealRender', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
+  // Catches a fly-through that renders stills, drops a frame, or never reaches Media History.
+  it('flies one camera through the chosen cameras in order and saves the MP4 to Media History', async () => {
+    db.getIngredient.mockResolvedValue(place());
+    const pngFrames = Object.fromEntries(Array.from({ length: 48 }, (_, i) => [`frame-${String(i + 1).padStart(4, '0')}.png`, PNG]));
+    const runFfmpeg = vi.fn(async () => ({ ok: true }));
+    const saveVideo = vi.fn(async () => ({ id: 'upload-abc123', filename: 'upload-abc123.mp4' }));
+    __setPhotorealDepsForTests({
+      resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker: fakeWorker({
+        'report.json': JSON.stringify({ version: '5.2.3', device: 'GPU', backend: 'METAL', frames: 48, fps: 24 }), 'blockout.blend': 'BLENDER', ...pngFrames,
+      }) }),
+      findFfmpeg: async () => '/usr/bin/ffmpeg', runFfmpeg, saveVideo,
+    });
+    await startPhotorealRender(`plc-${seq}`, { shotIds: ['booth', 'wide'], engine: 'eevee', flythroughSeconds: 2 });
+    await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'done', flythroughSeconds: 2, video: { id: 'upload-abc123' } });
+
+    const data = JSON.parse(fakeWorker.lastFiles.find((f) => f.path === 'greybox-blender.json').content);
+    expect(data).toMatchObject({ shotIds: ['booth', 'wide'], flythrough: { fps: 24, frames: 48 } });
+    expect(runFfmpeg.mock.calls[0][0].args).toEqual(expect.arrayContaining(['-framerate', '24', '-frames:v', '48', '-c:v', 'libx264']));
+    expect(saveVideo).toHaveBeenCalledWith(expect.stringContaining('flythrough.mp4'), 'Example Rink fly-through (Booth → Wide).mp4');
+    // A fly-through leaves the cameras' stills alone.
+    expect(upload).not.toHaveBeenCalled();
+    expect(db.detachMedia).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fly-through with one camera or no ffmpeg before touching Blender', async () => {
+    const resolveTool = vi.fn();
+    __setPhotorealDepsForTests({ resolveTool, findFfmpeg: async () => null });
+    db.getIngredient.mockResolvedValue(place());
+    await expect(startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee', flythroughSeconds: 4 })).rejects.toMatchObject({ code: 'PHOTOREAL_FLYTHROUGH_SHOTS' });
+    await expect(startPhotorealRender(`plc-${seq}`, { shotIds: ['wide', 'booth'], engine: 'eevee', flythroughSeconds: 4 })).rejects.toMatchObject({ status: 503, code: 'FFMPEG_MISSING' });
+    expect(resolveTool).not.toHaveBeenCalled();
+  });
+
   it('fails the job when Blender skips a camera or writes a non-PNG', async () => {
     db.getIngredient.mockResolvedValue(place());
     __setPhotorealDepsForTests({ resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker: fakeWorker({

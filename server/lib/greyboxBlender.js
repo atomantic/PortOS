@@ -18,13 +18,22 @@ export const PHOTOREAL_LONG_EDGE = Object.freeze({ eevee: 1280, cycles: 1920 });
 export const PHOTOREAL_DEFAULT_SAMPLES = Object.freeze({ eevee: 32, cycles: 128 });
 export const PHOTOREAL_MAX_SAMPLES = 1024;
 
+export const PHOTOREAL_FLYTHROUGH_FPS = 24;
+export const PHOTOREAL_FLYTHROUGH_SECONDS = Object.freeze({ MIN: 2, MAX: 60, DEFAULT: 8 });
+
 export const photorealShotRole = (shotId) => `${PHOTOREAL_ROLE_PREFIX}${shotId}`;
 export const photorealShotFile = (shotId) => `shot-${shotId}.png`;
+export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).padStart(4, '0')}.png`;
 
-/** The data file the script reads. Pure; the greybox must already be validated. */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null } = {}) {
+/**
+ * The data file the script reads. Pure; the greybox must already be validated.
+ * With `flythroughSeconds`, one camera glides through `shotIds` in order and
+ * the script writes numbered frames instead of one still per camera.
+ */
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null } = {}) {
   return {
     look,
+    flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
     samples: samples ?? PHOTOREAL_DEFAULT_SAMPLES[engine],
     longEdge: PHOTOREAL_LONG_EDGE[engine],
@@ -379,18 +388,65 @@ def use_shot(shot_id):
     scene.render.resolution_y = height - height % 2
     scene.camera = cam
 
-# The downloaded scene opens ready to render from the first chosen camera.
-use_shot(job['shotIds'][0])
+def fly_camera(fly):
+    # One camera keyed at each chosen camera in order, aimed by a keyed target so
+    # it turns smoothly; its frame, lens and aspect start from the first camera.
+    use_shot(job['shotIds'][0])
+    stops = [camera_by_shot[shot_id][1] for shot_id in job['shotIds']]
+    data = bpy.data.cameras.new('Fly-through')
+    data.sensor_fit = 'VERTICAL'
+    data.sensor_height = 24
+    data.clip_start = 0.05
+    data.clip_end = 2000
+    cam = bpy.data.objects.new('Fly-through', data)
+    aim = bpy.data.objects.new('Fly-through target', None)
+    cameras.objects.link(cam)
+    cameras.objects.link(aim)
+    track = cam.constraints.new('TRACK_TO')
+    track.target = aim
+    track.track_axis = 'TRACK_NEGATIVE_Z'
+    track.up_axis = 'UP_Y'
+    last = fly['frames']
+    for i, shot in enumerate(stops):
+        frame = 1 + round(i * (last - 1) / (len(stops) - 1))
+        cam.location = to_blender(shot['position'])
+        aim.location = to_blender(shot['target'])
+        data.lens = shot.get('focalLengthMm', 35)
+        cam.keyframe_insert('location', frame=frame)
+        aim.keyframe_insert('location', frame=frame)
+        data.keyframe_insert('lens', frame=frame)
+    scene.frame_start = 1
+    scene.frame_end = last
+    scene.render.fps = fly['fps']
+    scene.camera = cam
+
+fly = job.get('flythrough')
+if fly:
+    fly_camera(fly)
+else:
+    # The downloaded scene opens ready to render from the first chosen camera.
+    use_shot(job['shotIds'][0])
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'blockout.blend'))
 rendered = []
-for shot_id in job['shotIds']:
-    use_shot(shot_id)
-    scene.render.filepath = os.path.join(out, 'shot-%s.png' % shot_id)
+report = dict(version=portos_version(), engine=job['engine'], device=device, backend=backend,
+    samples=job['samples'], parts=len(grey['parts']))
+if fly:
     started = time.time()
-    bpy.ops.render.render(write_still=True)
-    rendered.append(dict(shotId=shot_id, seconds=round(time.time() - started, 2),
-        width=scene.render.resolution_x, height=scene.render.resolution_y))
+    for frame in range(1, fly['frames'] + 1):
+        scene.frame_set(frame)
+        scene.render.filepath = os.path.join(out, 'frame-%04d.png' % frame)
+        bpy.ops.render.render(write_still=True)
+    report.update(frames=fly['frames'], fps=fly['fps'], seconds=round(time.time() - started, 2),
+        width=scene.render.resolution_x, height=scene.render.resolution_y)
+else:
+    for shot_id in job['shotIds']:
+        use_shot(shot_id)
+        scene.render.filepath = os.path.join(out, 'shot-%s.png' % shot_id)
+        started = time.time()
+        bpy.ops.render.render(write_still=True)
+        rendered.append(dict(shotId=shot_id, seconds=round(time.time() - started, 2),
+            width=scene.render.resolution_x, height=scene.render.resolution_y))
+    report.update(shots=rendered)
 with open(os.path.join(out, 'report.json'), 'w') as handle:
-    json.dump(dict(version=portos_version(), engine=job['engine'], device=device, backend=backend,
-        samples=job['samples'], parts=len(grey['parts']), shots=rendered), handle)
+    json.dump(report, handle)
 `;
