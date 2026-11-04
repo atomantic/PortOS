@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -9,6 +9,49 @@ import { runCommitSessionLinkScan } from './scan-commit-session-links.js';
 const TRAILER = 'Claude-Session: https://claude.ai/code/session_EXAMPLE123';
 
 describe('runCommitSessionLinkScan against a repository', () => {
+  it('checks a release candidate through the CLI without blaming commits already on origin/main', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-release-commit-links-'));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=Example', '-c', 'user.email=ci@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    const commit = (file, message) => {
+      writeFileSync(join(root, file), `${file}\n`);
+      git('add', '--all');
+      git('commit', '-q', '-m', message);
+      return git('rev-parse', 'HEAD');
+    };
+    const scanner = fileURLToPath(new URL('./scan-commit-session-links.js', import.meta.url));
+    const scan = (base) => spawnSync(process.execPath, [scanner, '--base', base], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_EVENT_NAME: '' },
+    });
+    try {
+      git('init', '-q', '-b', 'main');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      const releaseBase = commit('release.txt', 'Previous release');
+      const historical = commit('historical.txt', `Historical main change\n\n${TRAILER}`);
+      git('update-ref', 'refs/remotes/origin/main', historical);
+      git('checkout', '-q', '-b', 'release-candidate');
+      commit('preparation.txt', 'Prepare a clean release');
+
+      const clean = scan(releaseBase);
+      expect(clean.status, clean.stderr).toBe(0);
+      expect(clean.stdout).toContain('1 message(s)');
+
+      const offender = commit('candidate.txt', `Candidate-only change\n\n${TRAILER}`);
+      const dirty = scan(releaseBase);
+      expect(dirty.status).toBe(1);
+      expect(dirty.stderr).toContain(offender.slice(0, 10));
+      expect(dirty.stderr).not.toContain(historical.slice(0, 10));
+
+      // Without a published default-branch ref, retain the explicit base's full scan.
+      git('update-ref', '-d', 'refs/remotes/origin/main');
+      const withoutRemoteMain = scan(releaseBase);
+      expect(withoutRemoteMain.status).toBe(1);
+      expect(withoutRemoteMain.stderr).toContain(historical.slice(0, 10));
+      expect(withoutRemoteMain.stderr).toContain(offender.slice(0, 10));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('fails only on the branch\'s own commits, naming the offender', async () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-commit-links-'));
     const git = (...args) => execFileSync('git', ['-c', 'user.name=Example', '-c', 'user.email=ci@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();

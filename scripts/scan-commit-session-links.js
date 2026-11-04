@@ -19,7 +19,7 @@
  * (scripts/pre-install-entrypoints.test.js).
  *
  * Usage:
- *   node scripts/scan-commit-session-links.js --base <ref>   # <ref>..HEAD
+ *   node scripts/scan-commit-session-links.js --base <ref>   # <ref>..HEAD, excluding origin/main history when available
  *   node scripts/scan-commit-session-links.js                # pull_request CI, else origin/main..HEAD
  *   node scripts/scan-commit-session-links.js --description  # the pull request's description (CI)
  *
@@ -57,9 +57,12 @@ const commitEntry = (sha, message) => ({
   text: message,
 });
 
-/** This branch's own commits since `base`. */
+/** This branch's own commits since `base`, excluding already-published main history. */
 export function readBranchCommits(base, { cwd } = {}) {
-  const out = execFileSync('git', ['log', `--format=%H${FIELD}%B${RECORD}`, `${base}..HEAD`], {
+  // A release's explicit diff base predates the main commits it promotes. Keep
+  // that base, but never ask the candidate to rewrite history already on main.
+  const publishedMain = revParse('origin/main', cwd);
+  const out = execFileSync('git', ['log', `--format=%H${FIELD}%B${RECORD}`, `${base}..HEAD`, ...(publishedMain ? [`^${publishedMain}`] : [])], {
     cwd, encoding: 'utf8', maxBuffer: MAX_LOG_BYTES,
   });
   return out.split(RECORD).map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
