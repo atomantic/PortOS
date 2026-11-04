@@ -112,6 +112,44 @@ describe('useTwinEvaluationSuite', () => {
     expect(toast.success).toHaveBeenCalledWith('done');
   });
 
+  it('blocks a second run synchronously while the first provider batch is pending', async () => {
+    let resolveRun;
+    const cfg = baseCfg({ runTests: vi.fn(() => new Promise(resolve => { resolveRun = resolve; })) });
+    const { result } = renderHook(() => useTwinEvaluationSuite(cfg));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let firstRun;
+    act(() => {
+      firstRun = result.current.run();
+      void result.current.run();
+    });
+
+    expect(cfg.runTests).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveRun({ runId: 'r1', score: 0.9, aligned: 9, total: 10, timestamp: 1, model: 'm1' });
+      await firstRun;
+    });
+  });
+
+  it('does not update state or notify parents when provider runs finish after unmount', async () => {
+    let resolveRun;
+    const onRefresh = vi.fn();
+    const cfg = baseCfg({ onRefresh, runTests: vi.fn(() => new Promise(resolve => { resolveRun = resolve; })) });
+    const { result, unmount } = renderHook(() => useTwinEvaluationSuite(cfg));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let pendingRun;
+    act(() => { pendingRun = result.current.run(); });
+    unmount();
+    await act(async () => {
+      resolveRun({ runId: 'r1', score: 0.9, aligned: 9, total: 10, timestamp: 1, model: 'm1' });
+      await pendingRun;
+    });
+
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it('passes personaId through when set (null when empty)', async () => {
     const cfg = baseCfg({ personaId: 'persona-7' });
     const { result } = renderHook(() => useTwinEvaluationSuite(cfg));

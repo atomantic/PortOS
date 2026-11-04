@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import toast from '../components/ui/Toast';
+import useMounted from './useMounted';
 
 /**
  * Shared lifecycle for the Digital Twin evaluation-suite panels (M34 P6) —
@@ -45,12 +46,15 @@ export function useTwinEvaluationSuite({
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState([]);
   const [expanded, setExpanded] = useState(null);
+  const mountedRef = useMounted();
+  const runningRef = useRef(false);
 
   useEffect(() => {
     loadData();
   }, []);
 
   const loadData = async () => {
+    if (!mountedRef.current) return;
     setLoading(true);
     setLoadError(null);
     // The suite load owns its error UI (inline load-error state + Retry below)
@@ -62,6 +66,7 @@ export function useTwinEvaluationSuite({
       getTests({ silent: true }).catch(() => null),
       getHistory(5, { silent: true }).catch(() => [])
     ]);
+    if (!mountedRef.current) return;
     if (itemData === null) {
       setLoadError('Could not load the suite — check provider/server availability and retry.');
       setItems([]);
@@ -73,11 +78,15 @@ export function useTwinEvaluationSuite({
   };
 
   const run = async () => {
+    // State updates are batched, so `running` alone leaves a window where
+    // repeated clicks can dispatch the same expensive provider batch twice.
+    if (runningRef.current || !mountedRef.current) return;
     if (selectedProviders.length === 0) {
       toast.error('Select at least one provider/model above');
       return;
     }
 
+    runningRef.current = true;
     setRunning(true);
     setResults([]);
 
@@ -91,6 +100,10 @@ export function useTwinEvaluationSuite({
       )
     );
 
+    if (!mountedRef.current) {
+      runningRef.current = false;
+      return;
+    }
     setResults(runResults);
     // The run response already carries each run's history entry — prepend it
     // to the local list instead of refetching (reactive-update convention).
@@ -106,6 +119,7 @@ export function useTwinEvaluationSuite({
         [countField]: r[countField]
       }));
     if (fresh.length) setHistory(prev => [...fresh, ...prev].slice(0, 5));
+    runningRef.current = false;
     setRunning(false);
 
     // A stale/deleted persona is rejected by the same route guard the
