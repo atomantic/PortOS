@@ -3,7 +3,7 @@ import { Printer, QrCode } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
 import useContainerWidth from '../../hooks/useContainerWidth.js';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
-import { FLYER_IMAGE_CHOICES, FLYER_STYLES, FLYER_TEXT_LIMITS, buildFlyerHtml, flyerImagePath, resolveFlyer } from '../../lib/musicVideoFlyer.js';
+import { FLYER_IMAGE_CHOICES, FLYER_LAYOUTS, FLYER_STYLES, FLYER_TEXT_LIMITS, buildFlyerHtml, flyerImagePath, resolveFlyer } from '../../lib/musicVideoFlyer.js';
 import { releaseLinkUrl } from '../../../../server/lib/musicVideoCrossLinks.js';
 
 const PAGE_W = 816; // 8.5in at 96 CSS px per inch
@@ -16,6 +16,7 @@ const TEXT_FIELDS = [
   { key: 'byline', label: 'Artist' },
   { key: 'tagline', label: 'Tagline', multiline: true },
   { key: 'scanLine', label: 'Beside the QR code' },
+  { key: 'printedLink', label: 'Printed link (optional, e.g. a short link; the QR keeps the full link)' },
   { key: 'details', label: 'Small print (cast, credits, thanks)', multiline: true },
 ];
 
@@ -90,7 +91,7 @@ export default function FlyerPanel({ project, publishKit }) {
           <Printer size={13} /> Print
         </button>
       )}>
-      <p className="text-port-text-muted">8.5×11, black and white. Print opens the flyer in a new tab with the print dialog; choose Save as PDF there for a file.</p>
+      <p className="text-port-text-muted">8.5×11, black and white, one flyer or two (cut in half) per sheet. Print opens the flyer in a new tab with the print dialog; choose Save as PDF there for a file.</p>
       <div className="grid gap-3 md:grid-cols-2">
         <div ref={frameRef} className="min-w-0 md:order-last">
           <div className="relative overflow-hidden rounded border border-port-border bg-white"
@@ -110,18 +111,20 @@ export default function FlyerPanel({ project, publishKit }) {
               onChange={(e) => edit('url', e.target.value)} onBlur={commitUrl} className={inputClass} />
             {badUrl && <p role="alert" className="text-port-error">Start the link with https://</p>}
           </div>
-          <fieldset className="space-y-1">
-            <legend className="font-medium">Look</legend>
-            <div className="flex flex-wrap gap-1.5">
-              {FLYER_STYLES.map((c) => (
-                <button key={c.id} type="button" aria-pressed={draft.style === c.id}
-                  onClick={() => { if (draft.style !== c.id) { edit('style', c.id); save({ style: c.id }); } }}
-                  className={`rounded border px-3 py-2 text-sm min-h-[44px] sm:min-h-0 ${draft.style === c.id ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border'}`}>
-                  {c.label}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          {[['Look', 'style', FLYER_STYLES], ['Layout', 'layout', FLYER_LAYOUTS]].map(([legend, key, options]) => (
+            <fieldset key={key} className="space-y-1">
+              <legend className="font-medium">{legend}</legend>
+              <div className="flex flex-wrap gap-1.5">
+                {options.map((c) => (
+                  <button key={c.id} type="button" aria-pressed={draft[key] === c.id}
+                    onClick={() => { if (draft[key] !== c.id) { edit(key, c.id); save({ [key]: c.id }); } }}
+                    className={`rounded border px-3 py-2 text-sm min-h-[44px] sm:min-h-0 ${draft[key] === c.id ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border'}`}>
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          ))}
           <div className="space-y-1">
             <label htmlFor={idFor('image')} className="block font-medium">Image</label>
             <div className="flex gap-1.5">

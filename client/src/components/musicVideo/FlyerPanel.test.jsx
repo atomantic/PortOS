@@ -30,6 +30,8 @@ describe('FlyerPanel', () => {
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clean', hidden: true }));
     expect(publishKit.saveCopy).toHaveBeenLastCalledWith({ flyer: { style: 'clean' } });
+    fireEvent.click(screen.getByRole('button', { name: '2 per page', hidden: true }));
+    expect(publishKit.saveCopy).toHaveBeenLastCalledWith({ flyer: { layout: 'half' } });
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
   });
 
@@ -69,7 +71,11 @@ describe('FlyerPanel gallery image', () => {
     expect(screen.getByLabelText('Image')).toHaveValue('gallery');
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
     const flyer = resolveFlyer(project({ flyer: { image: 'gallery', imageFile: 'art.png' } }));
-    expect(buildFlyerHtml(flyer, { origin: 'https://host.example' })).toContain('src="https://host.example/data/images/art.png"');
+    const html = buildFlyerHtml(flyer, { origin: 'https://host.example' });
+    expect(html).toContain('src="https://host.example/data/images/art.png"');
+    // The art is fitted whole inside its frame, never cropped to fill it.
+    expect(html).not.toContain('object-fit: cover');
+    expect(html).toContain('max-height: calc(100cqh');
   });
 });
 
@@ -80,9 +86,17 @@ describe('buildFlyerHtml', () => {
     const html = buildFlyerHtml(flyer);
     expect(html).toContain('@page { size: letter; margin: 0; }');
     expect(html).toContain('<h1>A &lt;b&gt;</h1>');
+    // A printed short link replaces the shown text only; the QR still encodes the real link.
+    const short = buildFlyerHtml({ ...flyer, printedLink: 'https://is.gd/example' });
+    expect(short).toContain('<p class="url">is.gd/example</p>');
+    expect(short).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).not.toContain('class="qr placeholder"');
-    expect(html).toContain('<body class="retro">'); // 80s look unless the director picks Clean
-    expect(buildFlyerHtml({ ...flyer, style: 'clean' })).not.toContain('class="retro"');
+    expect(html).toContain('<body class="retro">'); // 80s look, full page unless the director picks otherwise
+    expect(buildFlyerHtml({ ...flyer, style: 'clean' })).not.toContain('class="retro');
+    // 2 per page: the same flyer twice on one sheet with a cut line between.
+    const halves = buildFlyerHtml({ ...flyer, layout: 'half' });
+    expect(halves.match(/<main class="page half/g)).toHaveLength(2);
+    expect(halves).toContain('class="cut"');
   });
 });

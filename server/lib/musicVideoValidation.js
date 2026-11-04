@@ -1000,12 +1000,13 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   }).strict().optional(),
   // The printable flyer's text (client/src/lib/musicVideoFlyer.js); `url` overrides the YouTube link the QR encodes, '' clears it.
   flyer: z.object({
-    kicker: kitText(60), title: kitText(120), byline: kitText(120), tagline: kitText(300), scanLine: kitText(60), details: kitText(1200),
+    kicker: kitText(60), title: kitText(120), byline: kitText(120), tagline: kitText(300), scanLine: kitText(60), printedLink: kitText(120), details: kitText(1200),
     url: z.union([z.string().url().max(500), z.literal('')]),
     image: z.enum(['cover', 'youtubeThumbnail', 'thumbnail', 'gallery', 'none']),
     // A gallery image (data/images/<file>) for image: 'gallery'.
     imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
     style: z.enum(['80s', 'clean']),
+    layout: z.enum(['full', 'half']),
   }).partial().strict().optional(),
   // What the director typed or picked on each platform's Publish row, saved as edited so a
   // reload or another tab shows it again. Replaces that platform's saved answers.
