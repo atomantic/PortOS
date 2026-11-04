@@ -129,6 +129,40 @@ describe('API request lifecycle', () => {
     expect(seen).toEqual({ method: 'DELETE', body: '{"key":"value"}' });
   });
 
+  it('identifies a rejected injected token without falling back to a working Agent API key or printing either', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const dir = await mkdtemp(join(tmpdir(), 'portos-api-rejection-'));
+    const file = join(dir, 'agent-key.json');
+    const requests = [];
+    server = createServer((request, response) => {
+      requests.push(request.headers.authorization);
+      const accepted = request.headers.authorization === 'Bearer synthetic-working-key';
+      response.writeHead(accepted ? 200 : 401, { 'Content-Type': 'application/json' });
+      response.end(accepted ? '{"found":true}' : '{"code":"AUTH_REQUIRED"}');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { PORTOS_AGENT_KEY_FILE: file };
+    try {
+      await writeFile(file, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-working-key' }));
+      await expect(main(['get', '/api/cos/agents/example'], { ...env, PORTOS_API_TOKEN: 'synthetic-rejected-token' })).resolves.toBe(1);
+      expect(requests).toEqual(['Bearer synthetic-rejected-token']);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('selected PORTOS_API_TOKEN credential; the API responded'));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('no fallback was attempted'));
+      expect(error.mock.calls.flat().join(' ')).not.toMatch(/synthetic-rejected-token|synthetic-working-key/);
+      await expect(main(['get', '/api/cos/agents/example'], env)).resolves.toBe(0);
+      expect(requests).toEqual(['Bearer synthetic-rejected-token', 'Bearer synthetic-working-key']);
+      expect(log).toHaveBeenCalledWith(JSON.stringify({ found: true }, null, 2));
+      error.mockClear();
+      await writeFile(file, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-rejected-key' }));
+      await expect(main(['get', '/api/cos/agents/example'], env)).resolves.toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('selected Agent API key credential; the API responded'));
+      expect(error.mock.calls.flat().join(' ')).not.toContain('synthetic-rejected-key');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports a refusal and missing credentials without presenting it as a transport failure', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     server = createServer((_request, response) => {
