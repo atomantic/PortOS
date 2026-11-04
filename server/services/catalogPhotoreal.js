@@ -93,6 +93,8 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
   // Checked before Blender starts, so a missing encoder never costs a render.
   if (flythroughSeconds && !(await deps.findFfmpeg())) throw refuse('A fly-through needs ffmpeg to make its MP4; install ffmpeg first.', 'FFMPEG_MISSING', 503);
   const tool = await deps.resolveTool();
+  // Validation can overlap another request; claim the slot only after its awaits.
+  if (jobs.get(ingredientId)?.state === 'running') throw refuse('A render is already running for this place.', 'PHOTOREAL_BUSY', 409);
   const job = {
     id: `pr-${Date.now().toString(36)}`, ingredientId, state: 'running', engine, shotIds, samples: greyboxBlenderJob(scene, { shotIds, engine, samples }).samples,
     ...(flythroughSeconds ? { flythroughSeconds } : {}),

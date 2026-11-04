@@ -117,6 +117,41 @@ describe('startPhotorealRender', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
+  // Catches two requests passing the busy check while their tool lookup overlaps.
+  it('starts only one worker when render requests overlap during tool resolution', async () => {
+    db.getIngredient.mockResolvedValue(place());
+    let resolveTool;
+    let releaseWorker;
+    const toolReady = new Promise((resolve) => { resolveTool = resolve; });
+    const lookup = vi.fn(() => toolReady);
+    const worker = vi.fn(() => new Promise((resolve) => { releaseWorker = resolve; }));
+    __setPhotorealDepsForTests({ resolveTool: lookup });
+    const attempts = Promise.allSettled([
+      startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' }),
+      startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' }),
+    ]);
+    await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(2));
+    resolveTool({ executable: '/opt/blender', version: '5.2.3', worker });
+    const results = await attempts;
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(results[1].reason).toMatchObject({ status: 409, code: 'PHOTOREAL_BUSY' });
+    expect(worker).toHaveBeenCalledTimes(1);
+    releaseWorker({ status: 'killed', reason: 'test complete' });
+    await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'failed' });
+  });
+
+  it('allows another render after tool resolution fails', async () => {
+    db.getIngredient.mockResolvedValue(place());
+    const worker = vi.fn(async () => ({ status: 'killed', reason: 'test complete' }));
+    const resolveTool = vi.fn().mockRejectedValueOnce(new Error('tool unavailable'))
+      .mockResolvedValue({ executable: '/opt/blender', version: '5.2.3', worker });
+    __setPhotorealDepsForTests({ resolveTool });
+    await expect(startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' })).rejects.toThrow('tool unavailable');
+    await expect(startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' })).resolves.toMatchObject({ state: 'running' });
+    await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'failed' });
+    expect(worker).toHaveBeenCalledTimes(1);
+  });
+
   // Catches a fly-through that renders stills, drops a frame, or never reaches Media History.
   it('flies one camera through the chosen cameras in order and saves the MP4 to Media History', async () => {
     db.getIngredient.mockResolvedValue(place());
