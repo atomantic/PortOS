@@ -2620,6 +2620,21 @@ describe('release attempt membership', () => {
     expect((await getTaskById(task.id)).metadata.releaseAttempts).toEqual(second.metadata.releaseAttempts);
   });
 
+  it('treats the spawn path\'s own claim as this dispatch, not earlier history', async () => {
+    const ownClaim = { claimedBy: 'instance-example', claimedAt: 'claim-time', leaseExpiresAt: 'lease-end' };
+    const fresh = await addTask({ id: 'sys-release-fresh', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    await updateTask(fresh.id, { metadata: ownClaim }, 'internal');
+    const first = await dispatch(fresh.id, 'agent-first', 'first-start', 1);
+    expect(first.metadata.releaseAttempts).toEqual({ version: 1, complete: true, attempts: [attempt('agent-first', 'first-start')] });
+  });
+
+  it('still starts incomplete when the own claim sits beside earlier dispatch accounting', async () => {
+    const task = await addTask({ id: 'sys-release-claimed-legacy', description: 'Release example', metadata: { analysisType: 'do-release' } }, 'internal');
+    await updateTask(task.id, { metadata: { claimedBy: 'instance-example', claimedAt: 'claim-time', lastAgentId: 'agent-unrecorded' } }, 'internal');
+    const first = await dispatch(task.id, 'agent-first', 'first-start', 1);
+    expect(first.metadata.releaseAttempts.complete).toBe(false);
+  });
+
   it('starts incomplete when a release task already carries earlier dispatch accounting', async () => {
     const task = await addTask({ id: 'sys-release-legacy', description: 'Legacy release example', metadata: { analysisType: 'do-release' } }, 'internal');
     await updateTask(task.id, { metadata: { lastAgentId: 'agent-unrecorded' } }, 'internal');

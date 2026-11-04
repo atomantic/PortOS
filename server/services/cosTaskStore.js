@@ -900,6 +900,11 @@ function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata,
 
 const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
   && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
+// Spawn preparation claims the task for this instance just before dispatching
+// it. That claim is this dispatch's own, not evidence of an earlier one; a
+// previous dispatch also leaves counters that still count as history.
+const withoutOwnClaim = (metadata, instanceId) => (metadata?.claimedBy === instanceId
+  ? { ...metadata, claimedBy: null, claimedAt: null } : metadata);
 
 // Release attempt membership is store-owned like the spawn-budget proof, but no
 // reset clears it: only a verified release dispatch appends to it.
@@ -916,7 +921,7 @@ async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata,
     return { error: 'Cannot record release attempt membership for this dispatch' };
   }
   const membership = appendReleaseAttempt(prior,
-    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(current.metadata) });
+    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(withoutOwnClaim(current.metadata, agent.metadata?.instanceId)) });
   if (!membership) return { error: 'Cannot record release attempt membership for this dispatch' };
   updatedMetadata[RELEASE_ATTEMPTS_KEY] = membership;
   return null;

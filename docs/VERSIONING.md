@@ -251,10 +251,15 @@ release base, branch and checkout path) on the held successor's
 `releaseCandidateRecovery.reconciliation` and on the task's
 `releaseCandidateReconciliation`, then closes the task with
 `resolution: "candidate-reconciled"` so a new release run can reserve a fresh
-cutoff. It never edits candidate files, review receipts, tags, attempt membership
-or the predecessor's history, and never marks a release published. The abandoned
-checkout stays for normal verified cleanup. Repeating the same request after a
-partial failure completes the task update; a different reason is refused. The
+cutoff. It never edits candidate commits, tags, attempt membership or the
+predecessor's history, and never marks a release published. It then removes the
+abandoned checkout and local branch, because no sweep retires an unmerged candidate
+and a later run would otherwise recover it into the same hold; the commits stay
+reachable at `refs/portos/retired-candidates/<branch>`. A checkout with uncommitted
+work or a moved head is kept, reported as `checkoutRemoved: false`. Deleting a held
+release task does not abandon its candidate: the next run holds on the same checkout
+and is retired the same way. Repeating the same request after a partial failure
+completes the task update; a different reason is refused. The
 hold must still be in the live agent registry: retry the held task first if its
 successor has aged out.
 
