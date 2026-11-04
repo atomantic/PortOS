@@ -3641,25 +3641,42 @@ describe('a11y conventions', () => {
       const tokens = cls.split(/\s+/).filter(Boolean);
       return axisPx(tokens, 'h', icon) >= MIN_TOUCH_PX && axisPx(tokens, 'w', icon) >= MIN_TOUCH_PX;
     };
-    const literalClass = (tag) => {
+    // A bare `className={BUTTON}` (or `${BUTTON}` inside a template) resolves to
+    // a same-file `const BUTTON = '…'` string; without that the shared-constant
+    // shape gave the scan no tokens and every such button passed (#14874).
+    const constClass = (src, name) => {
+      const m = new RegExp(`\\bconst\\s+${escapeRegExp(name)}\\s*=\\s*(?:(["'])([^"']*)\\1|\`([^\`$]*)\`)\\s*;`).exec(src);
+      return m ? (m[2] ?? m[3]) : null;
+    };
+    const literalClass = (tag, src = '') => {
       const quoted = /\bclassName=(["'])([^"']*)\1/.exec(tag);
       if (quoted) return quoted[2];
+      const ident = /\bclassName=\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(tag);
+      if (ident) return constClass(src, ident[1]);
       const template = /\bclassName=\{`([^`]*)`\}/.exec(tag);
       // A template with no static classes is dynamic, reviewed by hand like the rules above.
-      const statics = template ? template[1].replace(/\$\{[^}]*\}/g, ' ') : '';
+      const statics = template
+        ? template[1].replace(/\$\{\s*([A-Za-z_$][\w$]*)\s*\}/g, (_, name) => ` ${constClass(src, name) ?? ''} `).replace(/\$\{[^}]*\}/g, ' ')
+        : '';
       return statics.trim() ? statics : null;
     };
     const offendersIn = (file, src) => {
       const out = [];
       for (const node of forEachOpeningTag(src, 'button')) {
         if (!isIconOnlyButton(src, node)) continue;
-        const cls = literalClass(node.tag);
+        const cls = literalClass(node.tag, src);
         if (cls == null || reachesTouchSize(cls, iconPx(src, node))) continue;
         out.push(`${file}:${lineOf(src, node.index)}`);
       }
       return out;
     };
     const probe = (markup) => offendersIn('probe.jsx', markup).length;
+    // Same-file class constants are resolved, bare or inside a template (#14874).
+    const BTN = "const BTN = 'inline-flex min-h-[44px] px-2';\n";
+    expect(probe(BTN + '<button aria-label="Remove" className={BTN}><X size={14} /></button>')).toBe(1);
+    expect(probe(BTN + '<button aria-label="Remove" className={`${BTN} ${on ? "a" : "b"}`}><X size={14} /></button>')).toBe(1);
+    expect(probe("const BTN = 'min-h-[44px] min-w-[44px]';\n<button aria-label=\"Remove\" className={BTN}><X size={14} /></button>")).toBe(0);
+    expect(probe('<button aria-label="Remove" className={importedCls}><X size={14} /></button>')).toBe(0);
     expect(probe('<button aria-label="Remove" className="text-gray-500"><X size={14} /></button>')).toBe(1);
     expect(probe('<button aria-label="Toggle" className={`p-1 ${on ? "a" : "b"}`}>{on ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1"><X size={14} /></button>')).toBe(0);

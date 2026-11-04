@@ -17,6 +17,7 @@ const NAME_MAX = 120;
 const DESCRIPTION_MAX = 800;
 
 const inputClass = 'w-full px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent';
+const smallIconButton = 'inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded border border-port-border text-xs text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed';
 const smallButton = 'inline-flex items-center gap-1.5 min-h-[36px] px-2.5 py-1.5 rounded border border-port-border text-xs text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed';
 
 function LookForm({ formId, initial, busy, onSubmit, onCancel }) {
@@ -195,7 +196,7 @@ function LookCard({
           <button type="button" onClick={() => toggle('attach')} disabled={editLocked} className={smallButton} aria-expanded={mode === 'attach'}>
             <ImagePlus size={12} aria-hidden="true" /> Attach image
           </button>
-          <button type="button" onClick={() => toggle('edit')} disabled={editLocked} className={smallButton}
+          <button type="button" onClick={() => toggle('edit')} disabled={editLocked} className={smallIconButton}
             aria-label={`Edit ${wardrobe.name}`} title="Edit">
             <Pencil size={12} aria-hidden="true" />
           </button>

@@ -103,7 +103,7 @@ export default function VideoFramePicker({ src, poster, busy = false, onAdd, onC
     setPicked((prev) => [...prev, t].sort((a, b) => a - b));
   };
 
-  const button = 'min-h-[44px] min-w-[40px] inline-flex items-center justify-center rounded text-gray-300 hover:text-white disabled:opacity-40';
+  const button = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-gray-300 hover:text-white disabled:opacity-40';
   return (
     <Modal open usePortal size="3xl" onClose={onClose} ariaLabel="Pick frames" panelClassName="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
