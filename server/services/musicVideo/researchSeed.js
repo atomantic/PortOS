@@ -182,6 +182,8 @@ async function startResearch({ projectId, target, what, room, limit, input, hasH
   const key = `${projectId}:${target.sceneId || target.cameoId}`;
   if (running.has(key)) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING' });
   const resolved = await resolveResearchProvider(input, hasHostControl);
+  // Provider resolution yields, so another request may have claimed this target.
+  if (running.has(key)) throw new ServerError(`Research is already running for this ${what}.`, { status: 409, code: 'RESEARCH_RUNNING' });
   running.add(key);
   const label = `${what} ${target.sceneId || target.cameoId} of ${projectId}`;
   emit({ projectId, ...target, status: 'running', subject });
