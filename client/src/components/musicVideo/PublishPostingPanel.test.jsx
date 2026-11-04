@@ -67,6 +67,16 @@ describe('PublishPostingPanel (#9282)', () => {
     }
   });
 
+  it('folds a platform as soon as it is marked done, with a green Done label', () => {
+    const { rerender } = render(<PublishPostingPanel project={project()} publishing={hook()} />);
+    expandAll();
+    expect(row('Reddit').querySelector('h4 button')).toHaveAttribute('aria-expanded', 'true');
+    rerender(<PublishPostingPanel project={project({ posts: { reddit: { posted: true, postedAt: '2026-01-02T00:00:00.000Z' } } })} publishing={hook()} />);
+    const toggle = row('Reddit').querySelector('h4 button');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(toggle).getByText('Done')).toHaveClass('text-port-success');
+  });
+
   it('fills a Reddit draft with the subreddit and post type, dropping blanks', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);

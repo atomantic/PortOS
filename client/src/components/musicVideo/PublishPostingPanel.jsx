@@ -422,7 +422,7 @@ function PostPreview({ label, preview }) {
   );
 }
 
-const STATUS = { posted: ['Done', 'text-port-success border-port-success/40'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
+const STATUS = { posted: ['Done', 'bg-port-success/15 text-port-success border-port-success/60 font-medium'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
 
 function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const { target, label, note, linkPlaceholder } = entry;
@@ -506,6 +506,13 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
   }, [draftSongUrl]);
   // A done platform folds to its header so the ones still to do are easy to reach.
   const [open, setOpen] = useState(() => !kit.posts?.[target]);
+  // ...and folds as soon as it is posted or marked done while the page is open.
+  const isPosted = !!kit.posts?.[target];
+  const wasPosted = useRef(isPosted);
+  useEffect(() => {
+    if (isPosted && !wasPosted.current) setOpen(false);
+    wasPosted.current = isPosted;
+  }, [isPosted]);
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
   const posted = kit.posts?.[target];
@@ -526,7 +533,7 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
               className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
               <Chevron size={13} className="shrink-0" />
               <span>{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</span>
-              <span className={`ml-1 shrink-0 rounded border px-1 text-[10px] font-normal ${STATUS[status][1]}`}>{STATUS[status][0]}</span>
+              <span className={`ml-1 shrink-0 inline-flex items-center gap-0.5 rounded border px-1 text-[10px] ${status === 'posted' ? '' : 'font-normal'} ${STATUS[status][1]}`}>{status === 'posted' && <Check size={10} aria-hidden="true" />}{STATUS[status][0]}</span>
             </button>
           </h4>
           {open && <div className="text-[11px] text-port-text-muted">{note}</div>}
