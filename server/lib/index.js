@@ -1067,3 +1067,4 @@ export * from './ecosystemPortEdits.js';
 export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal.js';
 export * from './blenderVersion.js';
 export * from './greyboxBlender.js';
+export * from './photorealLook.js';

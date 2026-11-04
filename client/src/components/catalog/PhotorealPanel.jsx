@@ -4,6 +4,7 @@ import { Aperture, Check, Download, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import MediaImage from '../MediaImage';
+import PhotorealLookSection from './PhotorealLookSection';
 import { getCatalogPhotoreal, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { withShot } from '../../lib/greybox';
 import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
@@ -188,7 +189,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       <div className="flex flex-wrap items-start gap-2 justify-between">
         <div>
           <h2 className="text-base font-semibold text-white">Photoreal</h2>
-          <p className="text-xs text-gray-400">Builds this greybox in Blender and renders its saved cameras. Renders land here and can become a camera&apos;s photo plate.</p>
+          <p className="text-xs text-gray-400">Builds this greybox in Blender, dresses it with the Look, and renders its saved cameras. Renders land here and can become a camera&apos;s photo plate.</p>
         </div>
         {status?.blendUrl && (
           <a href={status.blendUrl} download className={actionButton}>
@@ -201,6 +202,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         {status?.blenderVersion ? `Blender ${status.blenderVersion} checked. ` : 'Blender not checked yet. '}
         Set up and check Blender under <Link to="/code-animation/production" className="text-port-accent hover:underline">Code Animation › Production › Blender execution</Link>.
       </p>
+
+      <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running}
+        onBusyChange={onBusyChange} onSaved={onSaved} />
 
       {shots.length === 0 ? (
         <p className="text-sm text-gray-400">Save a camera on the Greybox tab to render it here.</p>

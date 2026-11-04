@@ -15,6 +15,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
+import { resolvePhotorealLook } from '../lib/photorealLook.js';
 import {
   GREYBOX_BLENDER_PY, greyboxBlenderJob, photorealShotFile, photorealShotRole,
 } from '../lib/greyboxBlender.js';
@@ -96,7 +97,8 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
 }
 
 async function runRender({ place, scene, tool, job, samples }) {
-  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples });
+  // The look dresses parts by id; a rule for a part since removed just matches nothing.
+  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look: resolvePhotorealLook(place.payload) });
   let report = null;
   const outputs = {};
   // Cycles on a GPU and EEVEE both need more than the 8 GiB worker default.

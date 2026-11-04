@@ -22,8 +22,9 @@ export const photorealShotRole = (shotId) => `${PHOTOREAL_ROLE_PREFIX}${shotId}`
 export const photorealShotFile = (shotId) => `shot-${shotId}.png`;
 
 /** The data file the script reads. Pure; the greybox must already be validated. */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples } = {}) {
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null } = {}) {
   return {
+    look,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
     samples: samples ?? PHOTOREAL_DEFAULT_SAMPLES[engine],
     longEdge: PHOTOREAL_LONG_EDGE[engine],
@@ -98,6 +99,7 @@ def extrude(outline, height):
     return verts, faces
 
 zone_by_id = {z['id']: z for z in grey['zones']}
+part_objects = []
 parts_root = collection('Greybox parts')
 for part in grey['parts']:
     kind = part['type']
@@ -126,6 +128,7 @@ for part in grey['parts']:
     rotation = Matrix.Rotation(rx, 4, 'X') @ Matrix.Rotation(ry, 4, 'Y') @ Matrix.Rotation(rz, 4, 'Z')
     obj.matrix_world = Y_UP @ Matrix.Translation(Vector(part['position'])) @ rotation
     collection(zone['label'] if zone else 'Unzoned', parts_root).objects.link(obj)
+    part_objects.append((part, obj))
 
 marks = collection('Landmarks and anchors')
 for item in grey['landmarks'] + grey['anchors']:
@@ -151,17 +154,185 @@ for shot in grey['shots']:
     cameras.objects.link(cam)
     camera_by_shot[shot['id']] = (cam, shot)
 
+# Photoreal look: allowlisted presets mapped to procedural node setups.
+PRESETS = {
+    'wood-floor': dict(roughness=0.35, coat=0.6, grain='wood'),
+    'painted-wall': dict(roughness=0.8),
+    'painted-metal': dict(roughness=0.35, metallic=0.0, coat=0.3),
+    'carpet': dict(roughness=1.0, grain='pile'),
+    'tile': dict(roughness=0.4, grain='tile'),
+    'concrete': dict(roughness=0.7, grain='speckle'),
+    'plastic': dict(roughness=0.4),
+    'vinyl': dict(roughness=0.45, coat=0.2),
+    'fabric': dict(roughness=0.95, sheen=0.5),
+    'glass': dict(roughness=0.02, transmission=1.0),
+    'mirror': dict(roughness=0.02, metallic=1.0),
+    'chrome': dict(roughness=0.08, metallic=1.0),
+    'neon': dict(roughness=0.3),
+}
+
+def set_input(node, name, value):
+    if name in node.inputs:
+        node.inputs[name].default_value = value
+
+def look_material(rule):
+    preset = PRESETS[rule['preset']]
+    mat = bpy.data.materials.new('%s [%s]' % (rule['preset'], rule['id']))
+    mat.use_nodes = True
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = nodes.get('Principled BSDF')
+    base = srgb(rule['color'])
+    mat.diffuse_color = base
+    roughness = rule.get('roughness', preset['roughness'])
+    set_input(bsdf, 'Roughness', roughness)
+    set_input(bsdf, 'Metallic', preset.get('metallic', 0.0))
+    set_input(bsdf, 'Transmission Weight', preset.get('transmission', 0.0))
+    set_input(bsdf, 'Coat Weight', preset.get('coat', 0.0))
+    set_input(bsdf, 'Sheen Weight', preset.get('sheen', 0.0))
+    coord = nodes.new('ShaderNodeTexCoord')
+    color_out = None
+    grain = preset.get('grain')
+    if grain == 'wood':
+        wave = nodes.new('ShaderNodeTexWave')
+        wave.inputs['Scale'].default_value = 1.2
+        wave.inputs['Distortion'].default_value = 6.0
+        links.new(coord.outputs['Object'], wave.inputs['Vector'])
+        mix = nodes.new('ShaderNodeMix')
+        mix.data_type = 'RGBA'
+        mix.inputs['A'].default_value = tuple(c * 0.7 for c in base[:3]) + (1.0,)
+        mix.inputs['B'].default_value = base
+        links.new(wave.outputs['Fac'], mix.inputs['Factor'])
+        color_out = mix.outputs['Result']
+    elif grain == 'tile':
+        brick = nodes.new('ShaderNodeTexBrick')
+        brick.inputs['Scale'].default_value = 3.0
+        brick.inputs['Color1'].default_value = base
+        brick.inputs['Color2'].default_value = tuple(c * 0.92 for c in base[:3]) + (1.0,)
+        brick.inputs['Mortar'].default_value = (0.6, 0.6, 0.6, 1.0)
+        brick.offset = 0.0
+        links.new(coord.outputs['Object'], brick.inputs['Vector'])
+        color_out = brick.outputs['Color']
+    elif grain in ('pile', 'speckle'):
+        noise = nodes.new('ShaderNodeTexNoise')
+        noise.inputs['Scale'].default_value = 400.0 if grain == 'pile' else 60.0
+        links.new(coord.outputs['Object'], noise.inputs['Vector'])
+        bump = nodes.new('ShaderNodeBump')
+        bump.inputs['Strength'].default_value = 0.3
+        links.new(noise.outputs['Fac'], bump.inputs['Height'])
+        links.new(bump.outputs['Normal'], bsdf.inputs['Normal'])
+    wear = rule.get('wear', 0)
+    if wear > 0:
+        dirt = nodes.new('ShaderNodeTexNoise')
+        dirt.inputs['Scale'].default_value = 4.0
+        dirt.inputs['Detail'].default_value = 8.0
+        links.new(coord.outputs['Object'], dirt.inputs['Vector'])
+        ramp = nodes.new('ShaderNodeMapRange')
+        ramp.inputs['From Min'].default_value = 0.45
+        ramp.inputs['From Max'].default_value = 0.75
+        ramp.inputs['To Max'].default_value = wear
+        links.new(dirt.outputs['Fac'], ramp.inputs['Value'])
+        grime = nodes.new('ShaderNodeMix')
+        grime.data_type = 'RGBA'
+        if color_out is not None:
+            links.new(color_out, grime.inputs['A'])
+        else:
+            grime.inputs['A'].default_value = base
+        grime.inputs['B'].default_value = tuple(c * 0.45 for c in base[:3]) + (1.0,)
+        links.new(ramp.outputs['Result'], grime.inputs['Factor'])
+        color_out = grime.outputs['Result']
+        rough = nodes.new('ShaderNodeMath')
+        rough.operation = 'ADD'
+        rough.use_clamp = True
+        rough.inputs[1].default_value = roughness
+        links.new(ramp.outputs['Result'], rough.inputs[0])
+        links.new(rough.outputs['Value'], bsdf.inputs['Roughness'])
+    if color_out is not None:
+        links.new(color_out, bsdf.inputs['Base Color'])
+    else:
+        set_input(bsdf, 'Base Color', base)
+    if rule.get('emission', 0) > 0:
+        set_input(bsdf, 'Emission Color', base)
+        set_input(bsdf, 'Emission Strength', rule['emission'])
+    return mat
+
+def apply_look(look):
+    built = {}
+    chosen = {}
+    for rule in look['materials']:
+        for part, obj in part_objects:
+            if rule.get('part') == part['id'] or (rule.get('zone') and rule.get('zone') == part.get('zone')):
+                chosen[part['id']] = rule
+    for part, obj in part_objects:
+        rule = chosen.get(part['id'])
+        if rule is None:
+            continue
+        if rule['id'] not in built:
+            built[rule['id']] = look_material(rule)
+        obj.data.materials.clear()
+        obj.data.materials.append(built[rule['id']])
+    look_lights = collection('Look lights')
+    for spec in look['lights']:
+        kind = spec['type'].upper()
+        data = bpy.data.lights.new(spec.get('label') or spec['id'], kind)
+        data.energy = spec['watts']
+        data.color = srgb(spec['color'])[:3]
+        if kind == 'SPOT':
+            data.spot_size = math.radians(spec['spotDegrees'])
+            data.shadow_soft_size = spec['size']
+        elif kind == 'AREA':
+            data.shape = 'SQUARE'
+            data.size = max(spec['size'], 0.01)
+        else:
+            data.shadow_soft_size = spec['size']
+        light = bpy.data.objects.new('%s [%s]' % (spec.get('label') or spec['id'], spec['id']), data)
+        light.location = to_blender(spec['position'])
+        aim = spec.get('target')
+        if kind != 'POINT':
+            direction = (to_blender(aim) - light.location) if aim else Vector((0, 0, -1))
+            if direction.length > 0:
+                light.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
+        look_lights.objects.link(light)
+    haze = look['atmosphere'].get('haze', 0)
+    if haze > 0 and part_objects:
+        corners = [obj.matrix_world @ Vector(c) for _, obj in part_objects for c in obj.bound_box]
+        low = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
+        high = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+        mesh = bpy.data.meshes.new('Haze')
+        size = high - low
+        verts, faces = box(size.x, size.y, size.z)
+        mesh.from_pydata(verts, [], faces)
+        volume = bpy.data.objects.new('Haze volume', mesh)
+        volume.location = (low + high) / 2
+        mat = bpy.data.materials.new('Haze')
+        mat.use_nodes = True
+        nodes = mat.node_tree.nodes
+        nodes.remove(nodes.get('Principled BSDF'))
+        scatter = nodes.new('ShaderNodeVolumeScatter')
+        scatter.inputs['Density'].default_value = 0.002 + haze * 0.06
+        mat.node_tree.links.new(scatter.outputs['Volume'], nodes.get('Material Output').inputs['Volume'])
+        mesh.materials.append(mat)
+        volume.visible_shadow = False
+        look_lights.objects.link(volume)
+    scene.view_settings.exposure = look['atmosphere'].get('exposure', 0)
+
+look = job.get('look')
+atmos = (look or {}).get('atmosphere', {})
 world = bpy.data.worlds.new('Blockout world')
 world.use_nodes = True
-world.node_tree.nodes['Background'].inputs['Color'].default_value = (0.05, 0.05, 0.06, 1)
-world.node_tree.nodes['Background'].inputs['Strength'].default_value = 1.0
+background = world.node_tree.nodes['Background']
+background.inputs['Color'].default_value = srgb(atmos['worldColor']) if look else (0.05, 0.05, 0.06, 1)
+background.inputs['Strength'].default_value = atmos.get('worldStrength', 1.0) if look else 1.0
 scene.world = world
 lights = collection('Blockout lights')
-sun_data = bpy.data.lights.new('Blockout sun', 'SUN')
-sun_data.energy = 2.5
-sun = bpy.data.objects.new('Blockout sun', sun_data)
-sun.rotation_euler = (math.radians(35), math.radians(20), math.radians(30))
-lights.objects.link(sun)
+if not look or atmos.get('sun'):
+    sun_data = bpy.data.lights.new('Blockout sun', 'SUN')
+    sun_data.energy = 2.5
+    sun = bpy.data.objects.new('Blockout sun', sun_data)
+    sun.rotation_euler = (math.radians(35), math.radians(20), math.radians(30))
+    lights.objects.link(sun)
+
+if look:
+    apply_look(look)
 
 portos_set_engine(scene, job['engine'])
 device, backend = 'CPU', 'CPU'

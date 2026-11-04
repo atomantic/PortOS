@@ -6,7 +6,11 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 vi.mock('../services/catalogPhotoreal.js', () => ({
   getPhotorealStatus: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
 }));
+vi.mock('../services/catalogPhotorealLook.js', () => ({
+  draftPhotorealLook: vi.fn(), previewPhotorealLookPrompt: vi.fn(), savePhotorealLook: vi.fn(),
+}));
 const { photorealBlendPath, startPhotorealRender } = await import('../services/catalogPhotoreal.js');
+const { savePhotorealLook } = await import('../services/catalogPhotorealLook.js');
 const router = (await import('./catalog.js')).default;
 const app = express();
 app.use(express.json());
@@ -32,5 +36,13 @@ describe('photoreal routes', () => {
   it('answers 404 for a .blend that has not been built', async () => {
     photorealBlendPath.mockResolvedValue(null);
     expect((await request(app).get(`${base}/blend`)).status).toBe(404);
+  });
+
+  it('saves only allowlisted look presets and clears with null', async () => {
+    savePhotorealLook.mockResolvedValue({ id: 'example-place', payload: {} });
+    const bad = await request(app).put(`${base}/look`).send({ look: { materials: [{ id: 'm', zone: 'floor', preset: 'shader-code', color: '#ffffff' }] } });
+    expect(bad.status).toBe(400);
+    expect((await request(app).put(`${base}/look`).send({ look: null })).status).toBe(200);
+    expect(savePhotorealLook).toHaveBeenCalledWith('example-place', null, { source: undefined });
   });
 });

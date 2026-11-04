@@ -2,12 +2,16 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
-import { getCatalogPhotoreal, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { draftCatalogPhotorealLook, getCatalogPhotoreal, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
-vi.mock('../../services/apiCatalog', () => ({ getCatalogPhotoreal: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn() }));
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn() } }));
+vi.mock('../../services/apiCatalog', () => ({
+  getCatalogPhotoreal: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
+  draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
+}));
+vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt={props.alt} src={props.src} /> }));
 
 const greybox = {
@@ -22,6 +26,7 @@ const show = (props = {}) => render(<MemoryRouter><PhotorealPanel record={record
 beforeEach(() => {
   vi.resetAllMocks(); handlers.clear();
   try { localStorage.clear(); } catch { /* storage unavailable */ }
+  previewCatalogPhotorealLookPrompt.mockResolvedValue({ sentPrompt: 'composed', promptAdditions: [] });
   getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: '/api/catalog/ingredients/plc-example/photoreal/blend', blenderVersion: '5.2.3' });
 });
 
@@ -104,5 +109,22 @@ describe('PhotorealPanel', () => {
     const [, saved] = saveCatalogGreybox.mock.calls[0];
     expect(saved.shots.find((s) => s.id === 'wide')).toMatchObject({ plate: 'wide-render.png' });
     expect(saved.shots.find((s) => s.id === 'booth').plate).toBeUndefined();
+  });
+
+  it('drafts a look with AI as a preview and saves it only on Apply', async () => {
+    const onSaved = vi.fn();
+    const look = { materials: [{ id: 'maple', part: 'floor', preset: 'wood-floor', color: '#c89a5a', wear: 0.3, emission: 0 }], lights: [{ id: 'panel', type: 'area' }], atmosphere: { haze: 0.2, exposure: 0, sun: false } };
+    draftCatalogPhotorealLook.mockResolvedValue({ look, edited: false, providerId: 'p1', model: 'm1', sentPrompt: 'composed', promptAdditions: [] });
+    saveCatalogPhotorealLook.mockResolvedValue({ id: 'plc-example', payload: { photoreal: look } });
+    show({ onSaved });
+    fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'waxed maple floor, light haze' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    await waitFor(() => expect(draftCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', expect.objectContaining({ instruction: 'waxed maple floor, light haze', useCurrent: false }), { silent: true }));
+    expect(await screen.findByText(/Draft look, not saved yet/)).toBeInTheDocument();
+    expect(screen.getByText(/floor: wood-floor, worn/)).toBeInTheDocument();
+    expect(saveCatalogPhotorealLook).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply look' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', look, { source: 'refine', silent: true });
   });
 });
