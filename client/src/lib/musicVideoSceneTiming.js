@@ -13,7 +13,7 @@ const falEstimate = (take) => (take?.costUsd == null ? null
  */
 export function buildSceneTimingPresentation({
   scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
-  nextEndSec, isLast, documentComposition, hasMergeNext, lineCues = null,
+  nextEndSec, isLast, manifestOwnsShots, hasMergeNext, lineCues = null,
   prevStartSec = null, isFirst = true, hasMergePrevious = false,
 }) {
   const performance = isPerformanceScene(scene);
@@ -37,11 +37,11 @@ export function buildSceneTimingPresentation({
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend, falVideoSettings) : null;
   const canSplit = splitLimit != null && timedSpan != null && timedSpan > splitLimit + 1e-6;
   const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
-  const canMerge = hasMergeNext && !isLast && !documentComposition
+  const canMerge = hasMergeNext && !isLast && !manifestOwnsShots
     && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
   // Merge over previous keeps this shot and starts it where the previous one did.
   const mergedPreviousSpan = typeof prevStartSec === 'number' && typeof scene.endSec === 'number' ? scene.endSec - prevStartSec : null;
-  const canMergePrevious = hasMergePrevious && !isFirst && !documentComposition
+  const canMergePrevious = hasMergePrevious && !isFirst && !manifestOwnsShots
     && (splitLimit == null || (mergedPreviousSpan != null && mergedPreviousSpan <= splitLimit + 1e-6));
   return {
     performance, capability, timedSpan, plan, performanceBlocked, grokPlan,

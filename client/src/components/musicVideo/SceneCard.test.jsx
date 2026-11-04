@@ -320,8 +320,12 @@ describe('move buttons (#10785)', () => {
     expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
     fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
     expect(onMove).toHaveBeenCalledWith(1, 1);
+    // A Board-sourced document project still reorders; only a manifest-owned one is locked.
     rerender(<SceneCard {...props} documentComposition />);
     fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    expect(screen.queryByText(/comes from the composition document/)).toBeNull();
+    rerender(<SceneCard {...props} documentComposition manifestOwnsShots />);
     expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
     expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
@@ -332,7 +336,7 @@ describe('Merge with next (#10810)', () => {
   const scene = { sceneId: 's1', startSec: 0, endSec: 4, takes: [] };
   const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges into the next scene, and hides when last, in a document composition, or past the backend limit', () => {
+  it('merges into the next scene, and hides when last, when the manifest owns the shots, or past the backend limit', () => {
     const onMergeNext = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
     show('Clip');
@@ -342,8 +346,10 @@ describe('Merge with next (#10810)', () => {
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} isLast />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
-    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} manifestOwnsShots />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
+    expect(screen.getByRole('button', { name: /Merge with next/ })).toBeTruthy();
   });
 });
 
@@ -352,7 +358,7 @@ describe('Merge over previous', () => {
   const scene = { sceneId: 's2', startSec: 4, endSec: 8, takes: [] };
   const props = { index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges this shot over the previous one, and hides when first, in a document composition, or past the backend limit', () => {
+  it('merges this shot over the previous one, and hides when first, when the manifest owns the shots, or past the backend limit', () => {
     const onMergePrevious = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
     show('Clip');
@@ -362,8 +368,10 @@ describe('Merge over previous', () => {
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} index={0} onMergePrevious={onMergePrevious} prevStartSec={0} />);
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
-    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} manifestOwnsShots />);
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    expect(screen.getByRole('button', { name: 'Merge over previous' })).toBeTruthy();
   });
 });
 
