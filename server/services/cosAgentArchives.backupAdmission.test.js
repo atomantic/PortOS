@@ -1,10 +1,19 @@
 /** Real archive trees, primary index and state snapshots under synthetic cuts. */
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+// Fail-fast cancellation does not stop an async body. Join its remaining writes
+// before either this fixture or the admission setup removes its directories.
+function joinTestWork(run) {
+  return (...args) => {
+    const work = Promise.resolve().then(() => run(...args));
+    onTestFinished(() => work.then(() => {}, () => {}));
+    return work;
+  };
+}
 const fixture = await vi.hoisted(async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
@@ -71,7 +80,7 @@ async function seedAgent(agentId, { completed = false, indexed = false, resident
 async function seed({ completed = false, indexed = false } = {}) {
   await seedAgent(id, { completed, indexed });
 }
-beforeEach(async () => {
+beforeEach(joinTestWork(async () => {
   vi.resetModules(); fixture.beforeIndex = null; fixture.bypass = false;
   fixture.state = { agents: {}, config: { completedAgentRetentionMs: 1 }, stats: { tasksCompleted: 0, errors: 0 } };
   await rm(fixture.root, { recursive: true, force: true }); await mkdir(fixture.root);
@@ -84,10 +93,10 @@ beforeEach(async () => {
   taskStore.__resetTaskCache();
   index = await import('./cosAgentIndex.js');
   api = { ...await import('./cosAgentLifecycle.js'), ...await import('./cosAgentArchive.js') };
-});
+}));
 afterAll(() => rm(fixture.base, { recursive: true, force: true }));
 
-it('retains publisher and continuation history until the outbox verifies synchronization', async () => {
+it('retains publisher and continuation history until the outbox verifies synchronization', joinTestWork(async () => {
   const publisher = 'agent-publisher';
   const continuation = 'agent-continuation';
   const unrelated = 'agent-unrelated';
@@ -153,9 +162,9 @@ it('retains publisher and continuation history until the outbox verifies synchro
     verifiedAt: '2001-01-01T03:00:00Z', retryAt: null, blocker: null };
   await saveReleaseSynchronization(entry);
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 3, retained: 0 });
-});
+}));
 
-it('retains an enrolled publication before outbox registration and refuses cleanup when that outbox is unreadable', async () => {
+it('retains an enrolled publication before outbox registration and refuses cleanup when that outbox is unreadable', joinTestWork(async () => {
   await seed({ completed: true, indexed: true });
   fixture.state.agents[id].taskId = 'publisher-task';
   fixture.state.agents[id].metadata.releasePublication = {
@@ -167,9 +176,9 @@ it('retains an enrolled publication before outbox registration and refuses clean
   await writeFile(join(fixture.base, 'release-synchronization.json'), '{broken');
   await expect(api.deleteAgent(id)).rejects.toMatchObject({ status: 503, code: 'CLEANUP_OWNERSHIP_UNAVAILABLE' });
   await assertIndexedTrees();
-});
+}));
 
-it('preserves pending verification before the task hold is written and after archival', async () => {
+it('preserves pending verification before the task hold is written and after archival', joinTestWork(async () => {
   await seed({ completed: true, indexed: true });
   const agent = fixture.state.agents[id];
   agent.result.cleanupPending = true;
@@ -186,9 +195,9 @@ it('preserves pending verification before the task hold is written and after arc
   agent.metadata.repoStateVerification.status = 'completed';
   await writeFile(metadataPath, JSON.stringify(agent));
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 1, retained: 0 });
-});
+}));
 
-it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until delivery settles', async source => {
+it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until delivery settles', joinTestWork(async source => {
   await seed({ completed: true, indexed: true });
   // An archived owner is absent from resident state but still required after restart.
   delete fixture.state.agents[id];
@@ -213,7 +222,7 @@ it.each(['user', 'cos'])('preserves cleanup-owner evidence in the %s queue until
   expect(await api.clearCompletedAgents()).toEqual({ cleared: 1, retained: 0 });
   expect(await readIndex()).toEqual({});
   expect(await readdir(fixture.root)).not.toContain(date);
-});
+}));
 
 const cases = [
   { name: 'completion', setup: () => seed(), run: () => api.completeAgent(id, { success: true }) },
@@ -223,7 +232,7 @@ const cases = [
   { name: 'clear completed', setup: () => seed({ completed: true, indexed: true }), run: () => api.clearCompletedAgents() },
 ];
 describe.each(cases)('$name', ({ setup, run }) => {
-  it('keeps archive trees and the primary index behind an open cut', async () => {
+  it('keeps archive trees and the primary index behind an open cut', joinTestWork(async () => {
     await setup();
     const beforeIndex = await readIndex();
     const beforeState = structuredClone(fixture.state);
@@ -233,9 +242,9 @@ describe.each(cases)('$name', ({ setup, run }) => {
     try { await settle(); await settle(); expect(await readIndex()).toEqual(beforeIndex); expect(fixture.state).toEqual(beforeState); expect(await readdir(fixture.root)).toEqual(beforeNames); }
     finally { release(); }
     await work; await assertIndexedTrees();
-  });
+  }));
 
-  it('drains directory changes through the last primary-index commit', async () => {
+  it('drains directory changes through the last primary-index commit', joinTestWork(async () => {
     await setup();
     const reached = deferred(); const commit = deferred();
     fixture.beforeIndex = async () => { reached.resolve(); await commit.promise; };
@@ -247,9 +256,9 @@ describe.each(cases)('$name', ({ setup, run }) => {
     await work;
     const release = await cut;
     try { await assertIndexedTrees(); } finally { release(); }
-  });
+  }));
 });
-it('legacy migration holds moved directories and its new index in one publication', async () => {
+it('legacy migration holds moved directories and its new index in one publication', joinTestWork(async () => {
   await seed({ completed: true });
   await rm(join(fixture.root, 'index.json'));
   const reached = deferred(); const commit = deferred();
@@ -261,8 +270,8 @@ it('legacy migration holds moved directories and its new index in one publicatio
   await work;
   const release = await cut;
   try { await assertIndexedTrees(); } finally { release(); }
-});
-it('index publication failure remains retryable for peer reconciliation', async () => {
+}));
+it('index publication failure remains retryable for peer reconciliation', joinTestWork(async () => {
   const pairs = [{ agentId: id, date }];
   fixture.beforeIndex = async () => { throw new Error('synthetic index write failure'); };
   await expect(index.addAgentArchivesToIndex(pairs)).rejects.toThrow('synthetic index write failure');
@@ -270,8 +279,8 @@ it('index publication failure remains retryable for peer reconciliation', async 
   fixture.beforeIndex = null;
   expect(await index.addAgentArchivesToIndex(pairs)).toBe(0);
   expect(await readIndex()).toEqual({ [id]: date });
-});
-it('negative control exposes an index naming a relocated tree missing from the earlier copy', async () => {
+}));
+it('negative control exposes an index naming a relocated tree missing from the earlier copy', joinTestWork(async () => {
   await seed(); fixture.bypass = true;
   const copiedNames = await readdir(fixture.root);
   const release = await acquireCut();
@@ -280,13 +289,13 @@ it('negative control exposes an index naming a relocated tree missing from the e
     const bucket = (await readIndex())[id];
     expect(bucket).toBeTruthy(); expect(copiedNames).not.toContain(bucket);
   } finally { release(); }
-});
+}));
 
 describe.each([
   { name: 'single deletion', run: () => api.deleteAgent(id) },
   { name: 'clear completed', run: () => api.clearCompletedAgents() },
 ])('$name failure', ({ run }) => {
-  it('retains indexed archive bytes and retries after a primary-index write failure', async () => {
+  it('retains indexed archive bytes and retries after a primary-index write failure', joinTestWork(async () => {
     await seed({ completed: true, indexed: true });
     fixture.beforeIndex = async () => { throw new Error('synthetic index write failure'); };
     await expect(run()).rejects.toThrow('synthetic index write failure');
@@ -295,10 +304,10 @@ describe.each([
     fixture.beforeIndex = null;
     await run();
     expect(await readIndex()).toEqual({});
-  });
+  }));
 });
 
-it('does not let a cold reader queue its shared initialization ahead of an admitted publisher', async () => {
+it('does not let a cold reader queue its shared initialization ahead of an admitted publisher', joinTestWork(async () => {
   await seed({ completed: true });
   await rm(join(fixture.root, 'index.json'));
   const { withBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
@@ -315,7 +324,7 @@ it('does not let a cold reader queue its shared initialization ahead of an admit
   const release = await cut;
   try { await assertIndexedTrees(); } finally { release(); }
   await reader;
-});
+}));
 
 describe('active cleanup and retry owner preservation (#13430)', () => {
   async function seedCleanupTask(taskId, metadata, taskType = 'internal') {
@@ -332,7 +341,7 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
   it.each([
     { label: 'resident record', indexed: false, resident: true },
     { label: 'indexed archive', indexed: true, resident: false },
-  ])('refuses single delete and retains $label while task holds deliveryRecovery cleanup', async ({ indexed, resident }) => {
+  ])('refuses single delete and retains $label while task holds deliveryRecovery cleanup', joinTestWork(async ({ indexed, resident }) => {
     await seedAgent(id, { completed: true, indexed, resident });
     await seedCleanupTask('sys-rl-example', {
       deliveryRecovery: 'cleanup',
@@ -356,9 +365,9 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
 
     await expect(api.deleteAgent(id)).resolves.toEqual({ success: true, agentId: id });
     expect(await api.getAgent(id)).toBeNull();
-  });
+  }));
 
-  it('retains protected resident and archived runs across mixed buckets during clearCompletedAgents', async () => {
+  it('retains protected resident and archived runs across mixed buckets during clearCompletedAgents', joinTestWork(async () => {
     const protectedResident = 'agent-protected-resident';
     const protectedArchived = 'agent-protected-archived';
     const unprotectedSameBucket = 'agent-unprotected-same-bucket';
@@ -396,9 +405,9 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
     expect(secondClear).toEqual({ cleared: 2, retained: 0 });
     expect(fixture.state.agents).toEqual({});
     expect(await readIndex()).toEqual({});
-  });
+  }));
 
-  it('does not retain completed history solely because a stale agent result still carries cleanupPending', async () => {
+  it('does not retain completed history solely because a stale agent result still carries cleanupPending', joinTestWork(async () => {
     await seedAgent(id, {
       completed: true,
       indexed: true,
@@ -416,9 +425,9 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
 
     await expect(api.clearCompletedAgents()).resolves.toEqual({ cleared: 1, retained: 0 });
     expect(await api.getAgent(id)).toBeNull();
-  });
+  }));
 
-  it('revalidates current task ownership under the state lock so a concurrent reassignment is not deleted', async () => {
+  it('revalidates current task ownership under the state lock so a concurrent reassignment is not deleted', joinTestWork(async () => {
     const oldOwner = 'agent-old-owner';
     const newOwner = 'agent-new-owner';
     await seedAgent(oldOwner, { completed: true, indexed: true, resident: true });
@@ -453,9 +462,9 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
     expect(clearResult).toEqual({ cleared: 1, retained: 1 });
     expect((await api.getAgent(newOwner))?.id).toBe(newOwner);
     expect(await api.getAgent(oldOwner)).toBeNull();
-  });
+  }));
 
-  it('preserves evidence when task cleanup ownership cannot be verified', async () => {
+  it('preserves evidence when task cleanup ownership cannot be verified', joinTestWork(async () => {
     await seedAgent(id, { completed: true, indexed: true, resident: true });
     const spy = vi.spyOn(taskStore, 'getTaskView').mockRejectedValueOnce(new Error('task store unavailable'));
     try {
@@ -468,5 +477,5 @@ describe('active cleanup and retry owner preservation (#13430)', () => {
     } finally {
       spy.mockRestore();
     }
-  });
+  }));
 });

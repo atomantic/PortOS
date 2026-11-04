@@ -136,7 +136,16 @@ pull request's description into `main`'s commit message, so the separate
 `pr-description.yml` workflow runs the same script with `--description` on every
 open, push and description edit; fixing a flagged description turns it green
 without re-running CI. Pregate runs the same check
-over `<merge base>..HEAD` right after the hidden-content scan.
+over `<merge base>..HEAD` right after the hidden-content scan, excluding commits
+already on `origin/main` when that ref is available. This keeps release candidates
+from answering for historical main commits while still checking candidate-only work.
+
+The import-growth guard measures one development change. Release promotions and
+pushes retain the existing exception for a whole release cycle's aggregate growth.
+Local pregate carries its exact chosen base ref alongside `CI_BASE_SHA`, so the
+documented release refs use that same policy; main, other refs and raw SHAs keep
+the normal growth assertion. Other structural guards and full release suites run
+unchanged.
 
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the

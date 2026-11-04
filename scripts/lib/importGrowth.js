@@ -367,6 +367,14 @@ function defaultBaseRef(repoRoot) {
  * main. Measuring that aggregate fails a release on growth no change owns.
  */
 export function importGrowthSkipReason(env = process.env) {
+  // Pregate keeps the exact comparison SHA but also passes its chosen base
+  // ref, so a release promotion gets the same policy as its hosted PR. A
+  // selected local main base must not inherit an unrelated forge exemption.
+  if (typeof env.PORTOS_PREGATE_BASE_REF === 'string') {
+    return ['release', 'origin/release', 'refs/heads/release', 'refs/remotes/origin/release'].includes(env.PORTOS_PREGATE_BASE_REF)
+      ? 'local pregate against release aggregates a whole release cycle'
+      : null;
+  }
   if (env.GITHUB_BASE_REF === 'release') return 'pull request into release aggregates a whole release cycle';
   if (env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF_NAME === 'release') return 'push to release aggregates a whole release cycle';
   return null;

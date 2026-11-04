@@ -104,6 +104,38 @@ describe('Research and seed imports', () => {
 });
 
 describe('startSceneResearch', () => {
+  // Catches duplicate provider runs when two starts resolve their provider together.
+  it('starts only one research run when provider resolution overlaps', async () => {
+    let resolveProvider;
+    const providerReady = new Promise((resolve) => { resolveProvider = resolve; });
+    deps.resolve = vi.fn(() => providerReady);
+    deps.run = vi.fn(async () => ({ text: answer([]) }));
+    const settled = settle();
+    const input = { subject: 'Example Breed', providerId: 'claude' };
+    const attempts = Promise.allSettled([
+      startSceneResearch('mv-1', 's1', input, { hasHostControl: true }),
+      startSceneResearch('mv-1', 's1', input, { hasHostControl: true }),
+    ]);
+    await vi.waitFor(() => expect(deps.resolve).toHaveBeenCalledTimes(2));
+    resolveProvider({ provider: { id: 'claude', type: 'cli', enabled: true }, selectedModel: null });
+    const results = await attempts;
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    expect(results[1].reason).toMatchObject({ status: 409, code: 'RESEARCH_RUNNING' });
+    expect(await settled).toMatchObject({ status: 'failed' });
+    expect(deps.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows another research run after provider resolution fails', async () => {
+    deps.resolve.mockRejectedValueOnce(new Error('provider unavailable'));
+    deps.run = vi.fn(async () => ({ text: answer([]) }));
+    const input = { subject: 'Example Breed', providerId: 'claude' };
+    await expect(startSceneResearch('mv-1', 's1', input, { hasHostControl: true })).rejects.toThrow('provider unavailable');
+    const settled = settle();
+    await expect(startSceneResearch('mv-1', 's1', input, { hasHostControl: true })).resolves.toMatchObject({ status: 'running' });
+    expect(await settled).toMatchObject({ status: 'failed' });
+    expect(deps.run).toHaveBeenCalledTimes(1);
+  });
+
   // Uniquely catches a direct API model, which has no search tool, being sent off to guess photo URLs.
   it('refuses a direct API model before running it', async () => {
     deps.run = vi.fn();

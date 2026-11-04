@@ -507,6 +507,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 ## Process execution
 
+`detachedSpawn.js` also provides `snapshotMaintenanceProcesses()` for cross-platform maintenance and surviving-job checks: the POSIX process table or Windows CIM process identities, start times and command lines, rejecting incomplete inventories.
+
 | Module | Purpose |
 |---|---|
 | `agentGuard/` | `agentGuardEnv(baseEnv?)` + `AGENT_GUARD_BIN` — env patch that prepends a guarded `pm2` shim (`bin/pm2`) to a spawned AI agent's PATH so a confused `--dangerously-skip-permissions` agent can't `pm2 kill` / `pm2 delete all` the shared daemon (which would down every app, incl. PortOS). Blocked-subcommand list mirrors `validatePm2Command` in `commandSecurity.js`. POSIX-only (no-op on Windows). |

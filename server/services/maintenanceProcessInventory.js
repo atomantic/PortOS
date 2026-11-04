@@ -1,25 +1,9 @@
 /** Check observable local survivors without claiming historical output succeeded. */
 import { join, posix } from 'node:path';
-import { promisify } from 'node:util';
-import { snapshotProcesses } from '../lib/detachedSpawn.js';
-import { execFile } from '../lib/childProcess.js';
+import { snapshotMaintenanceProcesses } from '../lib/detachedSpawn.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
-const runFile = promisify(execFile);
-
-export async function snapshotMaintenanceProcesses({ platform = process.platform, run = runFile, selfPid = process.pid } = {}) {
-  if (platform !== 'win32') return snapshotProcesses();
-  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,@{Name="StartedAt";Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString("o")}}} | ConvertTo-Json -Compress'],
-  { timeout: 15000, maxBuffer: 32 * 1024 * 1024 });
-  const decoded = JSON.parse(stdout.replace(/^\uFEFF/, ''));
-  const records = Array.isArray(decoded) ? decoded : [decoded];
-  const rows = records.map(row => ({ pid: Number(row?.ProcessId), ppid: Number(row?.ParentProcessId) || null, state: 'S', command: row?.CommandLine ?? '',
-    startedAt: row?.StartedAt ? Date.parse(row.StartedAt) : null }));
-  if (rows.some(row => !Number.isSafeInteger(row.pid) || row.pid <= 0)
-    || !rows.some(row => row.pid === selfPid && row.command)) throw new Error('Incomplete process table');
-  return rows;
-}
+export { snapshotMaintenanceProcesses };
 
 export function findObservedReservationProcesses(processes, operations, installRoot, selfPid = process.pid) {
   const identities = operations

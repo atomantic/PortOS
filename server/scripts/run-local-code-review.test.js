@@ -8,123 +8,149 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { spawn, execFile } from '../lib/childProcess.js';
 
-it('runs a saved provider reviewer from the standalone claim bridge without bootstrapping PortOS', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'review-bridge-test-'));
-  await promisify(execFile)('git', ['init', '--quiet'], { cwd: root });
-  const bodies = [];
-  const api = createServer((request, response) => {
-    let body = '';
-    request.on('data', chunk => { body += chunk; });
-    request.on('end', () => {
-      bodies.push(body);
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ message: { content: 'NO FINDINGS' } }] }));
-    });
-  });
-  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
-  // Run under a temporary install path: source in a CoS worktree intentionally
-  // ignores PORTOS_DATA_ROOT. Preserve this test-only junction's module paths
-  // rather than weakening that live-data protection.
-  await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
-  const harness = join(root, 'harness.cjs');
-  await writeFile(join(root, 'context.txt'), 'example surrounding source');
-  await writeFile(harness, `
-    const { existsSync } = require('node:fs');
-    process.stdin.resume();
-    process.stdin.on('end', () => {
-      const args = process.argv.slice(2);
-      // No reviewer mode means ordinary argv, so it must run outside the caller's checkout.
-      if (existsSync('context.txt') || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
-      if (args.includes('--refuse')) {
-        process.stderr.write('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. synthetic-private-path-or-credential');
-        process.exit(1);
-      }
-      process.stdout.write('NO FINDINGS');
-    });
-  `);
-  const data = join(root, 'data');
-  await mkdir(data);
-  await writeFile(join(data, 'providers.json'), JSON.stringify({ activeProvider: 'example-gpu', providers: {
-    'example-gpu': { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
-      endpoint: `http://127.0.0.1:${api.address().port}/v1`, models: ['default-model', 'review-model'], defaultModel: 'default-model' },
-    'example-refusal': { id: 'example-refusal', name: 'Example Refusal', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--refuse'], defaultModel: 'review-model' },
-    'example-cli': { id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--model', 'baked-model'], defaultModel: 'default-model' },
-  } }));
-  await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
-    reviewers: ['provider:example-gpu'], providerModels: { 'provider:example-gpu': 'review-model' },
-    reviewerHealth: { 'provider:example-gpu': { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 1000 } },
-  } }));
-  const runReview = request => {
-    const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
-    delete env.VITEST;
-    const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
-      cwd: root,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return new Promise((resolve, reject) => {
-      let stdout = '';
-      let stderr = '';
-      const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Review bridge timed out')); }, 10000);
-      child.stdout.on('data', chunk => { stdout += chunk; });
-      child.stderr.on('data', chunk => { stderr += chunk; });
-      child.on('error', error => { clearTimeout(timeout); reject(error); });
-      child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
-      child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
-    });
-  };
-  const results = await (async () => {
-    const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
-    // A resumed claim can complete its review before attribution was initialized
-    // (#14102): the evidence file is created on demand, never failing publication.
-    const noState = await runReview(request);
-    expect(noState.code).toBe(0);
-    expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
-    expect(JSON.parse(noState.stdout).attributionError).toBeUndefined();
-    const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
-    expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
-    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
-    expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
-    await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root });
-    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
-    const cliRequest = { backend: 'provider:example-cli', model: 'review-model', diff: request.diff };
-    const results = [await runReview(request), await runReview({ ...request, inheritDefaults: false }), await runReview(cliRequest),
-      await runReview({ ...cliRequest, kind: 'claim-review' }),
-      await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] }),
-      await runReview({ ...cliRequest, backend: 'provider:example-refusal', kind: 'claim-review', inheritDefaults: false })];
-    expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\nreview-model\nreview-model\n');
-    const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root });
-    expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
-    return results;
-  })().finally(async () => {
-    await new Promise(resolve => api.close(resolve));
-    await rm(root, { recursive: true, force: true });
-  });
-  expect(results).toHaveLength(6);
-  expect(results[5].code).not.toBe(0);
-  expect(JSON.parse(results[5].stdout)).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED' });
-  expect(results[5].stderr).toContain('Reviewer configuration fault (REVIEWER_COMMAND_PERMISSION_DENIED) for provider:example-refusal');
-  expect(results[5].stdout + results[5].stderr).not.toContain('synthetic-private');
-  // Ordinary and claim code reviews both use the scratch review procedure.
-  // Public-comment screening still requires an enforced reviewer mode.
-  for (const result of [results[2], results[3]]) {
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', verdict: 'clean', findings: 'NO FINDINGS' });
-  }
-  for (const result of [results[4]]) {
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
-  }
+function withSavedProviderReview(context, run) {
+  const completed = (async () => {
+    let root;
+    let api;
+    try {
+      root = await mkdtemp(join(tmpdir(), 'review-bridge-test-'));
+      await promisify(execFile)('git', ['init', '--quiet'], { cwd: root, signal: context.signal });
+      const bodies = [];
+      api = createServer((request, response) => {
+        let body = '';
+        request.on('data', chunk => { body += chunk; });
+        request.on('end', () => {
+          bodies.push(body);
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ choices: [{ message: { content: 'NO FINDINGS' } }] }));
+        });
+      });
+      await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
+      // A temporary install path preserves test-only module paths without
+      // weakening the CoS worktree's live-data protection.
+      await symlink(fileURLToPath(new URL('../', import.meta.url)), join(root, 'server'), 'junction');
+      const harness = join(root, 'harness.cjs');
+      await writeFile(join(root, 'context.txt'), 'example surrounding source');
+      await writeFile(harness, `
+        const { existsSync } = require('node:fs');
+        process.stdin.resume();
+        process.stdin.on('end', () => {
+          const args = process.argv.slice(2);
+          // Ordinary argv must run outside the caller's checkout.
+          if (existsSync('context.txt') || args.includes('baked-model') || args[args.indexOf('--model') + 1] !== 'review-model') process.exit(1);
+          if (args.includes('--refuse')) {
+            process.stderr.write('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. synthetic-private-path-or-credential');
+            process.exit(1);
+          }
+          process.stdout.write('NO FINDINGS');
+        });
+      `);
+      const data = join(root, 'data');
+      await mkdir(data);
+      await writeFile(join(data, 'providers.json'), JSON.stringify({ activeProvider: 'example-gpu', providers: {
+        'example-gpu': { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
+          endpoint: `http://127.0.0.1:${api.address().port}/v1`, models: ['default-model', 'review-model'], defaultModel: 'default-model' },
+        'example-refusal': { id: 'example-refusal', name: 'Example Refusal', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--refuse'], defaultModel: 'review-model' },
+        'example-cli': { id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, command: process.execPath, args: [harness, '--model', 'baked-model'], defaultModel: 'default-model' },
+      } }));
+      await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
+        reviewers: ['provider:example-gpu'], providerModels: { 'provider:example-gpu': 'review-model' },
+        reviewerHealth: { 'provider:example-gpu': { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 1000 } },
+      } }));
+      const runReview = request => {
+        context.signal.throwIfAborted();
+        const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
+        delete env.VITEST;
+        const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
+          cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return new Promise((resolve, reject) => {
+          let stdout = '';
+          let stderr = '';
+          let failure;
+          const stop = error => { failure ||= error; child.kill('SIGKILL'); };
+          const abort = () => stop(context.signal.reason);
+          const timeout = setTimeout(() => stop(new Error('Review bridge timed out')), 10000);
+          context.signal.addEventListener('abort', abort, { once: true });
+          child.stdout.on('data', chunk => { stdout += chunk; });
+          child.stderr.on('data', chunk => { stderr += chunk; });
+          child.on('error', error => { failure ||= error; });
+          // Rejection waits for close too: fixture cleanup cannot race a child
+          // still using its temporary install after a watchdog or test abort.
+          child.on('close', code => {
+            clearTimeout(timeout);
+            context.signal.removeEventListener('abort', abort);
+            if (failure) reject(failure);
+            else resolve({ code, stdout, stderr });
+          });
+          child.stdin.end(JSON.stringify({ recordAttribution: true, ...request }));
+        });
+      };
+      context.signal.throwIfAborted();
+      return await run({ root, data, bodies, runReview });
+    } finally {
+      if (api?.listening) await new Promise(resolve => { api.close(resolve); api.closeAllConnections(); });
+      if (root) await rm(root, { recursive: true, force: true });
+    }
+  })();
+  // Vitest aborts a timed-out test without awaiting its remaining body. Keep
+  // teardown joined to that body's child-close and fixture cleanup instead.
+  context.onTestFinished(() => completed.then(() => {}, () => {}));
+  return completed;
+}
+
+it('runs saved API review defaults and attribution from the standalone bridge without bootstrapping PortOS', context => withSavedProviderReview(context, async ({ root, data, bodies, runReview }) => {
+  const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
+  // A resumed claim may finish before attribution has been initialized (#14102).
+  const noState = await runReview(request);
+  expect(noState.code, noState.stderr).toBe(0);
+  expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
+  expect(JSON.parse(noState.stdout).attributionError).toBeUndefined();
+  const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
+  expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
+  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
+  expect(JSON.parse(bodies.shift())).toMatchObject({ model: 'review-model' });
+  await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'reset'], { cwd: root, signal: context.signal });
+  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('');
   for (const [index, model] of ['review-model', 'default-model'].entries()) {
-    const result = results[index];
+    const result = await runReview(index ? { ...request, inheritDefaults: false } : request);
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-gpu', model, findings: 'NO FINDINGS' });
     expect(JSON.parse(bodies[index])).toMatchObject({ model });
     expect(JSON.parse(bodies[index])).not.toHaveProperty('tools');
   }
   expect(bodies).toHaveLength(2);
-}, 15000);
+  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\n');
+  const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root, signal: context.signal });
+  expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
+}), 15000);
+
+it('runs ordinary and claim CLI reviews in scratch with the explicit model', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+  const request = { backend: 'provider:example-cli', model: 'review-model', diff: 'diff --git a/example.js b/example.js' };
+  for (const review of [request, { ...request, kind: 'claim-review' }]) {
+    const result = await runReview(review);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-cli', verdict: 'clean', findings: 'NO FINDINGS' });
+  }
+  expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\nreview-model\n');
+}), 15000);
+
+it('refuses public-comment screening without an enforced CLI reviewer mode', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+  const result = await runReview({ kind: 'claim-comments', backend: 'provider:example-cli', model: 'review-model', comments: [{ login: 'example-user', type: 'User', body: 'I will work on this' }] });
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/REVIEWER_UNSUPPORTED/);
+  expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_UNSUPPORTED' });
+  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
+}), 15000);
+
+it('classifies a CLI command-permission refusal without exposing its private diagnostics', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+  const result = await runReview({ backend: 'provider:example-refusal', model: 'review-model', diff: 'diff --git a/example.js b/example.js', kind: 'claim-review', inheritDefaults: false });
+  expect(result.code).not.toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: 'REVIEWER_COMMAND_PERMISSION_DENIED' });
+  expect(result.stderr).toContain('Reviewer configuration fault (REVIEWER_COMMAND_PERMISSION_DENIED) for provider:example-refusal');
+  expect(result.stdout + result.stderr).not.toContain('synthetic-private');
+  expect(existsSync(join(root, '.git/portos-local-review-models'))).toBe(false);
+}), 15000);
 
 it('shuts down the Codex app-server child and cleans up scratch resources after successful and timed-out reviews', async () => {
   const root = await mkdtemp(join(tmpdir(), 'review-bridge-codex-test-'));
