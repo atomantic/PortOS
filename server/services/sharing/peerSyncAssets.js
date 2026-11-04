@@ -665,6 +665,8 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
     ...musicVideoCameoImageIds(project),
     // A shot's Research and seed photos (#14822).
     ...scenes.flatMap((s) => (Array.isArray(s?.researchReferences) ? s.researchReferences : []).map((r) => r?.imageId)).filter(isStr),
+    // The printable flyer's picked gallery image.
+    ...(isStr(project?.publishKit?.flyer?.imageFile) ? [project.publishKit.flyer.imageFile] : []),
   ])];
   if (imageNames.length) {
     const entries = imageNames.map(imageAssetReference);
