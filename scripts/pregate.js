@@ -162,8 +162,8 @@ export function describeStageCommand(stage) {
  * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
  * environment from scripts/lib/pregateResources.js.
  */
-export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, databaseEnv = {}, guardPlan = null } = {}) {
-  const base = baseSha ? { CI_BASE_SHA: baseSha } : {};
+export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, skip = {}, databaseEnv = {}, guardPlan = null } = {}) {
+  const base = { ...(baseSha ? { CI_BASE_SHA: baseSha } : {}), PORTOS_PREGATE_BASE_REF: baseRef ?? '' };
   const stages = [{
     name: 'hidden-content scan',
     suite: 'scan',
@@ -912,7 +912,7 @@ async function main() {
   const planStages = (prerequisites, databaseEnv) => {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
-    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv,
+    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
       guardPlan: options.guardsOnly ? null : guardPlan });
     return { uncovered, stages: options.guardsOnly
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
