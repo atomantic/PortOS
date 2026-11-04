@@ -3,8 +3,10 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+vi.mock('../services/signalManage.js', () => ({ blockConversation: vi.fn(), purgeConversation: vi.fn() }));
 vi.mock('../services/signalSync.js', () => ({ checkSetup: vi.fn(), getStatus: vi.fn(), runSync: vi.fn() }));
 
+import * as signalManage from '../services/signalManage.js';
 import * as signalSync from '../services/signalSync.js';
 import signalRoutes from './signal.js';
 
@@ -45,5 +47,16 @@ describe('/api/signal', () => {
     expect(res.body).toEqual({ enabled: true, intervalMinutes: 15 });
     expect(signalSync.checkSetup).not.toHaveBeenCalled();
     expect(signalSync.runSync).not.toHaveBeenCalled();
+  });
+
+  it('validates conversation bodies through the lazily loaded shared validator', async () => {
+    const bad = await request(app).post('/api/signal/purge').send({ conversationId: '' });
+    expect(bad.status).toBe(400);
+    expect(signalManage.purgeConversation).not.toHaveBeenCalled();
+
+    signalManage.purgeConversation.mockResolvedValue({ purged: 2 });
+    const ok = await request(app).post('/api/signal/purge').send({ conversationId: ' abc ' });
+    expect(ok.body).toEqual({ purged: 2 });
+    expect(signalManage.purgeConversation).toHaveBeenCalledWith('abc');
   });
 });

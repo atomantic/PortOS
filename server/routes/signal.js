@@ -1,12 +1,15 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { validateRequest } from '../lib/validation.js';
 import * as signalManage from '../services/signalManage.js';
 
 import { asyncHandler } from '../lib/errorHandler.js';
 import * as signalSync from '../services/signalSync.js';
 
 const router = Router();
+
+// The shared validation module re-exports every domain's schemas; load it when a
+// conversation handler runs so importing this route does not evaluate them all.
+const validateRequest = async (schema, data) => (await import('../lib/validation.js')).validateRequest(schema, data);
 
 // Setup check — resolve the DB key, decrypt a snapshot, and probe the schema.
 // Reports an actionable error (missing install, key failure, unsupported schema)
@@ -33,16 +36,16 @@ router.post('/sync', asyncHandler(async (req, res) => {
 
 const listSchema = z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(2000).optional() });
 router.get('/conversations', asyncHandler(async (req, res) => {
-  const options = validateRequest(listSchema, req.query);
+  const options = await validateRequest(listSchema, req.query);
   res.json({ conversations: await signalManage.listConversations(options) });
 }));
 const conversationSchema = z.object({ conversationId: z.string().trim().min(1).max(1000), purgeExisting: z.boolean().optional() });
 router.post('/purge', asyncHandler(async (req, res) => {
-  const body = validateRequest(conversationSchema, req.body);
+  const body = await validateRequest(conversationSchema, req.body);
   res.json(await signalManage.purgeConversation(body.conversationId));
 }));
 router.post('/blocklist/conversations', asyncHandler(async (req, res) => {
-  const body = validateRequest(conversationSchema, req.body);
+  const body = await validateRequest(conversationSchema, req.body);
   res.json(await signalManage.blockConversation(body.conversationId, body));
 }));
 router.get('/blocklist', asyncHandler(async (req, res) => {
@@ -53,7 +56,7 @@ const blocklistSchema = z.object({
   conversationIds: z.array(z.string().trim().min(1).max(1000)).max(5000),
 });
 router.put('/blocklist', asyncHandler(async (req, res) => {
-  const body = validateRequest(blocklistSchema, req.body);
+  const body = await validateRequest(blocklistSchema, req.body);
   res.json(await signalManage.setBlocklist(body));
 }));
 export default router;

@@ -30,7 +30,6 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { whichFirst } from '../../lib/processEnv.js';
 import { getProject } from './projects.js';
-import { attachVocalStem } from './vocalStem.js';
 
 const IS_WIN = process.platform === 'win32';
 const VENV_TIMEOUT_MS = 5 * 60 * 1000;
@@ -175,7 +174,7 @@ const canceledRun = () => Object.assign(new Error('cancelled'), { canceled: true
 export async function startVocalSeparation(projectId, { deps = {}, onProgress = null, isCancelled = () => false } = {}) {
   const d = {
     getProject,
-    attachVocalStem,
+    attachVocalStem: async (...args) => (await import('./vocalStem.js')).attachVocalStem(...args),
     resolveMaster: async (project) => (await import('./render.js')).resolveMasterAudioPath(project),
     run: runStreamingCommand,
     resolveBasePython: defaultBasePython,
