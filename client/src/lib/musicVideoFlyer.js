@@ -93,8 +93,8 @@ const RETRO_CSS = `
 .retro .frame::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(to bottom, rgba(0,0,0,0.16) 0 1.2pt, transparent 1.2pt 3.6pt); pointer-events: none; }
 .retro .tagline { font-family: "Courier New", Courier, monospace; font-size: 15pt; }
 .retro .scan { border-width: 4pt; border-radius: 10pt; background: repeating-linear-gradient(to bottom, #fff 0 15pt, #000 15pt 16pt); padding: 0.18in 0.22in; }
-.retro .scan .text { background: #fff; padding: 0.08in 0.1in; border: 2pt solid #000; }
-.retro .scan h2 { font-style: italic; }
+.retro .text { background: #fff; padding: 0.08in 0.1in; border: 2pt solid #000; }
+.retro .text h2 { font-style: italic; }
 .retro .vhs { margin: 0 0 0.08in; font-family: "Courier New", Courier, monospace; font-size: 11pt; font-weight: 700; letter-spacing: 0.1em; }
 .retro .vhs b { background: #000; color: #fff; padding: 1pt 5pt; margin-right: 4pt; font-style: italic; }
 .retro .play { margin: 0.1in 0 0; font-family: "Courier New", Courier, monospace; font-size: 10pt; font-weight: 700; }
@@ -118,13 +118,14 @@ const HALF_CSS = `
 .half .hero { max-height: none; }
 .half .tagline { font-size: 12pt; }
 .half .details { font-size: 9pt; }
-.half .scan { flex-direction: column-reverse; justify-content: center; gap: 0.12in; padding: 0.14in; flex: 0 0 auto; }
-.half .scan .text { text-align: center; }
-.half .scan h2 { font-size: 18pt; margin: 0 0 0.04in; }
+.half .scan { justify-content: center; padding: 0.14in; flex: 0 0 auto; align-self: center; }
+.half .text { padding: 0.06in 0.1in; border: 2pt solid #000; }
+.half .text h2 { font-size: 18pt; margin: 0 0 0.04in; }
 .half .url { font-size: 10pt; }
 .half .vhs { font-size: 8pt; margin: 0 0 0.04in; }
 .half .play { font-size: 8pt; margin-top: 0.04in; }
-.half .qr { width: 3in; height: 3in; }
+.half .qr { width: 3.5in; height: 3.5in; }
+.half.noimg .qr { width: 4.1in; height: 4.1in; }
 .half .qr.placeholder { font-size: 11pt; }
 .cut { height: 0.1in; border-top: 1.5pt dashed #000; position: relative; font-size: 14pt; line-height: 0; padding-left: 0.2in; }
 `;
@@ -148,6 +149,8 @@ export function buildFlyerHtml(flyer, { origin = '', autoPrint = false } = {}) {
   const retro = f.style !== 'clean';
   const half = f.layout === 'half';
   const urlLine = f.qrUrl ? `<p class="url">${escapeHtml(displayUrl(f.qrUrl))}</p>` : '<p class="url muted">youtube link pending</p>';
+  // The label beside the QR; on a half sheet it moves to the text column so the QR gets the whole right side.
+  const label = `<div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>`;
   const page = `<main class="page${half ? ' half' : ''}${image ? '' : ' noimg'}"><div class="info">
 ${f.kicker ? `<p class="kicker">${escapeHtml(f.kicker)}</p>` : ''}
 ${f.title ? `<h1>${escapeHtml(f.title)}</h1>` : ''}
@@ -155,9 +158,10 @@ ${retro ? '<div class="stripes" aria-hidden="true"><i></i><i></i><i></i></div>' 
 ${f.byline ? `<p class="byline">${escapeHtml(f.byline)}</p>` : ''}
 ${image ? `<div class="hero"><div class="frame"><img src="${escapeHtml(image)}" alt=""></div></div>` : ''}
 ${f.tagline ? `<p class="tagline">${lines(f.tagline)}</p>` : ''}
+${half ? label : ''}
 ${half && f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
 </div>
-<section class="scan"><div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>${qr}</section>
+<section class="scan">${half ? '' : label}${qr}</section>
 ${!half && f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
 </main>`;
   return `<!doctype html>
@@ -174,7 +178,11 @@ body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .page.noimg:not(.half) { justify-content: space-between; }
 .page.noimg:not(.half) .scan { flex-direction: column-reverse; gap: 0.15in; }
 .page.noimg:not(.half) .scan .text { text-align: center; }
-.page.noimg:not(.half) .qr { width: 4.6in; height: 4.6in; }
+.page.noimg:not(.half) { gap: 0.12in; padding: 0.4in 0.5in; }
+.page.noimg:not(.half) .scan { padding: 0.12in; }
+.page.noimg:not(.half) .text h2 { font-size: 24pt; margin: 0; }
+.page.noimg:not(.half) .vhs, .page.noimg:not(.half) .play { display: none; }
+.page.noimg:not(.half) .qr { width: 6.2in; height: 6.2in; }
 .kicker { margin: 0; font-size: 15pt; font-weight: 700; letter-spacing: 0.3em; text-transform: uppercase; border-bottom: 3pt solid #000; padding-bottom: 0.08in; }
 h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-weight: 900; font-size: 58pt; line-height: 0.95; text-transform: uppercase; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .byline { margin: 0; font-size: 20pt; font-weight: 700; }
@@ -185,7 +193,7 @@ h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
 .tagline { margin: 0; font-size: 17pt; line-height: 1.3; }
 .scan { display: flex; gap: 0.3in; align-items: center; border: 3pt solid #000; padding: 0.2in; }
 .scan .text { flex: 1 1 auto; min-width: 0; }
-.scan h2 { margin: 0 0 0.08in; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-size: 30pt; text-transform: uppercase; line-height: 1; }
+.text h2 { margin: 0 0 0.08in; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-size: 30pt; text-transform: uppercase; line-height: 1; }
 .url { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 13pt; overflow-wrap: anywhere; }
 .muted { color: #555; }
 .qr { width: 3.3in; height: 3.3in; flex: 0 0 auto; }
