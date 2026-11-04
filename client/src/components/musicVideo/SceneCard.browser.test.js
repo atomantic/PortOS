@@ -32,14 +32,21 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
               import SceneCard from '/src/components/musicVideo/SceneCard.jsx';
               import '/src/index.css';
               const h = React.createElement;
-              const width = Number(new URLSearchParams(location.search).get('width'));
-              const scene = { sceneId: 'layout', order: 0, startSec: 0, endSec: 4, referenceImageId: 'synthetic.png',
-                visualIntent: 'Synthetic direction', takes: [] };
+              const params = new URLSearchParams(location.search);
+              const width = Number(params.get('width'));
+              const longPrompt = Array.from({ length: 26 }, (_, i) => 'Frame direction line ' + (i + 1)).join('\\n');
               const models = [{ id: 'synthetic-long-model', name: 'An exceptionally long local video rendering model name for layout validation',
                 runtime: 'ltx25', supportedModes: ['image'] }];
+              function Fixture() {
+                const [scene, setScene] = React.useState({ sceneId: 'layout', order: 0, startSec: 0, endSec: 4, referenceImageId: 'synthetic.png',
+                  visualIntent: 'Synthetic direction', framePrompt: longPrompt, endFramePrompt: longPrompt, takes: [] });
+                return h('main', { style: { width: width + 'px', maxWidth: '100%', padding: '8px', boxSizing: 'border-box' } },
+                  h(SceneCard, { scene, index: 0, expanded: true, videoModels: models,
+                    onGenerateEndFrame: params.has('frames') ? () => {} : undefined,
+                    onEditLocal: (_id, patch) => setScene(current => ({ ...current, ...patch })), onSave: () => {} }));
+              }
               createRoot(document.getElementById('root')).render(
-                h('main', { style: { width: width + 'px', maxWidth: '100%', padding: '8px', boxSizing: 'border-box' } },
-                  h(SceneCard, { scene, index: 0, expanded: true, videoModels: models, onEditLocal: () => {}, onSave: () => {} })));
+                h(Fixture));
             `;
           },
           configureServer(vite) {
@@ -55,6 +62,69 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
   }, BROWSER_FIXTURE_STARTUP_MS);
 
   afterAll(() => fixture?.close());
+
+  // Catches measuring a hidden frame as zero, clipping long prompts, and stale heights after edits or wrapping changes.
+  it('fits both frame prompts when opened, edited, and rewrapped', async () => {
+    const page = await fixture.browser.newPage({ viewport: { width: 1000, height: 900 } });
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.message));
+    await page.addInitScript(() => {
+      window.frameLayoutErrors = [];
+      window.addEventListener('error', event => window.frameLayoutErrors.push(event.message));
+    });
+    await page.route('**/*', route => {
+      const url = new URL(route.request().url());
+      return url.origin === new URL(fixture.origin).origin && !/^\/(api|data|socket\.io)(\/|$)/.test(url.pathname)
+        ? route.continue() : route.abort();
+    });
+    try {
+      await page.goto(`${fixture.origin}shot-editor-test?width=1000&frames=1`);
+      await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Frames' }).click();
+      const start = page.getByRole('textbox', { name: 'Reference frame prompt' });
+      const end = page.getByRole('textbox', { name: 'End frame prompt' });
+      const fit = async (locator) => {
+        await locator.waitFor({ state: 'visible' });
+        await page.waitForFunction(el => el.clientHeight > 0 && el.scrollHeight <= el.clientHeight + 1, await locator.elementHandle(), { timeout: 5000 });
+        return locator.evaluate(el => el.clientHeight);
+      };
+      const initialHeight = await fit(start);
+      expect(initialHeight).toBeGreaterThan(320);
+      const initialEndHeight = await fit(end);
+      expect(initialEndHeight).toBeGreaterThan(320);
+      await end.fill('Short end prompt');
+      expect(await fit(end)).toBeLessThan(initialEndHeight);
+
+      await start.fill('Short prompt');
+      expect(await fit(start)).toBeLessThan(initialHeight);
+      await start.fill(Array(35).fill('A longer frame direction').join('\n'));
+      expect(await fit(start)).toBeGreaterThan(initialHeight);
+
+      await start.fill('A wrapping frame direction '.repeat(100));
+      await fit(start);
+      const wideWidth = await start.evaluate(el => el.clientWidth);
+      await page.setViewportSize({ width: 420, height: 900 });
+      await page.waitForFunction(([el, oldWidth]) => el.clientWidth !== oldWidth,
+        [await start.elementHandle(), wideWidth], { timeout: 5000 });
+      const middleHeight = await fit(start);
+      const middleWidth = await start.evaluate(el => el.clientWidth);
+      await page.locator('main').evaluate(el => { el.style.width = '180px'; });
+      await page.waitForFunction(([el, oldHeight]) => el.clientHeight > oldHeight && el.scrollHeight <= el.clientHeight + 1,
+        [await start.elementHandle(), middleHeight], { timeout: 5000 });
+      expect(await start.evaluate(el => el.clientWidth)).toBeLessThan(middleWidth);
+      await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Clip' }).click();
+      await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Frames' }).click();
+      await fit(start);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      expect(await page.evaluate(() => window.frameLayoutErrors)).toEqual([]);
+
+      await page.goto(`${fixture.origin}shot-editor-test?width=1000`);
+      await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Still' }).click();
+      expect(await fit(page.getByRole('textbox', { name: 'Reference frame prompt' }))).toBeGreaterThan(320);
+      expect(pageErrors).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  }, 30000);
 
   it.each([
     [320, 320], [390, 390], [768, 768], [820, 820], [900, 900], [1024, 1024], [1280, 1280], [1440, 1440],

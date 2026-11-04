@@ -93,8 +93,12 @@ describe('useAutoSizeTextarea', () => {
     Object.defineProperty(el, 'clientWidth', { value: 300, writable: true, configurable: true });
     vi.spyOn(el, 'scrollHeight', 'get').mockReturnValue(60);
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({ boxSizing: 'content-box' });
+    const frames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => { frames.push(callback); return frames.length; }));
+    const cancelFrame = vi.fn();
+    vi.stubGlobal('cancelAnimationFrame', cancelFrame);
 
-    renderHook(() => {
+    const { unmount } = renderHook(() => {
       const [ref] = useAutoSizeTextarea('test');
       ref(el);
     });
@@ -109,13 +113,23 @@ describe('useAutoSizeTextarea', () => {
       observerCallback();
     });
     expect(el.style.height).toBe('60px');
+    expect(frames).toHaveLength(0);
 
-    // Width changed (e.g. mobile viewport resize / word re-wrapping): triggers re-fit
+    // Width changes coalesce into a later frame, outside ResizeObserver delivery.
     el.clientWidth = 200;
-    act(() => {
-      observerCallback();
-    });
+    act(() => { observerCallback(); });
+    el.clientWidth = 180;
+    act(() => { observerCallback(); });
+    expect(frames).toHaveLength(1);
+    expect(el.style.height).toBe('60px');
+    act(() => { frames[0](); });
     expect(el.style.height).toBe('120px');
+
+    el.clientWidth = 160;
+    act(() => { observerCallback(); });
+    expect(frames).toHaveLength(2);
+    unmount();
+    expect(cancelFrame).toHaveBeenCalledWith(2);
   });
 
   it('exposes the manual resize trigger function', () => {
