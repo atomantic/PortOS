@@ -130,13 +130,36 @@ describe('POST /agents/:id/release-candidate retire (#14773)', () => {
     expect(fixture.state.agents['agent-original']).toEqual(predecessor);
     expect(fixture.task).toMatchObject({ status: 'completed', metadata: { resolution: 'candidate-reconciled', releaseCandidateReconciliation: receipt } });
     expect(await readClaimOwnershipAgents()).toHaveLength(2);
-    expect(await git(['rev-parse', branch], repo)).toBe(head);
+    // The abandoned branch is gone so no later run recovers it; its commits stay reachable.
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    expect(await git(['rev-parse', `refs/portos/retired-candidates/${branch}`], repo)).toBe(head);
 
     // A repeated request completes idempotently; a different decision is refused.
     expect(await (await auditedCall()).body).toMatchObject({ retired: true, reconciliation: receipt });
     expect(fixture.taskUpdates).toHaveLength(1);
     expect((await auditedCall({ action: 'retire', reason: 'A different decision entirely' })).body)
       .toEqual({ retired: false, reason: 'candidate-already-reconciled' });
+  });
+
+  it('removes the locked candidate checkout so the next release run has nothing to recover', async () => {
+    const path = join(scratch, 'candidate');
+    await git(['worktree', 'add', path, branch], repo);
+    await git(['worktree', 'lock', '--reason', `Active release candidate ${branch}`, path], repo);
+    expect((await auditedCall()).body).toMatchObject({ retired: true, checkoutRemoved: true });
+    expect(await git(['worktree', 'list', '--porcelain'], repo)).not.toContain(path);
+    expect((await execGit(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], repo, { ignoreExitCode: true })).exitCode).not.toBe(0);
+    expect(await git(['rev-parse', `refs/portos/retired-candidates/${branch}`], repo)).toBe(head);
+  });
+
+  it('retires the hold but keeps a candidate checkout holding uncommitted work', async () => {
+    const path = join(scratch, 'candidate');
+    await git(['worktree', 'add', path, branch], repo);
+    await writeFile(join(path, 'unfinished.txt'), 'uncommitted\n');
+    expect((await auditedCall()).body).toMatchObject({ retired: true, checkoutRemoved: false });
+    expect(fixture.task.status).toBe('completed');
+    expect(await git(['rev-parse', branch], repo)).toBe(head);
+    expect(await git(['worktree', 'list', '--porcelain'], repo)).toContain(path);
+    await git(['worktree', 'remove', '--force', path], repo);
   });
 
   it('finishes the task update when it failed after the receipt was recorded', async () => {

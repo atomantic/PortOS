@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
-import { releaseCandidateTransferSchema } from '../lib/releasePublication.js';
+import { INSUFFICIENT_EVIDENCE_HOLD_REASONS, releaseCandidateTransferSchema } from '../lib/releasePublication.js';
 import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { ownershipTransaction, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
 import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity,
@@ -23,6 +23,10 @@ const run = agent => ({ agentId: agent.id, taskId: agent.taskId, startedAt: agen
 const releaseRun = agent => agent?.metadata?.taskAnalysisType === 'do-release' && agent.metadata.isWorktree === false;
 const repository = agent => agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
 const nextStep = 'Preserve the original checkout and private review files; resolve the recorded lineage or process hold, then retry recovery. Do not reserve another candidate.';
+// Retrying cannot create missing historical evidence, so name the only way out.
+const nextStepFor = reason => (INSUFFICIENT_EVIDENCE_HOLD_REASONS.includes(reason)
+  ? `${nextStep} This evidence cannot be recreated by retrying: an operator who abandons the candidate retires this hold with the "retire" action (docs/VERSIONING.md, "Reconciling a legacy held candidate"), after which a new release run may reserve a fresh cutoff.`
+  : nextStep);
 
 async function sourceCheckout(source) {
   if (source.metadata.checkoutSeeds?.length) {
@@ -216,12 +220,12 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       // A failed retry must never revoke a completed transfer's reservation.
       if (previous?.status !== 'transferred') {
         state.agents[successor.id] = { ...successor, metadata: { ...successor.metadata,
-          releaseCandidateRecovery: { version: 1, status: 'held', predecessorAgentId, reason, nextStep } } };
+          releaseCandidateRecovery: { version: 1, status: 'held', predecessorAgentId, reason, nextStep: nextStepFor(reason) } } };
         await save();
         const { cosEvents } = await import('./cosEvents.js');
         cosEvents.emit('agent:updated', state.agents[successor.id]);
       }
-      return { recovered: false, reason, nextStep };
+      return { recovered: false, reason, nextStep: nextStepFor(reason) };
     };
     let persisting = false;
     try {
@@ -322,5 +326,5 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       return hold(error.recoveryReason || (/^candidate-[a-z-]+$/.test(error.message) ? error.message : 'candidate-evidence-unavailable'));
     }
   });
-  return result.recovered ? result : { ...result, nextStep };
+  return result.recovered ? result : { nextStep, ...result };
 }
