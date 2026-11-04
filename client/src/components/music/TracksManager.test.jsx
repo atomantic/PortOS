@@ -50,7 +50,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/apiMusicVideo.js', () => ({ listMusicVideoMidiSources: vi.fn() }));
 
 import TracksManager from './TracksManager.jsx';
-import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack, uploadTrackAudio } from '../../services/api';
+import { listTracks, listAlbums, createTrack, deleteTrack, updateTrack, uploadTrackAudio, listMusicLibrary } from '../../services/api';
 import { listMusicVideoMidiSources } from '../../services/apiMusicVideo.js';
 
 const TRACK = { id: 'track-1', title: 'Example Song', audioFilename: 'example.mp3', renders: [] };
@@ -487,5 +487,47 @@ describe('<TracksManager> Suno export import', () => {
     expect(fd.get('prompt')).toBe('dreamy synth-pop');
     expect(fd.get('lyrics')).toBe('la la la');
     expect(fd.get('track').name).toBe('suno-song.mp3');
+  });
+});
+
+describe('<TracksManager> music library picker', () => {
+  beforeEach(() => {
+    listTracks.mockResolvedValue([TRACK]);
+    listAlbums.mockResolvedValue([]);
+    listMusicVideoMidiSources.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('shows an error row with Retry when listing library fails, instead of claiming empty', async () => {
+    listMusicLibrary.mockRejectedValueOnce(new Error('Library storage offline'));
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+
+    const libraryButton = screen.getByRole('button', { name: /from library/i });
+    fireEvent.click(libraryButton);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load music library — Library storage offline');
+    expect(screen.queryByText('The music library is empty — upload a track first.')).toBeNull();
+
+    listMusicLibrary.mockResolvedValue({ tracks: [{ filename: 'song.mp3', label: 'Song Take 1' }] });
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Song Take 1');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('renders the empty copy when the library read succeeds with no tracks', async () => {
+    listMusicLibrary.mockResolvedValue({ tracks: [] });
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+
+    const libraryButton = screen.getByRole('button', { name: /from library/i });
+    fireEvent.click(libraryButton);
+
+    expect(await screen.findByText('The music library is empty — upload a track first.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

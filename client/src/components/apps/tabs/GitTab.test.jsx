@@ -424,4 +424,26 @@ describe('GitTab branch read failure', () => {
     expect(await screen.findByText('No branches found')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('shows an error row with Retry for remote branches instead of "No remote branches found", then recovers', async () => {
+    api.getRemoteBranches.mockRejectedValueOnce(new Error('remote unreachable'));
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+
+    const alerts = await screen.findAllByRole('alert');
+    const remoteAlert = alerts.find(a => a.textContent.includes('remote branches'));
+    expect(remoteAlert).toBeDefined();
+    expect(remoteAlert).toHaveTextContent('Could not load remote branches — remote unreachable');
+    expect(screen.queryByText('No remote branches found')).toBeNull();
+
+    api.getRemoteBranches.mockResolvedValue({ branches: [{ name: 'origin/main', fullRef: 'refs/remotes/origin/main', isDefault: true }], defaultBranch: 'main' });
+    const retryBtn = remoteAlert.querySelector('button');
+    fireEvent.click(retryBtn);
+    await screen.findByText('origin/main');
+    expect(screen.queryByText('Could not load remote branches')).toBeNull();
+  });
+
+  it('still renders the empty copy when remote read succeeds with no remote branches', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+    expect(await screen.findByText('No remote branches found')).toBeInTheDocument();
+  });
 });
