@@ -2,8 +2,9 @@ import { castLookForTake } from '../../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCastVariant from './SceneCastVariant.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
@@ -34,23 +35,12 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
   );
 }
 
-/**
- * A frame prompt that grows to fit its text, so a long prompt never sits
- * scrolled partway inside a short box (on iOS that left a half-cut line).
- */
 function FramePrompt({ id, label, value, ...props }) {
-  const ref = useRef(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
-  }, [value]);
   return (
     <>
       <label htmlFor={id} className="sr-only">{label}</label>
-      <textarea ref={ref} id={id} value={value} rows={3} {...props}
-        className="block max-h-80 w-full resize-none overflow-y-auto bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
+      <AutoSizeTextarea id={id} value={value} rows={3} {...props}
+        className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
     </>
   );
 }

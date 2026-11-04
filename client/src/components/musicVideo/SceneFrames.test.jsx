@@ -1,11 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
 
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
+
+it('edits and saves each frame prompt on blur', () => {
+  const onSave = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(scene);
+    return <SceneFrames scene={draft} index={0} endFrames onSave={onSave}
+      onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
+  }
+  render(<Harness />);
+  const start = screen.getByRole('textbox', { name: 'Reference frame prompt' });
+  fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
+  fireEvent.blur(start);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
+
+  const end = screen.getByRole('textbox', { name: 'End frame prompt' });
+  fireEvent.change(end, { target: { value: '' } });
+  fireEvent.blur(end);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { endFramePrompt: null });
+});
 
 describe('older Casting look (#14154)', () => {
   const guide = (mediaKey, age) => ({ mediaKey, kind: 'reference', library: { variant: { age }, guide: true } });

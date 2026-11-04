@@ -38,14 +38,20 @@ export default function useAutoSizeTextarea(value, externalRef) {
     const el = localRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
     let lastWidth = el.clientWidth;
+    let frame = null;
     const ro = new ResizeObserver(() => {
       if (el.clientWidth !== lastWidth) {
         lastWidth = el.clientWidth;
-        resize();
+        // Changing an observed element's height inside the observer can trigger
+        // an undelivered-notification warning. Re-fit in the next frame instead.
+        if (frame === null) frame = requestAnimationFrame(() => { frame = null; resize(); });
       }
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [resize]);
 
   const setRef = useCallback((el) => {
