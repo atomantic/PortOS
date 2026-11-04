@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Scissors, X } from 'lucide-react';
+import { timedSongScenes } from '../../../../server/lib/musicVideoColdOpen.js';
 import { lyricWordCuts } from '../../../../server/lib/musicVideoLyricAnchors.js';
 import { formatCount, formatTimecode } from '../../utils/formatters.js';
 
@@ -45,6 +46,9 @@ function AnchorSyncNote({ project, onDismiss }) {
  * Cut the board on sung words (#14820): pick a run of lyric lines and make one
  * shot per phrase or per word, each starting on its word and following it when
  * the words are re-aligned. Needs word timing (Align words on the Song step).
+ * A board with no timed shots has nothing to cut, so it offers to lay them out over
+ * the lines instead. Hidden when the storyboard comes from a document's shot
+ * manifest; a document project whose shots live on the Board keeps it (#14846).
  */
 export default function LyricWordCutPanel({ project, onCut, onDismissSync }) {
   const cues = (project.lyricCues || []).filter((cue) => typeof cue?.text === 'string' && cue.text.trim());
@@ -52,7 +56,8 @@ export default function LyricWordCutPanel({ project, onCut, onDismissSync }) {
   const [toId, setToId] = useState(cues[0]?.id ?? '');
   const [mode, setMode] = useState('phrase');
   const [busy, setBusy] = useState(false);
-  if (!cues.length || !(project.scenes || []).length) return null;
+  if (!cues.length || project.productionReview?.draft?.storyboardSource === 'document') return null;
+  const layOut = timedSongScenes(project).length === 0;
   const at = (id) => Math.max(0, cues.findIndex((cue) => cue.id === id));
   const [lo, hi] = [at(fromId), at(toId)].sort((a, b) => a - b);
   const cueIds = cues.slice(lo, hi + 1).map((cue) => cue.id);
@@ -85,13 +90,13 @@ export default function LyricWordCutPanel({ project, onCut, onDismissSync }) {
           </select>
         </div>
         <button type="button" onClick={cut} disabled={busy || untimed.length > 0 || !cuts.length} className={buttonCls}>
-          <Scissors size={15} aria-hidden="true" />{busy ? 'Cutting…' : `Cut ${formatCount(cuts.length)} ${cuts.length === 1 ? 'shot' : 'shots'}`}
+          <Scissors size={15} aria-hidden="true" />{busy ? (layOut ? 'Laying out…' : 'Cutting…') : `${layOut ? 'Lay out' : 'Cut'} ${formatCount(cuts.length)} ${cuts.length === 1 ? 'shot' : 'shots'}`}
         </button>
       </div>
       <p className="text-xs text-port-text-muted">
         {untimed.length > 0
           ? <span className="text-port-warning">Align words on the Song step first: {formatCount(untimed.length)} {untimed.length === 1 ? 'line has' : 'lines have'} no word timing.</span>
-          : 'Each shot starts on its first word and moves with it when the words are re-aligned.'}
+          : `${layOut ? `No timed shots yet, so this lays out one shot per ${mode} over the chosen lines. ` : ''}Each shot starts on its first word and moves with it when the words are re-aligned.`}
       </p>
     </div>
   );

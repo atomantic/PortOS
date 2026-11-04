@@ -45,7 +45,8 @@ const PHRASE_END = /[,;:!?.…—–]["'”’)\]]*$/u;
 
 /**
  * Cut points for a lyric range (#14820): one per sung word (`mode: 'word'`) or
- * one per phrase (`'phrase'`), in song order, each at its first word's onset.
+ * one per phrase (`'phrase'`), in song order, each at its first word's onset,
+ * with `endSec` where its last word ends (the line's end when that word has none).
  * `words[i]` is the i-th whitespace token of the cue text (timedText.js keeps
  * the two in step), so `{ cueId, wordIndex, wordCount }` names the words.
  * Returns `{ cuts, untimed }`; `untimed` lists selected lines with no word timing.
@@ -61,7 +62,7 @@ export function lyricWordCuts(cues, cueIds, mode = 'phrase') {
     let first = 0;
     words.forEach((word, i) => {
       if (mode !== 'word' && i < words.length - 1 && !PHRASE_END.test(String(word.w || ''))) return;
-      cuts.push({ cueId: cue.id, wordIndex: first, wordCount: i - first + 1, startSec: words[first].startSec,
+      cuts.push({ cueId: cue.id, wordIndex: first, wordCount: i - first + 1, startSec: words[first].startSec, endSec: word.endSec ?? cue.endSec ?? null,
         text: words.slice(first, i + 1).map((w) => w.w).join(' ') });
       first = i + 1;
     });

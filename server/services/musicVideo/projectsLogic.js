@@ -50,7 +50,7 @@ import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
-import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
+import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
 import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
 
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
@@ -1097,10 +1097,27 @@ function keepAnchorOnItsWord(prior, next, cues) {
   return withoutSlot(next, ['lyricAnchor']);
 }
 
-/** Timed song shots in song order (the cold open has no song time to cut on). */
-const timedSongScenes = (project) => songScenes(project)
-  .filter((scene) => timedSec(scene.startSec) && timedSec(scene.endSec))
-  .sort((a, b) => a.startSec - b.startSec);
+const cutAnchor = (cut) => ({ cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount });
+
+/**
+ * A board with no timed shots has nothing to split, so lay one shot per cut over
+ * the chosen lines. Each runs to the next cut, which keeps them contiguous so a
+ * re-alignment moves the shared cut, and the last ends with its last sung word.
+ * Adds no storyboard row and carries no approval: these shots are new to the board.
+ */
+function layOutShotsOnCuts(project, cuts) {
+  const kept = [];
+  for (const cut of cuts) {
+    if (!kept.length || cut.startSec - kept.at(-1).startSec >= MIN_SPLIT_PIECE_SEC) kept.push(cut);
+  }
+  const { project: next, scenes } = addScenes(project, kept.map((cut, i) => ({
+    startSec: cut.startSec,
+    endSec: kept[i + 1]?.startSec ?? Math.max(cut.endSec ?? 0, cut.startSec + MIN_SPLIT_PIECE_SEC),
+    lyricText: cut.text,
+    lyricAnchor: cutAnchor(cut),
+  })));
+  return { project: touch(next, { wordCutBoard: true }), scenes, skipped: cuts.length - kept.length, from: {}, laidOut: true };
+}
 
 /**
  * Cut the board on sung words (#14820): over the lyric lines `cueIds`, one shot
@@ -1110,12 +1127,15 @@ const timedSongScenes = (project) => songScenes(project)
  * the word (`syncWordAnchoredScenes`). A word that lands near an existing cut
  * moves that cut onto it; one inside a shot splits the shot there
  * (`applySceneSplit`, so later pieces carry the shot's direction and frame).
- * Words outside every timed shot, or too close to another cut, are skipped.
- * Returns `{ project, scenes, skipped, from }`: the anchored shots, how many
- * cut points were skipped, and each new piece's source shot (for shot locks).
+ * Words outside every timed shot, or too close to another cut, are skipped. A
+ * board with no timed shots gets its shots laid out over the lines instead
+ * (`layOutShotsOnCuts`, `laidOut: true`). Refused only when the shot manifest owns
+ * the storyboard: a document project can keep its shots on the Board (#14846).
+ * Returns `{ project, scenes, skipped, from, laidOut }`: the anchored shots, how
+ * many cut points were skipped, and each new piece's source shot (for shot locks).
  */
 export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {}) {
-  if (project.composition?.mode === 'document') {
+  if (project.productionReview?.draft?.storyboardSource === 'document') {
     throw new ServerError("This video's shots come from its composition document — anchor them in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_DOCUMENT' });
   }
   const { cuts, untimed } = lyricWordCuts(project.lyricCues, cueIds, mode);
@@ -1123,6 +1143,7 @@ export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {})
     throw new ServerError(`Align the lyric words first: "${untimed[0].slice(0, 80)}" has no word timing.`, { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_UNTIMED' });
   }
   if (!cuts.length) throw new ServerError('Choose lyric lines with sung words to cut on.', { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_EMPTY' });
+  if (!timedSongScenes(project).length) return layOutShotsOnCuts(project, cuts);
   let next = project;
   const anchors = new Map();
   const inside = new Map();
@@ -1166,10 +1187,10 @@ export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {})
   // A board with word cuts renders every timed shot at its saved span (musicVideoLayers.wordTimedScenes).
   const scenes = next.scenes.map((scene) => {
     const cut = anchors.get(scene.sceneId);
-    return cut ? { ...scene, lyricText: cut.text, lyricAnchor: { cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount } } : scene;
+    return cut ? { ...scene, lyricText: cut.text, lyricAnchor: cutAnchor(cut) } : scene;
   });
   next = carryStoryboardApproval(project, touch(next, { scenes, wordCutBoard: true }), 'Cut shots on lyric words');
-  return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from };
+  return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from, laidOut: false };
 }
 
 /**

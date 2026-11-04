@@ -29,6 +29,31 @@ describe('LyricWordCutPanel', () => {
     expect(screen.getByText(/Align words on the Song step first/)).toBeTruthy();
   });
 
+  // Catches the panel hiding on an empty board, or promising a cut when there is nothing to split.
+  it('offers to lay out shots when the board has no timed shots', async () => {
+    const onCut = vi.fn(() => Promise.resolve());
+    render(<LyricWordCutPanel project={project({ scenes: [{ sceneId: 'u1', label: 'Untimed' }, { sceneId: 'c1', startSec: 0, endSec: 3, preMusic: { durationSec: 3 } }] })} onCut={onCut} onDismissSync={() => {}} />);
+    expect(screen.getByText(/No timed shots yet/)).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Lay out 3 shots/ })); });
+    expect(onCut).toHaveBeenCalledWith({ cueIds: ['l1'], mode: 'phrase' });
+  });
+
+  it('shows on a board with no shots at all', () => {
+    render(<LyricWordCutPanel project={project({ scenes: [] })} onCut={() => {}} onDismissSync={() => {}} />);
+    expect(screen.getByRole('button', { name: /Lay out 3 shots/ })).toBeTruthy();
+  });
+
+  // Catches the panel keying on the render style: a document project with Board shots must keep it, a shot manifest must not.
+  it('follows where the storyboard comes from, not the render style', () => {
+    const composition = { mode: 'document' };
+    const { rerender } = render(<LyricWordCutPanel project={project({ composition, productionReview: { draft: { storyboardSource: 'board' } } })} onCut={() => {}} onDismissSync={() => {}} />);
+    expect(screen.getByRole('button', { name: /Cut 3 shots/ })).toBeTruthy();
+    rerender(<LyricWordCutPanel project={project({ composition })} onCut={() => {}} onDismissSync={() => {}} />);
+    expect(screen.getByRole('button', { name: /Cut 3 shots/ })).toBeTruthy();
+    rerender(<LyricWordCutPanel project={project({ composition, productionReview: { draft: { storyboardSource: 'document' } } })} onCut={() => {}} onDismissSync={() => {}} />);
+    expect(screen.queryByRole('group', { name: 'Cut on lyric words' })).toBeNull();
+  });
+
   it('says which shots followed their words after re-alignment until dismissed', () => {
     const onDismissSync = vi.fn();
     render(<LyricWordCutPanel project={project({ lyricAnchorSync: { at: 'now', moved: [{ sceneId: 's2', fromSec: 20, toSec: 20.2 }], unresolved: ['s1'], blocked: [] } })}
