@@ -81,6 +81,16 @@ describe('PublishPostingPanel (#9282)', () => {
     expect(within(toggle).getByText('Done')).toHaveClass('text-port-success');
   });
 
+  it('saves the new DistroKid songwriter role, not the one it replaced', async () => {
+    const savePostOptions = vi.fn(async () => true);
+    render(<PublishPostingPanel project={project({ postOptions: { distrokid: { songwriterRole: 'music' } } })} publishing={hook({ savePostOptions, setPlatform: vi.fn(async () => null) })} />);
+    expandAll();
+    fireEvent.change(within(row('DistroKid')).getByLabelText('Songwriter wrote'), { target: { value: 'lyrics' } });
+    await act(async () => {});
+    expect(savePostOptions).toHaveBeenCalledTimes(1);
+    expect(savePostOptions.mock.calls[0][2]).toMatchObject({ songwriterRole: 'lyrics' });
+  });
+
   it('fills a Reddit draft with the subreddit and post type, dropping blanks', () => {
     const publishing = hook();
     render(<PublishPostingPanel project={project()} publishing={publishing} />);

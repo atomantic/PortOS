@@ -146,6 +146,14 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toContainEqual({ filename: 'upload-flyer.png', kind: 'image', sha256: sha(bytes) });
   });
 
+  // Uniquely catches the X story reply's gallery image staying behind when the project syncs to a peer.
+  it('bundles a gallery image used only by the X story reply', async () => {
+    const bytes = Buffer.from('story-art');
+    writeImage('upload-story.png', bytes);
+    const manifest = await buildMusicVideoAssetManifest({ scenes: [], publishKit: { postOptions: { x: { storyImageFile: 'upload-story.png' } } } });
+    expect(manifest).toContainEqual({ filename: 'upload-story.png', kind: 'image', sha256: sha(bytes) });
+  });
+
   it('retains the historical source audio after a timing revision', async () => {
     const bytes = Buffer.from('historical-audio');
     writeMusic('previous.wav', bytes);

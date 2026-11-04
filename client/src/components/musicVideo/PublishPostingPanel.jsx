@@ -488,12 +488,16 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
     // Keyed by the options' JSON; flushOptions reads the latest through refs.
     // Dependency list is intentionally partial.
   }, [optionsKey]);
+  // Leaving a field saves at once, but only after its change has rendered: a select that
+  // sets and commits in one event would otherwise save the previous value.
+  const [flushTick, setFlushTick] = useState(0);
+  useEffect(() => { if (flushTick) flushOptions(); }, [flushTick]);
   // Dependency list is intentionally partial: flush once, as the row unmounts.
   useEffect(() => () => flushOptions(), []);
   const setOption = (key, value) => { dirty.current = true; setOptions((prev) => ({ ...prev, [key]: value })); };
   // Keep an answer that repeats across releases (or the account it names) in settings when the director leaves the field.
   const commitOption = (key, raw) => {
-    flushOptions();
+    if (dirty.current) setFlushTick((n) => n + 1);
     const value = typeof raw === 'string' ? raw.trim() : raw;
     const platform = publishing.platforms?.[target] || {};
     if (ACCOUNT_OPTION[target] === key) {
