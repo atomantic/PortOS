@@ -19,14 +19,16 @@ ARG DEBIAN_IMAGE=debian:trixie-20260918-slim@sha256:a99cfc517144bc59b1978475ec53
 FROM ${DEBIAN_IMAGE} AS base
 ARG DEBIAN_SNAPSHOT=20260918T000000Z
 # Point apt at the dated snapshot instead of the moving mirror. Valid-Until is
-# necessarily in the past for an archived Release file.
+# necessarily in the past for an archived Release file. Disable HTTP pipelining
+# so apt does not overwhelm snapshot.debian.org's backend with multiplexed
+# requests (which returns HTTP 503 TooManyRequests / No healthy backends).
 RUN set -eux; \
     sed -i \
       -e "s#http://deb.debian.org/debian-security#http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}#" \
       -e "s#http://deb.debian.org/debian\$#http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}#" \
       /etc/apt/sources.list.d/debian.sources; \
     grep -q "snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}" /etc/apt/sources.list.d/debian.sources; \
-    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAPT::Install-Recommends "false";\n' \
+    printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Timeout "60";\nAcquire::http::Pipeline-Depth "0";\nAPT::Install-Recommends "false";\n' \
       > /etc/apt/apt.conf.d/99portos-snapshot
 
 FROM base AS build
@@ -34,10 +36,20 @@ ARG SC_VERSION=3.14.1
 ARG SC_SOURCE_SHA256=ee640c68777ae697682066ce5c4a8b7e56c5b223e76c79c13b5be5387ee55bb2
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y \
-      build-essential bzip2 ca-certificates cmake curl pkg-config \
-      libasound2-dev libfftw3-dev libjack-jackd2-dev libncurses-dev \
-      libreadline-dev libsndfile1-dev libudev-dev; \
+    for attempt in 1 2 3 4 5; do \
+      if apt-get install -y \
+        build-essential bzip2 ca-certificates cmake curl pkg-config \
+        libasound2-dev libfftw3-dev libjack-jackd2-dev libncurses-dev \
+        libreadline-dev libsndfile1-dev libudev-dev; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 5 ]; then \
+        echo "apt-get install failed after 5 attempts" >&2; \
+        exit 1; \
+      fi; \
+      echo "apt-get install failed on attempt ${attempt}; retrying after sleep..." >&2; \
+      sleep $(( attempt * 5 )); \
+    done; \
     rm -rf /var/lib/apt/lists/*
 RUN set -eux; \
     curl -fsSL --retry 5 -o /tmp/sc.tar.bz2 \
