@@ -31,6 +31,28 @@ beforeEach(() => {
 });
 
 describe('PhotorealPanel', () => {
+  it('keeps every camera deselected when the last checked camera is unchecked', async () => {
+    show();
+    const wide = await screen.findByLabelText(/Wide/);
+    const booth = screen.getByLabelText(/Booth/);
+    expect(wide).toBeChecked();
+    expect(booth).toBeChecked();
+
+    fireEvent.click(booth);
+    fireEvent.click(wide);
+
+    expect(wide).not.toBeChecked();
+    expect(booth).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Render 0 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
+    expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
+
+    fireEvent.click(booth);
+    expect(booth).toBeChecked();
+    expect(wide).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Render 1 camera' })).toBeEnabled();
+  });
+
   it('renders the picked cameras with the chosen engine and reloads media when the socket says done', async () => {
     const onRendered = vi.fn();
     show({ onRendered });

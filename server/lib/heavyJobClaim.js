@@ -164,7 +164,7 @@ const readTrainerPid = async path => {
 };
 
 async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = null,
-  snapshot = async () => (await import('../services/maintenanceProcessInventory.js')).snapshotMaintenanceProcesses(),
+  snapshot = async () => (await import('./detachedSpawn.js')).snapshotMaintenanceProcesses(),
   readControl = readTrainerPid } = {}) {
   let rootUnavailable = false;
   const entries = await readdir(root, { withFileTypes: true }).catch(err => {

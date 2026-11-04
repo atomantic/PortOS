@@ -132,6 +132,7 @@ describe('resolvePlanStages', () => {
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
       PORTOS_PREGATE_GUARDS: '',
+      PORTOS_PREGATE_BASE_REF: '',
     });
   });
 
@@ -361,6 +362,44 @@ describe('pregate hidden-content invocation', () => {
     write('server/lib/helper.js', 'export const helper = 1;\n');
     if (browser) write(BROWSER_SUITES[0], 'export const changed = true;\n');
   }
+
+  it('passes the selected release base to the import guard while a main base still enforces growth', () => {
+    copyFileSync(join(REPO_ROOT, 'scripts/lib/importGrowth.js'), join(root, 'scripts/lib/importGrowth.js'));
+    // Exercise the real guard in a child stage against a real Git base. Each
+    // existing suite gains three leaves, exceeding the unchanged 2,500 limit.
+    write('server/lib/wide.js', 'export const wide = true;\n');
+    for (let index = 0; index < 1000; index++) {
+      write(`server/lib/fixture-${index}.test.js`, "import './wide.js';\n");
+    }
+    write('server/lib/importScoping.test.js', `
+      import { appendFileSync } from 'fs';
+      import { evaluateWorkingTreeImportGrowth, formatImportGrowthReport } from '../../scripts/lib/importGrowth.js';
+      const report = evaluateWorkingTreeImportGrowth({ repoRoot: process.cwd() });
+      appendFileSync('.cache/growth-results', JSON.stringify({ baseRef: process.env.PORTOS_PREGATE_BASE_REF, sha: process.env.CI_BASE_SHA, report }) + '\\n');
+      if (!report.ok) throw new Error(formatImportGrowthReport(report));
+    `);
+    write('scripts/run-ci-tests.js', "await import('../server/lib/importScoping.test.js');\n");
+    git('add', '--all');
+    git('commit', '-qm', 'import growth stage fixture');
+    base = git('rev-parse', 'HEAD');
+    for (const ref of ['refs/remotes/origin/release', 'refs/remotes/origin/main']) git('update-ref', ref, base);
+    mkdirSync(join(root, '.cache'), { recursive: true });
+    write('server/lib/wide.js', "import './leaf-a.js';\nimport './leaf-b.js';\nimport './leaf-c.js';\nexport const wide = true;\n");
+    for (const name of ['a', 'b', 'c']) write(`server/lib/leaf-${name}.js`, `export const value = '${name}';\n`);
+    const invoke = (ref) => spawnSync(process.execPath, ['scripts/pregate.js', '--base', ref, '--full',
+      '--skip-lint', '--skip-db', '--skip-browser', '--skip-build', '--skip-smoke'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_BASE_REF: '', GITHUB_EVENT_NAME: '', GITHUB_REF_NAME: '', PORTOS_PREGATE_BASE_REF: 'release' },
+    });
+    const main = invoke('origin/main');
+    expect(main.status, main.stdout).toBe(1);
+    expect(main.stderr).toContain('Existing-suite growth 3000 (limit 2500)');
+    const release = invoke('origin/release');
+    expect(release.status, release.stderr).toBe(0);
+    expect(release.stdout).toContain('Pregate passed');
+    const observations = readFileSync(join(root, '.cache/growth-results'), 'utf8').trim().split('\n').map(JSON.parse);
+    expect(observations).toContainEqual({ baseRef: 'origin/main', sha: base, report: expect.objectContaining({ ok: false, existingSuiteGrowth: 3000 }) });
+    expect(observations).toContainEqual({ baseRef: 'origin/release', sha: base, report: { ok: true, skipped: expect.stringMatching(/release cycle/) } });
+  });
 
   it('prints the selected guard, broad and browser stages without starting any process', () => {
     prepareGuardFixture({ browser: true });
@@ -1384,6 +1423,7 @@ describe('resource suite stages', () => {
       PORTOS_REQUIRE_BROWSER_SUITES: '1',
       PORTOS_TEST_QUIET: '1',
       CI_BASE_SHA: 'base',
+      PORTOS_PREGATE_BASE_REF: '',
     });
   });
 

@@ -91,6 +91,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
+  // Composed views read these after a debounce; slower runs must still have a valid transport.
+  getMusicVideoFilmLooks: vi.fn(async () => ({ available: false, total: 0, looks: [] })),
+  getMusicVideoShotRenders: vi.fn(async () => ({ available: false, shots: [], outro: null, ready: 0, total: 0 })),
   getMusicVideoSharingCopy: vi.fn(async () => ({ copy: null, jobId: null })),
   prepareMusicVideoSharingCopy: vi.fn(async () => ({ jobId: 'sharing-example' })),
   musicVideoSharingCopyDownloadUrl: id => `/api/music-video/${id}/sharing-copy/download`,

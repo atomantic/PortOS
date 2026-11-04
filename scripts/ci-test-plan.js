@@ -427,6 +427,8 @@ export const ALWAYS_RUN_TESTS = [
   // Pregate copies the sha into the test process so the local run uses this
   // plan's base, not a second guess.
   'server/lib/importScoping.test.js',
+  // Scans every lib source for upward service imports without importing it.
+  'server/lib/layering.test.js',
   // Whole-tree scanner over collectServerSources: every cwd-passing spawn pins PWD (#8723).
   'server/lib/spawnCwd.test.js',
   // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
