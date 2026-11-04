@@ -16,6 +16,22 @@ beforeEach(() => {
 });
 
 describe('production cleanup', () => {
+  it('explains missing video files and shows the local bytes that remain', async () => {
+    getMusicVideoRenderCleanup.mockResolvedValue({
+      finals: [
+        { id: 'missing', videoStatus: 'missing', bytes: 0, reason: null },
+        { id: 'thumbnail-only', videoStatus: 'missing', bytes: 1024, reason: null },
+        { id: 'empty', videoStatus: 'present', bytes: 0, reason: null },
+      ],
+      segments: { stale: [], unusedLooks: [] },
+    });
+    render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
+    expect(await screen.findByText('3 renders · 1 KB on this device')).toBeInTheDocument();
+    expect(screen.getByText('2 video files are not on this device')).toBeInTheDocument();
+    expect(screen.getAllByText('Video file not on this device')).toHaveLength(2);
+    expect(screen.getAllByText('Older final · 0 B')).toHaveLength(1);
+  });
+
   it('removes derived renders while keeping comparisons by default, then offers explicit look purging', async () => {
     render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
     const cleanup = await screen.findByRole('button', { name: 'Remove superseded renders' });

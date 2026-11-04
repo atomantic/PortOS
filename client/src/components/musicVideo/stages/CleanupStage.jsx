@@ -97,9 +97,11 @@ export default function CleanupStage({ board }) {
 }
 
 function InventoryCard({ title, files, noun = 'files' }) {
+  const missingVideos = files.filter(file => file.videoStatus === 'missing').length;
   return <div className="min-w-0 rounded border border-port-border p-3">
     <h4 className="text-sm text-port-text-muted">{title}</h4>
-    <p className="mt-1 font-semibold">{formatCount(files.length)} {noun} · {formatBytes(bytes(files))}</p>
+    <p className="mt-1 font-semibold">{formatCount(files.length)} {noun} · {formatBytes(bytes(files))}{missingVideos > 0 && ' on this device'}</p>
+    {missingVideos > 0 && <p className="mt-1 text-sm text-port-text-muted">{formatCount(missingVideos)} video {missingVideos === 1 ? 'file is' : 'files are'} not on this device</p>}
   </div>;
 }
 
@@ -118,7 +120,9 @@ function CleanupFinalList({ files }) {
     {rows.map(({ file, removing }) => <CollapsibleListItem key={file.id} removing={removing}
       onExited={() => setRows(previous => previous.filter(row => row.file.id !== file.id || !row.removing))}>
       <article role="listitem" className="break-words rounded border border-port-border p-3 text-sm">
-        <p>{file.createdAt ? formatDateTime(file.createdAt) : 'Older final'} · {formatBytes(file.bytes)}</p>
+        <p>{file.createdAt ? formatDateTime(file.createdAt) : 'Older final'} · {formatBytes(file.bytes)}{file.videoStatus === 'missing' && ' on this device'}</p>
+        {file.videoStatus === 'missing' && <p className="text-port-text-muted">Video file not on this device</p>}
+        {file.videoStatus === 'invalid' && <p className="text-port-text-muted">Video location unavailable</p>}
         <p className="text-port-text-muted">{file.reason ? `Kept: ${file.reason}` : file.pending ? 'Cleanup incomplete — retry to remove remaining files' : 'Superseded — safe to remove'}</p>
       </article>
     </CollapsibleListItem>)}

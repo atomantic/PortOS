@@ -77,6 +77,30 @@ const seedPending = entries => writeFileSync(journalPath(), JSON.stringify({ ver
 const readPending = () => JSON.parse(readFileSync(journalPath(), 'utf8')).entries;
 
 describe('derived render retention', () => {
+  it('reports local bytes and distinguishes missing videos from empty files', async () => {
+    await seed(['current', 'missing', 'thumbnail-only', 'empty', 'present'].map(id => entry(id)));
+    rmSync(join(PATHS.videos, 'missing.mp4'));
+    rmSync(join(PATHS.videoThumbnails, 'missing.jpg'));
+    rmSync(join(PATHS.videos, 'thumbnail-only.mp4'));
+    writeFileSync(join(PATHS.videos, 'empty.mp4'), '');
+    rmSync(join(PATHS.videoThumbnails, 'empty.jpg'));
+
+    expect((await getRenderCleanup('example-project')).finals).toEqual([
+      expect.objectContaining({ id: 'missing', videoStatus: 'missing', bytes: 0 }),
+      expect.objectContaining({ id: 'thumbnail-only', videoStatus: 'missing', bytes: 6 }),
+      expect.objectContaining({ id: 'empty', videoStatus: 'present', bytes: 0 }),
+      expect.objectContaining({ id: 'present', videoStatus: 'present', bytes: 11 }),
+    ]);
+  });
+
+  it('does not offer a render with an invalid filename for cleanup', async () => {
+    await seed([entry('current')]);
+    await saveHistory([entry('current'), entry('invalid', { filename: '../invalid.mp4' })]);
+    expect((await getRenderCleanup('example-project')).finals).toEqual([
+      expect.objectContaining({ id: 'invalid', videoStatus: 'invalid', reason: 'Invalid render filename' }),
+    ]);
+  });
+
   it('retains upscaled deliverables while retiring obsolete final renders', async () => {
     await seed([entry('current'), entry('old'), entry('topaz', { upscaledFrom: 'current', upscaleMethod: 'topaz' }), entry('lanczos', { upscaledFrom: 'current', upscaleMethod: 'lanczos' })]);
     expect((await getRenderCleanup('example-project')).finals.map(item => item.id)).toEqual(['old']);
