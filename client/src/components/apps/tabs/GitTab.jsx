@@ -149,6 +149,7 @@ export default function GitTab({ appId, appName, repoPath }) {
   // A failed branch read is kept apart from a repo that has no branches; a
   // refresh failure keeps the last good list on screen beside the error row.
   const [branchesError, setBranchesError] = useState(null);
+  const [remoteBranchesError, setRemoteBranchesError] = useState(null);
   const [checkingOut, setCheckingOut] = useState(null);
   const [pushing, setPushing] = useState(null);
   const [syncing, setSyncing] = useState(null);
@@ -181,7 +182,7 @@ export default function GitTab({ appId, appName, repoPath }) {
       api.getBranches(repoPath, { silent: true }).catch((error) => ({ error }))
     ];
     if (includeRemote) {
-      promises.push(api.getRemoteBranches(repoPath).catch(() => null));
+      promises.push(api.getRemoteBranches(repoPath, { silent: true }).catch((error) => ({ error })));
     }
 
     const [info, branchesResult, remoteResult] = await Promise.all(promises);
@@ -202,7 +203,10 @@ export default function GitTab({ appId, appName, repoPath }) {
     setLoading(false);
 
     if (includeRemote) {
-      if (remoteResult) {
+      if (remoteResult?.error) {
+        setRemoteBranchesError(remoteResult.error);
+      } else if (remoteResult) {
+        setRemoteBranchesError(null);
         setRemoteBranches(remoteResult.branches || []);
         setDefaultBranch(remoteResult.defaultBranch || 'main');
       }
@@ -220,8 +224,11 @@ export default function GitTab({ appId, appName, repoPath }) {
   const loadRemoteBranches = useCallback(async (opts = {}) => {
     if (!repoPath) return;
     setLoadingRemote(true);
-    const result = await api.getRemoteBranches(repoPath, opts).catch(() => null);
-    if (result) {
+    const result = await api.getRemoteBranches(repoPath, { silent: true, ...opts }).catch((error) => ({ error }));
+    if (result?.error) {
+      setRemoteBranchesError(result.error);
+    } else if (result) {
+      setRemoteBranchesError(null);
       setRemoteBranches(result.branches || []);
       setDefaultBranch(result.defaultBranch || 'main');
     }
@@ -1121,7 +1128,15 @@ export default function GitTab({ appId, appName, repoPath }) {
                     )}
                   </div>
                 ))}
-                {remoteBranches.length === 0 && !loadingRemote && (
+                {remoteBranchesError && (
+                  <ListLoadError
+                    what="remote branches"
+                    error={remoteBranchesError}
+                    onRetry={() => loadRemoteBranches({ force: true })}
+                    retrying={loadingRemote}
+                  />
+                )}
+                {!remoteBranchesError && remoteBranches.length === 0 && !loadingRemote && (
                   <div className="text-gray-500 text-sm">No remote branches found</div>
                 )}
               </div>

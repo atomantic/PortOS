@@ -55,9 +55,10 @@ export const syncBranch = (path, branch) => request('/git/sync', {
   method: 'POST',
   body: JSON.stringify({ path, branch })
 });
-export const getRemoteBranches = (path, { force = false } = {}) => request('/git/remote-branches', {
+export const getRemoteBranches = (path, { force = false, ...options } = {}) => request('/git/remote-branches', {
   method: 'POST',
-  body: JSON.stringify({ path, force })
+  body: JSON.stringify({ path, force }),
+  ...options
 });
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.
