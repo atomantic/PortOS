@@ -30,6 +30,50 @@ export function persistTestDiagnostic(path, value) {
   }
 }
 
+const REPLAY_ENUMS = {
+  browserOwner: ['unit', 'browser'],
+  browserProfile: ['smoke', 'fidelity'],
+  memo: ['off'],
+};
+const replayEnum = (key, value) => REPLAY_ENUMS[key].includes(value) ? value : 'unset';
+const replayInt = value => Number.isInteger(value) && value > 0 && value < 1024 ? value : null;
+
+/**
+ * Allowlisted effective settings a maintainer needs to replay a failing run.
+ * Every field is validated against a fixed shape or enum: no environment dump,
+ * argv, credentials or machine-local path can enter the persisted artifact.
+ * `workers` is added later by the reporter, which sees Vitest's resolved value.
+ */
+export function replayContext({ env = process.env, scope, script, extraArgs = [], head = null, node = process.version } = {}) {
+  return {
+    head: /^[a-f0-9]{40}$/.test(head ?? '') ? head : null,
+    node: /^v\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(node ?? '') ? node : null,
+    scope: /^[a-z][a-z-]{0,31}$/.test(scope ?? '') ? scope : null,
+    script: /^[\w:-]{1,64}$/.test(script ?? '') ? script : null,
+    shard: /^\d{1,3}\/\d{1,3}$/.test(env.CI_SHARD ?? '') ? env.CI_SHARD : null,
+    browserOwner: replayEnum('browserOwner', env.PORTOS_CI_BROWSER_OWNER),
+    browserProfile: replayEnum('browserProfile', env.PORTOS_BROWSER_TEST_PROFILE),
+    quiet: env.PORTOS_TEST_QUIET === '1',
+    silent: extraArgs.some(arg => /^--silent(?:=true)?$/.test(arg)),
+    memo: replayEnum('memo', env.PORTOS_TEST_MEMO),
+  };
+}
+
+/** One bounded line; re-validates on read so a tampered report cannot inject text. */
+export function replayDiagnostic(invocation, run) {
+  const replay = invocation?.replay;
+  if (!replay || typeof replay !== 'object') return 'Diagnostic gap: effective replay context unavailable.';
+  const safe = (value, pattern) => typeof value === 'string' && pattern.test(value) ? value : 'unavailable';
+  const flag = value => value === true ? 'on' : 'off';
+  const workers = replayInt(run?.workers ?? replay.workers) ?? 'unavailable';
+  const selectors = Array.isArray(invocation.selectors) ? invocation.selectors.length : 0;
+  return `Replay context: head=${safe(replay.head, /^[a-f0-9]{40}$/)}; node=${safe(replay.node, /^v\d{1,3}\.\d{1,3}\.\d{1,3}$/)}; `
+    + `scope=${safe(replay.scope, /^[a-z][a-z-]{0,31}$/)}; script=${safe(replay.script, /^[\w:-]{1,64}$/)}; `
+    + `shard=${safe(replay.shard ?? '', /^\d{1,3}\/\d{1,3}$/)}; selectors=${selectors}; workers=${workers}; `
+    + `browserOwner=${replayEnum('browserOwner', replay.browserOwner)}; browserProfile=${replayEnum('browserProfile', replay.browserProfile)}; `
+    + `quiet=${flag(replay.quiet)}; silent=${flag(replay.silent)}; memo=${replayEnum('memo', replay.memo)}.`;
+}
+
 // No raw process identity or command arguments enter this projection.
 export function processExitDiagnostic(run) {
   const final = run.processExit;
@@ -87,6 +131,7 @@ export async function collectTestDiagnostics(root, {
   if (!attempts.length) lines.push('Inconclusive failure: no persisted test invocation; launcher completion is unverified.');
   for (const [index, name] of attempts.slice(-2).entries()) {
     const dir = join(root, name);
+    let replay;
     lines.push(`CI test invocation ${index + 1}:`);
     try {
       const invocation = readReport(join(dir, 'invocation.json'));
@@ -103,6 +148,7 @@ export async function collectTestDiagnostics(root, {
       }
       const boundary = ['direct npm process', 'cmd.exe -> npm.cmd'].includes(invocation.commandBoundary) ? invocation.commandBoundary : 'unavailable';
       lines.push(`Observed command boundary: ${boundary}.`);
+      replay = invocation;
       for (const [event, value] of [['exit', invocation.childExit], ['close', invocation.childClose]]) {
         lines.push(`Command ${event}: code=${Number.isInteger(value?.code) ? value.code : 'unavailable'}; `
           + `signal=${/^SIG[A-Z]+$/.test(value?.signal) ? value.signal : 'none'}.`);
@@ -117,6 +163,7 @@ export async function collectTestDiagnostics(root, {
       if (!Array.isArray(run.activeModules) || !Array.isArray(run.completedModules)
         || !Number.isInteger(run.completedCount) || !Number.isInteger(run.errorCount)) throw Error('invalid progress');
       const reason = ['passed', 'failed', 'interrupted', 'not-finished'].includes(run.reason) ? run.reason : 'unavailable';
+      lines.push(replayDiagnostic(replay, run));
       lines.push(processExitDiagnostic(run));
       if (run.collection) lines.push(collectionDiagnostic(run));
       lines.push(`Vitest progress: reason=${reason}; completed=${run.completedCount}; unhandledErrors=${run.errorCount}.`);

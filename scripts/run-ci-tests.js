@@ -13,7 +13,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
-import { RUN_DIAGNOSTIC_MAX_BYTES, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
+import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
@@ -156,6 +156,10 @@ export function recordVitestDuration(scope, label, startedAt) {
   writeStepSummary(line);
 }
 
+function readInvocation(reportPath) {
+  return readCollectionReport(join(dirname(reportPath), 'invocation.json'));
+}
+
 /**
  * Recover diagnostics independently of the terminal reporter. Bound both the
  * input and rendered output; diagnostic failures never change the exit status.
@@ -169,6 +173,7 @@ export function structuredFailureDiagnostics(reportPath, runReportPath) {
       if (!Array.isArray(run.errors) || !run.errors.every(error => typeof error === 'string')) {
         throw new Error('invalid run report schema');
       }
+      lines.push(replayDiagnostic(readInvocation(reportPath), run));
       lines.push(`Vitest run: reason=${run.reason}, exitCode=${run.exitCode}, unhandledErrors=${run.errorCount}`);
       lines.push(processExitDiagnostic(run));
       if (run.collection) lines.push(collectionDiagnostic(run));
@@ -301,6 +306,7 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
     startedAt: Date.now(), completed: false, scope, script,
     policy: diagnostic ? 'release-candidate' : 'ordinary', assertionLimit: diagnostic ? 5 : 1,
     ...(diagnostic ? candidateProvenance(env) : {}),
+    replay: replayContext({ env, scope, script, extraArgs, head: currentCommit(repoRoot, env) }),
     selectors: extraArgs.filter(arg => !arg.startsWith('-')).slice(0, 100)
       .map(arg => diagnosticTestFile(arg.startsWith('../') ? arg.slice(3) : `${scope}/${arg.replace(/^\.\//, '')}`)),
   };

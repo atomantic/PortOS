@@ -902,9 +902,12 @@ describe('structured failure diagnostics', () => {
         expect(invocation).toMatchObject({ completed: true, status: code,
           childExit: { code, signal: null }, childClose: { code, signal: null } });
         expect(['direct npm process', 'cmd.exe -> npm.cmd']).toContain(invocation.commandBoundary);
+        expect(invocation.replay).toMatchObject({ scope: 'server', script: 'test:ci', node: process.version, silent: false });
+        expect(Number.isInteger(run.workers) && run.workers > 0).toBe(true);
         const { collectTestDiagnostics } = await import('./ci-test-diagnostics.js');
         const lines = await collectTestDiagnostics(durable, { logger: { warn() {} }, diagnose: async () => {}, writeSummary() {} });
         expect(lines.join('\n')).toContain(`Vitest process exit event: code=${code}; exitCode=${code}.`);
+        expect(lines.join('\n')).toMatch(new RegExp(`Replay context: head=[a-f0-9]{40}; node=${process.version.replace(/\./g, '\\.')}; scope=server; script=test:ci;.* workers=\\d+;`));
       }
     } finally { rmSync(fixture, { recursive: true, force: true }); }
   }, 65_000);

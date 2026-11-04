@@ -18,13 +18,18 @@ export function createTestPhaseDiagnostics(onTestFailed) {
       if (error.stack) error.stack += `\n${evidence}`;
     }
   });
-  return async (name, operation) => {
+  // Fixture-owned operations still running; a timed-out test abandons its await, not the work.
+  const inFlight = new Set();
+  const phase = async (name, operation) => {
     // Only developer-authored labels, never browser content, URLs or errors.
     if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('Invalid test phase label');
     active = name;
     record(name, 'start');
+    const running = (async () => operation())(); // invoked synchronously, as before
+    const tracked = running.then(() => {}, () => {}).finally(() => inFlight.delete(tracked));
+    inFlight.add(tracked);
     try {
-      const value = await operation();
+      const value = await running;
       record(name, 'done');
       active = 'between-phases';
       return value;
@@ -33,4 +38,12 @@ export function createTestPhaseDiagnostics(onTestFailed) {
       throw error;
     }
   };
+  /** Join only the work started through this tracker, bounded so a hung operation cannot wedge teardown. */
+  phase.settle = async (timeoutMs = 5000) => {
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); });
+    try { return await Promise.race([Promise.all(inFlight).then(() => true), timeout]); }
+    finally { clearTimeout(timer); }
+  };
+  return phase;
 }
