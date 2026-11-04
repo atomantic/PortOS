@@ -68,7 +68,7 @@ export default function GraphTimeline({
           type="button"
           onClick={() => onPlayingChange(!playing)}
           aria-label={playing ? 'Pause timeline' : 'Play timeline'}
-          className="w-8 h-8 flex items-center justify-center rounded-lg bg-port-accent/20 border border-port-accent/30 text-port-accent"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-8 h-8 flex items-center justify-center rounded-lg bg-port-accent/20 border border-port-accent/30 text-port-accent"
         >
           {playing ? <Pause size={14} /> : <Play size={14} />}
         </button>

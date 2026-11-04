@@ -4,7 +4,7 @@
  * entries are written only for files a run reported green.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
@@ -14,6 +14,7 @@ import {
   recordTestMemo, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
+import { buildCiTestPlan } from '../ci-test-plan.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -47,6 +48,44 @@ describe('planTestMemo and recordTestMemo', () => {
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
   });
+
+  it('keeps the layering guard selected and executable after a cached pass when an unrelated lib file gains an upward import', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-layering-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-layering-memo-store-'));
+    writeRepo(root, FILES);
+    const guard = 'server/lib/layering.test.js';
+    const source = 'server/lib/unrelated.js';
+    // Keep the real scanner and assertions; this standalone Vitest fixture
+    // supplies globals instead of resolving its intentionally stubbed package.
+    const original = readFileSync(new URL('../../server/lib/layering.test.js', import.meta.url), 'utf8');
+    writeRepo(root, { [guard]: original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, ''), [source]: 'export const unrelated = true;\n' });
+    const config = join(root, 'vitest.config.mjs');
+    writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.test.js"], maxWorkers: 1 } };\n');
+    const planned = () => {
+      const impact = buildCiTestPlan([source], { trackedFiles: [guard, source] });
+      expect(impact.full).toBe(false);
+      const memo = plan({ mode: impact.server.mode, repoFiles: impact.server.files, repoSources: impact.server.sources,
+        listTests: () => ['lib/layering.test.js'], readRecord: () => [guard], readEntry: () => true });
+      expect(memo.selected).toContain(guard);
+      expect(memo.skipped).toEqual([]);
+      expect(memo.run).toContain(guard);
+      return memo;
+    };
+    const run = (memo) => spawnSync(process.execPath, [join(import.meta.dirname, '../../server/node_modules/vitest/vitest.mjs'),
+      'run', ...memo.run, '--root', root, '--config', config], {
+      cwd: root, encoding: 'utf8', timeout: 60000,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_MEMO: 'off' },
+    });
+    const clean = run(planned());
+    expect(clean.status, clean.stderr).toBe(0);
+    for (const statement of ["import { feature } from '../services/new-feature.js';", "const feature = () => import('../services/new-feature.js');", "import '../services/new-feature.js';"]) {
+      writeFileSync(join(root, source), `${statement}\n`);
+      const dirty = run(planned());
+      expect(dirty.status, statement).toBe(1);
+      expect(`${dirty.stdout}\n${dirty.stderr}`).toContain('unrelated.js');
+      expect(`${dirty.stdout}\n${dirty.stderr}`).toContain('server/lib modules importing upward into services');
+    }
+  }, 120000);
 
   it('subtracts memoized files, selects related files from the closure, and records only passed files', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));

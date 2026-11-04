@@ -57,7 +57,7 @@ function escapeCmdMetachars(value, carets) {
  * choice: a `node.exe` beside it, else `node` on the child's PATH, else this
  * process's node.
  */
-function resolveCmdShimLaunch(shimPath, searchEnv) {
+export function resolveCmdShimLaunch(shimPath, searchEnv) {
   let source;
   try { source = readFileSync(shimPath, 'utf8'); } catch { return null; }
   const targets = [...source.matchAll(CMD_SHIM_TARGET_RE)].map((m) => m[1]);

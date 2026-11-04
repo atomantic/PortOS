@@ -23,15 +23,22 @@ const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
 });
 
-const nodeUpdateSchema = z.object({
+// `acknowledgeBusy`: the owner proceeds although PortOS is busy (the guard
+// warns with what is running; it does not lock the owner out).
+const acknowledgeBusySchema = z.object({ acknowledgeBusy: z.boolean().optional() });
+
+const nodeUpdateSchema = acknowledgeBusySchema.extend({
   version: z.string().regex(/^v\d+\.\d+\.\d+$/, 'version must look like v26.12.1')
 });
+
+const softwareQuerySchema = z.object({ fresh: z.enum(['0', '1']).optional() });
 
 const syncForkSchema = z.object({
   branch: z.string().min(1).max(255).regex(/^[A-Za-z0-9._/-]+$/, 'branch contains invalid characters').optional()
 });
 
 const executeSchema = z.object({
+  acknowledgeInterruption: z.boolean().optional(),
   acknowledgeFork: z.boolean().optional(),
   acknowledgePersistentMindImageBackup: z.boolean().optional(),
   // Reconcile a half-updated install (issue #1779): run update.sh to pull +
@@ -182,7 +189,7 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
-  const { acknowledgeFork, acknowledgePersistentMindImageBackup, reconcile } = validateRequest(executeSchema, req.body || {});
+  const { acknowledgeFork, acknowledgePersistentMindImageBackup, acknowledgeInterruption, reconcile } = validateRequest(executeSchema, req.body || {});
 
   // Every refusal, the update lock, and the fire-and-forget launch live in
   // `portosSelfUpdate` — shared with App Management's Git tab so both entry
@@ -192,6 +199,7 @@ router.post('/execute', asyncHandler(async (req, res) => {
     io: req.app.get('io'),
     acknowledgeFork,
     acknowledgePersistentMindImageBackup,
+    acknowledgeInterruption,
     mode: reconcile ? 'reconcile' : 'release',
   });
 
@@ -204,12 +212,26 @@ router.get('/node-runtime', asyncHandler(async (req, res) => {
   res.json(await getNodeRuntimeStatus());
 }));
 
+// GET /api/update/software — every additional component PortOS manages, for
+// Settings › Software. Read-only; actions go to each component's own endpoint.
+router.get('/software', asyncHandler(async (req, res) => {
+  const { getSoftwareInventory } = await import('../services/softwareInventory.js');
+  const { fresh } = validateRequest(softwareQuerySchema, req.query);
+  res.json(await getSoftwareInventory({ fresh: fresh === '1' }));
+}));
+
+// GET /api/update/browser — the periodically observed managed Chrome version.
+router.get('/browser', asyncHandler(async (req, res) => {
+  const { getBrowserUpdateSnapshot } = await import('../services/runtimeUpdateReview.js');
+  res.json(getBrowserUpdateSnapshot());
+}));
+
 // POST /api/update/node-runtime — install an offered Node with nvm and restart
 // PortOS on it. Refuses while anything a restart would kill is running.
 // Progress streams on `portos:update:step`.
 router.post('/node-runtime', asyncHandler(async (req, res) => {
-  const { version } = validateRequest(nodeUpdateSchema, req.body || {});
-  res.status(202).json(await startNodeUpdate({ version, io: req.app.get('io') }));
+  const { version, acknowledgeBusy } = validateRequest(nodeUpdateSchema, req.body || {});
+  res.status(202).json(await startNodeUpdate({ version, acknowledgeBusy, io: req.app.get('io') }));
 }));
 
 // POST /api/update/node-runtime/startup — repoint the macOS pm2 LaunchAgent at
@@ -227,7 +249,17 @@ router.post('/node-runtime/startup', asyncHandler(async (req, res) => {
 // POST /api/update/pm2 — align the terminal's pm2 CLI and the daemon with the
 // pm2 PortOS ships; restarts PortOS only when the daemon is behind.
 router.post('/pm2', asyncHandler(async (req, res) => {
-  res.status(202).json(await startPm2Update({ io: req.app.get('io') }));
+  const { acknowledgeBusy } = validateRequest(acknowledgeBusySchema, req.body || {});
+  res.status(202).json(await startPm2Update({ acknowledgeBusy, io: req.app.get('io') }));
+}));
+
+// POST /api/update/software/blender — download the newest verified Blender of the
+// series PortOS is checked against (macOS), select it for Code Animation and re-run
+// its execution check. Progress streams on `software:blender`.
+router.post('/software/blender', asyncHandler(async (req, res) => {
+  const { acknowledgeBusy } = validateRequest(acknowledgeBusySchema, req.body || {});
+  const { startBlenderInstall } = await import('../services/blenderInstaller.js');
+  res.status(202).json(await startBlenderInstall({ acknowledgeBusy, io: req.app.get('io') }));
 }));
 
 export default router;

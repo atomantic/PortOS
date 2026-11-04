@@ -118,14 +118,15 @@ function deriveMotifs(project, brief) {
   }];
 }
 
-function defaultBalance(hasLyrics, hasMotionReference) {
+function defaultBalance(hasLyrics, hasMotionReference, hasPerformance) {
   const base = hasLyrics ? { performance: 40, cutaway: 45, graphic: 15 } : { performance: 15, cutaway: 65, graphic: 20 };
+  if (!hasPerformance) { base.cutaway += base.performance; base.performance = 0; }
   if (hasMotionReference) { base.cutaway -= 10; base.graphic += 10; }
   return {
     ...base,
-    rationale: hasLyrics
-      ? 'Sung lines alternate between the performer and interpretive cutaways; graphic moments carry the typography.'
-      : 'An instrumental track is carried by cutaways and graphic motion rather than a performance.',
+    rationale: hasPerformance
+      ? 'Retain the selected performance shots alongside interpretive cutaways and graphic moments.'
+      : 'The selected shots are carried by cutaways and graphic motion without inventing a performance.',
   };
 }
 
@@ -182,7 +183,7 @@ function draftShotDirections(project, sections, beats, motifs) {
     positions.set(sectionIndex, position + 1);
     const beat = beats[sectionIndex];
     const sung = isNonBlankStr(scene.lyricText);
-    const mode = sung ? (position % 2 === 0 ? 'performance' : 'cutaway') : (beat.role === 'contrast' ? 'graphic' : 'cutaway');
+    const mode = scene.shotMode === 'performance' ? 'performance' : (!sung && beat.role === 'contrast' ? 'graphic' : 'cutaway');
     let typographyRole = sung ? 'subtitle' : 'none';
     if (sung && beat.role === 'payoff' && !heroGiven) { typographyRole = 'hero'; heroGiven = true; }
     const negativeSpace = typographyRole === 'hero' ? 'upper' : (typographyRole === 'subtitle' ? 'lower' : 'none');
@@ -346,6 +347,7 @@ export function buildTreatmentDraft(project) {
   const hasLyrics = (project.lyricCues || []).some((c) => isNonBlankStr(c?.text));
   const hasMotionReference = (project.visualSpec?.references || []).some((r) => r.use === 'motion-reference');
   const motifs = deriveMotifs(project, brief);
+  const { directions, scenes } = draftShotDirections(project, sections, beats, motifs);
   const arc = {
     rationale: [
       brief.premise ? `Premise: ${brief.premise}` : 'A visual arc built on the song\'s own structure, without a literal plot.',
@@ -354,9 +356,8 @@ export function buildTreatmentDraft(project) {
     lyricInterpretation: hasLyrics ? '' : null,
     beats,
     motifs,
-    balance: defaultBalance(hasLyrics, hasMotionReference),
+    balance: defaultBalance(hasLyrics, hasMotionReference, directions.some((d) => d.mode === 'performance')),
   };
-  const { directions, scenes } = draftShotDirections(project, sections, beats, motifs);
   return finalize(project, brief, arc, directions, scenes);
 }
 

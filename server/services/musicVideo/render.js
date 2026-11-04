@@ -28,7 +28,7 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -44,7 +44,8 @@ import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideoLayers.js';
+import { assertSongAudioCurrent } from '../../lib/musicVideoSongAudio.js';
 import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
@@ -65,6 +66,8 @@ import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { sumExpr } from '../../lib/ffmpegExpr.js';
+import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
@@ -375,7 +378,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
 // returned unchanged.
 //
 // `scenes` (optional) is the project's scene list — when a clip's matching
-// scene has planner section provenance or `beatAligned: true` and valid
+// scene has a pacing cut, planner section provenance or `beatAligned: true` and valid
 // `startSec`/`endSec` (persisted by
 // the BeatTimeline drag-snap arranger, #1854), that scene's saved duration is
 // honored EXACTLY instead of being re-derived from the live beat grid: the
@@ -400,16 +403,16 @@ export function beatSnapClips(clips, beats, { toleranceSec = 0.12, minClipSec = 
     // A planned shot keeps its bounded span even when a sparse grid cannot
     // supply an on-beat cut. Beat alignment describes the cut, not ownership
     // of its timing. Section provenance is cleared when the audio changes.
-    const planned = Number.isInteger(scene?.sectionIndex) && scene.sectionIndex >= 0;
     // A measured word-gap repair owns its edit boundary independently of beats.
-    if ((scene?.beatAligned || planned || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
+    if ((sceneUsesAuthoredTiming(scene) || selectedPerformanceInstruction(scene)?.repair) && sceneHasAuthoredSpan(scene)) {
       // Keep the resolved playback in-point, including performance edits and
       // hand-set clip offsets; only the authored output span changes here.
       // A looping input may repeat to fill a span longer than its source.
       // Insufficient coverage for a non-looping shot is refused before render
       // (#8964), using the preserved playable duration in sourceSec.
       const inSec = clip.inSec || 0;
-      const spanSec = Math.max(minClipSec, scene.endSec - scene.startSec);
+      // A cut on a sung word may be shorter than the floor; it plays exactly its span (#14820).
+      const spanSec = scene.wordCut ? scene.endSec - scene.startSec : Math.max(minClipSec, scene.endSec - scene.startSec);
       running += spanSec;
       return { ...clip, inSec, outSec: inSec + spanSec, duration: spanSec };
     }
@@ -537,7 +540,7 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
       : fitted(id);
     if (inputRefs.photos?.length && !sequence?.stacked) {
       const frame = `max(0,t*${fps}+${Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps)}+0.000001)`;
-      const step = sequence.switchFrames ? (sequence.switchFrames.map(f => `gte(${frame},${f})`).join('+') || '0') : `floor(${frame}/${sequence.intervalFrames})`;
+      const step = sequence.switchFrames ? (sumExpr(sequence.switchFrames.map(f => `gte(${frame},${f})`)) || '0') : `floor(${frame}/${sequence.intervalFrames})`;
       inputRefs.photos.forEach((photo, i) => {
         picture += `[seq${id}_${i}];${fitted(photo)}[photo${id}_${i}];[seq${id}_${i}][photo${id}_${i}]overlay=shortest=1:enable='eq(mod(${step},${sequence.imageIds.length}),${i + 1})'`;
       });
@@ -582,18 +585,20 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
 // are the ones the whole-film render draws there. `segment` is `{ index,
 // maxFrames?, tagFilter? }`; `overlays` here are this window's captures, each
 // with its absolute song `startSec`.
-function buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
+function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
   const index = segment.index;
   if (!Number.isInteger(index) || !plan[index]) throw new Error(`buildMusicVideoFfmpegArgs: no section ${index}`);
-  const { c, frames, startSec, endSec } = plan[index];
+  const { c, frames, startSec } = plan[index];
   const startFrame = sectionFrame(startSec);
   const own = addInput(c);
   const preroll = prerolls.find((p) => p.index === index);
   if (preroll) preroll.input = addInput(preroll.clip);
+  const postroll = postrolls.find((p) => p.into === index);
+  if (postroll) postroll.input = addInput(postroll.clip);
   const overlayBase = nextInput();
   for (const overlay of overlays) inputs.push('-itsoffset', String(round3(overlay.startSec - startSec)), '-i', overlay.path);
-  const filters = sectionFilters(index, own, preroll, 'v0');
-  const gradeFilter = musicVideoGradeFilter(grade, [{ sceneId: c.sceneId, startSec, endSec }], { fps, offsetSec: startSec });
+  const filters = sectionFilters(index, own, preroll, 'v0', postroll);
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections([index]), { fps, offsetSec: startSec, frame: { width: canonW, height: canonH } });
   const local = glitches.filter((g) => g.frame >= startFrame && g.frame < startFrame + frames).map((g) => ({ ...g, frame: g.frame - startFrame }));
   const glitchFilter = musicVideoTransitionFilter(local, { width: canonW, height: canonH });
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -743,17 +748,50 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     ...fades.filter((f) => f.index === i - 1 && f.inFrames > 0).map((f) => `,fade=t=in:s=0:n=${f.inFrames}`),
     ...fades.filter((f) => f.index === i).map((f) => `,fade=t=out:s=${Math.max(0, frames - f.outFrames)}:n=${f.outFrames}`),
   ].join('');
-  // One section's chain, ending on `out`; an incoming cut effect lays the next shot's preroll over its end.
-  const sectionFilters = (i, input, preroll, out) => {
+  // A wipe (musicVideoWipes.js) plays over the start of the incoming shot, the outgoing
+  // shot's last frame held under it: that frame is read again from the outgoing
+  // shot's own input and chain, so a segment render draws it without the other segment.
+  const wipes = wipeCuts(plan.map(({ c, startSec, endSec }) => ({
+    sceneId: c.sceneId, startFrame: sectionFrame(startSec), endFrame: sectionFrame(endSec),
+    partner: !!c.intercutOf, wipeIn: c.wipeIn, wipeOut: c.wipeOut, transitionOut: c.transitionOut, cutEffect: c.cutEffect,
+  })), { fps });
+  const postrolls = wipes.map((wipe) => ({ ...wipe, into: wipe.index + 1, clip: plan[wipe.index].c }));
+  // The finishing grade's windows, starting a wiped shot after its wipe (graded in its own chain).
+  const gradeSections = (indexes) => indexes.map((i) => {
+    const { c, startSec, endSec } = plan[i];
+    const wipe = postrolls.find((p) => p.into === i);
+    return { sceneId: c.sceneId, startSec: wipe ? Math.max(startSec, (wipe.cutFrame + wipe.frames) / fps) : startSec, endSec };
+  });
+  // One section's chain, ending on `out`: a wipe in lays the outgoing shot's held frame over its
+  // start, and an incoming cut effect lays the next shot's preroll over its end.
+  const sectionFilters = (i, input, preroll, out, postroll = null) => {
     const { c, frames, startSec } = plan[i];
-    const head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid, beats })}${fadeChain(i, frames)}`;
-    if (!preroll) return [`${head}[${out}]`];
+    let head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid, beats })}${fadeChain(i, frames)}`;
+    const wiped = [];
+    if (postroll) {
+      const from = plan[postroll.index];
+      // Each picture takes its own shot's grade over the wipe's frames (on song time, as the
+      // finishing grade would), and the finishing grade skips them: the held frame keeps its look.
+      const gradeOver = (sceneId, key) => musicVideoGradeFilter(grade, [{ sceneId, startSec: postroll.cutFrame / fps, endSec: (postroll.cutFrame + postroll.frames) / fps }],
+        { fps, offsetSec: postroll.cutFrame / fps, frame: { width: canonW, height: canonH }, key });
+      const heldGrade = gradeOver(from.c.sceneId, `Held${i}`);
+      const baseGrade = gradeOver(c.sceneId, `Base${i}`);
+      const held = `${sectionChain(from.c, postroll.input, { canonW, canonH, fps, frames: from.frames, frameGrid, beats })},`
+        + `trim=start_frame=${Math.max(0, from.frames - 1)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=${postroll.frames},setpts=PTS-STARTPTS${heldGrade ? `,${heldGrade}` : ''}`;
+      const filter = musicVideoWipeFilter(postroll, { width: canonW, height: canonH, fps, outgoing: `wpost${i}`, incoming: `wbase${i}`, out: `wiped${i}`, key: i });
+      if (filter) {
+        wiped.push(`${head}${baseGrade ? `,${baseGrade},format=yuv420p` : ''}[wbase${i}]`, `${held}[wpost${i}]`, ...filter);
+        head = `[wiped${i}]null`;
+      }
+    }
+    if (!preroll) return [...wiped, `${head}[${out}]`];
     const start = sectionFrame(startSec);
     const pad = Math.max(0, frames - preroll.windowFrames);
     const shown = preroll.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
     // A dissolve fades the incoming clip in across its window, fully in on the cut.
     const fadeIn = preroll.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${preroll.windowFrames + 1}:alpha=1,` : '';
     return [
+      ...wiped,
       `${head}[vraw${i}]`,
       `${sectionChain(preroll.clip, preroll.input, { canonW, canonH, fps, frames: preroll.windowFrames, frameGrid, beats })}[pre${i}]`,
       `[pre${i}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${i}]`,
@@ -763,7 +801,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // Cut transitions repaint a few frames around their cuts, under the typography, and add no time.
   const pieces = plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
-    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, effect: c.effect, effectAtSec: c.effectAtSec,
+    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, wipeOut: c.wipeOut, effect: c.effect, effectAtSec: c.effectAtSec,
     shotGlitches: c.shotGlitches,
   }));
   // A still's glitch to its end frame paints with the same frames.
@@ -771,17 +809,18 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps), shotGlitchFrames(pieces, fps));
 
   if (segment) {
-    return buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
+    return buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
   }
 
   for (const { c } of plan) sectionInputs.push(addInput(c));
   for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
+  for (const postroll of postrolls) postroll.input = addInput(postroll.clip);
   const audioIdx = nextInput; // master audio follows the section inputs
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
-  const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`));
-  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
+  const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`, postrolls.find((p) => p.into === i)));
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections(plan.map((_, i) => i)), { fps, frame: { width: canonW, height: canonH } });
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -889,8 +928,8 @@ export function excerptBoundaryTimes(sections, cues, startSec, endSec, { fps = 2
 // authored span. Both callers build on the exact same resolved clip list, so
 // an excerpt frame matches what a full render would produce at that song time.
 //
-// A shot whose clip is locked renders as locked: the director approved that
-// clip as it is, so frames changed after it was made no longer block.
+// Legacy approval compatibility: a clip locked before shot locking was removed
+// (read-only `clipApprovals`) stays exempt, so older projects still render.
 // Any other stale clip blocks, naming its shots (numbered in song order) and the fix.
 export function assertCurrentClipDependencies(project) {
   const locks = clipLocks(project);
@@ -912,6 +951,7 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
 
   const audioPath = await resolveMasterAudioPath(project);
+  assertSongAudioCurrent(project, basename(audioPath));
   // #8977/#9266: refuse a performance take whose scene was re-timed or whose
   // sung window changed in the current master. A draft shows a cutaway instead.
   if (draft) project = await withDraftPerformanceFallbacks(project, audioPath, { decode });
@@ -921,7 +961,8 @@ export async function planMusicVideoRender(project, { draft = false, decode = tr
   const composed = project.composition?.mode === 'composed';
   // The cold open (shots marked before the song) is cut on its own clock; the
   // song's pipeline below never sees those shots.
-  const song = withSongScenesOnly(project);
+  const songOnly = withSongScenesOnly(project);
+  const song = { ...songOnly, scenes: wordTimedScenes(songOnly) };
   const coldOpen = await resolveColdOpenClips(project, { layered: composed, stillForMissingClip: draft });
   const rawClips = await resolveSceneClips(song, { layered: composed, stillForMissingClip: draft });
   const audioDurationSec = await probeVideoDuration(audioPath).catch(() => null);
@@ -1031,6 +1072,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   // Resolve the master before any rendering mark. A missing track throws here
   // and the caller releases the pending slot without leaving a job running.
   const audioPath = await resolveMasterAudioPath(project);
+  assertSongAudioCurrent(project, basename(audioPath));
   if (renderer.performanceTakes) {
     assertCurrentClipDependencies(project);
     await assertCurrentPerformanceTakes(project, audioPath);

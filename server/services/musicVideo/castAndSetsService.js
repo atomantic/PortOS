@@ -1,3 +1,4 @@
+import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
@@ -29,19 +30,27 @@ import { withMusicVideoStyle } from './styleReferences.js';
  */
 
 import { randomUUID } from 'crypto';
+import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
 import { readFile } from 'fs/promises';
+import { existsSync } from 'node:fs';
+import { FACE_SHEET_ANGLE_TEMPLATE } from '../../lib/faceSheetAngleTemplate.js';
+import { atomicWrite } from '../../lib/fileCore.js';
 import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
-import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
+import { resolveGalleryImage, resolveImageRef, resolveTemplateAsset } from '../../lib/pathSafety.js';
+import { musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
 import {
   CAST_SETS_WORKING,
+  CAST_SETS_MAX_KEY_NOTES,
+  CAST_SETS_MAX_IMAGE_HISTORY,
   allCastAndSetsImagesDone,
   assertCastAndSetsApprovable,
   castAndSetsCheckinMode,
@@ -66,6 +75,7 @@ import {
   castAndSetsMedium,
   describeDirectionChanges,
   fixedSupportingCast,
+  fixedProps,
   formSubjects,
   mergeCastAndSetsDirection,
   moodBoardImageList,
@@ -77,6 +87,7 @@ import {
   CAST_SETS_REF_PREFIX,
   affectedImageKeys,
   buildCastAndSetsImagePlan,
+  castAndSetsOverflowFaceReferences,
   castAndSetsReferences,
   castAndSetsSubjects,
   fixedCastSheetsWithoutReference,
@@ -90,12 +101,15 @@ import { findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserv
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const short = (id) => String(id || '').slice(3, 11);
-const MAX_KEY_NOTES = 8;
 const MAX_SUBMITTED_PROMPT = 20_000;
 const MAX_SUBMITTED_REFERENCES = 16;
 
 // Test seam: provider, queue, settings and mood-board access are swappable.
 const defaults = {
+  syncCatalogImage: async (projectId, key) => (await import('./catalogCast.js')).syncCheckinImageToCatalog(projectId, key),
+  previewPrompt: async (opts) => (await import('../imageGen/promptPreview.js')).previewQuickImageEdit(opts),
+  resolveReviewer: async (opts) => (await import('./plateReview.js')).resolvePlateReviewer(opts),
+  reviewImage: async (opts) => (await import('./castAndSetsInspection.js')).reviewCastSetsImage(opts),
   resolveProvider: async (opts) => resolveMusicVideoLlm(opts),
   runPrompt: async (opts) => (await import('../promptRunner.js')).runPromptThroughProvider(opts),
   getSettings: async () => (await import('../settings.js')).getSettings(),
@@ -112,6 +126,25 @@ const defaults = {
 let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
 export const __castAndSetsProcessId = () => PROCESS_ID;
+
+// Reconcile the old single pending flag against the actual capture sent to the plate.
+async function pendingGreyboxState(project) {
+  const stage = project.castAndSets;
+  if (!stage?.greyboxPending) return { direct: [], legacy: [], unavailable: [] };
+  const direct = Array.isArray(stage.greyboxPendingSetIds) ? stage.greyboxPendingSetIds : [];
+  const legacyIds = Array.isArray(stage.greyboxLegacyPendingSetIds) ? stage.greyboxLegacyPendingSetIds
+    : Array.isArray(stage.greyboxPendingSetIds) ? [] : (stage.direction?.sets || []).map((set) => set.id);
+  const candidates = new Set(legacyIds);
+  const selected = (stage.direction?.sets || []).filter((set) => candidates.has(set.id) && set.setReference?.greyboxShotId);
+  const legacyStage = { ...stage, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: legacyIds };
+  if (!selected.length) return { direct, legacy: castAndSetsPendingGreyboxSetIds(legacyStage), unavailable: [] };
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const captures = await Promise.all(selected.map(async (set) => {
+    const greybox = await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference }, { catalog: deps.catalog }).catch(() => null);
+    return [set.id, greybox?.reference?.imageId || null];
+  }));
+  return { direct, legacy: castAndSetsPendingGreyboxSetIds(legacyStage, Object.fromEntries(captures)), unavailable: captures.filter(([, imageId]) => !imageId).map(([id]) => id) };
+}
 
 // A legacy card has no test snapshot. Use the same complete plan comparison
 // for read-time hydration and write-time edits; a partial match is ambiguous.
@@ -244,7 +277,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const parsed = parseCastAndSetsResponse(text);
   if (!parsed) return fail(projectId, 'The creative direction answer had no usable JSON');
   const sections = songSections(project);
-  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project) });
+  const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project), fixedProps: fixedProps(project) });
   if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
   const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
   // The look every image prompt carries. While the director's sheet feedback
@@ -282,7 +315,10 @@ async function currentImagePlan(project, direction) {
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greyboxes = Object.fromEntries(await Promise.all((direction.sets || []).filter((s) => s.setReference?.greyboxShotId).map(async (set) => [set.id, await loadMusicVideoGreybox(project, { sceneId: `set:${set.id}`, setReference: set.setReference })])));
   const catalogLikeness = await loadCastAndSetsCatalogLikeness(project, { catalog: deps.catalog });
-  return { codeOnly, plan: buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(project.castAndSets?.keyNotes), greyboxes, catalogLikeness }) };
+  const plan = buildCastAndSetsImagePlan(project, direction, { revisionNotes: keyNotesText(project.castAndSets?.keyNotes), greyboxes, catalogLikeness });
+  // Planned cards are published before their dependent renders can start.
+  if (Object.values(plan).some((item) => item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE))) await ensureFaceSheetTemplate();
+  return { codeOnly, plan };
 }
 
 /** (Re)build the plan from the stage's direction + accumulated per-image notes, then dispatch. */
@@ -299,7 +335,7 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   if (!route && !codeOnly) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => {
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
-    const stage = { ...next.stage, greyboxPending: false,
+    const stage = { ...next.stage, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [],
       ...(directedInputs ? { directedInputs } : {}),
       ...(changes ? { changeSummary: { revision: next.stage.revision, changes, rerendered: renderKeys.length, at: next.stage.updatedAt } } : {}),
     };
@@ -348,8 +384,18 @@ const keyNotesText = (keyNotes = {}) => Object.fromEntries(Object.entries(keyNot
 
 // ---- images -----------------------------------------------------------------------
 
-function referencePaths(stage, item) {
+async function ensureFaceSheetTemplate() {
+  const path = resolveTemplateAsset(FACE_SHEET_ANGLE_TEMPLATE, { mustExist: false });
+  if (!existsSync(path)) {
+    await atomicWrite(path, await readFile(new URL(`../../../data.reference/templates/${FACE_SHEET_ANGLE_TEMPLATE}`, import.meta.url)));
+  }
+  return path;
+}
+
+async function referencePaths(stage, item) {
   const paths = [];
+  // Only the shipped layout is admissible here; plan data never selects a host path.
+  if (item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE)) paths.push(await ensureFaceSheetTemplate());
   for (const key of item.refKeys || []) {
     const id = stage.images?.[key]?.imageId;
     const path = id ? resolveGalleryImage(id, { mustExist: false }) : null;
@@ -361,7 +407,7 @@ function referencePaths(stage, item) {
     const path = resolveGalleryImage(id) || resolveImageRef(id);
     if (path && !paths.includes(path)) paths.push(path);
   }
-  return paths.slice(0, 4);
+  return paths;
 }
 
 /** Job params for one image on the stage's route (cloud provider bag or the local model). */
@@ -376,14 +422,19 @@ export async function imageJobParams(settings, route, common) {
   if (resolved.mode !== route.mode) throw new ServerError(`The ${route.mode} image backend is not available`, { status: 409, code: 'CAST_SETS_ROUTE_UNAVAILABLE' });
   if (resolved.cloud && !resolved.cloud.enabled) throw resolved.cloud.disabledError;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
-  if (resolved.cloud) return { ...resolved.cloud.jobParams, ...common, cleanC2PA, denoise };
-  const { pythonPath, selectedModel } = resolveLocalImageModel(settings, { modelId: route.model || undefined });
-  return { ...common, cleanC2PA, denoise, pythonPath, ...(selectedModel?.id ? { modelId: selectedModel.id } : {}) };
+  const local = resolved.cloud ? null : resolveLocalImageModel(settings, { modelId: route.model || undefined });
+  const capacity = musicVideoReferenceCapacity(route.mode, { modelId: resolved.cloud?.modelId || route.model, localModel: local?.selectedModel });
+  if (common.referenceImagePaths?.length && !capacity) throw new ServerError('The selected image renderer cannot use the Cast & Sets reference images', { status: 409, code: 'CAST_SETS_ROUTE_INELIGIBLE' });
+  const referenceImagePaths = common.referenceImagePaths?.slice(0, capacity);
+  const referenceImageStrengths = common.referenceImageStrengths?.slice(0, capacity);
+  const params = { ...common, ...(referenceImagePaths ? { referenceImagePaths } : {}), ...(referenceImageStrengths ? { referenceImageStrengths } : {}), cleanC2PA, denoise };
+  if (resolved.cloud) return { ...resolved.cloud.jobParams, ...params };
+  return { ...params, pythonPath: local.pythonPath, ...(local.selectedModel?.id ? { modelId: local.selectedModel.id } : {}) };
 }
 
 async function enqueueImage(project, stage, key) {
   const item = stage.plan[key];
-  const referenceImagePaths = referencePaths(stage, item);
+  const referenceImagePaths = await referencePaths(stage, item);
   if (item.setReference?.greyboxShotId) {
     const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
     const greybox = await loadMusicVideoGreybox(project, { sceneId: key, setReference: item.setReference });
@@ -407,6 +458,15 @@ async function enqueueImage(project, stage, key) {
   };
   const settings = await deps.getSettings();
   const baseParams = await deps.imageParams(settings, stage.route, common);
+  if (item.refTemplates?.includes(FACE_SHEET_ANGLE_TEMPLATE)) {
+    const identityId = stage.images?.[item.refKeys?.[0]]?.imageId;
+    const identityPath = identityId ? resolveGalleryImage(identityId, { mustExist: false }) : null;
+    const sent = baseParams.referenceImagePaths || [];
+    if (!identityPath || !sent.includes(identityPath) || !sent.includes(referenceImagePaths[0])) {
+      throw new ServerError('Face sheets require a renderer that can send both the angle guide and the character reference',
+        { status: 409, code: 'CAST_SETS_ROUTE_INELIGIBLE' });
+    }
+  }
   const params = await withMusicVideoStyle(project, baseParams, stage.route.mode, stage.route.model, settings);
   // Persist the actual styled queue input, with only served local references.
   // Never expose the absolute host paths used by the provider transport.
@@ -415,6 +475,7 @@ async function enqueueImage(project, stage, key) {
     const filename = basename(path);
     if (resolveGalleryImage(filename, { mustExist: false }) === path) return [{ kind: 'image', filename }];
     if (resolveImageRef(filename, { mustExist: false }) === path) return [{ kind: 'image-ref', filename }];
+    if (resolveTemplateAsset(filename, { mustExist: false }) === path) return [{ kind: 'template', filename }];
     return [];
   });
   const prompt = String(params.prompt || '');
@@ -495,11 +556,22 @@ async function dispatchKey(projectId, key) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
-      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision });
+      // This route cannot carry the required inputs, so retrying it cannot
+      // succeed and may otherwise leave the final pending key without a wakeup.
+      const retryable = sent?.error?.code !== 'CAST_SETS_ROUTE_INELIGIBLE';
+      const settled = settleCastAndSetsImage(next, key, { error: reason, revision: reserved.stage.revision, retryable });
       if (settled.stage?.status === 'failed') settled.project = refundUnusedCheckinSteps(settled.project);
       return settled;
     });
     console.warn(`⚠️ Music Video Cast & Sets ${short(projectId)} ${key} refused: ${reason}`);
+    // A refusal has no later job-completion event to wake the retry. Request
+    // another pass only for the same pending revision, without awaiting the
+    // current coalesced advance (which would wait on itself).
+    if (out.changed && out.stage?.status === 'imaging' && out.stage.revision === reserved.stage.revision
+      && out.stage.processId === PROCESS_ID && out.stage.images?.[key]?.status === 'pending') {
+      const live = advancing.get(projectId);
+      if (live) live.again = true;
+    }
     publish(projectId, out.project);
     return;
   }
@@ -550,13 +622,51 @@ function checkinPlanSize(stage) {
   return `The Cast & Sets check-in needs ${pending.length} image${pending.length === 1 ? '' : 's'}${cast ? `, ${cast} of them supporting cast sheets` : ''}`;
 }
 
-async function advanceOnce(projectId) {
+// Retakes keep the revision and only replace the flagged key, not its dependents.
+async function retryInspectedImage(projectId, { key, inputs, inspectionId, note }) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
+  const eligible = (current) => current.castAndSets?.status === 'imaging'
+    && !current.castAndSets.manualImageEditReview
+    && current.castAndSets.processId === PROCESS_ID && current.castAndSets.revision === stage.revision
+    && current.castAndSets.productionRunId === stage.productionRunId && stage.productionRunId
+    && current.castAndSets.images[key]?.renderQualityRetry?.revision !== stage.revision
+    && currentCastSetsInspection(current.castAndSets, key)?.id === inspectionId
+    && sameCastSetsInspectionInputs(inputs, castSetsInspectionInputs(current.castAndSets, key));
+  if (!eligible(project)) return;
+  const keyNotes = { ...stage.keyNotes, [key]: [...(stage.keyNotes?.[key] || []), note].slice(-CAST_SETS_MAX_KEY_NOTES) };
+  const { plan } = await currentImagePlan({ ...project, castAndSets: { ...stage, keyNotes } }, stage.direction);
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (!eligible(current)) return { project: current, changed: false };
+    const run = findProductionRun(current, stage.productionRunId);
+    if (run.status !== 'running') return { project: current, changed: false };
+    const live = current.castAndSets;
+    return { project: { ...current, castAndSets: { ...live,
+      keyNotes: { ...live.keyNotes, [key]: keyNotes[key] },
+      plan: { ...live.plan, [key]: plan[key] },
+      images: { ...live.images, [key]: { ...live.images[key], status: 'pending', jobId: null,
+        renderQualityRetry: { revision: stage.revision, jobId: inputs.jobId },
+        inspectionAcknowledgement: null, failures: 0, error: null } },
+    } }, changed: true };
+  });
+  if (out.changed) publish(projectId, out.project);
+}
+
+async function advanceOnce(projectId) {
+  let project = await requireProject(projectId);
+  let stage = project.castAndSets;
   if (!stage || stage.processId !== PROCESS_ID || stage.status !== 'imaging') return;
   if (allCastAndSetsImagesDone(stage)) {
-    await assemble(projectId);
-    return;
+    const { inspectCastAndSetsImages } = await import('./castAndSetsInspection.js');
+    await inspectCastAndSetsImages(projectId, { processId: PROCESS_ID, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish, retryImage: (opts) => retryInspectedImage(projectId, opts) });
+    const fresh = await requireProject(projectId);
+    if (fresh.castAndSets?.revision !== stage.revision || fresh.castAndSets.status !== 'imaging' || fresh.castAndSets.processId !== PROCESS_ID) return;
+    if (allCastAndSetsImagesDone(fresh.castAndSets)) {
+      await assemble(projectId);
+      return;
+    }
+    project = fresh;
+    stage = fresh.castAndSets;
   }
   if (stage.productionRunId) {
     const run = findProductionRun(project, stage.productionRunId);
@@ -628,6 +738,7 @@ async function assemble(projectId) {
   const project = marked.project;
   const stage = marked.stage;
   const mode = castAndSetsCheckinMode(project);
+  const autoApprove = mode === 'auto' && !stage.manualImageEditReview && !castSetsInspectionBlockers(stage).length;
   const html = renderCastAndSetsSheet({
     title: project.name,
     project,
@@ -639,7 +750,7 @@ async function assemble(projectId) {
     revision: stage.revision,
     notesApplied: stage.notesApplied || [],
     checkinMode: mode,
-    status: mode === 'auto' ? 'approved' : 'review',
+    status: autoApprove ? 'approved' : 'review',
   });
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
@@ -653,8 +764,8 @@ async function assemble(projectId) {
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'review', {
     extra: { artifactId: artifact.id, artifactVersion: artifact.version },
   }));
-  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${mode === 'auto' ? 'auto-approve' : 'waiting for check-in'})`);
-  if (mode === 'auto') return approveCastAndSets(projectId);
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${autoApprove ? 'auto-approve' : 'waiting for check-in'})`);
+  if (autoApprove) return approveCastAndSets(projectId);
   publish(projectId, out.project);
   return out;
 }
@@ -700,7 +811,10 @@ function applyApproval(project, now) {
   }
   // Record what the approval rests on, so a later concept/style/subject/song
   // edit can be named as "changed since" (#10141).
-  return setCastAndSetsStatus(next, 'approved', { extra: { approvedInputs: castAndSetsApprovalInputs(next), approvedValues: castAndSetsApprovalValues(next) } }, now);
+  return setCastAndSetsStatus(next, 'approved', { extra: {
+    approvedInputs: castAndSetsApprovalInputs(next), approvedValues: castAndSetsApprovalValues(next),
+    overflowFaceReferences: castAndSetsOverflowFaceReferences(stage, references),
+  } }, now);
 }
 
 // Settle the stage and re-base a production run waiting on it, in ONE write,
@@ -710,13 +824,74 @@ const settleAndRebase = (next, now) => {
   return { project, stage: project.castAndSets };
 };
 
+/** Record an explicit operator decision on this exact image, including unavailable vision. */
+export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (stage?.status !== 'review') throw new ServerError('The sheet is not waiting for review', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+    const inputs = castSetsInspectionInputs(stage, input.inputs.key);
+    const inspection = currentCastSetsInspection(stage, input.inputs.key);
+    if (!sameCastSetsInspectionInputs(inputs, input.inputs) || input.inspectionId !== (inspection?.id || null)) throw new ServerError('This image or inspection changed. Review it again.', { status: 409, code: 'CAST_SETS_INSPECTION_STALE' });
+    // A verdict still on its way could turn out to be a mismatch the director never saw.
+    if (inspection?.verdict === 'pending') throw new ServerError('Vision is still checking this image. Wait for its answer.', { status: 409, code: 'CAST_SETS_INSPECTION_PENDING' });
+    const image = stage.images[input.inputs.key];
+    return { project: { ...current, castAndSets: { ...stage, images: { ...stage.images,
+      [input.inputs.key]: { ...image, inspectionAcknowledgement: { inputs, inspectionId: input.inspectionId, reviewer, at: new Date().toISOString() } } } } } };
+  });
+  publish(projectId, out.project);
+  return { project: out.project };
+}
+
+/** Re-run vision on existing images (all unreviewed/mismatched when `keys` is omitted) without touching approval. */
+export async function reinspectCastAndSetsImages(projectId, { keys } = {}) {
+  const { reinspectCastAndSetsImages: run } = await import('./castAndSetsInspection.js');
+  return run(projectId, { keys, resolveReviewer: deps.resolveReviewer, reviewImage: deps.reviewImage, publish });
+}
+
+/** Adopt a gallery take without re-rendering it or approving uninspected pixels. */
+export async function useCastAndSetsImage(projectId, { key, imageId }) {
+  const out = await mutateProjectRecord(projectId, (current) => {
+    const stage = current.castAndSets;
+    if (!stage || !['review', 'approved'].includes(stage.status)) throw new ServerError('Wait for the check-in to finish before choosing an image', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
+    if (!Object.hasOwn(stage.plan || {}, key) || !Object.hasOwn(stage.images || {}, key)) throw new ServerError('This image slot no longer exists', { status: 404, code: 'NOT_FOUND' });
+    if (!resolveGalleryImage(imageId)) throw new ServerError('The selected gallery image is missing', { status: 404, code: 'NOT_FOUND' });
+    const old = stage.images[key];
+    const revision = stage.revision + 1;
+    const image = { ...old, imageId, status: 'done', jobId: null, error: null, edit: null,
+      inspection: null, inspectionAcknowledgement: null, submittedRevision: revision,
+      submittedPrompt: null, promptAdditions: [], submittedPromptTruncated: false,
+      submittedReferences: [], submittedReferencesTruncated: false,
+      history: [...new Set([...(old.history || []), old.imageId].filter((id) => id && id !== imageId))].slice(-CAST_SETS_MAX_IMAGE_HISTORY) };
+    const next = { ...stage, revision, processId: PROCESS_ID, status: 'imaging', manualImageEditReview: true,
+      approvedAt: null, approvedInputs: null, approvedValues: null,
+      images: { ...stage.images, [key]: image } };
+    // Only this slot changes now; other hand-picked project references remain intact.
+    const refId = `${CAST_SETS_REF_PREFIX}${key.replace(':', '-')}`.slice(0, 64);
+    const reference = castAndSetsReferences(current, next).find((ref) => ref.id === refId);
+    const references = current.visualSpec?.references || [];
+    const updated = references.some((ref) => ref.id === refId)
+      ? references.map((ref) => ref.id === refId ? { ...ref, imageId } : ref)
+      : reference ? [...references, reference] : references;
+    return { project: { ...current, castAndSets: next, visualSpec: { ...current.visualSpec, references: updated } } };
+  });
+  publish(projectId, out.project);
+  inBackground('The chosen image', projectId, async () => {
+    await deps.syncCatalogImage(projectId, key).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving chosen image to the catalog failed; approval will retry: ${err.message}`));
+    await advance(projectId);
+  });
+  return { project: out.project };
+}
+
 /** Approve & continue. Returns `{ project, stage }`. */
 export async function approveCastAndSets(projectId) {
   const now = new Date().toISOString();
-  const out = await mutateProjectRecord(projectId, (current) => {
+  const out = await mutateProjectRecord(projectId, async (current) => {
     assertCastAndSetsApprovable(current);
-    if (current.castAndSets.greyboxPending) throw new ServerError('Regenerate the set plates with the selected greybox references before approving.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
-    return settleAndRebase(applyApproval(current, now), now);
+    const pending = await pendingGreyboxState(current);
+    if (pending.unavailable.length) throw new ServerError('The selected greybox capture could not be checked. Restore it or clear the selection, then try again.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
+    if (pending.direct.length || pending.legacy.length) throw new ServerError('Regenerate the set plates with the selected greybox references before approving.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
+    const ready = { ...current, castAndSets: { ...current.castAndSets, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [] } };
+    return settleAndRebase(applyApproval(ready, now), now);
   });
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
   publish(projectId, out.project);
@@ -768,6 +943,17 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
+/** Render an isolated candidate; the approved stage remains unchanged until acceptance. */
+export const previewCastAndSetsImageEdit = (projectId, input) => previewCastSetsImageEdit(projectId, input, deps);
+export const editCastAndSetsImage = (projectId, input) => requestCastSetsImageEdit(projectId, input, { ...deps, processId: PROCESS_ID, publish });
+export const discardCastAndSetsImageEdit = (projectId, input) => discardCastSetsImageEdit(projectId, input, publish);
+export async function acceptCastAndSetsImageEdit(projectId, input) {
+  const out = await acceptCastSetsImageEdit(projectId, input, PROCESS_ID);
+  publish(projectId, out.project);
+  inBackground('The accepted image edit', projectId, () => advance(projectId));
+  return { project: out.project };
+}
+
 /**
  * Regenerate, with notes or without. `notes` default to the open notes on the stage's
  * sheet. A note aimed at an image (`character`, `looks`, `set:<id>`,
@@ -799,7 +985,7 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
   const out = await mutateProjectRecord(projectId, (current) => {
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied: source, redirect });
     const keyNotes = { ...(revised.stage.keyNotes || {}) };
-    for (const [k, list] of Object.entries(imageNotes)) keyNotes[k] = [...(keyNotes[k] || []), ...list].slice(-MAX_KEY_NOTES);
+    for (const [k, list] of Object.entries(imageNotes)) keyNotes[k] = [...(keyNotes[k] || []), ...list].slice(-CAST_SETS_MAX_KEY_NOTES);
     let next = { ...revised.project, castAndSets: { ...revised.stage, keyNotes } };
     if (artifact && consumed.size) next = resolveDevArtifactNotes(next, artifact.id, (n) => consumed.has(n.id)).project;
     return { project: next, stage: next.castAndSets };
@@ -871,10 +1057,21 @@ export async function editCastAndSetsDirection(projectId, edits) {
   const sections = songSections(project);
   const referencesOnly = edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'));
   if (referencesOnly) {
-    const out = await mutateProjectRecord(projectId, (current) => {
+    const out = await mutateProjectRecord(projectId, async (current) => {
       if (!current.castAndSets?.direction || !['review', 'approved'].includes(current.castAndSets.status)) throw new ServerError('The Cast & Sets direction is not ready to edit.', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
       const edited = applyCastAndSetsDirectionEdits(current.castAndSets.direction, edits, { sections });
-      const stage = { ...current.castAndSets, direction: edited.direction, greyboxPending: true, status: 'review', updatedAt: new Date().toISOString() };
+      const pending = await pendingGreyboxState(current);
+      const pendingSetIds = new Set(pending.direct);
+      const legacySetIds = new Set(pending.legacy);
+      for (const set of edits.sets) {
+        const rendered = current.castAndSets.plan?.[`set:${set.id}`]?.setReference;
+        // A matching camera id can now resolve to a different capture or environment.
+        legacySetIds.delete(set.id);
+        if (set.setReference?.greyboxShotId || rendered?.greyboxShotId) pendingSetIds.add(set.id);
+        else pendingSetIds.delete(set.id);
+      }
+      const greyboxPending = pendingSetIds.size > 0 || legacySetIds.size > 0;
+      const stage = { ...current.castAndSets, direction: edited.direction, greyboxPending, greyboxPendingSetIds: [...pendingSetIds], greyboxLegacyPendingSetIds: [...legacySetIds], status: greyboxPending ? 'review' : current.castAndSets.status, updatedAt: new Date().toISOString() };
       return { project: { ...current, castAndSets: stage }, stage };
     });
     publish(projectId, out.project);
@@ -995,8 +1192,12 @@ export async function getCastAndSets(projectId) {
  * Settles its key (idempotent) and, when the stage is dispatching in this
  * process, continues. Returns true when the record changed.
  */
-export async function onCastAndSetsImageSettled({ projectId, key, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
+export async function onCastAndSetsImageSettled({ projectId, key, editRequestId = null, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
+  if (editRequestId) {
+    if (!project) return false;
+    return settleCastSetsImageEdit({ projectId, key, editRequestId, jobId, filename, error, status, productionRunId, productionStepKey }, publish);
+  }
   if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
     if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };

@@ -194,7 +194,7 @@ export default function PersistentMindThinkingPresets({
                     onClick={() => onEditPreset?.(preset.id)}
                     disabled={disabled || saving}
                     aria-label={`Edit ${preset.label}`}
-                    className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-text hover:bg-port-border/30 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-text hover:bg-port-border/30 disabled:opacity-50"
                   >
                     <Pencil size={14} aria-hidden="true" />
                   </button>
@@ -203,7 +203,7 @@ export default function PersistentMindThinkingPresets({
                     onClick={() => remove(preset)}
                     disabled={disabled || saving}
                     aria-label={`Remove ${preset.label}`}
-                    className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-error hover:bg-port-error/10 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex min-h-[36px] min-w-[36px] items-center justify-center rounded border border-port-border text-port-error hover:bg-port-error/10 disabled:opacity-50"
                   >
                     <Trash2 size={14} aria-hidden="true" />
                   </button>

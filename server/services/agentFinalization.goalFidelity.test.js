@@ -43,9 +43,13 @@ const completeAgentMock = vi.fn();
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: vi.fn(async () => null),
+  getAgents: vi.fn(async () => []),
   updateAgent: vi.fn(async () => null),
   completeAgent: (...args) => completeAgentMock(...args),
 }));
+
+const getAgentsByDateMock = vi.fn(async () => []);
+vi.mock('./cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAgentsByDateMock(...args) }));
 
 const updateTaskMock = vi.fn(async () => ({}));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
@@ -91,6 +95,11 @@ vi.mock('./goalFidelityFollowUp.js', () => ({
   runGoalFidelityFollowUp: (...args) => runGoalFidelityFollowUpMock(...args),
 }));
 
+const priorTaskDeliveryMock = vi.fn(async () => null);
+vi.mock('./goalFidelityPriorDelivery.js', () => ({
+  priorTaskDelivery: (...args) => priorTaskDeliveryMock(...args),
+}));
+
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
 
@@ -106,7 +115,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh, findPullRequestForBranch, getPullRequestState } from './github.js';
 import { execGlab } from './gitlab.js';
 import { resolveForgeForRepo } from './git.js';
-import { getAgentRecord } from './cosAgentLifecycle.js';
+import { getAgentRecord, getAgents } from './cosAgentLifecycle.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -202,6 +211,7 @@ const completion = () => completeAgentMock.mock.calls[0][1];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getAgentsByDateMock.mockReset().mockResolvedValue([]);
   claimVerifier.verifyClaimDisposition.mockResolvedValue(null);
   execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'synthetic-token' } });
@@ -221,6 +231,44 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  describe('a retry whose earlier attempt already merged', () => {
+    const retryTask = { id: 'task-retry', description: 'Investigate the provider timeout and fix its cause', taskType: 'internal', metadata: { totalSpawnCount: '2' } };
+    const earlier = { diff: '# fix: bound the prompt\ndiff --git a/fix.js b/fix.js', heads: ['a'.repeat(40)] };
+
+    it('reviews the earlier delivery alongside the retry\'s own diff and records it', async () => {
+      execGit.mockResolvedValueOnce({ stdout: `${'b'.repeat(40)}\n`, stderr: '', exitCode: 0 });
+      priorTaskDeliveryMock.mockResolvedValueOnce(earlier);
+      await finalize({ task: retryTask });
+      const [args] = runLocalGoalFidelityReviewMock.mock.calls.at(-1);
+      expect(args.priorDeliveryDiff).toBe(earlier.diff);
+      expect(args.diff).toBe('diff --git a/a.js b/a.js');
+      expect(priorTaskDeliveryMock.mock.calls.at(-1)[0]).toMatchObject({
+        taskId: retryTask.id, head: 'b'.repeat(40), maxChars: 60_000 - args.diff.length,
+      });
+      expect(completion().goalFidelity.priorDeliveryHeads).toEqual(earlier.heads);
+    });
+
+    // The detector stays armed: an earlier merge is evidence, never a pass.
+    it('still holds the run when the reviewer answers rethink with that evidence', async () => {
+      priorTaskDeliveryMock.mockResolvedValueOnce(earlier);
+      runLocalGoalFidelityReviewMock.mockResolvedValueOnce(verdict({ verdict: 'rethink', missing: ['the requested fix'] }));
+      await finalize({ task: retryTask });
+      expect(completion()).toMatchObject({ success: false, goalFidelity: { verdict: 'rethink' } });
+    });
+
+    it('does not look on a first attempt', async () => {
+      await finalize({ task: { ...retryTask, metadata: { totalSpawnCount: '1' } } });
+      expect(priorTaskDeliveryMock).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock.mock.calls.at(-1)[0]).not.toHaveProperty('priorDeliveryDiff');
+    });
+
+    it('falls back to the ordinary review when the lookup fails', async () => {
+      priorTaskDeliveryMock.mockRejectedValueOnce(new Error('unreadable archive'));
+      await finalize({ task: retryTask });
+      expect(runLocalGoalFidelityReviewMock.mock.calls.at(-1)[0]).not.toHaveProperty('priorDeliveryDiff');
+    });
+  });
+
   it('captures completion outside an expired spawn Git lifetime without reopening that lifetime', async () => {
     const git = await vi.importActual('../lib/execGit.js');
     let completionCallback;
@@ -307,6 +355,63 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(review.objectiveScreenshots).toEqual(screenshots);
     expect(review.diff).toBe(diff);
     expect(completion()).toMatchObject({ success: true });
+  });
+
+  describe('investigation of a goal-fidelity finding', () => {
+    const task = {
+      id: 'investigate-example', taskType: 'internal',
+      description: '[Auto] Investigate goal-fidelity fix-first: Refresh the example catalog',
+      metadata: {
+        isInvestigation: 'true',
+        investigationFingerprint: 'goal-fidelity:internal:example-app/refresh-the-example-catalog',
+        affectedTasks: ['original-example'],
+      },
+    };
+    const investigatedRun = (id, checkedAt, overturned = null) => ({
+      id, taskId: 'original-example',
+      result: { goalFidelity: { verdict: 'fix-first', checkedAt, ...(overturned ? { overturned } : {}) } },
+    });
+    const stamp = { gap: 'other', calibrationTaskId: 'calibration-example', at: '2026-01-01T00:05:00Z' };
+    beforeEach(() => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['catalog refresh'] }));
+    });
+
+    // The regression: the investigator disproved the finding, shipped a one-line
+    // accuracy fix, and that diff was judged against the embedded objective —
+    // re-raising the disproved finding and re-dispatching the investigation.
+    it('does not judge an investigation whose finding was overturned', async () => {
+      getAgents.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp)]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    it('does not judge an investigation whose overturned run now lives only in the archive', async () => {
+      getAgents.mockResolvedValue([]);
+      getAgentsByDateMock.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp)]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+    });
+
+    it('still judges an investigation whose archived run carries no overturn stamp', async () => {
+      getAgents.mockResolvedValue([]);
+      getAgentsByDateMock.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z')]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('still judges an investigation of a newer finding that nothing overturned', async () => {
+      getAgents.mockResolvedValue([
+        investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp),
+        investigatedRun('agent-retry', '2026-01-02T00:00:00Z'),
+      ]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledTimes(1);
+      expect(completion()).toMatchObject({ success: false, goalFidelity: { verdict: 'rethink' } });
+    });
   });
 
   describe('forge-side PR remediation whose only diff is a test CI repair', () => {

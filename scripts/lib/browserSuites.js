@@ -22,6 +22,7 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/lyricPlaythrough.browser.test.js',
   'server/services/musicVideo/publish/linkedin.browser.test.js',
   'server/services/musicVideo/publish/sunoHook.browser.test.js',
+  'server/routes/manualUpdateRecovery.browser.test.js',
 ];
 
 /**

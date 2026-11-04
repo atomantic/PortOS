@@ -577,22 +577,27 @@ export async function listProcessesStrict(pm2Home = null) {
   return list.map(mapProcess);
 }
 
-/**
- * The running daemon's own pm2 and Node versions — what the Node runtime panel
- * compares against the pm2 PortOS ships. Only those two fields leave this
- * function: the daemon's report also carries its whole environment.
- * @returns {Promise<{pm2Version: string|null, nodeVersion: string|null}|null>} null when unreachable
- */
-export async function getDaemonIdentity() {
+async function callExistingDaemon(method) {
   const rpcPath = process.env.PM2_DAEMON_RPC_PORT || join(process.env.PM2_HOME || join(homedir(), '.pm2'), 'rpc.sock');
   if (!IS_WIN && !existsSync(rpcPath)) return null;
-  const report = await connectAndRun(client => new Promise((resolve, reject) => {
+  return connectAndRun(client => new Promise((resolve, reject) => {
     // executeRemote() silently calls start() if its connection has disappeared;
     // use the established RPC directly so a read cannot launch a daemon.
     const rpc = client.Client.client;
     if (!rpc?.call) { reject(new Error('PM2 daemon connection unavailable')); return; }
-    rpc.call('getReport', {}, (error, value) => error ? reject(error) : resolve(value));
+    rpc.call(method, {}, (error, value) => error ? reject(error) : resolve(value));
   }), JLIST_TIMEOUT_MS, { existingOnly: true }).catch(() => null);
+}
+
+/** Fresh read of an existing daemon; unlike connect(), this cannot start one. */
+export async function listExistingProcessesStrict() {
+  const list = await callExistingDaemon('getMonitorData');
+  return Array.isArray(list) ? list.map(mapProcess) : null;
+}
+
+/** The daemon's own pm2 and Node versions, or null when unreachable. */
+export async function getDaemonIdentity() {
+  const report = await callExistingDaemon('getReport');
   if (!report) return null;
   const text = (value) => (typeof value === 'string' && value && value !== 'N/A' ? value : null);
   return { pm2Version: text(report.pm2_version), nodeVersion: text(report.node_version) };

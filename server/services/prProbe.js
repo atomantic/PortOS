@@ -116,7 +116,14 @@ async function probeMergedHead(sourceWorkspace, branchName, head) {
   const forge = await git.resolveForgeForRepo(sourceWorkspace).catch(() => null);
   if (!forge?.cli) return null;
   const probe = await probePrForBranch(sourceWorkspace, branchName, forge).catch(() => null);
-  return probe?.readable === true && probe.prState === 'MERGED' && probe.prHead === observed ? probe : null;
+  return isExactMergedPrHead(probe, observed) ? probe : null;
+}
+
+/** The same forge observation can be used for cleanup without a second probe. */
+export function isExactMergedPrHead(probe, head) {
+  return probe?.readable === true && probe.prState === 'MERGED'
+    && typeof head === 'string' && head.length > 0
+    && probe.prHead === head.toLowerCase();
 }
 
 export async function isMergedPrHead(sourceWorkspace, branchName, head) {

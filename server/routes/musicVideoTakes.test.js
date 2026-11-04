@@ -54,6 +54,12 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
+
+// The approvals a project saved before lock removal still carries (a covering board approval and a
+// clip approval); nothing writes them now.
+const withLegacyLocks = (current, sceneId, videoHistoryId) => ({ ...current, productionReview: { ...current.productionReview,
+  approvals: { storyboard: { basis: productionReviewBasis(current).storyboard } }, clipApprovals: { [sceneId]: { videoHistoryId } } } });
 
 const app = express();
 app.use(express.json());
@@ -113,6 +119,30 @@ describe('scene takes routes', () => {
       ['take-1.png', 'rejected', 'wrong wardrobe'],
       ['take-2.png', 'candidate', null],
     ]);
+  });
+
+  it('records server-derived acknowledgement only for the current image and visible rendering defect', async () => {
+    seedImage('defect.png');
+    const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'defect.png' });
+    const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, scenes: current.scenes.map((scene) => scene.sceneId === sceneA.sceneId
+      ? { ...scene, takes: scene.takes.map((take) => ({ ...take, plateEvidence: plateReviewEvidence(scene, take.assetId, 'synthetic-run', JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
+        id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'The clock is fused into the wall.' : 'Matches',
+      })) })) })) } : scene) } }));
+    const scene = (await reload()).scenes[0];
+    const body = { acknowledgeRenderQuality: { basis: scene.takes[0].plateEvidence.basis, note: 'The clock is fused into the wall.' } };
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}`;
+    race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
+    expect((await request(app).patch(url).send({ ...body, reviewer: { kind: 'human' } })).status).toBe(400);
+    const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
+    const response = await request(app).patch(url).send(body);
+    expect(response.status).toBe(200);
+    expect(response.body.takes[0].renderQualityAcknowledgement).toMatchObject({ ...body.acknowledgeRenderQuality, reviewer: { kind: 'local' } });
+    // The defect refusal is gone; the independent art approval gate remains.
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
+    expect((await request(app).patch(url).send(body)).status).toBe(409);
   });
 
   it('rejecting the selected take clears the slot so the next take fills it', async () => {
@@ -311,33 +341,10 @@ describe('swapping a shot from unused takes', () => {
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'endImage', assetId: 'a-1.png', withAssetId: 'clip-a1' })).status).toBe(400);
 
     // Legacy video locks do not prevent changing the reference or discard its clip.
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(
-      setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }),
-      { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' },
-    ) }));
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: withLegacyLocks(current, sceneA.sceneId, 'clip-b2') }));
     const changed = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'a-1.png' });
     expect(changed.status).toBe(200);
     expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId)).toMatchObject({ referenceImageId: 'a-1.png', videoHistoryId: 'clip-b2' });
-  });
-});
-
-describe('locking a shot\'s video', () => {
-  // Uniquely catches a video lock leaving the shot's other takes as open candidates, or rejecting the ones it uses.
-  it('rejects the shot\'s unused frame and clip takes', async () => {
-    for (const name of ['lock-a.png', 'lock-b.png']) seedImage(name);
-    seedVideoHistory([{ id: 'lock-clip', filename: 'lock-clip.mp4' }, { id: 'lock-other', filename: 'lock-other.mp4' }]);
-    for (const [kind, assetId] of [['image', 'lock-a.png'], ['image', 'lock-b.png'], ['video', 'lock-clip'], ['video', 'lock-other']]) {
-      await addTake(sceneA.sceneId, { kind, assetId, source: 'generated' });
-    }
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    const { lockProductionShots } = await import('../services/musicVideo/productionReviewService.js');
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage: 'still' }) }));
-    await lockProductionShots(project.id, { sceneIds: [sceneA.sceneId], locked: true, stage: 'video' });
-    const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
-    expect(Object.fromEntries(scene.takes.map((take) => [take.assetId, take.status])))
-      .toEqual({ 'lock-a.png': 'candidate', 'lock-b.png': 'rejected', 'lock-clip': 'candidate', 'lock-other': 'rejected' });
-    expect(scene).toMatchObject({ referenceImageId: 'lock-a.png', videoHistoryId: 'lock-clip' });
   });
 });
 
@@ -381,9 +388,7 @@ describe('a director can change legacy locked shots', () => {
     await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a1', source: 'generated', sourceImageId: 'a-1.png' });
     await addTake(sceneB.sceneId, { kind: 'image', assetId: 'floor.png', source: 'generated' });
     await request(app).delete(`${base()}/scenes/${sceneB.sceneId}`);
-    const { setShotLocks } = await import('../services/musicVideo/productionReview.js');
-    const lockA = async (stage) => projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [sceneA.sceneId], locked: true, stage }) }));
-    await lockA('still');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: withLegacyLocks(current, sceneA.sceneId, 'clip-a1') }));
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/use`).send({ kind: 'image', assetId: 'floor.png' })).status).toBe(200);
     expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${second.body.take.takeId}/select`)).status).toBe(200);
     expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ prompt: 'Slow push toward the reel' })).status).toBe(200);
@@ -555,7 +560,7 @@ describe('a shot\'s frame references', () => {
     expect(saved.status).toBe(200);
     // Outside inspiration is never sent as an image, even when named.
     expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['tattooist']);
-    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: ['a', 'b', 'c', 'd', 'e'] })).status).toBe(400);
+    expect((await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: Array.from({ length: 17 }, (_, i) => `ref-${i}`) })).status).toBe(400);
     // Back to auto.
     await request(app).patch(`${base()}/scenes/${sceneA.sceneId}`).send({ frameReferenceIds: null });
     expect(musicVideoConditioningReferences(await reload(), await sceneOf()).map((ref) => ref.id)).toEqual(['lead']);

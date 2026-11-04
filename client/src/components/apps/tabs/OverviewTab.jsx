@@ -164,7 +164,7 @@ export default function OverviewTab({ app, onRefresh }) {
               onClick={handleDismissLaunchVideoCard}
               aria-label="Dismiss launch video card"
               title="Dismiss launch video card"
-              className="inline-flex items-center justify-center rounded p-2 text-port-text-muted hover:bg-port-border hover:text-white transition-colors"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center rounded p-2 text-port-text-muted hover:bg-port-border hover:text-white transition-colors"
             >
               <X size={16} aria-hidden="true" />
             </button>

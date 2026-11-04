@@ -1,3 +1,4 @@
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
@@ -18,11 +19,12 @@ import { basename } from 'path';
 import { Router } from 'express';
 import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoShotLockSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
+import researchSeedRoutes from './musicVideoResearchSeed.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
 import { productionReadiness } from '../services/musicVideo/productionReview.js';
 import { presentMusicVideoDependencies } from '../lib/musicVideoDependencies.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, lockProductionShots, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -34,7 +36,10 @@ import {
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
+  musicVideoVaryWipesSchema,
   musicVideoSceneSplitSchema,
+  musicVideoLyricCutSchema,
+  musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
@@ -42,6 +47,7 @@ import {
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
+  musicVideoSongPrepareSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
   musicVideoHandoffImportSchema,
@@ -123,7 +129,11 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  varyProjectWipes,
   splitProjectScene,
+  cutProjectScenesOnLyrics,
+  previewProjectPacingRecut,
+  recutProjectToPacing,
   mergeProjectNextScene,
   mergeProjectPreviousScene,
   moveProjectSceneStart,
@@ -226,9 +236,16 @@ import {
   editCastAndSetsDirection,
   applyCastAndSetsFeedback,
   removeCastAndSetsFeedbackEntry,
+  editCastAndSetsImage,
+  previewCastAndSetsImageEdit,
+  acceptCastAndSetsImageEdit,
+  discardCastAndSetsImageEdit,
   regenerateCastAndSets,
   resumeCastAndSets,
   approveCastAndSets,
+  useCastAndSetsImage,
+  acknowledgeCastAndSetsImage,
+  reinspectCastAndSetsImages,
   reconfirmCastAndSets,
   skipCastAndSets,
   discardCastAndSets,
@@ -274,7 +291,9 @@ async function presentProjectForRead(project) {
     current = await reconcileInterruptedYoutubeThumbnail(project);
   }
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
-  return { ...presented, productionReadiness: productionReadiness(presented) };
+  // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
+  const { projectSongAudioChange } = await import('../services/musicVideo/songAudio.js');
+  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange: await projectSongAudioChange(presented) };
 }
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -506,6 +525,7 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
 
 router.use('/', storyRoutes);
 router.use('/', festivalPacketRoutes);
+router.use('/', researchSeedRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to
@@ -611,8 +631,16 @@ router.post('/:id/song-style/suno', asyncHandler(async (req, res) => {
 // analyze the song if it has no analysis and start word alignment when the
 // lines were never aligned. Returns the project and the alignment job to follow.
 router.post('/:id/song/prepare', asyncHandler(async (req, res) => {
+  const { refresh } = validateRequest(musicVideoSongPrepareSchema, req.body ?? {});
   const { autoPrepareSong } = await import('../services/musicVideo/songAutoPrepare.js');
-  res.json(await autoPrepareSong(req.params.id));
+  res.json(await autoPrepareSong(req.params.id, { refresh }));
+}));
+
+// The director keeps the old beat grid and lyric timing against a replaced take
+// (#14793): the recorded basis moves to the current audio, nothing is re-derived.
+router.post('/:id/song/keep-timing', asyncHandler(async (req, res) => {
+  const { keepSongTiming } = await import('../services/musicVideo/songAudio.js');
+  res.json(await presentProjectForRead(await keepSongTiming(req.params.id)));
 }));
 
 // The lyric timing playthrough: the aligned words drawn by the shipped template over a
@@ -909,12 +937,6 @@ router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
-}));
-// Lock or unlock single Board shots: a locked shot may have its clip made before the whole storyboard is approved.
-router.post('/:id/production-review/shots', asyncHandler(async (req, res) => {
-  const input = validateRequest(musicVideoShotLockSchema, req.body);
-  const reviewer = await requireProductionReviewer(req);
-  res.json(await lockProductionShots(req.params.id, { ...input, reviewer }));
 }));
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {
   res.status(202).json(await renderProductionProof(req.params.id, validateRequest(musicVideoProductionProofSchema, req.body)));
@@ -1639,6 +1661,37 @@ router.post('/:id/cast-and-sets/regenerate', asyncHandler(async (req, res) => {
   res.status(202).json(await regenerateCastAndSets(req.params.id, input));
 }));
 
+router.post('/:id/cast-and-sets/use-image', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsUseImageSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await useCastAndSetsImage(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/edit-image-preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditSchema, req.body || {});
+  res.json(await previewCastAndSetsImageEdit(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/edit-image', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await editCastAndSetsImage(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/accept-image-edit', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditDecisionSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await acceptCastAndSetsImageEdit(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/discard-image-edit', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastSetsImageEditDecisionSchema, req.body || {});
+  res.json(await discardCastAndSetsImageEdit(req.params.id, input));
+}));
+
 router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsDirectionEditSchema, req.body || {});
   res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
@@ -1661,6 +1714,23 @@ router.delete('/:id/cast-and-sets', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsStartSchema, req.body || {});
   res.status(202).json(await resumeCastAndSets(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/inspect', asyncHandler(async (req, res) => {
+  const { musicVideoCastSetsInspectSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
+  const input = validateRequest(musicVideoCastSetsInspectSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.json(await reinspectCastAndSetsImages(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res) => {
+  const { musicVideoCastSetsAcknowledgeSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
+  const input = validateRequest(musicVideoCastSetsAcknowledgeSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  const reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
+  res.json(await acknowledgeCastAndSetsImage(req.params.id, input, reviewer));
 }));
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
@@ -1696,10 +1766,26 @@ router.delete('/:id/scenes/:sceneId', asyncHandler(async (req, res) => {
   res.json(updated);
 }));
 
+// A non-repeating run of wipes over the cuts out of `count` shots from `fromSceneId` (musicVideoWipes.js).
+router.post('/:id/scenes/vary-wipes', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoVaryWipesSchema, req.body ?? {});
+  const { project, scenes } = await varyProjectWipes(req.params.id, options);
+  res.json({ scenes: scenes.map(({ sceneId, wipeOut, transitionOut }) => ({ sceneId, wipeOut, transitionOut: transitionOut ?? null })), updatedAt: project.updatedAt });
+}));
+
 router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
   const { sceneIds } = validateRequest(musicVideoSceneReorderSchema, req.body);
   const updated = await reorderProjectScenes(req.params.id, sceneIds);
   res.json(updated);
+}));
+
+router.get('/:id/pacing-recut', asyncHandler(async (req, res) => {
+  res.json(await previewProjectPacingRecut(req.params.id));
+}));
+
+router.post('/:id/pacing-recut', asyncHandler(async (req, res) => {
+  const { revision } = validateRequest(musicVideoPacingRecutSchema, req.body ?? {});
+  res.json(await recutProjectToPacing(req.params.id, revision));
 }));
 
 // Split a shot its backend cannot render in one take (#8977): a performance
@@ -1708,6 +1794,12 @@ router.post('/:id/scenes/reorder', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/split', asyncHandler(async (req, res) => {
   const { backend, atSec } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await splitProjectScene(req.params.id, req.params.sceneId, { backend, atSec }));
+}));
+
+// Cut the board on sung words: one shot per phrase or per word over the chosen lyric lines (#14820).
+router.post('/:id/scenes/cut-on-lyrics', asyncHandler(async (req, res) => {
+  const { cueIds, mode } = validateRequest(musicVideoLyricCutSchema, req.body ?? {});
+  res.json(await cutProjectScenesOnLyrics(req.params.id, { cueIds, mode }));
 }));
 
 // Merge a scene with the next one — the inverse of split.
@@ -1858,6 +1950,7 @@ router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) =>
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
+  if (review.acknowledgeRenderQuality) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
 }));
 

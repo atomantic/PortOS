@@ -164,10 +164,27 @@ describe('owned composition capture browser lifecycle', () => {
 
   it('cleans a child and profile after a bounded startup timeout without leaking stderr', async () => {
     startup = () => { child.emit('spawn'); child.stderr.write('private profile path and diagnostics'); };
-    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow('startup exceeded its deadline');
+    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(
+      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-devtools-endpoint, spawnMs=\d+\)$/,
+    );
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     await expect(access(profile)).rejects.toThrow();
     expect(child.stderr.listenerCount('data')).toBe(0);
+  });
+
+  it('names a browser that never produced output, and honors a startup override only when it is a positive integer', async () => {
+    const key = 'PORTOS_COMPOSITION_BROWSER_STARTUP_MS';
+    const prior = process.env[key];
+    startup = () => { child.emit('spawn'); };
+    try {
+      process.env[key] = '25';
+      await expect(launchCompositionBrowser()).rejects.toThrow(/deadlineMs=25, phase=spawned-no-output/);
+      // A malformed override falls back to the 20s default, so a tight explicit deadline is the only way out.
+      process.env[key] = 'abc';
+      await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(/deadlineMs=20,/);
+    } finally {
+      if (prior === undefined) delete process.env[key]; else process.env[key] = prior;
+    }
   });
 
   it('settles a spawn failure without trying to signal a nonexistent process', async () => {

@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import { trashFiles } from '../../lib/trashFiles.js';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, resolveImageInputPath, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { extractPngGenerationMetadata, extractPngGenerationMetadataFile } from '../../lib/pngMetadata.js';
+import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
@@ -30,7 +31,7 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
-import { usesTorchVenv, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
+import { usesTorchVenv, usesMossSwift, usesFlux3 } from '../../lib/imageRuntimeRemedies.js';
 import { mossRenderArgs, mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
@@ -45,6 +46,7 @@ import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../vi
 
 import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
+import { flux3RenderArgs, assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
@@ -167,8 +169,8 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
   let repo = model.repo;
   let quantization = model.quantization || 'sdnq';
   let { tokenizerRepo, basePipelineRepo, kvRepo } = model;
-  let refImagePaths = referenceImagePaths;
-  let refImageStrengths = referenceImageStrengths;
+  const refImagePaths = referenceImagePaths;
+  const refImageStrengths = referenceImageStrengths;
   // LoRA + quantized base is incompatible: PEFT can't inject an adapter into
   // SDNQ/int8-quantized Linear layers, and the runner swallows the failure
   // into a base render (lora_utils.apply_loras), so the LoRA silently does
@@ -187,17 +189,8 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
     quantization = 'none';
     tokenizerRepo = null;
     basePipelineRepo = null;
-    // Multi-reference editing needs the `-kv` sibling repo, which the bf16
-    // LoRA route doesn't load (and the 4B variant has none). Drop the refs so
-    // the LoRA render proceeds as txt2img/i2i instead of the runner hard-
-    // failing on the missing kv pipeline — the LoRA is the primary intent
-    // when one is attached. i2i (single init image) is unaffected.
+    // The rerouted base has no KV sibling; references were refused up front.
     kvRepo = null;
-    if (refImagePaths?.length) {
-      console.log(`⚠️ flux2 LoRA render dropped ${refImagePaths.length} reference image(s) — multi-ref editing isn't supported on the bf16 LoRA route`);
-      refImagePaths = [];
-      refImageStrengths = [];
-    }
   }
   return { repo, quantization, tokenizerRepo, basePipelineRepo, kvRepo, refImagePaths, refImageStrengths };
 };
@@ -205,6 +198,10 @@ const flux2LoraRoute = (model, { loraPaths, referenceImagePaths, referenceImageS
 const flux2RenderArgs = (model, inputs) => {
   const { prompt, negativePrompt, width, height, steps, guidance, seed, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength } = inputs;
   const modelId = model?.id;
+  assertFlux2InputsCompatible(model, {
+    hasInitImage: Boolean(initImagePath), referenceCount: inputs.referenceImagePaths?.length || 0,
+    loraCount: loraPaths.length,
+  });
   if (!model.repo) {
     throw new ServerError(
       `FLUX.2 model "${modelId}" is missing the 'repo' field in data/media-models.json`,
@@ -321,6 +318,7 @@ const mfluxArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, s
 export const buildArgs = ({ loraPaths = [], loraScales = [], referenceImagePaths = [], referenceImageStrengths = [], platform = process.platform, ...rest }) => {
   const inputs = { ...rest, loraPaths, loraScales, referenceImagePaths, referenceImageStrengths };
   const { model } = inputs;
+  if (usesFlux3(model)) return flux3RenderArgs(inputs);
   if (usesMossSwift(model)) return mossRenderArgs(inputs);
   if (usesDiffusersRunner(model)) return diffusersRenderArgs(inputs);
   if (isFlux2(model)) return flux2RenderArgs(model, inputs);
@@ -648,6 +646,17 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
+  if (usesFlux3(model)) {
+    assertFlux3Inputs({ negativePrompt, width: Number(width), height: Number(height), initImagePath, referenceImagePaths, referenceImageStrengths,
+      loraPaths: [...loraPaths, ...loraFilenames] });
+    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
+    const runtime = await diagnoseLocalRuntime({ modelId });
+    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'FLUX3_NOT_READY' });
+  }
+  assertFlux2InputsCompatible(model, {
+    hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
+    loraCount: loraFilenames.length + loraPaths.length,
+  });
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
@@ -660,7 +669,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const runtime = await diagnoseLocalRuntime({ modelId });
     if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MOSS_NOT_READY' });
   }
-  if (!usesTorchVenv(model) && !usesMossSwift(model) && !pythonPath) {
+  if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
@@ -756,6 +765,12 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       status: 400, code: 'IMAGE_INPUT_UNAVAILABLE',
     });
   }
+  if (usesFlux3(model)) {
+    meta.quantize = model.quantization?.replace('q', '') || null;
+    meta.quantization = model.quantization;
+    meta.guidance = 0;
+    meta.modelRepo = model.repo;
+  }
   if (usesMossSwift(model)) {
     meta.quantize = null;
     meta.quantization = 'bf16';
@@ -843,7 +858,8 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
-    const childEnv = usesMossSwift(model) ? mossChildEnv() : await hfChildEnv();
+    const tokenEnv = usesMossSwift(model) ? null : await hfChildEnv();
+    const childEnv = usesMossSwift(model) ? mossChildEnv() : usesFlux3(model) ? flux3Env(tokenEnv) : tokenEnv;
     // Last spawn gate: a cancel() during the awaits above found no child to signal.
     if (preparation.cancelRequested) {
       throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });

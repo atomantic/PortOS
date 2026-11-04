@@ -27,7 +27,7 @@ vi.mock('../lib/maintenanceAdmission.js', async () => {
   gate.admission = actual.createMaintenanceAdmission(gate.root);
   return { ...actual, maintenance: gate.admission };
 });
-import { bindMaintenanceIo, _getMaintenanceWatcher, resumeMaintenance } from './maintenanceControl.js';
+import { bindMaintenanceIo, _getMaintenanceWatcher, resumeMaintenance, wakeAfterMaintenance } from './maintenanceControl.js';
 
 afterAll(() => {
   _getMaintenanceWatcher()?.close();
@@ -111,6 +111,14 @@ describe('maintenance notifications', () => {
 
 
 describe('maintenance completion recovery wake-up', () => {
+  it('allows an owned wake to wait for and retry a Mind or completion failure', async () => {
+    resumeWork.mind.mockRejectedValueOnce(new Error('mind unavailable'));
+    await expect(wakeAfterMaintenance({ waitForCompletion: true })).rejects.toThrow('mind unavailable');
+    expect(resumeWork.recover).toHaveBeenCalledOnce();
+    expect(resumeWork.queue).toHaveBeenCalledOnce();
+    await expect(wakeAfterMaintenance({ waitForCompletion: true })).resolves.toBeUndefined();
+    expect(resumeWork.mind).toHaveBeenCalledTimes(2);
+  });
   it('returns normal immediately, repairs before dequeue, and refuses duplicate stale resume without another attempt', async () => {
     const operation = gate.admission.admit('runner', 'historical-fixture');
     const { hold } = gate.admission.begin({ reason: 'fixture deployment', owner: 'fixture' });

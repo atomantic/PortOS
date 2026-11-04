@@ -1,5 +1,26 @@
 import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines } from './greyboxVocabulary.js';
 
+/** Older records only have the flag; compare live captures when available and otherwise keep the gate. */
+export function castAndSetsPendingGreyboxSetIds(stage, liveCaptures = {}) {
+  if (!stage?.greyboxPending) return [];
+  const direct = Array.isArray(stage.greyboxPendingSetIds) ? stage.greyboxPendingSetIds : [];
+  const legacy = Array.isArray(stage.greyboxLegacyPendingSetIds) ? stage.greyboxLegacyPendingSetIds
+    : Array.isArray(stage.greyboxPendingSetIds) ? [] : (stage.direction?.sets || []).map((set) => set.id);
+  const candidates = new Set(legacy);
+  const unresolved = (stage.direction?.sets || []).filter((set) => {
+    if (!candidates.has(set.id)) return false;
+    const chosen = set.setReference;
+    const plan = stage.plan?.[`set:${set.id}`];
+    const rendered = plan?.setReference;
+    if (!chosen?.greyboxShotId && !rendered?.greyboxShotId) return false;
+    return !chosen?.greyboxShotId || chosen.subjectId !== rendered?.subjectId || chosen.greyboxShotId !== rendered?.greyboxShotId
+      || !liveCaptures[set.id] || liveCaptures[set.id] !== plan?.refImages?.[0];
+  }).map((set) => set.id);
+  return [...new Set([...direct, ...unresolved])];
+}
+
+export const castAndSetsGreyboxPending = (stage, liveCaptures) => castAndSetsPendingGreyboxSetIds(stage, liveCaptures).length > 0;
+
 /** Resolve only the explicitly selected camera, never a replacement plate. Browser-safe. */
 export function musicVideoGreyboxReference(project, scene, places = {}) {
   const selected = scene?.setReference;

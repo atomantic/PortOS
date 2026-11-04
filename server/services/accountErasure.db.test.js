@@ -1,6 +1,6 @@
 /**
  * Postgres-backed proof that deleting a mail/calendar account or purging an
- * iMessage chat erases the subjects, previews and attendees sync copied into
+ * iMessage or Beeper chat erases the subjects, previews and attendees sync copied into
  * the Timeline and Tribe, including the `record_audit` snapshots (#12984).
  *
  * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`.
@@ -13,6 +13,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as humanActivity from './humanActivity.js';
 import * as tribe from './tribe.js';
 import { purgeConversation, encodeChatKey } from './imessageManage.js';
+import { purgeConversation as purgeBeeperConversation } from './beeperConversations.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -37,10 +38,12 @@ const CHAT_B = `chat-b;${nonce}`;
 const SOURCES = [`mail-${nonce}`, `calendar-${nonce}`];
 const IMESSAGE = 'imessage'; // purgeConversation is scoped to the real source; chat guids carry the nonce
 const personIds = [];
+const BEEPER_ACCOUNT = `beeper-${nonce}`;
 
 afterAll(async () => {
   if (!dbReady) return;
   await query('DELETE FROM human_activity_events WHERE source = ANY($1::text[]) OR metadata->>\'chatGuid\' = ANY($2::text[])', [SOURCES, [CHAT_A, CHAT_B]]).catch(() => {});
+  await query('DELETE FROM beeper_accounts WHERE account_id = $1', [BEEPER_ACCOUNT]).catch(() => {});
   if (personIds.length) {
     await query('DELETE FROM tribe_people WHERE id = ANY($1::uuid[])', [personIds]).catch(() => {});
     await query(
@@ -114,6 +117,52 @@ describe.skipIf(!runDb)('derived-data erasure (#12984)', () => {
     expect(await chatEvents(CHAT_A)).toBe(0);
     expect(await chatEvents(CHAT_B)).toBe(1);
     expect(await auditRows()).toBe(0);
+  });
+
+  it('Beeper purge erases its touchpoints and all audit snapshots while preserving other conversations and sources', async () => {
+    await query('INSERT INTO beeper_accounts (account_id) VALUES ($1)', [BEEPER_ACCOUNT]);
+    const conversations = await query(
+      `INSERT INTO beeper_conversations (account_id, source_chat_id)
+       VALUES ($1, 'example-chat-a'), ($1, 'example-chat-b') RETURNING id, source_chat_id`,
+      [BEEPER_ACCOUNT],
+    );
+    const target = conversations.rows.find((row) => row.source_chat_id === 'example-chat-a').id;
+    const other = conversations.rows.find((row) => row.source_chat_id === 'example-chat-b').id;
+    await query(
+      `INSERT INTO beeper_sync_cursors (account_id, chat_id) VALUES ($1, 'example-chat-a'), ($1, 'example-chat-b')`,
+      [BEEPER_ACCOUNT],
+    );
+    const touchpoint = (source, conversationId) => tribe.autoCreateTouchpoint(personIds[0], {
+      happenedAt: '2026-07-04T15:00:00Z', channel: 'Example bridge', summary: 'Example interaction',
+      source, dedupeKey: `${source}:${conversationId}:${nonce}`, metadata: { conversationId },
+    });
+    const erased = await touchpoint('message', target);
+    const spared = [await touchpoint('message', other), await touchpoint('signal', target)];
+    // Seed historical snapshots as well as the hard-delete snapshot the purge
+    // trigger will create, so erasure must clear the full retained history.
+    await query(
+      `INSERT INTO record_audit (table_name, record_id, action, row_snapshot)
+       SELECT 'tribe_touchpoints', id::text, 'tombstone', to_jsonb(t) FROM tribe_touchpoints t
+       WHERE id = ANY($1::uuid[])`,
+      [[erased.id, ...spared.map((row) => row.id)]],
+    );
+    const snapshots = (ids) => count(
+      `SELECT COUNT(*) AS n FROM record_audit WHERE table_name = 'tribe_touchpoints' AND record_id = ANY($1::text[])`, [ids],
+    );
+    expect(await snapshots([erased.id])).toBeGreaterThan(0);
+    const sparedAuditCount = await snapshots(spared.map((row) => row.id));
+    expect(sparedAuditCount).toBeGreaterThan(0);
+
+    expect(await purgeBeeperConversation(target)).toMatchObject({ purged: true, conversationId: target });
+
+    expect(await count('SELECT COUNT(*) AS n FROM tribe_touchpoints WHERE id = $1', [erased.id])).toBe(0);
+    expect(await snapshots([erased.id])).toBe(0);
+    expect(await count('SELECT COUNT(*) AS n FROM tribe_touchpoints WHERE id = ANY($1::uuid[])', [spared.map((row) => row.id)])).toBe(2);
+    expect(await snapshots(spared.map((row) => row.id))).toBe(sparedAuditCount);
+    expect(await count('SELECT COUNT(*) AS n FROM beeper_conversations WHERE id = $1', [target])).toBe(0);
+    expect(await count('SELECT COUNT(*) AS n FROM beeper_conversations WHERE id = $1', [other])).toBe(1);
+    expect(await count('SELECT COUNT(*) AS n FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2', [BEEPER_ACCOUNT, 'example-chat-a'])).toBe(0);
+    expect(await count('SELECT COUNT(*) AS n FROM beeper_sync_cursors WHERE account_id = $1 AND chat_id = $2', [BEEPER_ACCOUNT, 'example-chat-b'])).toBe(1);
   });
 
   it('empty selectors delete nothing', async () => {

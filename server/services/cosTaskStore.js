@@ -3,6 +3,8 @@ import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORG
 import { getSkipReason } from './cosTaskClaim.js';
 import { isDeepStrictEqual } from 'node:util';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS } from '../lib/releaseSynchronization.js';
+import { RELEASE_ATTEMPTS_KEY, appendReleaseAttempt, mergeReleaseAttempts } from '../lib/releaseAttemptMembership.js';
+import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode, spawnBudgetCount, SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 /**
  * CoS Task Store Module
@@ -491,6 +493,10 @@ async function uniqueTaskId(source, id, tasks) {
   }
 }
 
+const matchesInvestigationSource = (tasks, taskType, expected) => !expected || (taskType === 'internal'
+  && tasks.some(task => task.id === expected.id && task.status === 'blocked'
+    && ['description', 'priority', 'approvalRequired', 'metadata'].every(key => isDeepStrictEqual(task[key], expected[key]))));
+
 /**
  * Add a new task to the user or internal queue.
  *
@@ -514,7 +520,7 @@ export async function addTask(taskData, taskType = 'user', options = {}) {
   }
 }
 
-async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null }) {
+async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false, idempotencyKey = null, deliveredReleaseTaskIds = [], repoRepairContract = null, expectedSourceTask = null }) {
   validateRequest(cosTaskTypeSchema, taskType);
   if (!raw && taskData.metadata) taskData = { ...taskData, metadata: newAuditMetadata(taskData.metadata) };
   return withStateLock(async () => {
@@ -530,6 +536,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     taskData = { ...taskData, metadata: { ...taskData.metadata, idempotencyKey } };
   }
   const tasks = await readTaskFile(taskType);
+  // An approval-held release may change while its investigation is being
+  // prepared. Check that episode under the same lock and queue version as the
+  // new task, so a cancellation cannot dispatch stale diagnostic work.
+  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { error: 'Investigation source changed before admission' };
 
   if (taskData.metadata?.cleanupRefillSource) {
     const valid = await (await import('./swarmCleanupDelivery.js')).validCleanupRefillSource(
@@ -546,6 +556,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     ? await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(tasks,
       { allowSourceAgentId: taskData.metadata?.cleanupRefillSource }).catch(() => new Set())
     : new Set();
+  // Only the release scheduler supplies IDs it has already checked for delivery.
+  if (raw && taskData.metadata?.analysisType === 'do-release') {
+    for (const id of deliveredReleaseTaskIds) cleanupOnlyIds.add(id);
+  }
 
   // One state lock covers BOTH queues: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
@@ -668,8 +682,11 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
   // Never accept proof supplied by an intake caller. A record with prior run
   // accounting is not a new episode merely because it was inserted here.
   const initialMetadata = { ...(newTask.metadata || {}) };
+  delete initialMetadata.repoRepairContract;
+  if (repoRepairContract && taskType === 'internal') initialMetadata.repoRepairContract = { ...repoRepairContract, taskId: newTask.id };
   delete initialMetadata.spawnBudgetProof;
   delete initialMetadata.spawnBudgetReconciledHold;
+  delete initialMetadata[RELEASE_ATTEMPTS_KEY];
   const pristine = newTask.status === 'pending' && SPAWN_HISTORY_METADATA_KEYS.every(key => initialMetadata[key] == null);
   newTask = { ...newTask, metadata: { ...initialMetadata, ...(pristine ? { spawnBudgetProof: newSpawnBudgetEpisode() } : {}) } };
 
@@ -717,10 +734,10 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
  * `expectedStatus`, when supplied, is checked under the task-file lock. A mismatch
  * returns `{ statusChanged: true }` without writing or retiring pause state.
  */
-export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null } = {}) {
+export async function updateTask(taskId, updates, taskType = 'user', { now = Date.now(), suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   const release = await preparePauseRelease(taskId, updates);
-  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, suppressCompletionWake, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation });
+  const result = await writeTaskUpdate(taskId, release ? { ...updates, metadata: release.metadata } : updates, taskType, { now, suppressDequeue, suppressCompletionWake, expectedStatus, expectedMetadata, expectedTask, recoveryOwner, preserveRetryBudget, spawnBudgetOperation, expectedSourceTask });
   if (release && !result?.error && !result?.statusChanged) {
     await retirePausedAgent(release.agentId, taskId, resolveTaskTargetBranch(result?.metadata));
   }
@@ -881,6 +898,35 @@ function acceptsDispatchProof({ owners, agent, current, taskId, updatedMetadata,
     && !!updatedMetadata.claimedBy && !!updatedMetadata.claimedAt && !!updatedMetadata.lastSpawnedAt;
 }
 
+const hasSpawnHistory = metadata => SPAWN_HISTORY_METADATA_KEYS.some(key => metadata?.[key] != null
+  && !(key === 'totalSpawnCount' && spawnBudgetCount(metadata[key]) === 0));
+// Spawn preparation claims the task for this instance just before dispatching
+// it. That claim is this dispatch's own, not evidence of an earlier one; a
+// previous dispatch also leaves counters that still count as history.
+const withoutOwnClaim = (metadata, instanceId) => (metadata?.claimedBy === instanceId
+  ? { ...metadata, claimedBy: null, claimedAt: null } : metadata);
+
+// Release attempt membership is store-owned like the spawn-budget proof, but no
+// reset clears it: only a verified release dispatch appends to it.
+async function applyReleaseAttemptMembership({ current, taskId, updatedMetadata, spawnBudgetOperation }) {
+  const prior = current.metadata?.[RELEASE_ATTEMPTS_KEY];
+  delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
+  if (prior !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = prior;
+  if (spawnBudgetOperation?.kind !== 'dispatch'
+    || currentTaskTypeName(current.metadata?.analysisType || current.metadata?.selfImprovementType) !== 'do-release') return null;
+  const agent = trustedAgent(await readAgentsStateForSafetyCheck(), spawnBudgetOperation.agentId);
+  // An unverifiable release dispatch must not run without being recorded.
+  if (!agent || agent.id !== spawnBudgetOperation.agentId || agent.taskId !== taskId || agent.status !== 'running'
+    || !agent.startedAt || agent.startedAt !== spawnBudgetOperation.startedAt) {
+    return { error: 'Cannot record release attempt membership for this dispatch' };
+  }
+  const membership = appendReleaseAttempt(prior,
+    { agentId: agent.id, startedAt: agent.startedAt, instanceId: agent.metadata?.instanceId }, { pristine: !hasSpawnHistory(withoutOwnClaim(current.metadata, agent.metadata?.instanceId)) });
+  if (!membership) return { error: 'Cannot record release attempt membership for this dispatch' };
+  updatedMetadata[RELEASE_ATTEMPTS_KEY] = membership;
+  return null;
+}
+
 // Store-owned spawn-budget provenance. Mutates `updatedMetadata`; returns a
 // refusal for the caller to return, or null to continue the write.
 async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMetadata, spawnBudgetOperation }) {
@@ -910,6 +956,8 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
     else updatedMetadata.spawnBudgetProof = newSpawnBudgetEpisode(nextCount);
     delete updatedMetadata.spawnBudgetReconciledHold;
   }
+  const attemptRefusal = await applyReleaseAttemptMembership({ current, taskId, updatedMetadata, spawnBudgetOperation });
+  if (attemptRefusal) return attemptRefusal;
   if (kind === 'dispatch' && validSpawnBudgetEpisode(priorProof)) {
     const owners = await readAgentsStateForSafetyCheck();
     const agent = trustedAgent(owners, spawnBudgetOperation.agentId);
@@ -976,8 +1024,9 @@ function isRuntimeVerificationRelease({ current, updates, expectedStatus, expect
 }
 
 // Caller holds withStateLock, including its status and ownership decision.
-async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null }) {
+async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressDequeue = false, suppressCompletionWake = false, expectedStatus = null, expectedMetadata = null, expectedTask = null, recoveryOwner = null, preserveRetryBudget = false, spawnBudgetOperation = null, expectedSourceTask = null }) {
   const tasks = await readTaskFile(taskType);
+  if (!matchesInvestigationSource(tasks, taskType, expectedSourceTask)) return { statusChanged: true };
 
   let taskIndex = tasks.findIndex(t => t.id === taskId);
   // A history item older than the working set can still be edited or reopened:
@@ -1002,6 +1051,10 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   }
 
   const current = tasks[taskIndex];
+  if (updates.metadata && Object.hasOwn(updates.metadata, 'repoRepairContract')
+    && !isDeepStrictEqual(updates.metadata.repoRepairContract, current.metadata?.repoRepairContract)) {
+    return { error: 'Checkout repair completion contract is server-owned and immutable' };
+  }
   if (spawnBudgetOperation?.kind === 'reset' && spawnBudgetOperation.requireInactive && isLeaseLive(current.metadata)) {
     return { statusChanged: true, task: current };
   }
@@ -1247,6 +1300,10 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
       const localProof = local?.metadata?.spawnBudgetProof;
       const remoteProof = remote.metadata?.spawnBudgetProof;
       const differentProof = local && !isDeepStrictEqual(localProof, remoteProof);
+      const attempts = mergeReleaseAttempts(local?.metadata?.[RELEASE_ATTEMPTS_KEY], remote.metadata?.[RELEASE_ATTEMPTS_KEY],
+        { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
+      if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
+      else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
       if ((!local || localEpoch === remoteEpoch) && (local?.metadata?.spawnBudgetReconciledHold === 'true'
         || remote.metadata?.spawnBudgetReconciledHold === 'true')) {
         task.metadata.spawnBudgetReconciledHold = 'true';
@@ -1303,11 +1360,13 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
 /**
  * Delete a task
  */
-export async function deleteTask(taskId, taskType = 'user') {
+export async function deleteTask(taskId, taskType = 'user', { releaseSynchronizationRetired = false } = {}) {
   validateRequest(cosTaskTypeSchema, taskType);
   return withStateLock(async () => {
     const stored = await getStoredTask(taskId, taskType);
-    if (stored?.task.metadata?.releaseSynchronization) return { error: 'Release synchronization owns a durable publication obligation; retain its task history' };
+    // The publication receipt lives in the release outbox; the row may go once
+    // the caller has retired (or verified) that checkpoint.
+    if (stored?.task.metadata?.releaseSynchronization && !releaseSynchronizationRetired) return { error: 'Release synchronization owns a durable publication obligation; retain its task history' };
     // One row delete, whether the task is in the working set or old history. It
     // bumps the queue version, which is what makes the next read reload.
     if (await deleteStoredTask(taskId, taskType) === 0) return { error: 'Task not found' };

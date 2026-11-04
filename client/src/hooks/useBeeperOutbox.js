@@ -48,6 +48,8 @@ import useMounted from './useMounted';
  */
 export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   const [entries, setEntries] = useState([]);
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState(null);
   const [sending, setSending] = useState(false);
   // `null` = no confirmation pending. When set it carries the entry the user is
   // being asked about, so confirming re-sends that row rather than a new one.
@@ -56,23 +58,39 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   const mountedRef = useMounted();
   const onSentRef = useRef(onSent);
   onSentRef.current = onSent;
-  const scopeRef = useRef({ conversationId, refreshGeneration: 0 });
+  const scopeRef = useRef({ conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false });
   if (scopeRef.current.conversationId !== conversationId) {
-    scopeRef.current = { conversationId, refreshGeneration: 0 };
+    scopeRef.current = { conversationId, refreshGeneration: 0, mutationVersion: 0, readInFlight: false };
   }
   const scope = scopeRef.current;
 
   const refresh = useCallback(async () => {
     if (!conversationId) {
       setEntries([]);
+      setLoadState('ready');
       return;
     }
     const generation = ++scope.refreshGeneration;
-    const result = await listOutboxEntries(conversationId, { silent: true }).catch(() => null);
+    const mutationVersion = scope.mutationVersion;
+    scope.readInFlight = true;
+    setLoadState('loading');
+    const [result, readError] = await listOutboxEntries(conversationId, { silent: true })
+      .then(value => [value, null]).catch(err => [null, err]);
     if (!mountedRef.current || scopeRef.current !== scope || generation !== scope.refreshGeneration) return;
+    scope.readInFlight = false;
+    // A read begun before a local send or dismissal cannot replace that newer
+    // state. Re-read after the mutation so other outbox rows are recovered too.
+    if (mutationVersion !== scope.mutationVersion) return refresh();
     // A failed GET leaves the list alone rather than blanking it — absent is
     // not the same as empty, and an emptied list would hide a failed send.
-    if (Array.isArray(result?.entries)) setEntries(result.entries);
+    if (Array.isArray(result?.entries)) {
+      setEntries(result.entries);
+      setLoadError(null);
+      setLoadState('ready');
+    } else {
+      setLoadError(readError instanceof Error ? readError : new Error('Invalid outbox response'));
+      setLoadState('error');
+    }
   }, [conversationId, scope]);
 
   useEffect(() => {
@@ -80,6 +98,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
     setSending(false);
     setConfirmation(null);
     setError(null);
+    setLoadError(null);
     refresh();
   }, [refresh]);
 
@@ -127,6 +146,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
       return false;
     }
     setError(null);
+    scope.mutationVersion += 1;
     setEntries((prev) => [sent, ...prev.filter((row) => row.id !== sent.id)]);
     return true;
   }, [refresh, conversationId, scope]);
@@ -163,6 +183,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
         toast.error(err.message || 'Could not queue the message');
         return false;
       }
+      scope.mutationVersion += 1;
       setEntries((prev) => [entry, ...prev]);
       // Awaited into a local rather than returned bare: `return dispatch(...)`
       // would run the `finally` and drop the latch before the send resolved.
@@ -209,6 +230,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
       await refresh();
       return;
     }
+    scope.mutationVersion += 1;
     setEntries((prev) => prev.filter((row) => row.id !== entry.id));
   }, [refresh, scope]);
 
@@ -236,16 +258,30 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
 
   const reconcile = useCallback(async (entry) => {
     const generation = ++scope.refreshGeneration;
+    const interruptedRead = scope.readInFlight;
     const updated = await reconcileOutboxEntry(entry.id, { silent: true }).catch((err) => {
       if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
       return null;
     });
-    if (!updated || !mountedRef.current || scopeRef.current !== scope || generation !== scope.refreshGeneration) return;
-    setEntries((prev) => prev.map((row) => row.id === updated.id ? updated : row));
-  }, [scope]);
+    if (!mountedRef.current || scopeRef.current !== scope) return;
+    // A newer read may have captured the row before this check finished. Do
+    // not overwrite it with the check response (another check may have won),
+    // but re-read after the completed operation so the visible state converges.
+    if (generation !== scope.refreshGeneration) {
+      if (updated) await refresh();
+      return;
+    }
+    if (updated) {
+      scope.mutationVersion += 1;
+      setEntries((prev) => prev.map((row) => row.id === updated.id ? updated : row));
+    }
+    if (interruptedRead) await refresh();
+  }, [scope, refresh]);
 
   return {
     entries,
+    loadState,
+    loadError,
     sending,
     error,
     confirmation,

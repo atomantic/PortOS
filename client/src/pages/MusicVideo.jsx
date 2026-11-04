@@ -16,14 +16,17 @@ import {
   createMusicVideoProject,
   cloneMusicVideoProject,
   updateMusicVideoProject,
+  varyMusicVideoWipes,
   deleteMusicVideoProject,
   analyzeMusicVideoProject,
   prepareMusicVideoSong,
+  keepMusicVideoSongTiming,
   planMusicVideoProject,
   addMusicVideoScene,
   updateMusicVideoScene,
   deleteMusicVideoScene,
   splitMusicVideoScene,
+  cutMusicVideoScenesOnLyrics,
   mergeMusicVideoNextScene, mergeMusicVideoPreviousScene,
   moveMusicVideoSceneStart,
   reorderMusicVideoScenes,
@@ -40,7 +43,7 @@ import useMusicVideoKickoff from '../hooks/useMusicVideoKickoff.js';
 import useMusicVideoCastAndSets from '../hooks/useMusicVideoCastAndSets.js';
 import useMusicVideoDevArtifacts from '../hooks/useMusicVideoDevArtifacts.js';
 import useMusicVideoLyricAlign from '../hooks/useMusicVideoLyricAlign.js';
-import useMusicVideoVocalSeparation from '../hooks/useMusicVideoVocalSeparation.js';
+import useMusicVideoVocalSeparation, { separatedStemPatch } from '../hooks/useMusicVideoVocalSeparation.js';
 import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoExcerpts from '../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoPublishKit from '../hooks/useMusicVideoPublishKit.js';
@@ -106,6 +109,7 @@ import {
   deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
+import { mergeCameoScenes } from '../lib/musicVideoCameos.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../lib/musicVideoAutonomous.js';
 
 // Automation first: a new project defaults to autopilot with the free tools.
@@ -151,6 +155,9 @@ const STAGE_VIEWS = {
 
 
 // Stable fetcher for useListResource — the hook re-runs on identity change.
+// Word-anchored shots follow their words on the server when lyric timing changes (#14820), so take their new spans.
+const wordAnchoredShots = (project) => ((project?.scenes || []).some((scene) => scene.lyricAnchor)
+  ? { scenes: project.scenes, productionReview: project.productionReview, lyricAnchorSync: project.lyricAnchorSync ?? null } : {});
 const loadTracks = () => listTracks({ silent: true });
 const loadUniverses = () => listUniverseNames({ silent: true });
 
@@ -197,6 +204,11 @@ export default function MusicVideo() {
   // Retry, never as an empty library; an import appends to it locally.
   const trackLibrary = useListResource(loadTracks);
   const { items: tracks, setItems: setTracks } = trackLibrary;
+  // Imports can complete before the library read; replace that pre-import read.
+  const onTrackImported = (track) => {
+    if (trackLibrary.state !== 'ready') trackLibrary.retry();
+    else setTracks((prev) => [...prev.filter((item) => item.id !== track.id), track]);
+  };
   const universeResource = useListResource(loadUniverses);
   const universes = universeResource.items;
   // A project-less stage URL (/music-video/board, from the nav manifest) names a stage, not a project:
@@ -340,7 +352,7 @@ export default function MusicVideo() {
   const youtube = useMusicVideoYoutubeImport({
     routeProjectId,
     navigate,
-    onTrackImported: (track) => setTracks((prev) => [...prev, track]),
+    onTrackImported,
     onCreateComplete: (track) => setForm((f) => ({
       ...f,
       trackId: track.id,
@@ -351,19 +363,29 @@ export default function MusicVideo() {
   // "Separate vocals" (demucs) — one slot shared by the stem control and the
   // autopilot kickoff; the terminal frame carries the project with its stem.
   const separation = useMusicVideoVocalSeparation({
-    onSeparated: (projectId, project) => patchProject(projectId, { vocalStemFilename: project.vocalStemFilename, updatedAt: project.updatedAt }),
+    onSeparated: (projectId, project) => patchProject(projectId, separatedStemPatch(project)),
   });
+  // Projects whose director chose "Re-analyze & re-time" (#14793): once their alignment lands, the
+  // server re-derives whether the song's timing still predates its audio.
+  const retimingAfterReplace = useRef(new Set());
+  const reloadProject = (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {});
   const lyricAlign = useMusicVideoLyricAlign({
-    onAligned: (projectId, project) => patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt }),
+    onAligned: (projectId, project) => {
+      patchProject(projectId, { lyricCues: project.lyricCues, audioAnalysis: project.audioAnalysis, ...wordAnchoredShots(project), updatedAt: project.updatedAt });
+      if (retimingAfterReplace.current.delete(projectId)) reloadProject(projectId);
+    },
   });
   // A track attached or lyrics imported: analyze the song and align never-aligned
   // lines on the server, then follow the alignment here (the Song step shows it).
-  const prepareSong = (projectId) => {
+  const prepareSong = (projectId, { refresh = false } = {}) => {
     setAnalyzing(true);
-    return prepareMusicVideoSong(projectId, { silent: true })
+    if (refresh) retimingAfterReplace.current.add(projectId);
+    return prepareMusicVideoSong(projectId, { silent: true, ...(refresh ? { refresh } : {}) })
       .then(({ project, analyzed, alignJobId }) => {
         if (analyzed) patchProject(projectId, { audioAnalysis: project.audioAnalysis, updatedAt: project.updatedAt });
         if (alignJobId) lyricAlign.attach(alignJobId, projectId);
+        // A re-analysis with nothing to re-time is done; the aligned callback covers the rest.
+        else if (refresh) { retimingAfterReplace.current.delete(projectId); reloadProject(projectId); }
       })
       .catch((err) => toast.error(err?.message || 'Could not analyze the song'))
       .finally(() => setAnalyzing(false));
@@ -739,7 +761,7 @@ export default function MusicVideo() {
             prepareSong={prepareSong}
             onAnalyze={handleAnalyze}
             onClone={handleClone}
-            onTrackImported={(track) => setTracks((prev) => [...prev, track])}
+            onTrackImported={onTrackImported}
             onRename={handleRename}
             renameForm={renameForm}
             deletion={deletion}
@@ -1120,7 +1142,7 @@ function ProjectWorkspace({
       .then((saved) => {
         if (applyComposition) patchProject(projectId, { composition: saved.composition });
         // The server moves markers with their cues when lines are removed or merged.
-        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers });
+        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
       })
       .catch((err) => toast.error(err?.message || 'Failed to save changes'))
       .finally(() => setCompositionSavePending((count) => count - 1));
@@ -1244,6 +1266,14 @@ function ProjectWorkspace({
       })
       .catch((err) => toast.error(err?.message || 'Failed to split scene'));
   };
+
+  // Cut the board on sung words over a run of lyric lines (#14820).
+  const handleCutOnLyrics = ({ cueIds, mode }) => cutMusicVideoScenesOnLyrics(selected.id, { cueIds, mode }, { silent: true })
+    .then(({ project, scenes, skipped, laidOut }) => {
+      replaceProject(project);
+      toast.success(`${laidOut ? 'Laid out' : 'Cut'} ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: ${laidOut ? '' : 'outside a shot or '}too close to a cut)` : ''}`);
+    })
+    .catch((err) => toast.error(err?.message || 'Failed to cut on the lyric words'));
 
   // Join a scene with the next one (the inverse of the split above).
   const handleMergeNextScene = (sceneId, backend) => {
@@ -1606,6 +1636,23 @@ function ProjectWorkspace({
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
+    // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
+    applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({
+      cameos,
+      scenes: mergeCameoScenes(p.scenes, scenes),
+      ...(updatedAt ? { updatedAt } : {}),
+    })),
+    // "Vary wipes": a wipe out of each of `count` shots from this one; only their cut-out fields change here.
+    varyWipes: (fromSceneId, count) => varyMusicVideoWipes(selected.id, { fromSceneId, count, seed: Math.floor(Math.random() * 2147483646) }, { silent: true })
+      .then(({ scenes, updatedAt }) => {
+        const byId = new Map(scenes.map((scene) => [scene.sceneId, scene]));
+        patchProject(selected.id, (p) => ({
+          scenes: p.scenes.map((scene) => (byId.has(scene.sceneId) ? { ...scene, ...byId.get(scene.sceneId) } : scene)),
+          ...(updatedAt ? { updatedAt } : {}),
+        }));
+        toast.success(`Wipes on ${scenes.length} cut${scenes.length === 1 ? '' : 's'}`);
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to vary the wipes')),
     // Only labels still empty here: an edit made while the request ran keeps its own.
     applyReferenceLabels: (labels) => patchProject(selected.id, (p) => ({ visualSpec: { ...(p.visualSpec || {}),
       references: (p.visualSpec?.references || []).map((ref) => (labels[ref.id] && !ref.label?.trim() ? { ...ref, label: labels[ref.id] } : ref)) } })),
@@ -1631,6 +1678,7 @@ function ProjectWorkspace({
     onAddScene: handleAddScene,
     onDeleteScene: handleDeleteScene,
     onSplitScene: handleSplitScene,
+    onCutOnLyrics: handleCutOnLyrics,
     onMergeNextScene: handleMergeNextScene,
     onMergePreviousScene: handleMergePreviousScene,
     onMoveSceneStart: handleMoveSceneStart,
@@ -1787,6 +1835,8 @@ function ProjectWorkspace({
                   onResumeProduction: (runId, opts) => production.resume(runId, opts),
                   onKeepApproval: keepApproval,
                   onRevertApproval: productionReview.revert,
+                  onRefreshSong: () => prepareSong(selected.id, { refresh: true }),
+                  onKeepSongTiming: () => keepMusicVideoSongTiming(selected.id).then(replaceProject),
                 }}
               />
             )}
@@ -1801,6 +1851,7 @@ function ProjectWorkspace({
                 expanded={dockExpanded}
                 onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
                 onEditShot={editShot}
+                onProject={replaceProject}
               />,
             )}
           >

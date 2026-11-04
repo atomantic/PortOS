@@ -14,7 +14,7 @@ import {
 import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import {
   MAX_CHUNKS, supportsContextWindow,
-  videoModelMemoryGb, isModelAllowedForMode,
+  videoModelMemoryGb, isModelAllowedForMode, videoModelModeOptions,
   normalizeFramesForModel, normalizeFpsForModel, audioDurationToFrames,
   icLoraSpecForMode,
   textEncoderOptionsForModel, normalizeTextEncoderForModel,
@@ -84,6 +84,7 @@ export function useVideoGenForm({
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [unavailableReferenceImageNames, setUnavailableReferenceImageNames] = useState([]);
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingAudioFilename = searchParams.get('audioFilename');
   const incomingPrompt = searchParams.get('prompt');
@@ -388,11 +389,13 @@ export function useVideoGenForm({
     setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
   }, [availableLoras, models]);
 
-  // Models filtered to the current mode's compatibility. Drives the
-  // <ModelSelect> options and the auto-select fallback so the user can't
-  // land on a model the server will reject.
+  // Keep compatibility fallbacks separate from discoverable models in other modes.
   const visibleModels = useMemo(
     () => models.filter((m) => isModelAllowedForMode(m, mode)),
+    [models, mode],
+  );
+  const otherModeModels = useMemo(
+    () => models.filter((model) => !isModelAllowedForMode(model, mode)),
     [models, mode],
   );
 
@@ -730,6 +733,12 @@ export function useVideoGenForm({
   // per-model defaults, and carrying one model's numbers onto another is
   // usually wrong.
   const handleModelChange = (nextId) => {
+    const nextModel = models.find((model) => model.id === nextId);
+    if (!isModelAllowedForMode(nextModel, mode)) {
+      const nextMode = videoModelModeOptions(nextModel)[0]?.value;
+      if (!nextMode) return;
+      handleModeChange(nextMode);
+    }
     setRemixSourceModel(null);
     setRemixModelFallback(null);
     applyModelSelection(nextId);
@@ -1194,6 +1203,7 @@ export function useVideoGenForm({
     setIcReferenceImageFiles([]);
     setIcReferenceNames([]);
     setReferenceImageFiles([]);
+    setUnavailableReferenceImageNames([]);
     setReferenceVideoIds([]);
     setReferenceAudioFiles([]);
     if (typeof item.icStrength === 'number') setIcStrength(item.icStrength);
@@ -1356,6 +1366,7 @@ export function useVideoGenForm({
     // repopulates its picker and the submit gate unblocks without a re-pick.
     setIcReferenceImageFiles(Array.isArray(p.icReferenceImageFiles) ? p.icReferenceImageFiles : []);
     setReferenceImageFiles(Array.isArray(p.referenceImageFiles) ? p.referenceImageFiles : []);
+    setUnavailableReferenceImageNames(Array.isArray(p.unavailableReferenceImageNames) ? p.unavailableReferenceImageNames : []);
     setReferenceVideoIds(Array.isArray(p.referenceVideoIds) ? p.referenceVideoIds : []);
     // Uploaded voice files cannot be reconstructed from the display-only names.
     setReferenceAudioFiles([]);
@@ -1431,7 +1442,7 @@ export function useVideoGenForm({
     selectedUniverse, setSelectedUniverse,
     remixModelFallback,
     // Model
-    modelId, handleModelChange, currentModel, visibleModels,
+    modelId, handleModelChange, currentModel, visibleModels, otherModeModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     a2vLoraStageStrengths, setA2vLoraStageStrengths,
@@ -1474,7 +1485,7 @@ export function useVideoGenForm({
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
-    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
     referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
     referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength,

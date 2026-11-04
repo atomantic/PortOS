@@ -1,0 +1,86 @@
+import { useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import {
+  MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices,
+} from '../../../../server/lib/musicVideoConditioning.js';
+import MediaImage from '../MediaImage';
+import { formatCount } from '../../utils/formatters.js';
+
+const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
+const nameOf = (ref) => ref.label || ref.role || 'Reference';
+
+/** The extra images this model will receive alongside the shot's frame. */
+export default function SceneClipReferences({ project, scene, castMedia, backend, model, onEditLocal, onSave, onSaveState, saveState }) {
+  const [adding, setAdding] = useState(false);
+  const allChoices = musicVideoClipReferenceChoices(project, scene, castMedia);
+  const choices = allChoices.filter((ref) => ref.imageId !== scene.referenceImageId);
+  const chosen = musicVideoClipConditioningReferences(project, scene, castMedia);
+  const chosenIds = chosen.map((ref) => ref.id);
+  const unresolved = (scene.clipReferenceIds || []).filter((id) => !allChoices.some((ref) => ref.id === id));
+  const retained = (scene.clipReferenceIds || []).filter((id) => !chosenIds.includes(id));
+  const others = choices.filter((ref) => !chosenIds.includes(ref.id));
+  const auto = !Array.isArray(scene.clipReferenceIds);
+  const capacity = musicVideoClipReferenceCapacity(backend, model);
+  const unknownModel = !backend || (['local', 'fal'].includes(backend) && !model);
+  const guideId = scene.characterVariant?.ingredientId;
+  const locked = saveState === 'saving' || Boolean(castMedia && guideId && castMedia[guideId] === undefined);
+  const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
+    || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni');
+  const save = (next) => {
+    onEditLocal(scene.sceneId, { clipReferenceIds: next });
+    onSaveState('saving');
+    Promise.resolve(onSave(scene.sceneId, { clipReferenceIds: next }))
+      .then((saved) => onSaveState(saved === false ? 'failed' : 'saved'), () => onSaveState('failed'));
+  };
+  const update = (ids) => save(ids && [...ids, ...retained].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES));
+
+  return (
+    <div role="group" aria-label="Clip references" className="space-y-1">
+      <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-port-text-muted">
+        <span className="font-medium text-port-text">Clip references</span>
+        {auto ? <span>Auto: cast from Frames</span> : <button type="button" className="min-h-[44px] underline sm:min-h-0" disabled={locked} onClick={() => save(null)}>Back to auto</button>}
+      </div>
+      <p className="text-[11px] text-port-text-muted">
+        {scene.referenceImageId
+          ? looseStart ? 'The selected start frame is a guide; this model does not pin the opening frame.' : 'The selected start frame is sent with the clip.'
+          : 'Select a start frame before rendering.'}
+        {' '}{backend === 'remote' ? 'Peer render pools cannot receive extra clip references.'
+          : unknownModel ? 'Select a model to see its reference support.'
+          : capacity ? `PortOS can send up to ${formatCount(capacity)} additional image ${capacity === 1 ? 'reference' : 'references'} with this model.`
+            : 'This model does not use additional image references.'}
+      </p>
+      {backend === 'fal' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Reference inputs may add to the provider charge.</p>}
+      <ul className="flex flex-wrap gap-1">
+        {chosen.map((ref, index) => (
+          <li key={ref.id} className={`${BUTTON} pr-0.5`}>
+            <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+            <span className="max-w-[10rem] truncate">{nameOf(ref)}{index >= capacity ? ' · not sent' : ''}</span>
+            <button type="button" aria-label={`Remove clip reference ${nameOf(ref)}`} disabled={locked}
+              onClick={() => update(chosenIds.filter((id) => id !== ref.id))}
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border sm:min-h-[28px] sm:min-w-[24px]">
+              <X size={12} aria-hidden="true" />
+            </button>
+          </li>
+        ))}
+        {others.length > 0 && capacity > chosen.length && (
+          <li><button type="button" className={BUTTON} disabled={locked} aria-expanded={adding} onClick={() => setAdding((open) => !open)}><Plus size={12} aria-hidden="true" /> Add</button></li>
+        )}
+      </ul>
+      {capacity > 0 && !locked && unresolved.length > 0 && <p className="text-[11px] text-port-warning">Some saved references are unavailable. Restore them or return to auto before rendering.</p>}
+      {saveState === 'failed' && <button type="button" className={BUTTON} onClick={() => save(scene.clipReferenceIds ?? null)}>Retry saving clip references</button>}
+      {adding && capacity > chosen.length && (
+        <ul aria-label="Clip references to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+          {others.map((ref) => (
+            <li key={ref.id} className="min-w-0">
+              <button type="button" className={`${BUTTON} w-full text-left`} disabled={locked}
+                onClick={() => { update([...chosenIds, ref.id]); setAdding(false); }}>
+                <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+                <span className="min-w-0 truncate">{nameOf(ref)}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

@@ -31,7 +31,7 @@ vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   getImageModels: (...args) => mocks.getImageModels(...args),
 }));
 
-import { renderCharacterReferenceSheet } from './universeCharacterSheet.js';
+import { renderCharacterReferenceSheet, previewCharacterReferenceSheet } from './universeCharacterSheet.js';
 
 const models = [
   { id: 'dev', hardwareCompatibility: { state: 'available' } },
@@ -89,5 +89,48 @@ describe('renderCharacterReferenceSheet prompt additions', () => {
 
     await renderCharacterReferenceSheet('universe-1', 'character-1', { overridePrompt: 'my own sheet', overrideNegativePrompt: 'blur' });
     expect(mocks.enqueueJob.mock.calls[1][0].params.promptAdditions).toBeUndefined();
+  });
+});
+
+// Uniquely catches authored list entries lost between preview and queued render,
+// while keeping fixed sheet layouts coherent for both long and short lists.
+describe('character sheet authored lists', () => {
+  it.each(['standard', 'photographic', 'face'])('preserves complete expression context in %s preview and render', async (variant) => {
+    const expressions = Array.from({ length: 8 }, (_, i) => ({ name: `expression-${i + 1}`, description: `face detail ${i + 1}` }));
+    const handGestures = Array.from({ length: 8 }, (_, i) => ({ name: `gesture-${i + 1}`, description: `hand detail ${i + 1}` }));
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      characters: [{ id: 'character-1', name: 'Example Character', expressions, handGestures }],
+    });
+    const preview = await previewCharacterReferenceSheet('universe-1', 'character-1', { variant });
+    await renderCharacterReferenceSheet('universe-1', 'character-1', { variant });
+    const { prompt } = mocks.enqueueJob.mock.calls[0][0].params;
+    expect(preview.sentPrompt).toBe(prompt);
+    for (const expression of expressions) expect(prompt).toContain(`${expression.name} (${expression.description})`);
+    if (variant === 'standard') {
+      for (const gesture of handGestures) expect(prompt).toContain(`${gesture.name} (${gesture.description})`);
+      expect(prompt).toContain('exactly five labeled hand close-ups');
+      expect(prompt).toContain('if more, choose five without adding frames');
+    }
+    if (variant !== 'face') {
+      expect(prompt).toContain('exactly seven head-and-shoulders');
+      expect(prompt).toContain('if more, choose seven without adding frames');
+    }
+  });
+
+  it.each(['standard', 'photographic'])('keeps supplied values and fills the %s layout when lists are short', async (variant) => {
+    mocks.getUniverse.mockResolvedValue({
+      id: 'universe-1', name: 'Example Universe', influences: { embrace: [] },
+      characters: [{ id: 'character-1', name: 'Example Character', expressions: [{ name: 'authored expression' }], handGestures: [{ name: 'authored gesture' }] }],
+    });
+    const preview = await previewCharacterReferenceSheet('universe-1', 'character-1', { variant });
+    await renderCharacterReferenceSheet('universe-1', 'character-1', { variant });
+    expect(preview.sentPrompt).toBe(mocks.enqueueJob.mock.calls[0][0].params.prompt);
+    expect(preview.sentPrompt).toContain('authored expression');
+    expect(preview.sentPrompt).toContain('show each supplied expression and add variations to fill the row');
+    if (variant === 'standard') {
+      expect(preview.sentPrompt).toContain('authored gesture');
+      expect(preview.sentPrompt).toContain('show each supplied gesture and add variations to fill the row');
+    }
   });
 });

@@ -24,6 +24,8 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(['speedFps', 'offsetFrames', 'reverse', 'holdLastFrame'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     // A glitch over its cuts changes the render; a shot without one keeps its evidence.
     .concat(['transitionIn', 'transitionOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    // So does a wipe on them.
+    .concat(['wipeIn', 'wipeOut'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
     .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
     // A shot's own film look changes the render; a shot following the video's keeps its evidence.
     .concat(scene.filmLook ? [['filmLook', scene.filmLook]] : [])
@@ -232,7 +234,7 @@ export function presentMusicVideoDependencies(project) {
       ...(take.dependencies ? { dependencyState: state(take.dependencies) } : {}),
     })) })),
     ...(project.excerpts ? { excerpts: project.excerpts.map((excerpt) => ({ ...excerpt, dependencyState: state(excerpt.dependencies) })) } : {}),
-    ...(project.treatment ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
+    ...(Array.isArray(project.treatment?.proofs) ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
       ...(proof.evidence ? { evidence: { ...proof.evidence, dependencyState: state(proof.evidence.dependencies) } } : {}),
     })) } } : {}),
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,

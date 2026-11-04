@@ -110,11 +110,11 @@ export default function ProviderFallbacks() {
               </div>
               <div className="flex gap-1">
                 <button type="button" aria-label={`Move step ${i + 1} up`} disabled={i === 0} onClick={() => move(i, -1)}
-                  className="rounded border border-port-border p-2 text-gray-300 hover:text-white disabled:opacity-30"><ArrowUp size={14} aria-hidden="true" /></button>
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded border border-port-border p-2 text-gray-300 hover:text-white disabled:opacity-30"><ArrowUp size={14} aria-hidden="true" /></button>
                 <button type="button" aria-label={`Move step ${i + 1} down`} disabled={i === entries.length - 1} onClick={() => move(i, 1)}
-                  className="rounded border border-port-border p-2 text-gray-300 hover:text-white disabled:opacity-30"><ArrowDown size={14} aria-hidden="true" /></button>
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded border border-port-border p-2 text-gray-300 hover:text-white disabled:opacity-30"><ArrowDown size={14} aria-hidden="true" /></button>
                 <button type="button" aria-label={`Remove step ${i + 1}`} onClick={() => update(entries.filter((_, at) => at !== i))}
-                  className="rounded border border-port-border p-2 text-port-error hover:bg-port-error/10"><Trash2 size={14} aria-hidden="true" /></button>
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded border border-port-border p-2 text-port-error hover:bg-port-error/10"><Trash2 size={14} aria-hidden="true" /></button>
               </div>
             </li>
           );

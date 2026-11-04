@@ -50,6 +50,8 @@ const activeOperations = new Set();
 // spawns (executeRender) and drained in its `finally`.
 const activeRenders = new Map();
 
+export const getActiveModelOperationCount = () => activeOperations.size;
+
 /** Injectable existence probe — `access` resolves/rejects rather than returning. */
 const pathExists = (p) => access(p).then(() => true, () => false);
 

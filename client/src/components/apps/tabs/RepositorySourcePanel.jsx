@@ -164,6 +164,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   const [error, setError] = useState(null);
   const [scopeFailure, setScopeFailure] = useState(null);
   const [updateIntent, setUpdateIntent] = useState(null);
+  const [updateAcknowledgments, setUpdateAcknowledgments] = useState({});
   const lastRefreshKey = useRef(refreshKey);
 
   const load = useCallback(async ({ initial = false } = {}) => {
@@ -213,6 +214,8 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   }, [operationErrorCode, operationErrorContext, operationError]);
 
   const updating = isOperating && operationType === 'update';
+  const waitingForWork = appId === PORTOS_APP_ID && updating
+    && operationSteps.some(step => step.step === 'waiting' && step.status === 'running');
   const operationBusy = isOperating || restarting;
 
   useEffect(() => {
@@ -279,7 +282,9 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     setUpdateIntent(null);
     setScopeFailure(null);
     setUpdateRequested(true);
-    startUpdate(appId, appName, { syncFork: intent?.syncFork === true });
+    const options = { syncFork: intent?.syncFork === true };
+    setUpdateAcknowledgments(options);
+    startUpdate(appId, appName, options);
   };
 
   // Retry a refused PortOS self-update with the acknowledgement its refusal
@@ -289,7 +294,9 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   // let the user retry immediately (#5984).
   const handleAcknowledgeAndRetry = (ackOptions) => {
     setUpdateRequested(false);
-    startUpdate(appId, appName, ackOptions);
+    const options = { ...updateAcknowledgments, ...ackOptions };
+    setUpdateAcknowledgments(options);
+    startUpdate(appId, appName, options);
   };
 
   return (
@@ -350,6 +357,18 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
               <Download size={15} />
               Update from fork as-is
             </button>
+          )}
+          {(operationErrorCode === 'UPDATE_INTERRUPTION_REQUIRED' || waitingForWork) && (
+            <div role="alert">
+              {waitingForWork && <p className="mt-2 text-sm text-port-warning">Updating restarts PortOS and Chrome. Active work may fail or lose unsaved progress. Save your work before continuing.</p>}
+              <button
+                onClick={() => handleAcknowledgeAndRetry({ acknowledgeInterruption: true })}
+                disabled={(isOperating && !waitingForWork) || syncingFork}
+                className="mt-2 min-h-[40px] rounded-lg bg-port-warning px-3 py-2 text-sm text-black disabled:opacity-50"
+              >
+                Update now and interrupt active work
+              </button>
+            </div>
           )}
           {operationErrorCode === 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' && (
             <button

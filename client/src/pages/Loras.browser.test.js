@@ -46,7 +46,7 @@ describe.skipIf(!chrome)('LoRA touch targets (#10692)', () => {
               export const getCivitaiAuth = async () => ({ hasKey: false, source: 'none' });
               export const setCivitaiAuth = async () => {};
               export const clearCivitaiAuth = async () => {};
-              export const getCivitaiSuggestions = async () => ({ runners: {}, video: [], fetchedAt: null });
+              export const getCivitaiSuggestions = async () => ({ runners: {}, video: [{ repo: "example/video-lora", file: "example.safetensors", name: "Example clip", runnerFamily: "ltx-video", previewVideoUrl: "https://example.com/clip.mp4" }], fetchedAt: null });
               export const searchCivitaiLoras = async () => ({ items: [], nextCursor: null });
               export const searchVideoLoras = async () => ({ items: [], nextCursor: null });
               export const probeLoraEffect = async () => {};
@@ -131,6 +131,13 @@ describe.skipIf(!chrome)('LoRA touch targets (#10692)', () => {
 
       await page.getByRole('tab', { name: /Discover \/ install/ }).click();
       await page.getByLabel('Civitai model URL').waitFor();
+      const clip = page.getByRole('button', { name: 'Play example clip', exact: true });
+      await measureAndCheck(clip);
+      expect((await clip.boundingBox()).width).toBeGreaterThanOrEqual(44);
+      // The minimum must remain independent of the card's available width.
+      await clip.evaluate(button => { button.parentElement.style.width = '16px'; });
+      expect((await clip.boundingBox()).width).toBeGreaterThanOrEqual(44);
+      await clip.evaluate(button => { button.parentElement.style.width = ''; });
       await checkToolbar();
       await measureAndCheck(page.getByLabel('Civitai model URL'));
       await measureAndCheck(page.getByLabel('HuggingFace LoRA URL'));

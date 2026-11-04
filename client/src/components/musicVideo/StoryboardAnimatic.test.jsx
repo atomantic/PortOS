@@ -28,6 +28,48 @@ describe('StoryboardAnimatic', () => {
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
 
+  // Uniquely catches the moving previous still surviving a cut between audio timeupdates.
+  it('shows each still on the playback frame that crosses its cut, and after seeks', () => {
+    const frames = new Map();
+    let nextFrame = 0;
+    vi.stubGlobal('requestAnimationFrame', (tick) => { frames.set(++nextFrame, tick); return nextFrame; });
+    vi.stubGlobal('cancelAnimationFrame', (id) => frames.delete(id));
+    try {
+      const shots = Array.from({ length: 24 }, (_, i) => ({
+        sceneId: `shot-${i}`, order: i, startSec: i * 2, endSec: (i + 1) * 2,
+        referenceImageId: `still-${i}.png`, visualLayer: 'still', stillMove: 'push',
+      }));
+      render(<StoryboardAnimatic project={{ id: 'p', composition: { mode: 'composed' }, scenes: shots }} audioUrl="/song.mp3" />);
+      const audio = screen.getByLabelText('Song for the storyboard animatic');
+      const at = (t) => {
+        audio.currentTime = t;
+        act(() => {
+          const pending = [...frames.values()];
+          frames.clear();
+          pending.forEach((tick) => tick());
+        });
+      };
+      fireEvent.play(audio);
+      for (let i = 0; i < shots.length; i++) {
+        at(i * 2);
+        expect(screen.getByTestId('animatic-still').querySelector('img').getAttribute('src')).toBe(`/data/images/still-${i}.png`);
+        expect(screen.getByTestId('animatic-still').style.transform).toBe('scale(1)');
+        at(i * 2 + 1);
+        expect(screen.getByTestId('animatic-still').querySelector('img').getAttribute('src')).toBe(`/data/images/still-${i}.png`);
+      }
+      audio.currentTime = 5;
+      fireEvent.seeked(audio);
+      expect(screen.getByTestId('animatic-still').querySelector('img').getAttribute('src')).toBe('/data/images/still-2.png');
+      at(6);
+      expect(screen.getByTestId('animatic-still').querySelector('img').getAttribute('src')).toBe('/data/images/still-3.png');
+      fireEvent.pause(audio);
+      at(20);
+      expect(screen.getByTestId('animatic-still').querySelector('img').getAttribute('src')).toBe('/data/images/still-3.png');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Pins the rendered frame endpoints and seeks, including an explicit Hold overriding a planned camera.
   it('pushes and pans cover-fitted stills on the song clock, while Hold stays still', () => {
     const still = { sceneId: 'still', startSec: 10, endSec: 12, referenceImageId: 'frame.png', visualLayer: 'still',

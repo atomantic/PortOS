@@ -244,6 +244,16 @@ describe('release aggregates', () => {
     expect(importGrowthSkipReason({ GITHUB_EVENT_NAME: 'push', GITHUB_REF_NAME: 'main' })).toBeNull();
     expect(importGrowthSkipReason({})).toBeNull();
   });
+
+  it('gives the same release-cycle policy to exact local release refs, never names or SHAs that merely resemble them', () => {
+    for (const ref of ['release', 'origin/release', 'refs/heads/release', 'refs/remotes/origin/release']) {
+      expect(importGrowthSkipReason({ PORTOS_PREGATE_BASE_REF: ref })).toMatch(/release cycle/);
+    }
+    for (const ref of ['', 'main', 'origin/main', 'release-candidate', 'origin/release-next', 'other/release', 'a'.repeat(40)]) {
+      // A local run's selected base overrides stale inherited forge context.
+      expect(importGrowthSkipReason({ PORTOS_PREGATE_BASE_REF: ref, GITHUB_BASE_REF: 'release' })).toBeNull();
+    }
+  });
 });
 
 describe('git base versus worktree head', () => {

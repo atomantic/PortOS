@@ -1,3 +1,4 @@
+import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
@@ -9,6 +10,9 @@ import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCredits
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
+import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
+import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './musicVideoConditioning.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -61,11 +65,16 @@ import {
   MUSIC_VIDEO_GLITCH_EDGES, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_GLITCH_REPEAT_SEC, MUSIC_VIDEO_SHOT_GLITCH_LIMIT, MUSIC_VIDEO_TRANSITIONS,
 } from './musicVideoTransitions.js';
 import { BEAT_TOGGLE_OVERLAP, BEAT_TOGGLE_RATES, MUSIC_VIDEO_CUT_EFFECTS } from './musicVideoCutEffects.js';
+import { MUSIC_VIDEO_WIPE_SEC, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
 import { IMAGE_EFFECT_SEC_RANGE, MUSIC_VIDEO_IMAGE_EFFECTS, PHOTO_LAYOUT_RANGES, PHOTO_SEQUENCE_LIMIT, PHOTO_SEQUENCE_OVERLAP_MAX_FRAMES, PHOTO_SEQUENCE_RATES } from './musicVideoImageEffects.js';
 import { PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECT_IDS, PRE_MUSIC_LAYER_LIMIT, PRE_MUSIC_VOLUME_RANGE } from './musicVideoColdOpen.js';
 import { CAMERA_FRAMINGS, CAMERA_MOVEMENT_VALUES, CAMERA_SPEEDS } from './cameraMovements.js';
 import { CAST_ERAS } from './catalogMediaLibrary.js';
 import { STORYBOARD_ID_PATTERN } from './storyboardVocabulary.js';
+import {
+  MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES,
+  MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES, MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN,
+} from './musicVideoCameos.js';
 import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
@@ -292,10 +301,6 @@ export const MUSIC_VIDEO_REFERENCE_ROLES = ['mood', 'character', 'wardrobe', 'se
 // appear in the finished video as-is, and `motion-reference` is scaffolding
 // footage/stills for a hand-drawn or code-rendered pass — never final picture.
 export const MUSIC_VIDEO_REFERENCE_USES = ['reference', 'final-visible', 'motion-reference'];
-// The image backends accept at most four reference images for most models
-// (imageGen/prepareParams.js referenceCap), so a project conditions each
-// reference frame on at most this many of its flagged references.
-export const MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES = 4;
 
 // One moodboard/reference asset. `condition: true` sends the image to frame
 // generation as a real conditioning input (`referenceImageFiles`) rather than
@@ -324,10 +329,7 @@ export const musicVideoVisualSpecSchema = z.object({
   cameraRules: z.string().max(2000).optional(),
   // An existing Mood Board this project draws inspiration from (display link).
   moodBoardId: z.string().max(64).nullable().optional(),
-}).strict().refine(
-  (spec) => (spec.references || []).filter((ref) => ref.condition).length <= MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES,
-  { message: `at most ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references can condition frames`, path: ['references'] },
-);
+}).strict();
 
 // `endImage` (#11173): a candidate for the scene's optional style-break end frame.
 export const MUSIC_VIDEO_TAKE_KINDS = ['image', 'video', 'endImage'];
@@ -349,8 +351,8 @@ const providerSlug = z.string().min(1).max(40).regex(/^[a-z0-9][a-z0-9._-]*$/i, 
 // a take that omits it is an older frame and reads as unknown, not stale.
 export const musicVideoCastInputsSchema = z.object({
   ingredientId: z.string().min(1).max(200).nullable(),
-  guides: z.array(galleryImageName).max(8),
-  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(8),
+  guides: z.array(galleryImageName).max(IMAGE_REFERENCE_REQUEST_LIMIT),
+  sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(IMAGE_REFERENCE_REQUEST_LIMIT),
 }).strict();
 
 export const musicVideoTakeInputSchema = z.object({
@@ -433,9 +435,10 @@ export const musicVideoPoolUseSchema = z.object({
 
 // Review a take: reject/restore it and/or leave a note for regeneration.
 export const musicVideoTakeReviewSchema = z.object({
+  acknowledgeRenderQuality: z.object({ basis: z.string().min(1), note: z.string().min(1).max(1000) }).strict().optional(),
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
-}).strict().refine((r) => r.status !== undefined || r.note !== undefined, { message: 'status or note is required' });
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
 
 // Import externally generated assets (e.g. a Midjourney handoff). Each item is
 // an asset the client already stored through the existing gallery upload
@@ -474,6 +477,12 @@ export const musicVideoLyricsAlignSchema = z.object({
   separateVocals: z.boolean().optional(),
   // A revised song: analyze, separate, align and carry the board across in one job.
   retimeSong: z.boolean().optional(),
+}).strict();
+
+// Prepare the song after a track arrives; `refresh` redoes the analysis and lyric
+// timing that predate a replaced take (#14793).
+export const musicVideoSongPrepareSchema = z.object({
+  refresh: z.boolean().optional(),
 }).strict();
 
 // ---- Composition manifest (#8984, part of #8966) ---------------------------
@@ -697,11 +706,48 @@ export const musicVideoPreMusicSchema = z.object({
   layers: z.array(musicVideoPreMusicLayerSchema).max(PRE_MUSIC_LAYER_LIMIT).optional(),
 }).strict();
 
+// #14822: a real photo of the shot's subject a research agent found and PortOS
+// downloaded into the gallery. `pageUrl` is the page it came from, `sourceUrl`
+// the image file; both are shown to the director and never sent to a model.
+const httpUrl = z.string().trim().max(2000).url().refine((u) => /^https?:\/\//i.test(u), 'must be an http(s) URL');
+const musicVideoResearchReferenceSchema = z.object({
+  id: z.string().regex(/^mvr-research-[A-Za-z0-9-]{1,40}$/, 'Invalid research reference id'),
+  imageId: z.string().min(1).max(256).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'must be a gallery image basename'),
+  subject: z.string().trim().min(1).max(200),
+  sourceUrl: httpUrl.nullable().optional(),
+  pageUrl: httpUrl.nullable().optional(),
+  addedAt: z.string().max(64).optional(),
+}).strict();
+
+// Start Research and seed for one shot: the subject to photograph and the agent that searches.
+export const musicVideoResearchSeedSchema = z.object({
+  subject: z.string().trim().min(2).max(200),
+  count: z.number().int().min(1).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).optional(),
+  providerId: z.string().trim().min(1).max(256),
+  model: z.string().trim().max(256).optional(),
+  effort: z.string().trim().max(32).optional(),
+  executionOptions: executionOptionsSchema.optional(),
+  preview: z.boolean().optional(),
+}).strict();
+
+// A shot's wipe on one of its cuts (musicVideoWipes.js).
+const musicVideoWipeSchema = z.object({
+  style: z.enum(MUSIC_VIDEO_WIPES),
+  lengthSec: z.number().min(MUSIC_VIDEO_WIPE_SEC.min).max(MUSIC_VIDEO_WIPE_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+});
+
 // Per-scene visual layer (#8985) — footage, a moved still, or a title card;
 // see musicVideoLayers.js. Only a composed render honors a non-footage layer.
+
 const sceneLayerFields = {
   // The references (visual spec ids) sent with this shot's frame renders; absent or null = the automatic set.
-  frameReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES).nullable().optional(),
+  // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
+  frameReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
+  // Independent clip picks; null/absent retains the legacy automatic cast set.
+  clipReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
+  // #14822: researched photos of the shot's subject, offered first among its frame references.
+  researchReferences: z.array(musicVideoResearchReferenceSchema).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
   characterVariant: musicVideoSceneCharacterVariantSchema.nullable().optional(),
   camera: musicVideoSceneCameraSchema.nullable().optional(),
@@ -721,6 +767,10 @@ const sceneLayerFields = {
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+  // An image-to-image wipe on the cut into / out of this shot (musicVideoWipes.js), its length and a
+  // shape wipe's edge color; a side with a wipe plays no glitch. null clears it.
+  wipeIn: musicVideoWipeSchema.nullable().optional(),
+  wipeOut: musicVideoWipeSchema.nullable().optional(),
   // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
   // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
   glitches: z.array(z.object({
@@ -1401,6 +1451,21 @@ export const musicVideoCastAndSetsStartSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+export const musicVideoCastSetsUseImageSchema = z.object({
+  key: z.string().min(1).max(80),
+  imageId: z.string().min(1).max(500),
+}).strict();
+
+export const musicVideoCastSetsImageEditSchema = z.object({
+  key: z.string().min(1).max(80),
+  imageId: z.string().min(1).max(500),
+  revision: z.number().int().min(1),
+  instruction: z.string().min(1).max(CAST_SETS_IMAGE_EDIT_MAX).refine((text) => !!text.trim(), 'Write an image edit instruction'),
+}).strict();
+export const musicVideoCastSetsImageEditDecisionSchema = z.object({
+  key: z.string().min(1).max(80), requestId: z.string().uuid(),
+}).strict();
+
 // Regenerate with notes. Omitted notes = the open notes on the sheet. A
 // `target` names an image (`character`, `expressions`, `looks`, `form:<id>`, `cast:<id>`, `set:<id>`,
 // `test:<n>`); any other note revises the direction. `keys` re-renders just
@@ -1467,6 +1532,13 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     chapters: castSetsText(300).optional(),
     originalName: castSetsText(120).optional(),
   }).strict()).min(1).max(4).optional(),
+  // The whole prop list (castAndSetsDirection CAST_SETS_LIMITS.props).
+  props: z.array(z.object({
+    id: z.string().max(64).optional(),
+    name: castSetsText(120).min(1),
+    owner: castSetsText(120).optional(),
+    description: castSetsText(1000).min(1),
+  }).strict()).max(6).optional(),
   // Every catalog-linked supporting character (the 24-subject cap) plus 4 invented ones.
   cast: z.array(z.object({
     id: z.string().min(1).max(64),
@@ -1641,6 +1713,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   storyboardReopenedAt: z.string().datetime().nullable().optional(),
   // Keep the shots 1:1 with the linked storyboard's panels after each board edit (lib/storyboardShotSync.js).
   storyboardSync: z.boolean().optional(),
+  // Dismiss the note of shots that followed their words after re-alignment (#14820).
+  lyricAnchorSync: z.null().optional(),
 }).strict();
 
 // Mark a project finished outside PortOS (or clear the marker). The server
@@ -1660,6 +1734,13 @@ export const musicVideoProjectCloneSchema = z.object({
   variant: z.enum(['revision', 'video-generation']).optional(),
 }).strict();
 
+// #14820: the sung word (or phrase) a shot was cut on; its start follows that word's onset.
+export const musicVideoLyricAnchorSchema = z.object({
+  cueId: z.string().min(1).max(64),
+  wordIndex: z.number().int().min(0).max(1000),
+  wordCount: z.number().int().min(1).max(200).optional(),
+}).strict();
+
 // Review content is editable; approval records are server-owned and never PATCHable.
 export const musicVideoProductionDraftSchema = z.object({
   storyboardSource: z.enum(['board', 'document']).optional(),
@@ -1673,6 +1754,7 @@ export const musicVideoProductionDraftSchema = z.object({
   storyboard: z.array(z.object({
     id: z.string().max(64).optional(), startSec: timedSec, endSec: timedSec,
     sceneId: z.string().max(64).nullable(), lyricCueIds: z.array(z.string().max(64)).max(2000),
+    lyricAnchor: musicVideoLyricAnchorSchema.optional(),
     action: z.string().max(4000), staging: z.string().max(4000),
     camera: z.string().max(4000), transition: z.string().max(4000),
   }).strict()).max(2000),
@@ -1698,12 +1780,6 @@ export const musicVideoDocumentShotsSchema = z.object({
 // the current start frame as its end frame.
 export const musicVideoContinueShotSchema = z.object({ keepStillAsEnd: z.boolean().optional() }).strict();
 export const musicVideoProductionImportSchema = z.object({ source: z.string().min(2).max(250000) }).strict();
-export const musicVideoShotLockSchema = z.object({
-  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(500),
-  locked: z.boolean(),
-  // A video shot locks its still first (ready to render), then its clip.
-  stage: z.enum(['still', 'video']).optional(),
-}).strict();
 export const musicVideoProductionApprovalSchema = z.object({
   stage: z.enum(['art', 'storyboard', 'proof']), basis: z.string().min(1).max(128),
   password: z.string().max(1024).optional(),
@@ -1744,12 +1820,15 @@ export const musicVideoSceneCreateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  beatNeedsReview: z.boolean().optional(),
+  pacingCut: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
   loop: z.boolean().optional(),
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
+  lyricAnchor: musicVideoLyricAnchorSchema.nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
   // #8977: `performance` = a lip-synced singer that must follow the master
@@ -1787,12 +1866,15 @@ export const musicVideoSceneUpdateSchema = z.object({
   startSec: z.number().min(0).max(36000).nullable().optional(),
   endSec: z.number().min(0).max(36000).nullable().optional(),
   beatAligned: z.boolean().optional(),
+  beatNeedsReview: z.boolean().optional(),
+  pacingCut: z.boolean().optional(),
   // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
   // repeat the source clip across a longer authored span; a scene with no
   // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
   loop: z.boolean().optional(),
   sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
   lyricText: z.string().max(2000).nullable().optional(),
+  lyricAnchor: musicVideoLyricAnchorSchema.nullable().optional(),
   visualIntent: z.string().max(2000).nullable().optional(),
   ...sceneLayerFields,
   // #8977: `performance` = a lip-synced singer that must follow the master
@@ -1814,7 +1896,77 @@ export const musicVideoSceneUpdateSchema = z.object({
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.
   lastFailure: musicVideoSceneLastFailureSchema.nullable().optional(),
+  // #14821: the roster cameo this shot shows (null unlinks), and the cameo's variant it picks.
+  cameoId: z.string().regex(MUSIC_VIDEO_CAMEO_ID_PATTERN, 'Invalid cameo id').nullable().optional(),
+  cameoVariantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN, 'Invalid variant id').nullable().optional(),
+  // This shot's own on-screen name for its cameo (an alias, e.g. Spoodle for the Cockapoo); null uses the cameo's label.
+  cameoLabel: z.string().trim().max(120).nullable().optional(),
   ...scenePanelFields,
+}).strict();
+
+// Music Video cameo roster (#14821, lib/musicVideoCameos.js).
+const cameoImageIdSchema = z.string().max(256).regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'Image must be a gallery basename ending in png/jpg/webp');
+const cameoUrlSchema = z.string().trim().url().max(2000).refine((u) => /^https?:\/\//i.test(u), 'Only http(s) links');
+const cameoTextFields = {
+  name: z.string().trim().min(1).max(120),
+  // What the video shows on screen; empty means the name.
+  label: z.string().trim().max(120).optional(),
+  description: z.string().trim().max(4000).optional(),
+};
+export const musicVideoCameoResearchSchema = z.object({
+  status: z.enum(MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES).optional(),
+  notes: z.string().trim().max(8000).optional(),
+  sources: z.array(z.object({ url: cameoUrlSchema, title: z.string().trim().max(300).optional() }).strict())
+    .max(MUSIC_VIDEO_CAMEO_MAX_SOURCES).optional(),
+}).strict();
+export const musicVideoCameoReferenceInputSchema = z.object({
+  imageId: cameoImageIdSchema,
+  source: z.enum(MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES).optional(),
+  // The image file a researched photo came from, and the page it was found on.
+  sourceUrl: cameoUrlSchema.optional(),
+  pageUrl: cameoUrlSchema.optional(),
+}).strict();
+export const musicVideoCameoCreateSchema = z.object({
+  cameos: z.array(z.object(cameoTextFields).strict()).min(1).max(MUSIC_VIDEO_MAX_CAMEOS),
+}).strict();
+export const musicVideoCameoUpdateSchema = z.object({
+  name: cameoTextFields.name.optional(),
+  label: cameoTextFields.label,
+  description: cameoTextFields.description,
+  research: musicVideoCameoResearchSchema.optional(),
+  stillImageId: cameoImageIdSchema.nullable().optional(),
+}).strict();
+export const musicVideoCameoReferencesAddSchema = z.object({
+  references: z.array(musicVideoCameoReferenceInputSchema).min(1).max(MUSIC_VIDEO_CAMEO_MAX_REFERENCES),
+}).strict();
+export const musicVideoCameoReferenceRemoveSchema = z.object({ imageId: cameoImageIdSchema }).strict();
+export const musicVideoCameoVariantCreateSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  // How the variant differs from the chosen still (the instruction a shot's Refine renders it with).
+  prompt: z.string().max(2000).optional(),
+  imageId: cameoImageIdSchema.nullable().optional(),
+}).strict();
+export const musicVideoCameoVariantUpdateSchema = musicVideoCameoVariantCreateSchema.partial().strict();
+export const musicVideoCameoLinkSchema = z.object({
+  sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500),
+  variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN).nullable().optional(),
+}).strict();
+export const musicVideoCameoUnlinkSchema = z.object({ sceneIds: z.array(z.string().min(1).max(64)).min(1).max(500) }).strict();
+// Use a linked shot's selected still as the cameo's still, or one variant's.
+export const musicVideoCameoStillFromShotSchema = z.object({
+  sceneId: z.string().min(1).max(64),
+  variantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN).nullable().optional(),
+}).strict();
+
+// "Vary wipes" (musicVideoWipes.js): a wipe out of each of `count` shots from `fromSceneId` in song
+// order, no style twice in a row, drawn from `styles` (default every wipe).
+export const musicVideoVaryWipesSchema = z.object({
+  fromSceneId: z.string().min(1).max(200),
+  count: z.number().int().min(1).max(1000),
+  styles: z.array(z.enum(MUSIC_VIDEO_WIPES)).min(1).max(MUSIC_VIDEO_WIPES.length).optional(),
+  lengthSec: z.number().min(MUSIC_VIDEO_WIPE_SEC.min).max(MUSIC_VIDEO_WIPE_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+  seed: z.number().int().min(0).max(2147483646).optional(),
 }).strict();
 
 // Reorder the board: the full set of scene ids in their new order.
@@ -1829,6 +1981,14 @@ export const musicVideoSceneSplitSchema = z.object({
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
+
+// Cut shots on sung words (#14820): one shot per phrase or per word over the chosen lyric lines.
+export const musicVideoLyricCutSchema = z.object({
+  cueIds: z.array(z.string().min(1).max(64)).min(1).max(2000),
+  mode: z.enum(['phrase', 'word']),
+}).strict();
+
+export const musicVideoPacingRecutSchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 // Move where a shot starts; the shot before it ends there too, so the cut moves and nothing gaps or overlaps.
 export const musicVideoSceneStartSchema = z.object({
@@ -1906,6 +2066,8 @@ export const musicVideoSongFeaturesSchema = z.object({
 export const musicVideoAudioAnalysisSchema = z.object({
   // Shape version: absent = 1 (pre feature track), 2 = carries `features`.
   version: z.number().int().min(1).optional(),
+  // The master audio file this was derived from (#14793); absent on older records.
+  masterFilename: z.string().min(1).max(260).optional(),
   features: musicVideoSongFeaturesSchema.nullable().optional(),
   bpm: z.number().nullable(),
   beats: z.array(z.number()),

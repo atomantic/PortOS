@@ -204,11 +204,11 @@ describe('OutputTab live socket output', () => {
 
     const registerCall = mockSocketOn.mock.calls.find(call => call[0] === 'cos:agent:output');
     expect(registerCall).toBeDefined();
+    expect(mockSocketOff).not.toHaveBeenCalled();
 
     unmount();
     await act(async () => {});
 
-    const unregisterCall = mockSocketOff.mock.calls.find(call => call[0] === 'cos:agent:output');
-    expect(unregisterCall).toBeDefined();
+    expect(mockSocketOff).toHaveBeenCalledWith('cos:agent:output', registerCall[1]);
   });
 });

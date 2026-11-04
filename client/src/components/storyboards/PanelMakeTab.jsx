@@ -77,7 +77,7 @@ function ImageStrip({ images, onRemove, label }) {
           {ref.label && <span className="block truncate text-[10px] text-gray-400">{ref.label}</span>}
           {onRemove && (
             <button type="button" onClick={() => onRemove(ref)} aria-label={`Remove ${ref.label || 'reference'}`}
-              className="absolute top-0 right-0 min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded bg-black/70 text-white">
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute top-0 right-0 min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded bg-black/70 text-white">
               <X size={14} aria-hidden="true" />
             </button>
           )}

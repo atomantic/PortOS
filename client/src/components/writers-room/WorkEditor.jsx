@@ -930,7 +930,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <div className={headerCollapsed ? 'hidden' : 'relative'} ref={overflowRef}>
           <button
             onClick={() => setOverflowOpen((v) => !v)}
-            className="flex items-center justify-center px-3 sm:px-2 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center px-3 sm:px-2 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
             aria-label="Work menu"
             aria-expanded={overflowOpen}
             title="Work menu"

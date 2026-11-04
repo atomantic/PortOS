@@ -10,6 +10,10 @@ vi.mock('../services/harnesses.js', () => service);
 
 const stream = vi.hoisted(() => ({ streamHarnessAction: vi.fn(async (req, res) => res.json({ streamed: true })) }));
 vi.mock('../services/harnessActionStream.js', () => stream);
+const review = vi.hoisted(() => ({ getRuntimeUpdateReviewSnapshot: vi.fn() }));
+const reference = vi.hoisted(() => ({ getHarnessUpdateReference: vi.fn(), takeHarnessUpdateTicket: vi.fn() }));
+vi.mock('../services/runtimeUpdateReview.js', () => review);
+vi.mock('../services/harnessUpdateReference.js', () => reference);
 
 import { errorMiddleware } from '../lib/errorHandler.js';
 import harnessRoutes from './harnesses.js';
@@ -29,6 +33,9 @@ describe('harness routes', () => {
     vi.clearAllMocks();
     stream.streamHarnessAction.mockImplementation(async (req, res) => res.json({ streamed: true }));
     service.listHarnesses.mockResolvedValue([{ id: 'opencode', label: 'OpenCode CLI' }]);
+    review.getRuntimeUpdateReviewSnapshot.mockReturnValue({ items: [{ id: 'harness:opencode', harnessUpdate: { installedVersion: '1.2.3', candidateVersion: '1.2.4', updatable: true } }] });
+    reference.getHarnessUpdateReference.mockResolvedValue({ state: 'unknown' });
+    reference.takeHarnessUpdateTicket.mockReturnValue({ candidate: '1.2.4', identity: { path: '/fixture/cli' } });
     app = makeApp();
   });
 
@@ -66,6 +73,27 @@ describe('harness routes', () => {
 
   it('rejects a missing runtime', async () => {
     expect((await request(app).post('/api/harnesses/action')).status).toBe(400);
+    expect(stream.streamHarnessAction).not.toHaveBeenCalled();
+  });
+
+  it('returns reference data and only starts an inline update for the reviewed installed version', async () => {
+    const info = await request(app).get('/api/harnesses/update-reference?runtime=opencode');
+    expect(info.status).toBe(200);
+    expect(info.headers['cache-control']).toBe('no-store');
+    expect(reference.getHarnessUpdateReference).toHaveBeenCalledWith('opencode');
+    const query = 'runtime=opencode&expectedVersion=1.2.3&candidateVersion=1.2.4&ticket=00000000-0000-4000-8000-000000000001';
+    expect((await request(app).post(`/api/harnesses/review-update?${query}`)).status).toBe(200);
+    expect(reference.takeHarnessUpdateTicket).toHaveBeenCalledWith('opencode', '00000000-0000-4000-8000-000000000001', '1.2.3', '1.2.4');
+    expect(stream.streamHarnessAction).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      runtime: 'opencode', action: 'update', requireSupervisor: true, expectedVersion: '1.2.3',
+      reviewed: { candidate: '1.2.4', identity: { path: '/fixture/cli' } },
+    });
+    stream.streamHarnessAction.mockClear();
+    expect((await request(app).post(`/api/harnesses/review-update?${query.replace('expectedVersion=1.2.3', 'expectedVersion=1.2.2')}`)).status).toBe(409);
+    expect((await request(app).post(`/api/harnesses/review-update?${query.replace('candidateVersion=1.2.4', 'candidateVersion=1.2.5')}`)).status).toBe(409);
+    reference.takeHarnessUpdateTicket.mockReturnValue(null);
+    expect((await request(app).post(`/api/harnesses/review-update?${query}`)).status).toBe(409);
+    expect((await request(app).post(`/api/harnesses/review-update?${query.replace('ticket=00000000-0000-4000-8000-000000000001', 'ticket=invalid')}`)).status).toBe(400);
     expect(stream.streamHarnessAction).not.toHaveBeenCalled();
   });
 

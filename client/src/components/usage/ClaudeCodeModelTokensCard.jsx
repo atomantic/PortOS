@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatUsd, timeAgo } from '../../utils/formatters';
@@ -56,19 +56,28 @@ function ModelTable({ models, totals }) {
  * transcripts (so it counts sessions run outside PortOS) and federates the
  * per-day totals; peers show as of their last sync.
  */
-export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom }) {
+export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom, onRefreshed, transcriptUpdatedAt, fleetRevision }) {
   // undefined = still loading, null = the read failed
   const [report, setReport] = useState(undefined);
   const loading = report === undefined;
+  const loadedRevision = useRef(transcriptUpdatedAt);
+  loadedRevision.current = transcriptUpdatedAt;
 
   useEffect(() => {
     let cancelled = false;
     setReport(undefined);
     api.getClaudeCodeModelUsage(isCustom ? { from, to } : { period }, { silent: true })
       .catch(() => null)
-      .then((data) => { if (!cancelled) setReport(data); });
+      .then((data) => {
+        if (!cancelled) {
+          setReport(data);
+          if (data?.transcriptUpdatedAt ? data.transcriptUpdatedAt !== loadedRevision.current : data?.transcriptRefreshed) {
+            void onRefreshed?.();
+          }
+        }
+      });
     return () => { cancelled = true; };
-  }, [period, from, to, isCustom]);
+  }, [period, from, to, isCustom, onRefreshed, fleetRevision]);
 
   const instances = report?.instances || [];
   const pending = report?.pendingInstances || [];
@@ -94,11 +103,11 @@ export default function ClaudeCodeModelTokensCard({ period, from, to, isCustom }
               <summary className="cursor-pointer text-xs sm:text-sm text-white flex flex-wrap items-center justify-between gap-2">
                 <span>
                   {i.name}{i.self ? ' (this machine)' : ''}
-                  {!i.usesSubscriptions && <span className="text-port-warning"> · API-billed, not in total</span>}
+                  {!i.usesSubscriptions && <span className="text-port-warning"> · API-billed</span>}
                 </span>
                 <span className="text-gray-400 tabular-nums">
                   {formatCount(i.totals.total)} tokens · {formatUsd(i.totals.estimatedCost)}
-                  {!i.self && <> · synced {timeAgo(new Date(i.capturedAt), 'unknown')}</>}
+                  {!i.self && <> · updated {timeAgo(new Date(i.capturedAt), 'unknown')}</>}
                 </span>
               </summary>
               <div className="pt-2"><ModelTable models={i.models} totals={i.totals} /></div>

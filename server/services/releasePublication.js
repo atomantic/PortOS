@@ -78,7 +78,8 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const identity = createHash('sha256').update(JSON.stringify([origin.host, repository, tag, tagCommit, tree])).digest('hex');
   const receipt = {
     ...(transfer && { recoveredPublisher: transfer.origin }),
-    status: 'verified', synchronizationHandoffVersion: 1, identity, repository, version: input.version, candidateHead,
+    status: 'verified', synchronizationHandoffVersion: input.synchronizationMode === 'inline' ? 2 : 1,
+    identity, repository, version: input.version, candidateHead,
     candidateBranch: pr.head.ref,
     cutoff: candidate.cutoff, pin: candidate.pin, releaseBase: candidate.releaseBase,
     previousCommit: candidate.previousCommit, previousTag: candidate.previousTag,
@@ -93,6 +94,8 @@ export async function verifyAgentReleasePublication(agentId, body) {
   const saved = await recordAgentReleasePublication(owner, receipt);
   const { ensureReleaseSynchronization } = await import('./releaseSynchronization.js');
   // A failed handoff never rolls back or overwrites verified publication.
-  await ensureReleaseSynchronization(await getAgentRecord(agentId));
-  return saved;
+  const synchronization = await ensureReleaseSynchronization(await getAgentRecord(agentId));
+  return saved.synchronizationHandoffVersion === 2
+    ? { ...saved, synchronizationPolicy: synchronization.policy }
+    : saved;
 }

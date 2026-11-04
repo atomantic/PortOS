@@ -3,7 +3,7 @@ import { sceneTakeList, takeThumbUrl } from '../../lib/musicVideoTakes.js';
 
 /** Short plate verdict for a frame take, or null when the shot has no action contract. */
 export function plateVerdict(scene, take) {
-  if (!scene?.direction?.actionContract) return null;
+  if (!scene) return null;
   const evidence = currentPlateEvidence(scene, take);
   if (evidence?.verdict === 'pass') return { label: 'Ready', tone: 'pass' };
   if (evidence?.verdict === 'fail') return { label: 'Requirements unmet', tone: 'fail' };
@@ -16,7 +16,7 @@ export function plateVerdict(scene, take) {
  * shows each frame once with a verdict badge; only the evidence notes remain.
  */
 export default function PlateComparison({ scene, frames = true }) {
-  if (!scene?.direction?.actionContract) return null;
+  if (!scene) return null;
   const takes = sceneTakeList(scene, 'image');
   return (
     <section aria-label="Plate preflight comparison" className="space-y-2 rounded border border-port-border p-2">

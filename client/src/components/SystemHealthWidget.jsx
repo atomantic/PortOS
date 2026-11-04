@@ -111,7 +111,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             type="button"
             onClick={handleRefresh}
             disabled={!refetchHealth || refreshing}
-            className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded text-gray-400 transition-colors hover:bg-port-border/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded text-gray-400 transition-colors hover:bg-port-border/50 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
             title="Refresh system health"
             aria-label={refreshing ? 'Refreshing system health' : 'Refresh system health'}
           >
@@ -142,7 +142,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
                   type="button"
                   onClick={() => handleDismissWarning(warning)}
                   disabled={!refetchHealth || dismissingType === warning.type}
-                  className="shrink-0 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
                   title="Dismiss as resolved"
                   aria-label={`Dismiss warning: ${warning.message}`}
                 >

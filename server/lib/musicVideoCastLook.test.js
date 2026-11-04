@@ -35,6 +35,24 @@ describe('music video cast look (#14154)', () => {
     expect(musicVideoTakeInputSchema.safeParse({ kind: 'image', assetId: 'frame.png', castInputs: { ingredientId: null, guides: ['../child.png'], sheets: [] } }).success).toBe(false);
   });
 
+  // Larger renderers can send more than eight sheets; the last one must still mark a take stale.
+  it('records and checks every sheet a larger renderer received', () => {
+    const references = Array.from({ length: 10 }, (_, i) => ({ id: `mvr-cs-cast-${i}`, imageId: `cast-${i}.png` }));
+    const castInputs = castInputsFromReferences(null, references);
+    expect(castInputs.sheets).toHaveLength(10);
+    expect(musicVideoTakeInputSchema.safeParse({ kind: 'image', assetId: 'frame.png', castInputs }).success).toBe(true);
+    const project = projectFor(references.map((ref, i) => i === 9 ? { ...ref, imageId: 'changed.png' } : ref));
+    expect(castLookForTake(project, {}, { castInputs }).status).toBe('older');
+  });
+
+  it('recognizes an approved overflow face sheet as current', () => {
+    const face = { id: 'mvr-cs-face-example', imageId: 'face.png', role: 'character' };
+    const project = { ...projectFor(), castAndSets: { status: 'approved', overflowFaceReferences: [face] } };
+    const take = { castInputs: castInputsFromReferences(null, [face]) };
+    expect(castLookForTake(project, {}, take).status).toBe('current');
+    expect(castLookForTake({ ...project, castAndSets: { ...project.castAndSets, overflowFaceReferences: [] } }, {}, take).status).toBe('older');
+  });
+
   // Uniquely catches a guide or sheet change marking another cast member, a take with no snapshot, or an empty snapshot.
   it('marks a frame older only when a guide or sheet it used has changed', () => {
     const lead = sceneFor('cat-lead', 7);

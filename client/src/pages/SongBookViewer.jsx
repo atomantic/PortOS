@@ -626,7 +626,7 @@ export default function SongBookViewer() {
               <button
                 type="button"
                 onClick={() => requestDelete('song')}
-                className="p-2 text-gray-500 hover:text-port-error"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-500 hover:text-port-error"
                 aria-label={`Delete ${song.title}`}
                 title="Delete song"
               >

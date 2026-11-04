@@ -84,6 +84,11 @@ export const coldOpenScenes = (project) => (Array.isArray(project?.scenes) ? pro
 /** The shots that play on the song (everything not marked before it), in their stored order. */
 export const songScenes = (project) => (Array.isArray(project?.scenes) ? project.scenes : []).filter((scene) => !isPreMusicShot(scene));
 
+/** Song shots with a start and end, in song order: the shots a cut on the song can land on. */
+export const timedSongScenes = (project) => songScenes(project)
+  .filter((scene) => finite(scene.startSec) && finite(scene.endSec))
+  .sort((a, b) => a.startSec - b.startSec);
+
 /** The project as the song's own pipeline sees it: the cold open left out. */
 export const withSongScenesOnly = (project) => (coldOpenScenes(project).length ? { ...project, scenes: songScenes(project) } : project);
 

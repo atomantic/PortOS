@@ -17,7 +17,7 @@ export default function FullDiskAccessSteps({ target, onRecheck, rechecking = fa
             type="button"
             onClick={() => copyToClipboard(path, 'Path copied')}
             aria-label={`Copy ${path}`}
-            className="shrink-0 inline-flex items-center justify-center min-h-[40px] min-w-[40px] bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 inline-flex items-center justify-center min-h-[40px] min-w-[40px] bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg"
           >
             <Copy size={14} />
           </button>

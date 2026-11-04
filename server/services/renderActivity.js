@@ -13,6 +13,7 @@
  * shared activity snapshot like any other lifecycle edge.
  */
 
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { noteSystemActivity } from './systemActivityNotify.js';
 
 const kinds = new Map();
@@ -22,13 +23,15 @@ const kinds = new Map();
  * and notes each slot opening and closing. `noun` names one slot in blocker
  * lines ("music video render"); `link(key, value)` is the page that owns a slot.
  */
-export function trackedRenderMap(kind, { noun = 'render', link = () => null } = {}) {
+export function trackedRenderMap(kind, { noun = 'render', link = () => null, admission = null } = {}) {
   const map = new Map();
   const started = new Map();
+  const permits = new Map();
   const set = map.set.bind(map);
   const remove = map.delete.bind(map);
   map.set = (key, value) => {
     const opened = !map.has(key);
+    if (opened && admission) permits.set(key, admission.admit(`render:${kind}`, String(key), { continuation: true }));
     set(key, value);
     if (opened) {
       started.set(key, new Date().toISOString());
@@ -39,11 +42,16 @@ export function trackedRenderMap(kind, { noun = 'render', link = () => null } = 
   map.delete = (key) => {
     const closed = remove(key);
     if (closed) {
+      const permit = permits.get(key);
+      permits.delete(key);
+      if (permit) void permit.finish();
       started.delete(key);
       noteSystemActivity('render', countActiveRenders() ? 'completion' : 'drained');
     }
     return closed;
   };
+  map.run = (key, fn) => { const permit = permits.get(key); return permit ? permit.run(fn) : fn(); };
+  map.markUnsettled = key => permits.get(key)?.markUnsettled();
   kinds.set(kind, { map, started, noun, link });
   return map;
 }
@@ -63,3 +71,5 @@ function countActiveRenders() {
   for (const { map } of kinds.values()) total += map.size;
   return total;
 }
+
+export const admittedRenderMap = (kind, options) => trackedRenderMap(kind, { ...options, admission: maintenance });

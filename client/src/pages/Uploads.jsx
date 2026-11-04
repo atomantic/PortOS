@@ -281,7 +281,7 @@ export default function Uploads() {
                   ) : (
                     <button
                       onClick={() => requestDelete(file.filename)}
-                      className="p-2 text-gray-500 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete" aria-label="Delete"
                     >
                       <Trash2 size={18} />

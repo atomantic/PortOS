@@ -18,6 +18,7 @@ import { compositionDraft } from './compositionDraft.js';
 import {
   detachMusicVideoCompositionDocument, getMusicVideoCompositionDocument, getMusicVideoCompositionExport,
   importMusicVideoCompositionDirectory, importMusicVideoCompositionZip, startMusicVideoCompositionTemplate,
+  upgradeMusicVideoCompositionEngine,
   generateMusicVideoMixedMediaDocument, regenerateMusicVideoMixedMediaSection,
   reviseMusicVideoMixedMediaEvents, updateMusicVideoProject,
   getMusicVideoMixedMediaCandidate, acceptMusicVideoMixedMediaDocument, discardMusicVideoMixedMediaDocument,
@@ -205,6 +206,10 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
     return run('film-style', () => updateMusicVideoProject(project.id, { composition: styleGrammarId ? { ...composition, styleGrammarId } : composition }, { silent: true }).then((project) => ({ project })), 'Film style saved');
   };
   const detach = confirmFirst('detach', () => run('detach', () => detachMusicVideoCompositionDocument(project.id, { silent: true }), 'Composition document detached'));
+  const upgradeEngine = async () => {
+    const result = await run('engine', () => upgradeMusicVideoCompositionEngine(project.id, doc.directory, { silent: true }));
+    if (result) toast.success(result.changed ? 'Layered engine updated; review the new render' : 'Layered engine is already current');
+  };
   const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
   const authoringValid = supportsToolFreeOneShot(providers.find((entry) => entry.id === selectedProviderId)) && Boolean(selectedProviderId && effectiveModel);
   const provider = { providerId: selectedProviderId, model: effectiveModel };
@@ -263,10 +268,15 @@ export default function DocumentCompositionPanel({ project, audioUrl, onProject,
           <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={exportZip}>
             <Download size={14} /> Export zip
           </button>
+          {doc && <button type="button" className={buttonCls}
+            disabled={!!busy || !!project.composition?.documentDraft} onClick={upgradeEngine}>
+            {busy === 'engine' ? 'Updating…' : 'Update layered engine'}
+          </button>}
           <button type="button" className={buttonCls} disabled={!!busy || !doc} onClick={detach} title="Stop using this document (the render refuses until another is attached)">
             <Unlink size={14} /> {confirming === 'detach' ? 'Click again to detach' : 'Detach'}
           </button>
         </div>
+        {doc && <p className="text-xs text-port-text-muted">Updating adds current layered effects in a new document version and makes earlier render reviews out of date. Custom and 3D engines are preserved.</p>}
         <label htmlFor="mv-doc-renderer" className="block text-xs text-port-text-muted">Authoring renderer</label>
         <select id="mv-doc-renderer" disabled={!!busy} value={musicVideoDocumentRenderer(project)} className={inputCls}
           onChange={(event) => run('renderer', () => updateMusicVideoProject(project.id, { composition: { ...compositionDraft(project), authoringRenderer: event.target.value } }, { silent: true }).then((project) => ({ project })), 'Renderer saved')}>

@@ -7,6 +7,14 @@ trap '' PIPE
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
+# The supervisor serializes installation; manual updates stop PortOS before source changes.
+if [ -n "${PORTOS_PEER_UPDATE_OPERATION_ID:-}" ]; then
+  node scripts/deferred-update.mjs --peer-enter "$PORTOS_PEER_UPDATE_OPERATION_ID"
+elif [ -z "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
+  exec node scripts/deferred-update.mjs "$@"
+else
+  node scripts/deferred-update.mjs --enter "$PORTOS_DEFERRED_UPDATE_ID" "$$"
+fi
 mkdir -p "$ROOT_DIR/data"
 
 # Log file for external command output — keeps noisy git/npm/node output
@@ -128,155 +136,6 @@ repair_stale_submodules() {
   run git submodule update --init --recursive
 }
 
-# Pull latest — always switch to main (detached HEAD or feature branch both
-# need to land on main before pulling, or the version won't advance). The
-# rest of the script (install, build, restart) runs on main so the app
-# starts on the freshly-pulled revision. A dirty checkout is refused rather
-# than stashed, so agent or user work cannot be duplicated by a later rebase.
-step "git-pull" "running" "Pulling latest changes..."
-origin_url=$(git remote get-url origin 2>/dev/null || echo "")
-if [ -n "$origin_url" ]; then
-  # Redact any embedded credentials (https://user:token@host/...) before logging
-  # so PATs don't leak into data/update.log or the update UI step output.
-  origin_url_safe=$(printf '%s' "$origin_url" | sed -E 's|://[^@/]+@|://***@|')
-  log "🌐 Pulling from origin: $origin_url_safe"
-  # Also append directly to $UPDATE_LOG — updateExecutor only forwards STEP:
-  # lines, so the `log` above doesn't reach update.log on its own.
-  echo "🌐 Pulling from origin: $origin_url_safe" >> "$UPDATE_LOG"
-fi
-# Clear locks a PREVIOUS killed update left behind, before anything tries to
-# take them again. This script is the most likely producer of one: PM2 tree-kills
-# the server mid-run and takes the `git pull` / `git submodule update` subprocess
-# with it, and the abandoned lock then fails every later self-update identically,
-# on a file buried under `.git/` that only a human would find. The rule for
-# "abandoned" lives in the Node helper so shell doesn't carry a second copy of
-# it; it refuses any lock young enough to still belong to a running command.
-# Builtins-only, so it runs before `npm install` — and never fatal.
-node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>/dev/null || true
-current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
-if ! repair_stale_submodules; then
-  log "❌ Could not repair the checkout's pinned submodules"
-  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
-  exit 1
-fi
-has_local_changes() {
-  ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]
-}
-if has_local_changes; then
-  log "❌ Refusing update: checkout has uncommitted changes; commit or restore them first"
-  step "git-pull" "failed" "Checkout is dirty; no stash was created"
-  exit 1
-fi
-if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
-  if [[ ! "$PORTOS_PEER_UPDATE_TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || [[ ! "${PORTOS_PEER_UPDATE_EXPECTED_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || [ "$current_branch" != "main" ] || [ "$(git rev-parse HEAD)" != "$PORTOS_PEER_UPDATE_EXPECTED_SHA" ]; then
-    step "git-pull" "failed" "Peer update evidence changed"
-    exit 1
-  fi
-fi
-if [ "$current_branch" != "main" ]; then
-  log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
-  run git checkout main
-fi
-if ! repair_stale_submodules; then
-  log "❌ Could not repair the main checkout's pinned submodules"
-  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
-  exit 1
-fi
-# Runtime pre-check: the target revision owns its Node support range, and a
-# refusal AFTER the checkout advances leaves the running (old) code over a new
-# working tree and old node_modules — any later single-process restart then
-# boots an unsupported, partly installed revision. So evaluate the target's own
-# gate from `git archive` BEFORE HEAD, submodules or apps change. The package.json
-# rides along because its `"type": "module"` is what lets the ESM gate load.
-# An unresolvable target (fetch failed, no upstream) or a target that predates
-# the gate skips this; the pull below then fails or the post-pull gate decides.
-preflight_target_sha=""
-if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
-  preflight_target_sha="$PORTOS_PEER_UPDATE_TARGET_SHA"
-else
-  run git fetch || true
-  preflight_target_sha=$(git rev-parse -q --verify '@{upstream}^{commit}' 2>/dev/null || echo "")
-fi
-if [ -n "$preflight_target_sha" ] && git cat-file -e "${preflight_target_sha}:scripts/checkNodeVersion.js" 2>/dev/null; then
-  gate_dir=$(mktemp -d)
-  gate_paths=(scripts/checkNodeVersion.js)
-  git cat-file -e "${preflight_target_sha}:package.json" 2>/dev/null && gate_paths+=(package.json)
-  git cat-file -e "${preflight_target_sha}:scripts/lib" 2>/dev/null && gate_paths+=(scripts/lib)
-  if git archive "$preflight_target_sha" "${gate_paths[@]}" 2>/dev/null | tar -x -C "$gate_dir" 2>/dev/null \
-    && ! node_gate_output=$(cd "$gate_dir" && node scripts/checkNodeVersion.js 2>&1); then
-    rm -rf "$gate_dir"
-    log "$node_gate_output"
-    log "❌ Update stopped before changing anything: upgrade Node.js, then re-run the update. The checkout was left unchanged."
-    step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
-    exit 1
-  fi
-  rm -rf "$gate_dir"
-fi
-# Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
-# the installed node_modules was built from (main, which the rest of this script
-# installs/builds), not a feature branch we just left. Diffing this against
-# post-pull HEAD yields exactly the pull's delta on main, so a manifest change
-# the update brings is detected even when launched from another branch.
-pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
-if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
-  run git merge --ff-only "$PORTOS_PEER_UPDATE_TARGET_SHA"
-else
-  run git pull --rebase
-fi
-step "git-pull" "done" "Latest changes pulled"
-
-# Determine which workspaces' package.json this update touched, so safe_install
-# can force a clean reinstall for them (see workspace_deps_changed). If the
-# from-revision is unknown/unreachable (fresh clone, unrelated history), treat
-# deps as changed everywhere — a clean reinstall is the conservative default.
-if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
-  DEPS_CHANGED_FILES=$(git diff --name-only "$pre_pull_sha" HEAD 2>/dev/null || echo "")
-else
-  DEPS_CHANGED_UNKNOWN=1
-fi
-log ""
-
-# Refresh local submodule metadata from the just-pulled .gitmodules before
-# checking out the commits pinned by PortOS. Without sync, a URL/path change in
-# .gitmodules can leave an older instance trying to initialize from stale local
-# git config. Deliberately omit --remote: the parent commit is the release
-# contract, not whichever submodule commit happens to be newest upstream.
-step "submodules" "running" "Synchronizing and updating submodules..."
-run git submodule sync --recursive
-run git submodule update --init --recursive
-step "submodules" "done" "Submodules updated"
-log ""
-
-# Runtime preflight: the pulled target owns its Node support range (it may have
-# just been raised), and npm's engines field only warns. Ask the target's own
-# gate — the same one `npm start`/`npm run setup` run — BEFORE deleting any app
-# or touching dependencies, so an unsupported runtime refuses while PortOS is
-# still up instead of mid-downtime. The pre-check above already refused an
-# unsupported runtime before HEAD moved, so this is the second line of defence.
-step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
-if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
-  log "$node_gate_output"
-  # The apps stay up on the tree they were already running, so a checkout left
-  # on the rejected revision would crash-loop the next restart (memory limit,
-  # crash, reboot). Put the tree back; untracked files are the
-  # user's, so nothing is cleaned. An unknown pre-pull sha is never reset to.
-  if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
-    if run git reset --hard "$pre_pull_sha" && run git submodule sync --recursive && run git submodule update --init --recursive; then
-      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout was rolled back to the revision PortOS was already running."
-      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back and PortOS apps were left running"
-    else
-      log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. Rolling the checkout back to ${pre_pull_sha} failed — run 'git reset --hard ${pre_pull_sha} && git submodule update --init --recursive' before restarting PortOS."
-      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rollback failed, PortOS apps were left running"
-    fi
-  else
-    log "❌ Update stopped before changing running apps: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision (no pre-pull commit was recorded to roll back to)."
-    step "runtime-preflight" "failed" "Unsupported Node.js runtime; PortOS apps were left running"
-  fi
-  exit 1
-fi
-step "runtime-preflight" "done" "Node.js runtime supported"
-log ""
-
 # Headless-install guard. From the `pm2-stop` step below until the closing
 # `pm2 start` succeeds, PortOS's PM2 entries are DELETED — the install has no
 # server. Every step in between (npm install, setup-db, migrations, the client
@@ -357,6 +216,8 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
 
+stop_portos_apps() {
+  if [ "$PM2_APPS_DOWN" = "1" ]; then return; fi
 # Remove ONLY PortOS's apps from the shared PM2 daemon — never `pm2 kill`, which
 # tears down the daemon and stops EVERY other project's apps on this machine.
 # The daemon itself is left alone here; whether it also needs an in-place reload
@@ -372,6 +233,166 @@ run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
 run node ./node_modules/pm2/bin/pm2 delete portos-ui --silent || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
+
+}
+
+if [ "${PORTOS_UPDATE_STOP_FIRST:-${PORTOS_UPDATE_INTERRUPT:-}}" = "1" ]; then
+  stop_portos_apps
+  node scripts/deferred-update.mjs --stopped "$PORTOS_DEFERRED_UPDATE_ID"
+fi
+
+# Pull latest — always switch to main (detached HEAD or feature branch both
+# need to land on main before pulling, or the version won't advance). The
+# rest of the script (install, build, restart) runs on main so the app
+# starts on the freshly-pulled revision. A dirty checkout is refused rather
+# than stashed, so agent or user work cannot be duplicated by a later rebase.
+step "git-pull" "running" "Pulling latest changes..."
+origin_url=$(git remote get-url origin 2>/dev/null || echo "")
+if [ -n "$origin_url" ]; then
+  # Redact any embedded credentials (https://user:token@host/...) before logging
+  # so PATs don't leak into data/update.log or the update UI step output.
+  origin_url_safe=$(printf '%s' "$origin_url" | sed -E 's|://[^@/]+@|://***@|')
+  log "🌐 Pulling from origin: $origin_url_safe"
+  # Also append directly to $UPDATE_LOG — updateExecutor only forwards STEP:
+  # lines, so the `log` above doesn't reach update.log on its own.
+  echo "🌐 Pulling from origin: $origin_url_safe" >> "$UPDATE_LOG"
+fi
+# Clear locks a PREVIOUS killed update left behind, before anything tries to
+# take them again. This script is the most likely producer of one: PM2 tree-kills
+# the server mid-run and takes the `git pull` / `git submodule update` subprocess
+# with it, and the abandoned lock then fails every later self-update identically,
+# on a file buried under `.git/` that only a human would find. The rule for
+# "abandoned" lives in the Node helper so shell doesn't carry a second copy of
+# it; it refuses any lock young enough to still belong to a running command.
+# Builtins-only, so it runs before `npm install` — and never fatal.
+node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>/dev/null || true
+current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
+if ! repair_stale_submodules; then
+  log "❌ Could not repair the checkout's pinned submodules"
+  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+  exit 1
+fi
+has_local_changes() {
+  ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]
+}
+if has_local_changes; then
+  log "❌ Refusing update: checkout has uncommitted changes; commit or restore them first"
+  step "git-pull" "failed" "Checkout is dirty; no stash was created"
+  exit 1
+fi
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  if [[ ! "$PORTOS_PEER_UPDATE_TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || [[ ! "${PORTOS_PEER_UPDATE_EXPECTED_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || [ "$current_branch" != "main" ] || [ "$(git rev-parse HEAD)" != "$PORTOS_PEER_UPDATE_EXPECTED_SHA" ]; then
+    step "git-pull" "failed" "Peer update evidence changed"
+    exit 1
+  fi
+fi
+if [ "$current_branch" != "main" ]; then
+  log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
+  run git checkout main
+fi
+if ! repair_stale_submodules; then
+  log "❌ Could not repair the main checkout's pinned submodules"
+  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+  exit 1
+fi
+# Runtime pre-check: the target revision owns its Node support range, and a
+# refusal AFTER the checkout advances leaves the running (old) code over a new
+# working tree and old node_modules — any later single-process restart then
+# boots an unsupported, partly installed revision. So evaluate the target's own
+# gate from `git archive` before pulling or changing dependencies. Automatic updates
+# have not stopped apps; manual updates restore them on exit.
+# The package.json rides along because its `"type": "module"` is what lets the ESM gate load.
+# An unresolvable target (fetch failed, no upstream) or a target that predates
+# the gate skips this; the pull below then fails or the post-pull gate decides.
+preflight_target_sha=""
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  preflight_target_sha="$PORTOS_PEER_UPDATE_TARGET_SHA"
+else
+  run git fetch || true
+  preflight_target_sha=$(git rev-parse -q --verify '@{upstream}^{commit}' 2>/dev/null || echo "")
+fi
+if [ -n "$preflight_target_sha" ] && git cat-file -e "${preflight_target_sha}:scripts/checkNodeVersion.js" 2>/dev/null; then
+  gate_dir=$(mktemp -d)
+  gate_paths=(scripts/checkNodeVersion.js)
+  git cat-file -e "${preflight_target_sha}:package.json" 2>/dev/null && gate_paths+=(package.json)
+  git cat-file -e "${preflight_target_sha}:scripts/lib" 2>/dev/null && gate_paths+=(scripts/lib)
+  if git archive "$preflight_target_sha" "${gate_paths[@]}" 2>/dev/null | tar -x -C "$gate_dir" 2>/dev/null \
+    && ! node_gate_output=$(cd "$gate_dir" && node scripts/checkNodeVersion.js 2>&1); then
+    rm -rf "$gate_dir"
+    log "$node_gate_output"
+    log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was left unchanged."
+    step "runtime-preflight" "failed" "Unsupported Node.js runtime for the target revision; checkout unchanged"
+    exit 1
+  fi
+  rm -rf "$gate_dir"
+fi
+# Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
+# the installed node_modules was built from (main, which the rest of this script
+# installs/builds), not a feature branch we just left. Diffing this against
+# post-pull HEAD yields exactly the pull's delta on main, so a manifest change
+# the update brings is detected even when launched from another branch.
+pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+if [ -n "${PORTOS_PEER_UPDATE_TARGET_SHA:-}" ]; then
+  run git merge --ff-only "$PORTOS_PEER_UPDATE_TARGET_SHA"
+else
+  run git pull --rebase
+fi
+step "git-pull" "done" "Latest changes pulled"
+
+# Determine which workspaces' package.json this update touched, so safe_install
+# can force a clean reinstall for them (see workspace_deps_changed). If the
+# from-revision is unknown/unreachable (fresh clone, unrelated history), treat
+# deps as changed everywhere — a clean reinstall is the conservative default.
+if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
+  DEPS_CHANGED_FILES=$(git diff --name-only "$pre_pull_sha" HEAD 2>/dev/null || echo "")
+else
+  DEPS_CHANGED_UNKNOWN=1
+fi
+log ""
+
+# Refresh local submodule metadata from the just-pulled .gitmodules before
+# checking out the commits pinned by PortOS. Without sync, a URL/path change in
+# .gitmodules can leave an older instance trying to initialize from stale local
+# git config. Deliberately omit --remote: the parent commit is the release
+# contract, not whichever submodule commit happens to be newest upstream.
+step "submodules" "running" "Synchronizing and updating submodules..."
+run git submodule sync --recursive
+run git submodule update --init --recursive
+step "submodules" "done" "Submodules updated"
+log ""
+
+# Runtime preflight: the pulled target owns its Node support range (it may have
+# just been raised), and npm's engines field only warns. Ask the target's own
+# gate — the same one `npm start`/`npm run setup` run — before touching dependencies.
+# Automatic updates have not stopped apps; manual updates restore them
+# on failure. The pre-check above already refused an unsupported runtime before
+# HEAD moved, so this is the second line of defence.
+step "runtime-preflight" "running" "Checking Node.js against the updated requirements..."
+if [ -f scripts/checkNodeVersion.js ] && ! node_gate_output=$(node scripts/checkNodeVersion.js 2>&1); then
+  log "$node_gate_output"
+  # Automatic updates leave apps up; manual updates restore them on exit.
+  # A checkout left on the rejected revision would crash-loop the next restart
+  # (memory limit,
+  # crash, reboot). Put the tree back; untracked files are the
+  # user's, so nothing is cleaned. An unknown pre-pull sha is never reset to.
+  if [ -n "$pre_pull_sha" ] && git cat-file -e "${pre_pull_sha}^{commit}" 2>/dev/null; then
+    if run git reset --hard "$pre_pull_sha" && run git submodule sync --recursive && run git submodule update --init --recursive; then
+      log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout was rolled back to the pre-pull revision."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rolled back"
+    else
+      log "❌ Update stopped: upgrade Node.js, then re-run the update. Rolling the checkout back to ${pre_pull_sha} failed — run 'git reset --hard ${pre_pull_sha} && git submodule update --init --recursive' before restarting PortOS."
+      step "runtime-preflight" "failed" "Unsupported Node.js runtime; checkout rollback failed"
+    fi
+  else
+    log "❌ Update stopped: upgrade Node.js, then re-run the update. The checkout is already on the pulled revision (no pre-pull commit was recorded to roll back to)."
+    step "runtime-preflight" "failed" "Unsupported Node.js runtime; update stopped"
+  fi
+  exit 1
+fi
+step "runtime-preflight" "done" "Node.js runtime supported"
+log ""
+
+stop_portos_apps
 
 # Update dependencies with retry logic
 step "npm-install" "running" "Installing all dependencies..."
@@ -615,4 +636,7 @@ fi
 
 # Exit non-zero when the install did not come back. This script outlives the
 # server it restarts, so its status is the only signal a caller still has.
+if [ -n "${PORTOS_DEFERRED_UPDATE_ID:-}" ]; then
+  node scripts/deferred-update.mjs --terminal "$PORTOS_DEFERRED_UPDATE_ID" "$$" "$verify_failed"
+fi
 exit "$verify_failed"

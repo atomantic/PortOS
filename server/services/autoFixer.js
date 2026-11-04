@@ -325,7 +325,7 @@ export function noteFallbackFailed({ provider, model }) {
 export async function escalateProviderFailure(error) {
   const ctx = error?.context || {};
   // Before dedupe: a later real fault on this route must still investigate.
-  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED) return;
+  if ([ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED, ERROR_CATEGORIES.IMAGE_UNSUPPORTED].includes(ctx.errorAnalysis?.category)) return;
 
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
   const now = Date.now();
@@ -464,6 +464,11 @@ async function handleAIProviderError(error) {
     return;
   }
 
+  if (ctx.errorAnalysis?.category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED) {
+    console.log(`🚫 AI model cannot accept images: ${ctx.provider} (${ctx.model}) — choose a vision-capable model`);
+    return;
+  }
+
   const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
 
   // A fallback retry for this exact failure is already in flight (promptRunner
@@ -571,7 +576,7 @@ async function createAIProviderInvestigationTask(error) {
       scope: ctx.provider
     })
   });
-  console.log(`✅ AI provider investigation task filed: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
+  console.log(`✅ AI provider investigation task ${task.duplicate ? 'reused' : 'filed'}: ${task.id} [tier ${diagnostics.tier}: ${diagnostics.fixStrategy}]`);
   return task;
 }
 
@@ -619,6 +624,13 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
   const lines = [
     '# AI Provider Execution Failure',
     '',
+    // The goal-fidelity gate judges the finished diff against this text. Without
+    // a stated deliverable, a small local reviewer graded the checks below as
+    // the requirements and a merged root-cause fix as unrequested, holding a
+    // delivered run and respawning it.
+    '## Objective',
+    'Find why this run failed and fix the cause. The cause may be outside the provider: when a PortOS prompt, caller, timeout or setting drove the run into this failure, change that code, even in a file that does not mention the provider. Report the evidence without a code change only when the fault is outside PortOS (an outage, a quota, credentials) or a fix is already committed and only needs a restart.',
+    '',
     '## Run Details',
     `- **Run ID:** ${ctx.runId || 'N/A'}`,
     `- **Provider:** ${ctx.provider || 'Unknown'}`,
@@ -649,6 +661,7 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
   if (diagnostics) {
     lines.push('## Fallback Tier');
     lines.push(`- **Tier:** ${diagnostics.tier} (${diagnostics.fixStrategy})`);
+    lines.push('- **Meaning:** This classifies the error; it does not establish that a fallback was attempted.');
     lines.push(`- **Error Type:** ${diagnostics.errorType}`);
     lines.push(`- **Failure Reason:** ${diagnostics.failureReason}`);
     lines.push('');
@@ -692,7 +705,8 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
     lines.push('');
   }
 
-  lines.push('## Investigation Steps');
+  lines.push('## Starting Checks');
+  lines.push('These help locate the cause. They are not deliverables, and a diff is not expected to show them.');
   const steps = [
     'Check if the AI provider is configured correctly in /devtools/providers',
     'Verify API keys and endpoints are valid',
@@ -746,7 +760,7 @@ async function createAutoFixTask(error) {
       scope: error.code
     })
   });
-  console.log(`✅ Auto-fix task created: ${task.id}`);
+  console.log(`✅ Auto-fix task ${task.duplicate ? 'reused' : 'created'}: ${task.id}`);
 
   return task;
 }
@@ -812,7 +826,7 @@ export async function handleErrorRecovery(errorCode, context) {
     context: context || `User requested investigation of error code: ${errorCode}`,
     fingerprint: investigationFingerprint({ kind: 'manual-recovery', scope: errorCode })
   });
-  console.log(`✅ Recovery task created: ${task.id}`);
+  console.log(`✅ Recovery task ${task.duplicate ? 'reused' : 'created'}: ${task.id}`);
 
   return task;
 }

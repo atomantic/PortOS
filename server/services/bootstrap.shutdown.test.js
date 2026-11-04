@@ -39,6 +39,8 @@ const loadShutdown = (loadModule) => {
   const marker = vi.fn(async () => {});
   const flush = vi.fn(async () => ({ ok: true }));
   const close = vi.fn(async () => {});
+  const stopRecovery = vi.fn();
+  const stopUpdateRecovery = vi.fn();
   const noop = () => {};
   runInNewContext(`
     ${extractDeclaration(SRC, 'withGrace')}
@@ -56,7 +58,8 @@ const loadShutdown = (loadModule) => {
     drainScheduledEvents: async () => {},
     createEventLoopLagProbe: () => ({ begin: () => ({ mark: noop, end: noop, snapshot: () => ({ totalMs: 0 }) }) }),
     describeSlowShutdown: () => null,
-    stopIdleReaper: noop, stopHostedSessionSweep: noop, stopBeeperSocket: noop,
+    stopIdleReaper: noop, stopHarnessActionRecovery: stopRecovery, stopAutomaticUpdateReservationRecovery: stopUpdateRecovery,
+    stopHostedSessionSweep: noop, stopBeeperSocket: noop,
     activeAgents: new Map([['example-agent', {}]]), dispatchingAgentIds: new Set(),
     writeHostShutdownMarker: marker, signalDetachedGroups: noop, stopCodexAppServer: async () => {},
     flushIdeaLoomAutoSync: async () => {}, flushCatalogUniverseFiling: async () => {}, flushMediaJobQueue: flush,
@@ -64,7 +67,7 @@ const loadShutdown = (loadModule) => {
     logBootstrapFailure: noop,
     loadModule: (path) => path === '../lib/db.js' ? Promise.resolve({ close }) : loadModule(path),
   });
-  return { stop: () => signals.get('SIGTERM')(), exit, marker, flush, close };
+  return { stop: () => signals.get('SIGTERM')(), exit, marker, flush, close, stopRecovery, stopUpdateRecovery };
 };
 
 describe('shutdown signal deadline and recovery', () => {
@@ -77,6 +80,8 @@ describe('shutdown signal deadline and recovery', () => {
     const lifecycle = loadShutdown(() => gate);
     const stopping = lifecycle.stop();
     try {
+      expect(lifecycle.stopRecovery).toHaveBeenCalledOnce();
+      expect(lifecycle.stopUpdateRecovery).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(9999);
       expect(lifecycle.exit).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);

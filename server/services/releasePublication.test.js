@@ -9,7 +9,7 @@ import { ownTestBodies, makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots }
 const bodies = ownTestBodies(it);
 const test = bodies.it;
 const fixture = vi.hoisted(() => ({ state: null, disk: null, queue: null, replies: {}, saveError: false, readHook: null,
-  tasks: new Map(), taskFailure: null, outboxWrite: 0, failedOutboxWrite: null }));
+  tasks: new Map(), taskFailure: null, outboxWrite: 0, failedOutboxWrite: null, app: null }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return makePathsProxy(actual, { dataRoot: lazyTempDataRoot('release-publication-'), overrides: {
@@ -19,6 +19,7 @@ vi.mock('../lib/fileUtils.js', async original => {
     },
   } });
 });
+vi.mock('./apps.js', () => ({ getAppById: async id => fixture.app?.id === id ? fixture.app : null }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async metadata => ({ reviewers: metadata.reviewers, reviewerEfforts: metadata.reviewerEfforts }) }));
 vi.mock('./cosTaskStore.js', () => ({
@@ -34,6 +35,7 @@ vi.mock('./cosTaskStore.js', () => ({
 vi.mock('./cosState.js', () => ({
   AGENTS_DIR: '/unused-synthetic-agents',
   loadState: async () => fixture.state,
+  readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.state.agents }),
   withStateLock: fn => fixture.queue(fn),
   saveState: async state => {
     if (fixture.saveError) throw new Error('synthetic persistence failure');
@@ -87,6 +89,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await rm(join(PATHS.cos, 'release-synchronization.json'), { force: true });
   fixture.tasks.clear();
+  fixture.app = { id: 'example-app', defaultPrCompletion: 'review-then-merge' };
   fixture.taskFailure = null;
   fixture.outboxWrite = 0;
   fixture.failedOutboxWrite = null;
@@ -109,6 +112,27 @@ beforeEach(async () => {
   };
 });
 
+test('registers inline synchronization on the publishing task without dispatching another task', async () => {
+  const result = await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
+  expect(result).toMatchObject({ synchronizationHandoffVersion: 2,
+    synchronizationPolicy: { app: 'example-app', prCompletion: 'review-then-merge', reviewers: ['codex'] } });
+  expect(fixture.tasks.size).toBe(0);
+  const outbox = JSON.parse(await readFile(join(PATHS.cos, 'release-synchronization.json'), 'utf8'));
+  expect(outbox.publications[result.identity]).toMatchObject({ version: 2, task: { id: 'release-task' },
+    owner: { agentId: 'publisher', taskId: 'release-task' } });
+  expect(await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' })).toEqual(result);
+});
+
+test('does not publish a successful terminal agent record when inline delivery evidence is unavailable', async () => {
+  await verifyAgentReleasePublication('publisher', { ...input, synchronizationMode: 'inline' });
+  await expect(completeAgent('publisher', { success: true })).rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+  await expect(updateAgent('publisher', { status: 'completed', result: { success: true } }))
+    .rejects.toMatchObject({ code: 'RELEASE_SYNC_DELIVERY_UNVERIFIED' });
+  expect(fixture.state.agents.publisher.status).toBe('running');
+  expect(fixture.state.agents.publisher.result).toBeUndefined();
+  expect(fixture.tasks.size).toBe(0);
+});
+
 test('publishes a durable live milestone once, emits it, and retains it across restart and later execution failure', async () => {
   const events = [];
   const listener = agent => events.push(structuredClone(agent));
@@ -122,12 +146,25 @@ test('publishes a durable live milestone once, emits it, and retains it across r
     expect(events[0].result).toBeUndefined();
     const continuation = [...fixture.tasks.values()];
     expect(continuation).toHaveLength(1);
-    expect(continuation[0]).toMatchObject({ status: 'pending', metadata: { app: 'example-app', targetInstanceId: 'example-instance', reviewers: ['codex'], reviewerEfforts: { codex: 'high' }, useWorktree: 'true', openPR: 'true' } });
+    expect(continuation[0]).toMatchObject({ status: 'pending', metadata: { app: 'example-app', targetInstanceId: 'example-instance', prCompletion: 'review-then-merge', reviewers: ['codex'], reviewerEfforts: { codex: 'high' }, useWorktree: 'true', openPR: 'true' } });
     fixture.state = structuredClone(fixture.disk);
     await updateAgent('publisher', { status: 'completed', result: { success: false, error: 'Synchronization failed' }, metadata: { releasePublication: null } });
     expect(fixture.disk.agents.publisher.metadata.releasePublication).toEqual(results[0]);
     expect(fixture.disk.agents.publisher.result.success).toBe(false);
   } finally { cosEvents.off('agent:updated', listener); }
+});
+
+test('retains publication without inventing an app policy and resumes registration when its app is restored', async () => {
+  const app = fixture.app;
+  fixture.app = null;
+  await expect(verifyAgentReleasePublication('publisher', input)).rejects.toThrow('requires its managed app policy');
+  const original = structuredClone(fixture.disk.agents.publisher.metadata.releasePublication);
+  expect(original.status).toBe('verified');
+  expect(fixture.tasks.size).toBe(0);
+  fixture.app = app;
+  expect(await verifyAgentReleasePublication('publisher', input)).toEqual(original);
+  expect([...fixture.tasks.values()]).toMatchObject([{ metadata: { prCompletion: 'review-then-merge' } }]);
+  expect(fixture.disk.agents.publisher.metadata.releasePublication).toEqual(original);
 });
 
 // Each failure is a distinct cross-store crash window: receipt without intent,

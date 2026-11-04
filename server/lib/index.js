@@ -17,6 +17,8 @@
 // `digitalTwinValidation.X`. The catch-all `validation.js` stays flat — its
 // names are the canonical PortOS-wide schemas.
 export * from './windowsAgentProcess.js';
+export * from './providerCallActivity.js';
+export * from './releaseAttemptMembership.js';
 export * from './releasePublication.js';
 export * from './releaseSynchronization.js';
 export * from './appOperationErrorContext.js';
@@ -52,6 +54,7 @@ export * as catalogGreyboxValidation from './catalogGreyboxValidation.js';
 export * as catalogMediaLibrary from './catalogMediaLibrary.js';
 export * from './catalogAppearance.js';
 export * from './characterSheetReferences.js';
+export * from './faceSheetAngleTemplate.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';
@@ -375,6 +378,7 @@ export * from './trashFiles.js';
 export * from './nativeTrash.js';
 export * from './nativeTrashXdg.js';
 export * as fileUtils from './fileUtils.js';
+export * from './flux2Inputs.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueCli.js';
 export * from './forgeIssueState.js';
@@ -468,6 +472,7 @@ export * from './execGit.js';
 export * from './gitMutationLifetime.js';
 export * from './windowsGitProcess.js';
 export * from './ffmpeg.js';
+export * from './ffmpegExpr.js';
 export * from './ffmpegFilterGraph.js';
 export * from './forgeAccessErrors.js';
 export * from './forkHead.js';
@@ -639,6 +644,7 @@ export * from './navManifest.js';
 export * from './noChangeCompletion.js';
 export * from './noReplaceMove.js';
 export * from './instanceFeatureRegistry.js';
+export * from './instanceSyncCategories.js';
 export * from './credentialRegistry.js';
 export * from './usageRange.js';
 export * from './subscriptionPlanTiers.js';
@@ -922,6 +928,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoProductionMedium.js';
 export * from './musicVideoShotPrompt.js';
+export * from './musicVideoSnapshotLight.js';
 
 export * from './musicVideoMediumPlan.js';
 export * from './musicVideoFinishedOutside.js';
@@ -935,6 +942,7 @@ export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
+export * from './musicVideoCameos.js';
 export * from './musicVideoCreditsOutro.js';
 export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';
@@ -947,6 +955,8 @@ export * from './musicVideoCrossLinks.js';
 export * from './musicVideoExcerptRange.js';
 
 export * from './musicVideoPlateEvidence.js';
+export * from './musicVideoCastSetsInspection.js';
+export * from './musicVideoCastSetsInspectionValidation.js';
 export * from './codeAnimationProjects.js';
 export * from './musicVideoNarrativeEvents.js';
 
@@ -957,12 +967,18 @@ export * from './scheduleExecutionFieldsValidation.js';
 export * from './codeAnimationSound.js';
 
 export * from './musicVideoMediaPolicy.js';
+export * from './musicVideoSongAudio.js';
 export * from './musicVideoSummary.js';
 export * from './sandboxDelegation.js';
 
 export * from './forgeMaintenanceTasks.js';
 
 export * from './maintenanceAdmission.js';
+export * from './maintenanceDeferredUpdate.js';
+export * from './maintenanceSettlementRetry.js';
+export * from './mediaRecoveryActivity.js';
+export * from './maintenanceHarnessAction.js';
+export * from './updateImageGuard.js';
 export * from './maintenanceExclusive.js';
 export * from './peerExecutionAuthority.js';
 export * as peerAdminValidation from './peerAdminValidation.js';
@@ -979,7 +995,9 @@ export * from './auditWorkflow.js';
 
 export * from './musicVideoCutEffects.js';
 export * from './musicVideoTransitions.js';
+export * from './musicVideoWipes.js';
 export * from './musicVideoImageEffects.js';
+export * from './musicVideoGlitchCanvas.js';
 
 export * from './securityScanEvidence.js';
 
@@ -1039,3 +1057,14 @@ export * from './mediaRowOwners.js';
 export * from './mediaOriginClaim.js';
 
 export * from './peerSyncEventSchema.js';
+export * from './musicVideoCastSetsImageEdit.js';
+
+export * from './imageRenderQuality.js';
+
+export * from './greyboxSequence.js';
+
+export * from './ecosystemPortEdits.js';
+export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal.js';
+export * from './blenderVersion.js';
+export * from './greyboxBlender.js';
+export * from './photorealLook.js';

@@ -2,6 +2,8 @@ import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { filmLookRuntimeSource } from '../../lib/filmLook.js';
 import { titleCardRuntime } from './titleCardFonts.js';
+import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
+import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
 /**
  * Music Video — HTML for a composition preview document.
  *
@@ -295,7 +297,7 @@ export async function buildDocumentPreview(project, { draft = false, files: give
   const mode = musicVideoMediaMode(project);
   const csp = PREVIEW_CSP.replace('img-src data: blob:', mode === 'code-only' ? "img-src 'none'" : 'img-src data: blob:').replace('media-src data: blob:', mode !== 'code-images-video' ? "media-src 'none'" : 'media-src data: blob:');
   // The film look and title card runtimes always ship (their panels post live changes); the saved records are their start.
-  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>${filmLookRuntimeSource(project.filmLook)}</script><script>${inlineScript(titleCardRuntime(project.titleCard))}</script><script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
+  const head = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script>${BOOTSTRAP}</script><script>${filmLookRuntimeSource(project.filmLook)}</script><script>${inlineScript(titleCardRuntime(project.titleCard))}</script>${data.effectFrames.length ? `<script>${inlineScript(musicVideoGlitchRuntime())}</script>` : ''}${data.scenes.some((scene) => scene.wipe) ? `<script>${inlineScript(musicVideoWipeRuntime())}</script>` : ''}<script>window.PORTOS_MV = ${scriptJson(data)};window.PORTOS_MV_EVENT_STATE = ${narrativeFrameState.toString()};</script>`;
   const at = html.match(/<head[^>]*>/i);
   html = at ? `${html.slice(0, at.index + at[0].length)}${head}${html.slice(at.index + at[0].length)}` : `${head}${html}`;
 
@@ -305,6 +307,10 @@ export async function buildDocumentPreview(project, { draft = false, files: give
     if (!m) continue;
     const name = m.path.split(/[\\/]/).pop();
     assets.push({ key: scene.media.src, url: `/data/${m.kind === 'video' ? 'videos' : 'images'}/${encodeURIComponent(name)}`, bytes: null });
+    if (m.end) {
+      const endName = m.end.path.split(/[\\/]/).pop();
+      assets.push({ key: scene.media.end.src, url: `/data/images/${encodeURIComponent(endName)}`, bytes: null });
+    }
     (m.photos || []).forEach((photo, i) => {
       const photoName = photo.path.split(/[\\\\/]/).pop();
       assets.push({ key: scene.media.photos[i].src, url: `/data/images/${encodeURIComponent(photoName)}`, bytes: null });

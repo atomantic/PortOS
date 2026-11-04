@@ -22,7 +22,7 @@ export default function CatalogPlatesPanel({ plates, candidates, missingMedia, o
   const roleButton = (m, role, label, Icon) => (
     <button type="button" onClick={() => setRole(m, role)} disabled={!!busyKey || !onSetRole || m.readOnly}
       title={label} aria-label={label}
-      className="port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-accent disabled:opacity-50">
+      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay-item p-2 sm:p-1 rounded hover:text-port-accent disabled:opacity-50">
       {busyKey === m.mediaKey
         ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
         : <Icon size={12} aria-hidden="true" />}

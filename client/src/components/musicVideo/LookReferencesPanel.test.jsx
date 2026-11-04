@@ -37,6 +37,17 @@ describe('look references', () => {
     expect(onSaveSpec).toHaveBeenCalledWith({ references: [{ id: 'r1', imageId: 'face.png', role: 'character', label: 'Singer', condition: true }] });
   });
 
+  it('lets the director flag a fifth candidate without imposing a separate render limit', () => {
+    const references = Array.from({ length: 5 }, (_, i) => ({ id: `ref-${i}`, imageId: `ref-${i}.png`, label: `Guide ${i}`, condition: i < 4 }));
+    const onSaveSpec = vi.fn();
+    mount({ visualSpec: { references } }, { onSaveSpec });
+    const toggles = screen.getAllByLabelText('Condition frames');
+    expect(toggles[4].disabled).toBe(false);
+    fireEvent.click(toggles[4]);
+    expect(onSaveSpec).toHaveBeenCalledWith({ references: references.map((ref) => ({ ...ref, condition: true })) });
+    expect(screen.getByText(/each shot sends them in priority order, up to its image renderer/)).toBeTruthy();
+  });
+
   it('asks once for Casting names for unlabeled references and shows a name that lands', async () => {
     labelMusicVideoReferencesFromCatalog.mockResolvedValue({ labels: { r1: 'Example Lead' } });
     const onReferenceLabels = vi.fn();

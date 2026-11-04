@@ -27,6 +27,15 @@ const observe = (event, profile, details) => {
 // recognized cause instead of copying stderr.
 const ROOT_SANDBOX_REFUSAL = /Running as root without --no-sandbox is not supported/;
 
+// Production keeps 20s. A loaded CI runner can legitimately need longer, so a
+// browser-backed test raises it with PORTOS_COMPOSITION_BROWSER_STARTUP_MS
+// instead of every caller threading an option through its render stack.
+const DEFAULT_STARTUP_MS = 20000;
+function resolveStartupMs(env = process.env) {
+  const configured = Number(env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS);
+  return Number.isSafeInteger(configured) && configured > 0 ? configured : DEFAULT_STARTUP_MS;
+}
+
 // Chrome helpers (crashpad, GPU) can still be writing into the profile for a
 // moment after the browser's close event, so a recursive rm may lose the race
 // with ENOTEMPTY/EBUSY. Retry until the directory is really gone, so a resolved
@@ -76,7 +85,7 @@ function isolationUnavailable(reason) {
 // Generated previews pass `'required'` and talk CDP over pipes so loopback IP
 // can be denied too. `'off'` exists for the egress negative control.
 export async function launchCompositionBrowser({
-  signal, startupMs = 20000, shutdownMs = 5000, isolation = 'legacy', support, onCleanupFailure,
+  signal, startupMs = resolveStartupMs(), shutdownMs = 5000, isolation = 'legacy', support, onCleanupFailure,
 } = {}) {
   signal?.throwIfAborted();
   const piped = isolation !== 'legacy';
@@ -297,7 +306,15 @@ export async function launchCompositionBrowser({
     }
     const ready = await new Promise((resolve, reject) => {
       let tail = '';
-      const timer = setTimeout(() => finish(new Error('Composition browser startup exceeded its deadline')), startupMs);
+      let sawOutput = false;
+      // Elapsed time and the last phase reached tell a slow runner from a hang
+      // without copying browser output; the error text survives CI quiet mode.
+      const startupPhase = () => !spawned ? 'before-spawn'
+        : !sawOutput ? 'spawned-no-output'
+          : piped ? 'awaiting-handshake' : 'awaiting-devtools-endpoint';
+      const timer = setTimeout(() => finish(new Error(
+        `Composition browser startup exceeded its deadline (elapsedMs=${observedMs()}, deadlineMs=${startupMs}, phase=${startupPhase()}, spawnMs=${observed.spawnMs ?? 'none'})`,
+      )), startupMs);
       const finish = (error, value) => {
         rejectStartupPipe = null;
         clearTimeout(timer);
@@ -316,6 +333,7 @@ export async function launchCompositionBrowser({
       };
       const canceled = () => finish(signal.reason ?? new Error('Render canceled'));
       const onData = bytes => {
+        sawOutput = true;
         tail = (tail + bytes.toString()).slice(-8192);
         if (piped) return;
         // No paths or raw browser output are copied into errors. An endpoint must

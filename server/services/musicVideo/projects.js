@@ -299,6 +299,12 @@ export async function updateScene(id, sceneId, patch) {
   return updated;
 }
 
+/** "Vary wipes" over a run of shots (projectsLogic.varySceneWipes). Returns `{ project, scenes }`. */
+export async function varyProjectWipes(id, options) {
+  const { varySceneWipes } = await import('./projectsLogic.js');
+  return mutateProjectRecord(id, (current) => varySceneWipes(current, options));
+}
+
 export async function deleteScene(id, sceneId) {
   const { removeScene } = await import('./projectsLogic.js');
   const { project } = await mutateProjectRecord(id, (current) => ({ project: removeScene(current, sceneId) }));
@@ -322,6 +328,29 @@ export async function splitProjectScene(id, sceneId, options = {}) {
     const outcome = splitScene(current, sceneId, options);
     const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
     return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
+  });
+}
+
+/** Cut shots on sung words over the chosen lyric lines, or lay them out on an empty board (projectsLogic.cutScenesOnLyricWords, #14820). */
+export async function cutProjectScenesOnLyrics(id, options) {
+  const [{ cutScenesOnLyricWords }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const { project, scenes, skipped, from, laidOut } = cutScenesOnLyricWords(current, options);
+    return { project: carryShotLocks(current, project, { from }), scenes, skipped, laidOut };
+  });
+}
+
+/** Read the raw record so preview and the serialized apply hash identical inputs. */
+export async function previewProjectPacingRecut(id) {
+  const { previewPacingRecut } = await import('./pacingRecut.js');
+  return previewPacingRecut(await (await selectBackend()).getProject(id));
+}
+
+export async function recutProjectToPacing(id, revision) {
+  const [{ applyPacingRecut }, { carryShotLocks }] = await Promise.all([import('./pacingRecut.js'), import('./productionReview.js')]);
+  return mutateProjectRecord(id, (current) => {
+    const { project, added, from } = applyPacingRecut(current, revision);
+    return { project: carryShotLocks(current, project, { from }), added };
   });
 }
 

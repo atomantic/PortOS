@@ -248,7 +248,7 @@ function HarnessCard({
               className="mt-2"
               autoFocus
               aria-label={`Remove ${effectiveLabel}`}
-              question={`Remove ${effectiveLabel}? ${pluralize(detail?.providers?.length || 0, 'provider')} use \`${effectiveCommand}\` and will show as needing setup until it is reinstalled — their settings are kept.`}
+              question={`Remove ${effectiveLabel}? PortOS will use npm to remove the package supplying \`${effectiveCommand}\` on its PATH. It cannot tell how it was installed; if another package manager installed it, cancel and use that manager. ${pluralize(detail?.providers?.length || 0, 'provider')} use \`${effectiveCommand}\` and will show as needing setup until it is reinstalled — their settings are kept.`}
               confirmText="Remove"
               onConfirm={() => confirmDelete(() => onAction(detail || harness, 'uninstall'))}
               onCancel={cancelDelete}

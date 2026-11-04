@@ -259,7 +259,7 @@ function CommissionDetail({ id }) {
               onClick={toggleEnabled}
               title={commission.enabled ? COMMISSION_STOP_COPY.pauseTitle : COMMISSION_STOP_COPY.resumeTitle}
               aria-label={commission.enabled ? 'Pause commission' : 'Resume commission'}
-              className="p-2 text-gray-400 hover:text-gray-100"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-gray-100"
             >
               {commission.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </button>
@@ -276,7 +276,7 @@ function CommissionDetail({ id }) {
                 onClick={() => requestDelete(commission.id)}
                 title={COMMISSION_STOP_COPY.deleteTitle}
                 aria-label={`Delete commission ${commission.name}`}
-                className="p-2 text-gray-400 hover:text-port-error"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-port-error"
               >
                 <Trash2 className="w-4 h-4" />
               </button>

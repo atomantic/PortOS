@@ -1132,7 +1132,7 @@ function TimelineProjectEditor({ projectId }) {
               type="button"
               onClick={() => setPlaying((p) => !p)}
               disabled={segments.length === 0}
-              className="p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent disabled:opacity-40"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent disabled:opacity-40"
               title={playing ? 'Pause' : 'Play'} aria-label={playing ? 'Pause' : 'Play'}
             >
               {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -1140,7 +1140,7 @@ function TimelineProjectEditor({ projectId }) {
             <button
               type="button"
               onClick={() => setMuted((m) => !m)}
-              className="p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 bg-port-card border border-port-border rounded-md hover:border-port-accent"
               title={muted ? 'Unmute' : 'Mute'} aria-label={muted ? 'Unmute' : 'Mute'}
             >
               {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}

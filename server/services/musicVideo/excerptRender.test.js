@@ -78,6 +78,7 @@ import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes }
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { musicVideoEvents } from './events.js';
+import { listActiveRenders } from '../renderActivity.js';
 
 const prime = (id, composition = null) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition });
 const lastProc = () => h.procs.at(-1);
@@ -92,6 +93,32 @@ beforeEach(() => {
 });
 
 describe('excerpt render cancellation', () => {
+  it('keeps deferred update admission blocked through the final record write', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { mutateProjectRecord } = await import('./projects.js');
+    const id = 'excerpt-update-race';
+    prime(id);
+    const { jobId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    const pending = maintenance.deferredUpdate.request();
+    let save;
+    mutateProjectRecord.mockImplementationOnce((projectId, transform) => new Promise(resolve => {
+      save = () => {
+        const outcome = transform(h.store.get(projectId));
+        h.store.set(projectId, outcome.project);
+        resolve(outcome);
+      };
+    }));
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(save).toBeTypeOf('function'));
+    expect(maintenance.deferredUpdate.acquire(pending.id)).toBe(false);
+    save();
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(maintenance.deferredUpdate.acquire(pending.id)).toBe(true);
+    prime('held-render');
+    await expect(startExcerptRender('held-render', { startSec: 0, endSec: 2 })).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    maintenance.deferredUpdate.finish(pending.id, false);
+  });
+
   it('keeps a canceled encode owned until close, removes partial output, and settles once', async () => {
     const id = 'excerpt-cancel';
     prime(id);
@@ -131,6 +158,32 @@ describe('excerpt render cancellation', () => {
     expect(terminalFrames(jobId)[0].type).toBe(status);
   });
 
+  it('frees the project slot before the completion event, so an immediate next render is admitted and keeps its own lock (#14862)', async () => {
+    const id = 'excerpt-immediate-restart';
+    prime(id);
+    const slotsHeld = () => listActiveRenders().filter((r) => r.kind === 'music-video-excerpt').length;
+    let heldAtEvent = null;
+    let next = null;
+    const onRender = () => {
+      heldAtEvent = slotsHeld();
+      next = startExcerptRender(id, { startSec: 0, endSec: 2 });
+    };
+    musicVideoEvents.on('excerpt-render', onRender);
+    const first = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(terminalFrames(first.jobId)).toHaveLength(1));
+    musicVideoEvents.off('excerpt-render', onRender);
+    expect(heldAtEvent).toBe(0);
+    const second = await next;
+    // The finishing job's trailing release must not drop the newer job's lock.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(slotsHeld()).toBe(1);
+    await expect(startExcerptRender(id, { startSec: 0, endSec: 2 })).rejects.toMatchObject({ code: 'EXCERPT_RENDER_IN_PROGRESS', context: { jobId: second.jobId } });
+    lastProc().emit('close', 1, null);
+    await vi.waitFor(() => expect(terminalFrames(second.jobId)).toHaveLength(1));
+  });
+
   it('retains zero-exit success after a cancellation request', async () => {
     const id = 'excerpt-cancel-success';
     prime(id);
@@ -141,6 +194,24 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
     expect(excerpt(id, excerptId).status).toBe('complete');
     expect(terminalFrames(jobId)[0].type).toBe('complete');
+  });
+
+  it('retires a completed excerpt after settled overlay scratch cleanup fails', async () => {
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const id = 'excerpt-scratch-failure';
+    prime(id, { mode: 'composed', textCues: [{ id: 'cue', text: 'Test', startSec: 0, endSec: 2 }], style: {} });
+    removeCompositionScratch.mockRejectedValueOnce(new Error('Synthetic scratch removal failure'));
+    const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    h.overlays.resolve([]);
+    await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+    expect(excerpt(id, excerptId).status).toBe('complete');
+    const update = maintenance.deferredUpdate.request();
+    try { expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true); }
+    finally { maintenance.deferredUpdate.finish(update.id, false); }
   });
 
   it('aborts overlay capture without spawning and releases scratch and the excerpt slot', async () => {

@@ -44,6 +44,7 @@ export const UNCOVERED_SUITES = Object.freeze({
   linuxContainment: 'a Linux host with bubblewrap: PORTOS_REQUIRE_LINUX_CONTAINMENT=1 npm test --prefix server -- --run <LINUX_CONTAINMENT_TESTS>',
   supercolliderLive: 'a native amd64/arm64 Linux Docker engine: npm run setup:supercollider -- --yes, then PORTOS_SUPERCOLLIDER_LIVE=1 npx vitest run services/superColliderRender.live.test.js from server/',
   dockerContainmentLive: 'a local Docker engine with Linux containers and npm registry access: PORTOS_DOCKER_CONTAINMENT_LIVE=1 npx vitest run services/dockerContainment.live.test.js from server/',
+  macosNative: 'a Mac: npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js',
 });
 
 /** Remedy when a prerequisite probe ran but failed (timeout, teardown): nothing indicates a missing install. */
@@ -91,6 +92,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
   }
   if (suiteSelected(plan, 'dockerContainmentLive')) {
     uncovered.push({ suite: 'dockerContainmentLive', reason: 'needs a real Docker engine and pulls the pinned Node image', remedy: UNCOVERED_SUITES.dockerContainmentLive });
+  }
+  if (suiteSelected(plan, 'macosNative')) {
+    uncovered.push({ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative });
   }
   return uncovered;
 }
@@ -149,7 +153,8 @@ export function describeStageCommand(stage) {
  *
  * Pure, so the plan -> stage mapping is testable without spawning anything.
  * The hidden-content scan always runs first, even if lint/tests select no
- * work, and the shipped prompt-history guard (CI's `prompt-history` job: one
+ * work, then the commit-message scan (no AI session links in this branch's
+ * commits), and the shipped prompt-history guard (CI's `prompt-history` job: one
  * git-history read, seconds locally) follows it when selected. Order after
  * that runs the shared structural guards first, then CI's dependency order:
  * lint, unit tests, the client build and its bundle pin, the boot smoke, the browser suites, and the DB suite
@@ -157,13 +162,19 @@ export function describeStageCommand(stage) {
  * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
  * environment from scripts/lib/pregateResources.js.
  */
-export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, databaseEnv = {}, guardPlan = null } = {}) {
-  const base = baseSha ? { CI_BASE_SHA: baseSha } : {};
+export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, skip = {}, databaseEnv = {}, guardPlan = null } = {}) {
+  const base = { ...(baseSha ? { CI_BASE_SHA: baseSha } : {}), PORTOS_PREGATE_BASE_REF: baseRef ?? '' };
   const stages = [{
     name: 'hidden-content scan',
     suite: 'scan',
     script: 'scan-diff-hidden-content.js',
     args: ['--base', baseSha, '--worktree'],
+    env: {},
+  }, {
+    name: 'commit-message scan',
+    suite: 'commit-messages',
+    script: 'scan-commit-session-links.js',
+    args: ['--base', baseSha],
     env: {},
   }];
 
@@ -814,6 +825,7 @@ function pregatePlanFromRaw(raw) {
     linuxContainment: raw.linux_containment,
     supercolliderLive: raw.supercollider_live,
     dockerContainmentLive: raw.docker_containment_live,
+    macosNative: raw.macos_native,
     suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
   };
 }
@@ -887,7 +899,7 @@ async function main() {
   const guardPlan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
   if (options.guardsOnly) {
     plan = guardPlan;
-    Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false });
+    Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false, macosNative: false });
   }
   if (downgraded) {
     plan = focusedLocalPlan(plan, git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(path => path && existsSync(join(REPO_ROOT, path))), changedFiles);
@@ -900,7 +912,7 @@ async function main() {
   const planStages = (prerequisites, databaseEnv) => {
     const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
-    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, skip, databaseEnv,
+    const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
       guardPlan: options.guardsOnly ? null : guardPlan });
     return { uncovered, stages: options.guardsOnly
       ? stages.filter(stage => stage.suite === 'server' || stage.suite === 'client')
@@ -952,7 +964,7 @@ async function main() {
     let result = results[index];
     // Even prerequisite probes may start Chrome. Defer them until every early
     // guard has passed, retaining not-run resource stages on an early failure.
-    if (!probed && !result.guard && !['scan', 'prompt-history'].includes(result.suite)) {
+    if (!probed && !result.guard && !['scan', 'commit-messages', 'prompt-history'].includes(result.suite)) {
       const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
       ({ uncovered, stages } = planStages(prerequisites, databaseEnv));
       announceUncovered(uncovered);

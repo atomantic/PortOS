@@ -47,6 +47,10 @@ vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => ({
 }));
 
 vi.mock('../../lib/mediaModels.js', () => ({
+  getImageModels: vi.fn(() => [
+    { id: 'flux2-example', runner: 'flux2', quantization: 'sdnq' },
+    { id: 'flux2-example-bf16', runner: 'flux2', quantization: 'none' },
+  ]),
   getVideoModels: vi.fn(() => [
     { id: 'example-mlx', runtime: 'mlx_video' },
     { id: 'example-cuda', runtime: 'cuda_video' },
@@ -682,6 +686,28 @@ describe('mediaJobQueue', () => {
     imageGenEvents.emit('completed', { generationId: jobId, filename: 'legacy.png' });
   });
 
+  it.each([
+    { initImagePath: 'init.png', initImageStrength: 0.35 },
+    { loraFilenames: ['example.safetensors'] },
+    { loraPaths: ['example.safetensors'] },
+  ])('refuses incompatible FLUX.2 selections before queue acceptance: %j', async extra => {
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+    await expect(mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      modelId: 'flux2-example', referenceImagePaths: ['reference.png'], ...extra,
+    } })).rejects.toMatchObject({ code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
+    expect(mediaJobQueue.listJobs()).toEqual([]);
+  });
+
+  it('keeps cloud and unquantized image selections outside the incompatible FLUX.2 queue refusal', async () => {
+    const params = { modelId: 'flux2-example-bf16', referenceImagePaths: ['reference.png'], loraFilenames: ['example.safetensors'] };
+    const local = await mediaJobQueue.enqueueJob({ kind: 'image', params });
+    const cloud = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+      ...params, modelId: 'flux2-example', mode: 'codex', initImagePath: 'init.png',
+    } });
+    expect(mediaJobQueue.getJob(local.jobId)).toMatchObject({ params });
+    expect(mediaJobQueue.getJob(cloud.jobId).params).toMatchObject({ mode: 'codex', initImagePath: 'init.png' });
+  });
+
   it('enqueueJob returns jobId + queued status + position', async () => {
     // Block the worker so the second enqueue lands behind the first in the
     // pipeline rather than entering an empty queue after the first ran.
@@ -818,6 +844,27 @@ describe('mediaJobQueue', () => {
       videoGenEvents.emit('failed', { generationId: id, error: 'Cancellation unconfirmed', remoteCancellationConfirmed: false });
       await waitFor(() => mediaJobQueue.getJob(id).status === 'failed');
       expect(mediaJobQueue.getJob(id).result.topazUncertain).toBe(true);
+    });
+
+    it('retains an expired uncertain Topaz job when saving its terminal status fails', async () => {
+      const id = '00000000-0000-4000-8000-000000000098';
+      writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'video-upscale',
+        status: 'failed', queuedAt: '2020-01-01T00:00:00Z', completedAt: '2020-01-01T00:00:00Z',
+        params: { mode: 'topaz', requestId: '22222222-2222-4222-8222-222222222222' }, result: { topazUncertain: true } }] }));
+      await importFresh();
+      await mediaJobQueue.initMediaJobQueue();
+      const realWrite = atomicWriteSpy.getMockImplementation();
+      atomicWriteSpy.mockRejectedValueOnce(new Error('synthetic result write failure'));
+      try {
+        const first = mediaJobQueue.updateJobResult(id, { topazUncertain: false, topazProviderStatus: 'failed' });
+        const second = mediaJobQueue.updateJobResult(id, { topazPhase: 'checking' });
+        await expect(first).rejects.toThrow('synthetic result write failure');
+        await expect(second).resolves.toBe(true);
+        expect(mediaJobQueue.getJob(id)?.result.topazUncertain).toBe(true);
+        expect(mediaJobQueue.getJob(id)?.result.topazPhase).toBe('checking');
+        expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs[0].result.topazUncertain).toBe(true);
+        await expect(mediaJobQueue.updateJobResult(id, { topazUncertain: false, topazProviderStatus: 'failed' })).resolves.toBe(true);
+      } finally { atomicWriteSpy.mockImplementation(realWrite); }
     });
   });
 
@@ -1961,12 +2008,13 @@ describe('mediaJobQueue', () => {
   it('holds restored Video production submissions before any worker can spend', async () => {
     const jobs = ['queued', 'running'].map((status, index) => ({ id: `00000000-0000-4000-8000-00000000000${index + 1}`,
       kind: 'video', status, queuedAt: '2026-04-30T10:00:00.000Z',
-      params: { videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
+      params: { mode: 'local', videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
     writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
     await importFresh();
     await mediaJobQueue.initMediaJobQueue();
     expect(mediaJobQueue.getJob(jobs[0].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: false } } });
     expect(mediaJobQueue.getJob(jobs[1].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: true } } });
+    expect(mediaJobQueue.getMediaRecoveryActivity()).toMatchObject({ trusted: true, pending: false });
     expect(stubs.generateVideo).not.toHaveBeenCalled();
     expect(stubs.generateVideoRemote).not.toHaveBeenCalled();
   });
@@ -2056,6 +2104,39 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
     const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
     expect(cleanupInterruptedSharingCopy).toHaveBeenCalledWith(id);
+  });
+
+  it.each([true, false])('manual update recovery: training survivor=%s is observed or failed, never left indefinitely running', async survives => {
+    const id = '00000000-0000-4000-8000-000000000304';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [{ id, kind: 'training', status: 'running',
+      queuedAt: '2026-04-30T10:00:00.000Z', params: { runId: 'training-example' } }] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Update acknowledged', owner: 'manual-update' });
+    try {
+      await importFresh(); stubs.hasSurvivingTrainer.mockResolvedValue(survives);
+      await mediaJobQueue.initMediaJobQueue();
+      if (survives) {
+        await waitFor(() => expect(stubs.runTraining).toHaveBeenCalledWith(expect.objectContaining({ jobId: id, reattach: true })));
+      } else {
+        expect(mediaJobQueue.getJob(id)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+        expect(stubs.runTraining).not.toHaveBeenCalled();
+      }
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
+  });
+
+  it('manual update recovery fails an interrupted local video and leaves queued work queued', async () => {
+    const video = '00000000-0000-4000-8000-000000000305', queued = '00000000-0000-4000-8000-000000000306';
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [
+      { id: video, kind: 'video', status: 'running', params: {} }, { id: queued, kind: 'image', status: 'queued', params: {} },
+    ] }));
+    const { maintenance } = await import('../../lib/maintenanceAdmission.js');
+    const { hold } = maintenance.begin({ reason: 'Update acknowledged', owner: 'manual-update' });
+    try {
+      await importFresh(); await mediaJobQueue.initMediaJobQueue();
+      expect(mediaJobQueue.getJob(video)).toMatchObject({ status: 'failed', error: 'interrupted by restart' });
+      expect(mediaJobQueue.getJob(queued).status).toBe('queued');
+      expect(stubs.generateVideo).not.toHaveBeenCalled();
+    } finally { maintenance.resume({ id: hold.id, revision: hold.revision }); }
   });
 
   it('boot recovery: a running job under a maintenance hold is archived with its inputs, never failed or replayed', async () => {
@@ -3265,8 +3346,20 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
   it('boots without throwing, so an unreadable snapshot cannot kill the server', async () => {
     writeFileSync(join(tempDataDir, 'media-jobs.json'), CORRUPT);
     await importFresh();
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
     await expect(mediaJobQueue.initMediaJobQueue()).resolves.toBeUndefined();
     expect(mediaJobQueue.listJobs()).toEqual([]);
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
+  });
+
+  it('keeps a malformed jobs field untrusted and preserves the snapshot', async () => {
+    const file = join(tempDataDir, 'media-jobs.json');
+    const malformed = JSON.stringify({ jobs: {} });
+    writeFileSync(file, malformed);
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getMediaRecoveryActivity().trusted).toBe(false);
+    expect(readFileSync(file, 'utf8')).toBe(malformed);
   });
 
   it('does NOT overwrite the unreadable file — at boot or on a later enqueue', async () => {

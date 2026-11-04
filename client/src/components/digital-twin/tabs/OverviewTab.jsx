@@ -211,7 +211,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
           <h2 className="text-lg font-semibold text-white">Soul Health</h2>
           <button
             onClick={() => setShowSettings(!showSettings)}
-            className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
             title="Settings" aria-label="Settings"
           >
             <Settings size={20} />

@@ -25,6 +25,15 @@ describe('musicVideoFrameModelInput', () => {
     for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
   });
 
+  // Uniquely catches an amateur snapshot look rendering people studio-lit and pasted in (Hold Still mall frames).
+  it('lets people be badly lit when the look is amateur snapshots or home video, and only then', () => {
+    const snapshots = { ...project, concept: { ...project.concept, style: 'Found 1986 snapshots and VHS-C home video' } };
+    const input = musicVideoFrameModelInput(snapshots, scene);
+    expect(ids(input)).toContain('people-light');
+    expect(input.prompt).toContain('Authentic amateur snapshot lighting');
+    expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('people-light');
+  });
+
   // Uniquely catches a panel-linked still losing the storyboard's action, picks or sketch role (Here to Dance, cold-open shot 1).
   it('leads a panel-linked still with the panel\'s action, shot picks and sketch, and names only its cast', () => {
     const cast = { ...project, concept: { ...project.concept, subjects: [
@@ -123,5 +132,52 @@ describe('authoredShotPrompt', () => {
     expect(authoredShotPrompt({ ...linked, prompt: 'She stands up' })).toBe('She stands up');
     expect(authoredShotPrompt(linked)).toBe('She laces her skates');
     expect(authoredShotPrompt({ visualIntent: 'planner intent', framePrompt: 'rental booth' })).toBe('rental booth');
+  });
+});
+
+// A composed still must identify each sent image without changing the director's notes
+// or assuming the supplied references contain everyone in the shot.
+describe('reference map', () => {
+  const references = [
+    { id: 'mvr-cs-character', imageId: 'lead.png', role: 'character', label: 'Example lead', note: 'short hair; blue coat' },
+    null,
+    { id: 'mvr-cs-cast-other', imageId: 'other.png', role: 'character', label: 'Example guest', note: 'long hair' },
+    { id: 'mvr-cs-set-street', imageId: 'street.png', role: 'set', label: 'Example street' },
+    { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', label: 'Props' },
+  ];
+
+  it('names each reference image by its send position, with the face text in full', () => {
+    const input = musicVideoFrameModelInput(project, scene, { references });
+    const text = input.promptAdditions.find((item) => item.id === 'reference-map').text;
+    expect(text).toContain('Reference image 1 is Example lead: this exact person. Match their face, hair, skin, build and age exactly (short hair; blue coat)');
+    expect(text).toContain('Reference image 3 is Example guest: this exact person.');
+    expect(text).toContain('Reference image 4 is the set reference "Example street"');
+    expect(text).toContain('Reference image 5 is the prop sheet');
+    expect(text).not.toContain('Reference image 2');
+    expect(text).not.toContain('add nobody else');
+    expect(input.prompt).toContain(text);
+    expect(ids(musicVideoFrameModelInput(project, scene, { references: [null, { role: 'mood', imageId: 'x.png' }] }))).not.toContain('reference-map');
+  });
+
+  it('preserves a long, multiline reference note in the listed and sent prompt', () => {
+    const note = `${'An invented detail. '.repeat(35)}\nKeep  the spacing.`;
+    const input = musicVideoFrameModelInput(project, scene, { references: [{ ...references[0], note }] });
+    expect(ids(input)[0]).toBe('reference-map');
+    const text = input.promptAdditions[0].text;
+    expect(text).toContain(note);
+    expect(input.prompt).toContain(text);
+    expect(ids(musicVideoFrameModelInput(project, scene))).not.toContain('reference-map');
+  });
+});
+
+// Uniquely catches a local clip prompt overflowing LTX-2's 1024-token text encoder with the production bible (Hold Still, 2026-11-02).
+describe('local clip prompts', () => {
+  const shot = { sceneId: 's1', startSec: 0, endSec: 4, prompt: 'a lantern swings' };
+
+  it('leaves the production bible out of a local render that hears the song, and keeps it elsewhere', () => {
+    const ids = (input) => input.promptAdditions.map((item) => item.id);
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'local' }))).not.toContain('creative-context');
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'local' }))).toContain('project-style');
+    expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'fal' }))).toContain('creative-context');
   });
 });

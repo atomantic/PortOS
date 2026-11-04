@@ -5,11 +5,17 @@ import { subscribeVisibility } from './useVisibilityEvent';
 import {
   getMusicVideoProject,
   startMusicVideoCastAndSets,
+  editMusicVideoCastAndSetsImage,
+  selectMusicVideoCastAndSetsImage,
+  acceptMusicVideoCastAndSetsImageEdit,
+  discardMusicVideoCastAndSetsImageEdit,
   regenerateMusicVideoCastAndSets,
   editMusicVideoCastAndSetsDirection,
   applyMusicVideoCastAndSetsFeedback,
   removeMusicVideoCastAndSetsFeedback,
   resumeMusicVideoCastAndSets,
+  acknowledgeMusicVideoCastAndSetsImage,
+  inspectMusicVideoCastAndSetsImages,
   approveMusicVideoCastAndSets,
   reconfirmMusicVideoCastAndSets,
   skipMusicVideoCastAndSets,
@@ -136,10 +142,16 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
   const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
-  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved — regenerate to apply it' : 'Direction saved — re-rendering what changed');
+  const useImage = (input) => call(() => selectMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Primary image selected — review the updated check-in');
+  const editImage = (input) => call(() => editMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Rendering an image edit for comparison');
+  const acceptImageEdit = (input) => call(() => acceptMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }), 'Image edit accepted — review the updated check-in');
+  const discardImageEdit = (input) => call(() => discardMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }));
+  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
+  const reinspectImages = (keys) => call(() => inspectMusicVideoCastAndSetsImages(projectId, keys ? { keys } : {}, { silent: true }), 'Vision re-check finished');
+  const acknowledgeImage = (input) => call(() => acknowledgeMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Image review acknowledged');
   const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
   const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
@@ -177,5 +189,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

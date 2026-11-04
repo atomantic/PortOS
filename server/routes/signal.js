@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
+import { validateRequest } from '../lib/validation.js';
+import * as signalManage from '../services/signalManage.js';
 
 import { asyncHandler } from '../lib/errorHandler.js';
 import * as signalSync from '../services/signalSync.js';
@@ -28,4 +31,29 @@ router.post('/sync', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+const listSchema = z.object({ q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(2000).optional() });
+router.get('/conversations', asyncHandler(async (req, res) => {
+  const options = validateRequest(listSchema, req.query);
+  res.json({ conversations: await signalManage.listConversations(options) });
+}));
+const conversationSchema = z.object({ conversationId: z.string().trim().min(1).max(1000), purgeExisting: z.boolean().optional() });
+router.post('/purge', asyncHandler(async (req, res) => {
+  const body = validateRequest(conversationSchema, req.body);
+  res.json(await signalManage.purgeConversation(body.conversationId));
+}));
+router.post('/blocklist/conversations', asyncHandler(async (req, res) => {
+  const body = validateRequest(conversationSchema, req.body);
+  res.json(await signalManage.blockConversation(body.conversationId, body));
+}));
+router.get('/blocklist', asyncHandler(async (req, res) => {
+  res.json(await signalManage.readBlocklist());
+}));
+const blocklistSchema = z.object({
+  handles: z.array(z.string().trim().min(1).max(200)).max(5000),
+  conversationIds: z.array(z.string().trim().min(1).max(1000)).max(5000),
+});
+router.put('/blocklist', asyncHandler(async (req, res) => {
+  const body = validateRequest(blocklistSchema, req.body);
+  res.json(await signalManage.setBlocklist(body));
+}));
 export default router;

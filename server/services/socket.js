@@ -318,11 +318,14 @@ const SIMPLE_BRIDGES = [
   { emitter: jevEvents, event: 'heads', channel: 'jev:heads', payload: noPayload },
   { emitter: layaMlxEvents, event: 'updated', channel: 'laya:status', payload: noPayload },
   { emitter: providerQuotaEvents, event: 'updated', channel: 'provider-quota:updated', payload: noPayload },
+  { emitter: settingsEvents, event: 'usage:fleet-billing-updated', channel: 'usage:fleet-billing-updated', payload: noPayload },
   // Importer analyze-phase stage progress; each frame carries a `runId` so the
   // client ignores stragglers from a prior run.
   { emitter: importerEvents, event: 'progress', channel: 'importer:progress' },
   { emitter: catalogEvents, event: 'progress', channel: 'catalog:extract:progress' },
   { emitter: catalogEvents, event: 'primitive-changed', channel: 'catalog:primitive-changed' },
+  // An Environments photoreal (Blender) render started, finished or failed.
+  { emitter: catalogEvents, event: 'photoreal', channel: 'catalog:photoreal' },
   // A record's media rows changed (an image added, removed or re-roled).
   { emitter: catalogEvents, event: 'assets-changed', channel: 'catalog:assets-changed' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
@@ -344,6 +347,8 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'scene-video', channel: 'music-video:scene-video' },
   // A scene render failed (or its recorded failure cleared) — #10154.
   { emitter: musicVideoEvents, event: 'scene-failure', channel: 'music-video:scene-failure' },
+  // Research and seed for a shot or cameo started, imported its photos, or found none (#14822).
+  { emitter: musicVideoEvents, event: 'research-seed', channel: 'music-video:research-seed' },
   { emitter: musicVideoEvents, event: 'auto-review', channel: 'music-video:auto-review' },
   { emitter: musicVideoEvents, event: 'production', channel: 'music-video:production' },
   // A fully-autonomous run (prompt → lyrics → Suno song → video) advancing.

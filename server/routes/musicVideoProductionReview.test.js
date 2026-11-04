@@ -593,24 +593,6 @@ describe('revising from review feedback', () => {
   });
 });
 
-describe('locking one shot', () => {
-  const lock = (body, auth) => {
-    const req = request(app).post(`${base}/production-review/shots`);
-    return (auth ? req.set('authorization', auth) : req).send(body);
-  };
-
-  it('locks and unlocks a Board shot for a signed-in reviewer only', async () => {
-    const sceneId = (await store.getProject(project.id)).scenes[0].sceneId;
-    expect((await lock({ sceneIds: [sceneId], locked: true }, 'Bearer expired')).status).toBe(401);
-    const locked = await lock({ sceneIds: [sceneId], locked: true });
-    expect(locked.status).toBe(200);
-    expect(locked.body.readiness.storyboard.shotLocks[sceneId]).toBe('locked');
-    const unlocked = await lock({ sceneIds: [sceneId], locked: false });
-    expect(unlocked.body.readiness.storyboard.shotLocks[sceneId]).toBe('open');
-    expect((await lock({ sceneIds: ['missing-scene'], locked: true })).status).toBe(404);
-  });
-});
-
 describe('reverting a changed input to its approved value (#10241)', () => {
   const revert = body => request(app).post(`${base}/production-review/revert`).send(body);
 

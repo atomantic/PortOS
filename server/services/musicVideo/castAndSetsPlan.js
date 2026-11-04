@@ -10,7 +10,8 @@
  *                     Its references are the director's own character
  *                     identity images (`refImages`); mood board images are
  *                     outside inspiration and only reach it as text.
- *   - `expressions` — an expression sheet of the moods the direction found in
+ *   - `expressions` — the protagonist's face sheet: a row of head angles (front,
+ *                     both 3/4s, both profiles) over a row of the moods the direction found in
  *                     the story (`protagonist.expressions`); a direction saved
  *                     before those existed keeps the 2×3 performance sheet.
  *   - `form:<id>`   — one more character sheet per other age the story shows
@@ -18,6 +19,12 @@
  *                     when the form is bound to a fixed-casting subject
  *                     (`form.subjectId`), on that subject's own reference image.
  *   - `looks`       — the wardrobe lookbook, one panel per look.
+ *   - `props`       — one prop sheet of every recurring object the characters
+ *                     carry, use or ride (`direction.props`): cameras, bikes,
+ *                     instruments. Shots that show one are conditioned on it.
+ *   - `face:<id>`   — the same face sheet for each supporting cast member, built
+ *                     on their cast sheet. Close-up shots condition on face sheets
+ *                     (musicVideoConditioning.js).
  *   - `set:<id>`    — one EMPTY plate per set: any sentence of the description,
  *                     lighting or look that puts a person in it is dropped. Plates do
  *                     not depend on the character, so they render alongside it. A
@@ -34,16 +41,16 @@
  * its prompt. A code-only project plans no images at all.
  */
 
+import { FACE_SHEET_ANGLE_TEMPLATE, FACE_SHEET_TEMPLATE_INSTRUCTION } from '../../lib/faceSheetAngleTemplate.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
-import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
 import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
+import { peopleLightLine } from '../../lib/musicVideoSnapshotLight.js';
 import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });
-// Mirrors MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES / the visual spec's list cap.
-const MAX_CONDITIONING = 4;
 const MAX_REFERENCES = 24;
 const MAX_SUBJECTS = 24;
 export const CAST_SETS_REF_PREFIX = 'mvr-cs-';
@@ -52,14 +59,21 @@ export { CAST_SETS_SUBJECT_PREFIX };
 // Only the medium is fixed; the look (film stock, light, texture) comes from
 // the project's own mood board / style via `direction.look`.
 const PHOTO = 'photorealistic, editorial photography';
+// Identity and wardrobe sheets define the person; recurring objects have their
+// own sheet, even when a legacy signature or wardrobe mentions carrying one.
+const EMPTY_HANDS = 'Hands empty and relaxed, holding no device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only, drawn as worn (a watch on the wrist, a camera hanging from its wrist strap), never gripped in a hand; never put a carried object from the description or reference images in their hands';
+// Stacked, interlocked or piled look-alike objects are where image models fuse
+// geometry (chairs molded into a table), and every shot on the set copies it.
+const PLAUSIBLE_SET = 'Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';
 const sentence = (s) => {
   const t = String(s || '').trim();
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
 };
 const join = (...parts) => parts.map(sentence).filter(Boolean).join(' ');
 
-function identity(p) {
-  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`].filter(Boolean).join('; ');
+function identity(p, { includeSignature = true } = {}) {
+  return [p.face && `face: ${p.face}`, p.hair && `hair: ${p.hair}`,
+    includeSignature && p.signature && `signature: ${p.signature} (keep physical and worn details; carried objects belong on the prop sheet)`].filter(Boolean).join('; ');
 }
 
 /**
@@ -72,7 +86,7 @@ function identityImages(project, exclude = new Set()) {
   return [...new Set((project?.visualSpec?.references || [])
     .filter((r) => r?.role === 'character' && r.condition && r.imageId && !exclude.has(r.imageId)
       && !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX) && !isOutsideMusicVideoReference(r))
-    .map((r) => r.imageId))].slice(0, MAX_CONDITIONING);
+    .map((r) => r.imageId))].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
 }
 
 /**
@@ -88,7 +102,7 @@ function formBindings(project, forms, catalogLikeness) {
     const subject = subjects.find((s) => s.id === f.subjectId);
     if (!subject) return [f.id, { subjectId: f.subjectId, missing: 'subject', reserved: unlinkedSubjectImage(project, f) }];
     const catalog = catalogLikeness[subject.id]?.images || [];
-    const images = (catalog.length ? catalog : [subject.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING - 1);
+    const images = (catalog.length ? catalog : [subject.imageId].filter(Boolean)).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES - 1);
     return [f.id, images.length ? { subjectId: f.subjectId, images, imageId: subject.imageId } : { subjectId: f.subjectId, missing: 'image' }];
   }));
 }
@@ -183,7 +197,8 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
 
 /**
  * Build the full image plan for a direction: `{ [key]: { key, kind, label,
- * prompt, deps, refKeys, refImages?, setId?, testIndex? } }`. `refKeys` name
+ * prompt, deps, refKeys, refImages?, refTemplates?, setId?, testIndex? } }`. Shipped
+ * `refTemplates` precede all identity references. `refKeys` name
  * other plan keys whose image is passed as a reference (in order), then
  * `refImages` (a linked catalog record's Casting images, else the reference
  * labeled with its name, then the director's character identity images)
@@ -192,6 +207,9 @@ function buildProceduralImagePlan(direction, { revisionNotes = {}, greyboxes = {
  * revision note for a key is appended to its prompt.
  */
 const expressionGrid = (n) => (n === 0 || n > 4 ? '2 rows x 3 columns' : n === 4 ? '2 rows x 2 columns' : `1 row x ${n} columns`);
+// The angle row every face sheet opens with, so a close-up at any angle has a view of the same face.
+const FACE_SHEET_ANGLES = 'TOP ROW, five tight head-and-shoulders views with a neutral face: FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT';
+const CAST_FACE_MOODS = '1) open laugh; 2) shy half-smile; 3) startled; 4) concentrating; 5) quiet and thoughtful';
 
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
@@ -225,17 +243,17 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   };
   const fixedImages = (f) => {
     const catalog = f && catalogLikeness[f.id]?.images;
-    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MAX_CONDITIONING);
+    return (catalog?.length ? catalog : [f?.imageId].filter(Boolean)).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
   };
   const protagonistSubject = fixedFor('character', p.name, { protagonist: true });
   // An age-specific reference grounds its own form, never the present-day sheet.
   const formImages = new Set([...bindings.values()].map((b) => b.imageId || b.reserved).filter(Boolean));
-  const identities = [...new Set([...fixedImages(protagonistSubject), ...identityImages(project, formImages)].filter((id) => id && !formImages.has(id)))].slice(0, MAX_CONDITIONING);
+  const identities = [...new Set([...fixedImages(protagonistSubject), ...identityImages(project, formImages)].filter((id) => id && !formImages.has(id)))].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
   // An age form no subject is bound to: that age's own Casting images of the protagonist's record.
   const protagonistForms = catalogLikeness[protagonistSubject?.id]?.forms || [];
   const ageImages = (form) => {
     const age = leadingAge(form.age);
-    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MAX_CONDITIONING - 1);
+    return age === null ? [] : (protagonistForms.find((f) => f.age === age)?.images || []).slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES - 1);
   };
   // Each person's height, the scale cue a sheet composited into a set lacks: the
   // direction's own, else the linked Casting record's, else a child age's median.
@@ -258,9 +276,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       identities.length && 'The SAME person as the identity reference images: keep their face, hair and build exactly',
       identity(p),
       heightLine(protagonistHeight),
-      p.signature && `Signature detail, always visible: ${p.signature}`,
       firstLook && `Wearing ${firstLook.description}`,
       rulesLine(p),
+      EMPTY_HANDS,
       'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
       style && `Look: ${style}`,
       `${PHOTO}, even studio light, lookbook realism`,
@@ -272,12 +290,14 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   plan.expressions = {
     key: 'expressions',
     kind: 'expressions',
-    label: 'Expression sheet',
+    label: 'Face sheet',
     deps: ['character'],
     refKeys: ['character'],
+    refTemplates: [FACE_SHEET_ANGLE_TEMPLATE],
     refImages: identities,
     prompt: join(
-      `Photographic expression sheet, ${expressionGrid(moods.length)} grid of tight close-ups of the SAME person as the character reference`,
+      FACE_SHEET_TEMPLATE_INSTRUCTION,
+      `Photographic face reference sheet of the SAME person as the character reference, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BELOW IT, a ${expressionGrid(moods.length)} grid of tight close-ups of the moods`,
       identity(p),
       moods.length
         ? `Panels: ${moods.map((mood, i) => `${i + 1}) ${mood}`).join('; ')}`
@@ -291,6 +311,26 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       note('expressions'),
     ),
   };
+  const lipSyncs = musicVideoLipSyncs(project);
+
+  const props = direction.props || [];
+  if (props.length) {
+    plan.props = {
+      key: 'props',
+      kind: 'props',
+      label: 'Props',
+      deps: [],
+      refKeys: [],
+      prompt: join(
+        `Photographic prop reference sheet of ${props.length} object${props.length > 1 ? 's' : ''} on a seamless dark grey paper backdrop, each in its own panel with a small typewriter caption of its name, shown from the angle that reads it best`,
+        ...props.map((item) => `${item.name.toUpperCase()}${item.owner ? ` (${item.owner})` : ''}: ${item.description}`),
+        'Every object exactly as described, real and photographed with honest wear, nobody in frame, no brand names, logos or text on any object',
+        style && `Look: ${style}`,
+        `${PHOTO}, even studio light`,
+        note('props'),
+      ),
+    };
+  }
 
   plan.looks = {
     key: 'looks',
@@ -307,7 +347,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       'The same one person alone in every panel, nobody else in frame',
       identity(p),
       rulesLine(p),
-      ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}${p.signature ? `, with ${p.signature}` : ''}`),
+      ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}`),
+      EMPTY_HANDS,
       `Seamless dark grey backdrop, typewriter captions ${looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}`).join(', ')}`,
       style && `Look: ${style}`,
       `${PHOTO}, lookbook realism`,
@@ -339,6 +380,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         form.hair && `hair: ${form.hair}`,
         form.wardrobe && `Wearing ${form.wardrobe}`,
         rulesLine(p),
+        EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
         (form.look || style) && `Look: ${form.look || style}`,
@@ -367,11 +409,33 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         identity(c),
         heightLine(castHeight(c)),
         c.wardrobe && `Wearing ${c.wardrobe}`,
+        EMPTY_HANDS,
         p.name && `A different person from ${p.name}`,
         'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
         style && `Look: ${style}`,
         `${PHOTO}, even studio light, lookbook realism`,
         note(key),
+      ),
+    };
+    const faceKey = `face:${c.id}`;
+    plan[faceKey] = {
+      key: faceKey,
+      kind: 'face',
+      label: `${c.name} face sheet`,
+      castId: c.id,
+      deps: [key],
+      refKeys: [key],
+      refTemplates: [FACE_SHEET_ANGLE_TEMPLATE],
+      prompt: join(
+        FACE_SHEET_TEMPLATE_INSTRUCTION,
+        `Photographic face reference sheet of the SAME person as the cast sheet, ${c.name}, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BOTTOM ROW, five close-ups of their moods, front or near-front`,
+        identity(c),
+        `Panels: ${CAST_FACE_MOODS}`,
+        !lipSyncs && 'Mouth closed or relaxed in every panel: nobody is singing or speaking',
+        'Consistent identity across all panels, nothing held in the hands',
+        style && `Look: ${style}`,
+        `${PHOTO}, thin black gutters between panels, no text`,
+        note(faceKey),
       ),
     };
   }
@@ -399,6 +463,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         eraLine(set.era),
         plateLight && `Lighting: ${plateLight}`,
         setLook && `Look: ${setLook}`,
+        PLAUSIBLE_SET,
         'Photorealistic music video location still',
         note(key),
       ),
@@ -427,14 +492,19 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refKeys: (form ? [`set:${test.setId}`, `form:${form.id}`] : [`set:${test.setId}`, 'character', 'looks']).filter((k) => plan[k]),
       prompt: join(
         `Photorealistic music video still, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
+        // Test actions may use a prop, and legacy cards match their exact saved
+        // prompt. Keep sheet-only signature instructions out of these frames.
         form
           ? `Place the person from the ${form.label} character sheet in it (${[form.age && `${p.name || 'the protagonist'} at age ${form.age}`, form.hair && `hair: ${form.hair}`].filter(Boolean).join('; ') || form.label})`
-          : `Place the person from the character sheet in it (${identity(p)})`,
+          : `Place the person from the character sheet in it (${identity(p, { includeSignature: false })})`,
         form ? form.wardrobe && `Wearing ${form.wardrobe}` : look && `Wearing ${look.description}`,
         test.action,
         heightScaleLine(form ? `${p.name || 'the protagonist'} ${form.age ? `at age ${form.age}` : `(${form.label})`}` : p.name || 'the protagonist', form ? formHeight(form) : protagonistHeight),
         era ? eraLine(era) : form && `The place as it was when ${p.name || 'the protagonist'} was ${form.age || form.label}, with period-correct buildings, vehicles and props`,
         set?.lighting && `Light: ${set.lighting}`,
+        // A test frame puts a person into a plate: lit apart from it, they read as pasted in.
+        // Judged on the look this frame uses (an era's own look overrides the project's).
+        peopleLightLine([testLook || style], { always: true }),
         // A dated age with no look of its own shares the project look; an undated
         // (older) one follows its sheet, whose description may carry the stock.
         testLook ? `Look: ${testLook}` : form && !form.era ? `Match the color, film stock and grain of the ${form.label} character sheet` : style && `Look: ${style}`,
@@ -475,26 +545,31 @@ export function noteImageKeys(target, plan) {
   if (plan[t]) return [t];
   if (t === 'protagonist' || t === 'cast') return ['character'];
   if (t === 'wardrobe') return ['looks'];
-  if (t === 'expression') return ['expressions'];
-  const byName = Object.values(plan).find((item) => ['plate', 'cast', 'form'].includes(item.kind) && item.label.toLowerCase() === t);
+  if ((t === 'prop' || t === 'object') && plan.props) return ['props'];
+  if (t === 'expression' || t === 'face') return ['expressions'];
+  const byName = Object.values(plan).find((item) => ['plate', 'cast', 'form', 'face'].includes(item.kind) && item.label.toLowerCase() === t);
   return byName ? [byName.key] : null;
 }
 
 // ---- applying an approved result ---------------------------------------------
 
+const castFaceReferenceId = (c) => `${CAST_SETS_REF_PREFIX}face-${c.id}`.slice(0, 64);
+const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+const protagonistFaceReference = (p, images) => ({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: `${trimTo(p.name || 'Protagonist', 80)} — face sheet`, note: trimTo([p.face, p.hair].filter(Boolean).join('; '), 1000) });
+const castFaceReference = (c, images) => ({ id: castFaceReferenceId(c), imageId: images[`face:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — face sheet`, note: trimTo([c.face, c.hair].filter(Boolean).join('; '), 1000) });
+
 /**
  * The visual-spec references the approved check-in contributes: the character
- * sheet (conditioning) first, then set plates by song coverage (conditioning
- * while the backend's reference cap allows, after any the director flagged
- * themselves), then the supporting cast sheets (conditioning only the shots
- * that feature them), then the looks and expression sheets as unconditioned
+ * sheet first, then set plates by song coverage as conditioning candidates
+ * after any the director flagged themselves. Each render takes as many as
+ * its own renderer accepts. Supporting cast sheets condition only the shots
+ * that feature them; the looks and expression sheets remain unconditioned
  * reference. Replaces any earlier Cast & Sets references; keeps the director's.
  * Room in the list is held for the sheets of the catalog-linked supporting
  * characters the director cast, so nothing else pushes one of them out.
  */
 export function castAndSetsReferences(project, stage) {
   const existing = (project?.visualSpec?.references || []).filter((r) => !String(r.id || '').startsWith(CAST_SETS_REF_PREFIX));
-  let budget = Math.max(0, MAX_CONDITIONING - existing.filter((r) => r.condition).length);
   let room = Math.max(0, MAX_REFERENCES - existing.length);
   const images = stage?.images || {};
   const direction = stage?.direction || {};
@@ -504,10 +579,8 @@ export function castAndSetsReferences(project, stage) {
   const out = [];
   const push = (ref, wantsCondition, { sheet = false } = {}) => {
     if (!ref.imageId || room - (sheet ? 0 : held) <= 0) return;
-    const condition = wantsCondition && budget > 0;
-    if (condition) budget -= 1;
     room -= 1;
-    out.push({ ...ref, condition, use: 'reference' });
+    out.push({ ...ref, condition: wantsCondition, use: 'reference' });
   };
   const p = direction.protagonist || {};
   push({ id: `${CAST_SETS_REF_PREFIX}character`, imageId: images.character?.imageId, role: 'character', label: `${p.name || 'Protagonist'} — character sheet`, note: trimTo([p.height && `Height: ${p.height}`, p.face, p.hair, p.signature].filter(Boolean).join('; '), 1000) }, true, { sheet: true });
@@ -529,12 +602,29 @@ export function castAndSetsReferences(project, stage) {
     if (sheet) held -= 1;
     push({ id: castReferenceId(c), imageId: images[`cast:${c.id}`]?.imageId, role: 'character', label: `${trimTo(c.name, 80)} — cast sheet`, note: trimTo([c.role, c.height && `Height: ${c.height}`, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000) }, false, { sheet });
   }
+  // The prop sheet conditions only the shots that show a prop (musicVideoConditioningReferences).
+  const props = direction.props || [];
+  push({ id: CAST_SETS_PROPS_REF_ID, imageId: images.props?.imageId, role: 'prop', label: 'Props', note: trimTo(props.map((item) => `${item.name}: ${item.description}`).join(' | '), 1000) }, false);
   push({ id: `${CAST_SETS_REF_PREFIX}looks`, imageId: images.looks?.imageId, role: 'wardrobe', label: 'Looks', note: trimTo((direction.looks || []).map((l) => l.name).join(', '), 1000) }, false);
-  push({ id: `${CAST_SETS_REF_PREFIX}expressions`, imageId: images.expressions?.imageId, role: 'character', label: 'Expression sheet', note: trimTo(p.gesture, 1000) }, false);
+  push(protagonistFaceReference(p, images), false);
+  // Extra cast face sheets use the remaining slots without displacing existing reference types.
+  for (const c of direction.cast || []) {
+    push(castFaceReference(c, images), false);
+  }
   return [...existing, ...out];
 }
 
-const castReferenceId = (c) => `${CAST_SETS_REF_PREFIX}cast-${c.id}`.slice(0, 64);
+export const CAST_SETS_PROPS_REF_ID = `${CAST_SETS_REF_PREFIX}props`;
+
+/** Face sheets omitted only because the reference list was full at approval. */
+export function castAndSetsOverflowFaceReferences(stage, references) {
+  const images = stage?.images || {};
+  const direction = stage?.direction || {};
+  const published = new Set((references || []).map((ref) => ref.id));
+  return [protagonistFaceReference(direction.protagonist || {}, images), ...(direction.cast || []).map((c) => castFaceReference(c, images))]
+    .filter((ref) => ref.imageId && !published.has(ref.id))
+    .map((ref) => ({ ...ref, condition: false, use: 'reference' }));
+}
 
 /**
  * The catalog-linked supporting characters whose rendered cast sheet is not in
@@ -581,6 +671,14 @@ export function castAndSetsSubjects(project, stage) {
       name: trimTo(c.name, 120),
       description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000),
       role: 'supporting',
+    });
+  }
+  for (const item of direction.props || []) {
+    ours.push({
+      id: `${CAST_SETS_SUBJECT_PREFIX}prop-${item.id}`.slice(0, 64),
+      kind: 'object',
+      name: trimTo(item.name, 120),
+      description: trimTo([item.description, item.owner && `Used by ${item.owner}`].filter(Boolean).join('. '), 1000),
     });
   }
   for (const set of direction.sets || []) {

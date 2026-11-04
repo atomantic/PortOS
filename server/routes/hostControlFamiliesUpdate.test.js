@@ -118,6 +118,7 @@ describe('host-control gate on update, brain-link and ask promote writes (#8742)
       ['post', '/api/update/node-runtime', { version: 'v26.12.1' }],
       ['post', '/api/update/pm2', {}],
       ['post', '/api/update/node-runtime/startup', {}],
+      ['post', '/api/update/software/blender', {}],
       ['post', '/api/brain/links/link-1/pull', {}],
       ['post', '/api/ask/conv-1/turns/turn-1/promote', { target: 'task' }],
     ];

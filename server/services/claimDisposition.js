@@ -16,8 +16,9 @@ async function trustedGithubEvent(event, target, run) {
   return trust.isTrusted(event.actor?.login);
 }
 
-function selectedIssues(task, agent) {
+async function selectedIssues(task, agent, context) {
   const branches = agent?.metadata?.claimBranches;
+  if (branches != null && !Array.isArray(branches)) return null;
   if (Array.isArray(branches) && branches.length) {
     // Every bound child must be accounted for; never settle an entire swarm by
     // presenting one convenient closed issue. Unknown branch formats refuse.
@@ -26,7 +27,13 @@ function selectedIssues(task, agent) {
     return numbers.every(Boolean) ? [...new Set(numbers)] : null;
   }
   const number = positiveIssue(task.metadata?.claimTarget);
-  return number ? [number] : null;
+  if (number) return [number];
+  if (task.metadata?.claimTarget || !agent.metadata?.claimSelection
+    || agent.metadata?.claimReleasedBranches?.length || agent.metadata?.checkoutSeeds?.length) return null;
+  const [{ claimSelectionIssues }, { getInstanceId }] = await Promise.all([
+    import('./cosClaimSelection.js'), import('./instanceIdentity.js'),
+  ]);
+  return claimSelectionIssues(agent, task, { ...context, instanceId: await getInstanceId() });
 }
 
 const PR_FIELDS = `number merged mergedAt baseRefName baseRepository { nameWithOwner }
@@ -170,12 +177,12 @@ async function inspectClaimDisposition(task, agent) {
   const source = agent.metadata?.sourceWorkspace || agent.metadata?.workspacePath;
   if (!app?.repoPath || typeof source !== 'string'
     || resolve(expandHome(app.repoPath)) !== resolve(source)) return unverified('repository-binding-unverified');
-  const numbers = selectedIssues(task, agent);
-  if (!numbers?.length || numbers.length > 50) return unverified('selected-issue-unverified');
   const { tracker, target } = await resolveAppForgeTarget(app);
   if (!['github', 'gitlab'].includes(tracker) || target?.forge !== tracker || !target?.fullName?.includes('/')) {
     return unverified('tracker-unsupported');
   }
+  const numbers = await selectedIssues(task, agent, { repoPath: source, tracker, target });
+  if (!numbers?.length || numbers.length > 50) return unverified('selected-issue-unverified');
   const { resolveForgeForRepo } = await import('./forgeAuth.js');
   const forge = await resolveForgeForRepo(source, { forgeAccount: app.forgeAccount || null });
   if (forge?.cli !== (tracker === 'github' ? 'gh' : 'glab')) return unverified('forge-mismatched');
@@ -194,7 +201,7 @@ async function inspectClaimDisposition(task, agent) {
     if (!/^[a-f0-9]{40,64}$/i.test(issue.defaultCommit || '')) return unverified('default-branch-unavailable');
     // Swarm coordinators run outside their selected children's checkouts.
     // Only server-captured seeds bind each child to the path we must inspect.
-    const workspace = Array.isArray(agent.metadata?.claimBranches)
+    const workspace = agent.metadata?.claimBranches?.length
       ? agent.metadata.checkoutSeeds?.find(seed => seed.agentId === agent.id && seed.branch === `claim/issue-${issue.issue}`
         && typeof seed.repoPath === 'string' && resolve(seed.repoPath) === resolve(source))?.path
       : agent.metadata?.workspacePath;

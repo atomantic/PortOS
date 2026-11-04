@@ -713,6 +713,9 @@ export default function BeeperChatSurface({
   // longer needs it.
   const {
     entries: outboxEntries,
+    loadState: outboxLoadState,
+    loadError: outboxLoadError,
+    refresh: refreshOutbox,
     sending: outboxSending,
     confirmation: outboxConfirmation,
     submit: sendOutboxMessage,
@@ -1214,6 +1217,9 @@ export default function BeeperChatSurface({
             draft={drafts[conversationId] || ''}
             onDraftChange={setDraft}
             outboxEntries={outboxEntries}
+            outboxLoadState={outboxLoadState}
+            outboxLoadError={outboxLoadError}
+            onRetryOutbox={refreshOutbox}
             sending={outboxSending}
             confirmation={outboxConfirmation}
             onSend={sendOutboxMessage}

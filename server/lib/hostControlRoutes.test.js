@@ -11,6 +11,11 @@ it('requires host control to retire a release checkpoint', () => {
     .toBe('POST /api/cos/schedule/release-synchronization/operator-reset');
 });
 
+it('requires host control to verify an independent release delivery', () => {
+  expect(hostControlRouteFor('POST', '/api/cos/schedule/release-synchronization/verify-delivery'))
+    .toBe('POST /api/cos/schedule/release-synchronization/verify-delivery');
+});
+
 it('requires host control for a manual cleanup recheck', () => {
   expect(isHostControlRoute('POST', '/api/cos/agents/agent-1/recheck-cleanup')).toBe(true);
 });
@@ -96,6 +101,7 @@ describe('Universe Builder mutation inventory (#10669)', () => {
     'POST /api/universe-builder/:id/canon/:kind/:entryId/apply-image-correction',
     'POST /api/universe-builder/:id/characters/:entryId/augment/apply',
     'POST /api/universe-builder/:id/canon/backfill-descriptions',
+    'PATCH /api/universe-builder/:id/canon/:kind/:entryId',
     'PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock',
     'DELETE /api/universe-builder/:id/canon/:kind/:entryId',
     'DELETE /api/universe-builder/:id/canon/:kind/:entryId/image-refs/:filename',
@@ -619,6 +625,8 @@ describe('Music Video agent workflow policy (#9869)', () => {
       'POST /api/music-video/:id/publish-kit/copy',
       'POST /api/music-video/:id/cast-and-sets',
       'POST /api/music-video/:id/cast-and-sets/regenerate',
+  'POST /api/music-video/:id/cast-and-sets/edit-image',
+  'POST /api/music-video/:id/cast-and-sets/accept-image-edit',
       'PATCH /api/music-video/:id/cast-and-sets/direction',
       'POST /api/music-video/:id/cast-and-sets/feedback',
       'POST /api/music-video/:id/cast-and-sets/resume',

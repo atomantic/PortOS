@@ -100,6 +100,13 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Derived render cleanup changed; refresh the project render inventory.',
     payloadSchema: { type: 'object', required: ['projectId'], properties: { projectId: { type: 'string' } }, additionalProperties: false },
   },
+  'music-video:research-seed': {
+    direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), or failed.',
+    payloadSchema: { type: 'object', required: ['projectId', 'status'], properties: {
+      projectId: { type: 'string' }, sceneId: { type: 'string' }, cameoId: { type: 'string' }, status: { type: 'string', enum: ['running', 'done', 'failed'] },
+      subject: { type: 'string' }, added: { type: 'integer' }, error: { type: 'string' }, project: { type: 'object' },
+    }, additionalProperties: false },
+  },
   'music-video:song-revision': {
     direction: 'server-to-client', summary: 'A song revision changed; apply the persisted project snapshot.',
     payloadSchema: { type: 'object', required: ['projectId', 'project'], properties: { projectId: { type: 'string' }, project: { type: 'object' } } },
@@ -413,6 +420,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate matching catalog identity receipt and detail views after a durable local change.',
     payloadSchema: { type: 'object', properties: { operationId: { type: 'string' }, sourceId: { type: 'string' }, survivorId: { type: 'string' } },
       required: ['operationId', 'sourceId', 'survivorId'], additionalProperties: false },
+  },
+  'catalog:photoreal': {
+    direction: 'server-to-client',
+    summary: 'An Environments photoreal (Blender) render for a place started, finished or failed; carries the job state.',
+    payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' }, job: { type: 'object' } }, required: ['ingredientId', 'job'], additionalProperties: false },
   },
   'catalog:primitive-changed': {
     direction: 'server-to-client',
@@ -734,6 +746,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'provider-quota:updated': {
     direction: 'server-to-client',
     summary: 'Invalidate quota cards after a background scrape settles, including failures; no account or quota data.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  'usage:fleet-billing-updated': {
+    direction: 'server-to-client',
+    summary: 'Invalidate subscription quota selection after the fleet billing setting changes; no billing or quota data.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   'shell:attach': input(shellAttachSchema, 'Attach this socket to an existing terminal session.'),

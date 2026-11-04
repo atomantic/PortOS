@@ -99,6 +99,20 @@ describe('browserService config persistence', () => {
     expect(reloaded.cdpPort).toBe(6000);
     expect(reloaded.headless).toBe(false);
   });
+
+  it('refuses lifecycle and config changes while a restart review is in progress', async () => {
+    const service = await importService();
+    let finish;
+    const pending = service.restartBrowser({ beforeRestart: () => new Promise((_, reject) => { finish = () => reject(new Error('cancel test')); }) });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    for (const operation of [() => service.stopBrowser(), () => service.launchBrowser(),
+      () => service.saveConfig({}), () => service.updateConfig({ headless: true }), () => service.restartBrowser()]) {
+      await expect(operation()).rejects.toMatchObject({ status: 409, code: 'BROWSER_OPERATION_BUSY' });
+    }
+    finish();
+    await expect(pending).rejects.toThrow('cancel test');
+    await expect(service.updateConfig({ headless: true })).resolves.toMatchObject({ headless: true });
+  });
 });
 
 // Issue #8164: the strict, mapped-shape reader (`listProcessesStrict`)
@@ -822,7 +836,7 @@ describe('read-only browser observation', () => {
     pageBody = [{ id: 'example-page', title: 'Example', url: 'https://example.com', type: 'page' }];
     pm2 = { execPm2: vi.fn(), listProcessesStrict: vi.fn().mockResolvedValue([{ name: 'portos-browser', status: 'online' }]) };
     probe = vi.fn(async url => new Response(JSON.stringify(
-      url.endsWith('/health') ? { status: 'healthy' }
+      url.endsWith('/health') ? { status: 'healthy', cdpHost: '127.0.0.1', cdpPort: 5556, headless: false }
         : url.endsWith('/json/list') ? pageBody : { Browser: 'Example browser' }
     )));
     vi.doMock('./pm2.js', () => pm2);
@@ -889,5 +903,17 @@ describe('read-only browser observation', () => {
       process: { status: 'online' },
       pages: [],
     });
+  });
+
+  it('uses the IPv4 health listener for IPv6 CDP and rejects incomplete health data', async () => {
+    const service = await import('./browserService.js');
+    await service.saveConfig({ cdpHost: '::1', healthPort: 5557 });
+    const health = await service.getHealthStatus({ strict: true });
+    expect(health).toMatchObject({ connected: true, cdpHost: '127.0.0.1' });
+    expect(probe.mock.calls.find(([url]) => url.endsWith('/health'))[0]).toBe('http://127.0.0.1:5557/health');
+    probe.mockResolvedValue(new Response(JSON.stringify({ status: 'healthy' })));
+    await expect(service.getHealthStatus({ strict: true })).rejects.toThrow('Browser health unavailable');
+    probe.mockResolvedValue(new Response(JSON.stringify({ status: 'healthy', cdpHost: '', cdpPort: 0, headless: false })));
+    await expect(service.getHealthStatus({ strict: true })).rejects.toThrow('Browser health unavailable');
   });
 });

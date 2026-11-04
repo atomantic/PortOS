@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
+import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
@@ -25,13 +26,17 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
+  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
   if (!choices.length) return null;
-  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox);
-  const ids = chosen.map((ref) => ref.id);
-  const others = choices.filter((ref) => !ids.includes(ref.id));
+  // The selected greybox is added separately and is not one of the saved picks.
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
+  const chosenIds = chosen.map((ref) => ref.id);
+  const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
+  const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
-  const full = ids.length >= MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
+  // Unresolved saved guides still occupy slots and must survive an edit.
+  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
+  const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
   const previewProps = (ref) => ({
     title: nameOf(ref),
     onPointerEnter: (e) => { if (e.pointerType === 'mouse') setPreview(ref); },
@@ -57,10 +62,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   // Until the cast member's guides load, an edit would save the row without them.
   const variantId = scene.characterVariant?.ingredientId;
   const locked = disabled || Boolean(castMedia && variantId && castMedia[variantId] === undefined);
-  // A saved guide id that does not resolve now (its media failed to load) is kept, so an edit cannot drop it.
-  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
   const set = (picked) => {
-    const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+    const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
     onEditLocal(scene.sceneId, { frameReferenceIds: next });
     onSave(scene.sceneId, { frameReferenceIds: next });
   };
@@ -79,7 +82,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
             {thumb(ref)}
             <span className="min-w-0 max-w-[10rem] truncate">{nameOf(ref)}</span>
             {!ref.greybox && <button type="button" onClick={unlessLongPress(() => { set(ids.filter((id) => id !== ref.id)); setPreview((shown) => (shown?.id === ref.id ? null : shown)); })} disabled={locked} aria-label={`Don't send ${nameOf(ref)}`}
-              className="inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[40px] min-w-[32px] items-center justify-center rounded hover:bg-port-border disabled:opacity-50 sm:min-h-[28px] sm:min-w-[24px]">
               <X size={12} aria-hidden="true" />
             </button>}
           </li>
@@ -87,14 +90,14 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         {others.length > 0 && (
           <li>
             <button type="button" onClick={() => setAdding((open) => !open)} disabled={locked || full} aria-expanded={adding}
-              title={full ? `Up to ${MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES} references` : 'Send another character or set'}
+              title={full ? `Up to ${MUSIC_VIDEO_MAX_REFERENCE_CHOICES} references` : 'Send another character or set'}
               className={`${CHIP} px-2 disabled:opacity-50`}>
               <Plus size={12} aria-hidden="true" /> Add
             </button>
           </li>
         )}
       </ul>
-      {full && <p className="text-[11px] text-port-text-muted">Refines and end frames send the frame plus the first {MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES - 1}.</p>}
+      {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render sends as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No references: frames render from the prompt alone.</p>}
       {adding && !full && (
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">

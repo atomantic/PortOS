@@ -81,7 +81,7 @@ describe('planShots', () => {
   const VERSE = [{ label: 'Verse', startSec: 0, endSec: 24, energy: 0.5 }];
 
   it('splits a verse longer than the clip capacity into bounded, beat-cut shots covering it exactly', () => {
-    const { shots, pacing } = planShots(VERSE, { ...GRID, clipCapacitySec: 5 });
+    const { shots, pacing } = planShots(VERSE, { ...GRID, clipCapacitySec: 5, pacing: { maxShotSec: 5 } });
     expect(pacing).toEqual({ minShotSec: 2, maxShotSec: 5, hookSec: 3 });
     expect(shots.length).toBeGreaterThanOrEqual(5);
     expectTiles(shots, 0, 24);
@@ -100,13 +100,21 @@ describe('planShots', () => {
     expect(shots.every((s) => s.sectionIndex === 0 && s.sectionLabel === 'Verse' && s.shotCount === shots.length)).toBe(true);
     expect(shots.map((s) => s.shotIndex)).toEqual(shots.map((_, i) => i));
     // Deterministic: the same inputs plan the same shots.
-    expect(planShots(VERSE, { ...GRID, clipCapacitySec: 5 }).shots).toEqual(shots);
+    expect(planShots(VERSE, { ...GRID, clipCapacitySec: 5, pacing: { maxShotSec: 5 } }).shots).toEqual(shots);
+  });
+
+  it('cuts about once a bar by default, even when one clip could hold a longer shot', () => {
+    const { shots, pacing } = planShots(VERSE, { ...GRID, clipCapacitySec: 10 });
+    expect(pacing).toEqual({ minShotSec: 1.5, maxShotSec: 3, hookSec: 3 });
+    expectTiles(shots, 0, 24);
+    expect(shots.every((s) => s.endSec - s.startSec <= 3)).toBe(true);
+    expect(shots.length).toBeGreaterThanOrEqual(8);
   });
 
   it('uses a Grok clip capacity and a project pacing ceiling when given', () => {
-    const grok = planShots(VERSE, { ...GRID, clipCapacitySec: 10 }).shots;
+    const grok = planShots(VERSE, { ...GRID, clipCapacitySec: 10, pacing: { maxShotSec: 10 } }).shots;
     expect(grok.every((s) => s.endSec - s.startSec <= 10)).toBe(true);
-    expect(grok.length).toBeLessThan(planShots(VERSE, { ...GRID, clipCapacitySec: 5 }).shots.length);
+    expect(grok.length).toBeLessThan(planShots(VERSE, { ...GRID, clipCapacitySec: 5, pacing: { maxShotSec: 5 } }).shots.length);
     const paced = planShots(VERSE, { ...GRID, clipCapacitySec: 10, pacing: { maxShotSec: 4 } }).shots;
     expect(paced.every((s) => s.endSec - s.startSec <= 4)).toBe(true);
     expectTiles(paced, 0, 24);
@@ -182,7 +190,7 @@ describe('planShots', () => {
   // Section edges still come from snapSectionsToGrid (#4664). A ceiling wider
   // than every section keeps one shot per section so the edges are observable.
   describe('section edges', () => {
-    const WIDE = { clipCapacitySec: 60, pacing: { hookSec: 60 } };
+    const WIDE = { clipCapacitySec: 60, pacing: { hookSec: 60, maxShotSec: 60 } };
 
     it('snaps off-grid section boundaries onto the beat grid, keeping the timeline contiguous', () => {
       const { shots } = planShots([
@@ -327,14 +335,14 @@ describe('planProject', () => {
     const result = await planProject('mv-1');
 
     expect(getProject).toHaveBeenCalledTimes(1);
-    // Local renderer (5s clips): 30s of sections → more shots than sections,
+    // Default pacing (3 s shots): 30s of sections → more shots than sections,
     // each labeled within its section and never looping by default.
     const seeded = addProjectScenes.mock.calls[0][1];
     expect(seeded.length).toBeGreaterThan(3);
     expect(seeded[0]).toMatchObject({ label: expect.stringMatching(/^Intro · 1\/\d+$/), sectionLabel: 'Intro', sectionIndex: 0, startSec: 0, loop: false });
-    expect(seeded.every((scene) => scene.loop === false && scene.endSec - scene.startSec <= 5)).toBe(true);
+    expect(seeded.every((scene) => scene.loop === false && scene.endSec - scene.startSec <= 3)).toBe(true);
     expect(seeded.at(-1)).toMatchObject({ sectionLabel: 'Outro', sectionIndex: 2, endSec: 30 });
-    expect(result.pacing).toEqual({ minShotSec: 2, maxShotSec: 5, hookSec: 3 });
+    expect(result.pacing).toEqual({ minShotSec: 1.5, maxShotSec: 3, hookSec: 3 });
     expect(runPromptThroughProvider).not.toHaveBeenCalled();
     expect(result.project.renderHistoryId).toBe('rh-fresh');
     expect(result.scenesAdded).toBe(3);

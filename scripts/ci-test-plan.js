@@ -262,11 +262,11 @@ const FULL_TRIGGER_RULES = [
   // prove themselves against the complete suite rather than their own scope.
   // Only the ones the windows-server job itself executes (ci-base-sha,
   // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
-  // planner, lint runner, hidden-content scan and status verifier run on Linux
+  // planner, lint runner, hidden-content and commit-message scans and status verifier run on Linux
   // jobs only, so a Windows run would observe nothing they change.
   { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
-  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|scan-commit-session-links|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
 // Native Windows coverage is intentionally limited to CLI/TUI execution,
@@ -275,6 +275,7 @@ const FULL_TRIGGER_RULES = [
 export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
+  /^scripts\/(?:deferred-update\.mjs|update-headless-recovery\.test\.js)$/,
   /^server\/lib\/(?:bufferedSpawn|detachedSpawn|childProcess|bashResolver|processEnv|platform|spawnCwd|cliProviderRun|grok|execGit|windowsGitProcess|windowsGitSupervisor|windowsAgentProcess|windowsAgentSupervisor|nativeTrash|pathSafety|worktreeOwnership|staticImportGraph)\b/,
   /^server\/lib\/aiToolkit\/internal\/windowsSafeSpawn\.js$/,
   /^server\/lib\/shell(?:Cd|Exit|LivenessProbe|ReadinessProbe)(?:\.test)?\.js$/,
@@ -291,6 +292,7 @@ export const WINDOWS_RISK_RULES = [
 // one shared process helper must not pull all its application consumers onto
 // Windows. Full, scheduled and release plans retain this same native set.
 export const WINDOWS_CONTRACT_TESTS = [
+  'scripts/update-headless-recovery.test.js',
   // Launch, prompt transport, executable discovery and environment/cwd safety.
   'server/cos-runner/allowedCommands.test.js',
   'server/lib/agentGuard/index.test.js',
@@ -425,6 +427,8 @@ export const ALWAYS_RUN_TESTS = [
   // Pregate copies the sha into the test process so the local run uses this
   // plan's base, not a second guess.
   'server/lib/importScoping.test.js',
+  // Scans every lib source for upward service imports without importing it.
+  'server/lib/layering.test.js',
   // Whole-tree scanner over collectServerSources: every cwd-passing spawn pins PWD (#8723).
   'server/lib/spawnCwd.test.js',
   // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
@@ -585,12 +589,16 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
   || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
 );
 
-// Three narrow CI jobs observe a small, enumerable input set, so a pull request
-// that touches none of it skips them (non-PR and release-base runs are forced
-// full and always run all three). Each gate is the head tree's static import
-// closure of the job's entry points, computed per run so it cannot drift from
-// a hand-kept list, plus the non-module inputs named by the pattern. ci.yml is
-// in both patterns so a workflow edit proves the job still runs.
+// The narrow CI jobs below observe a small, enumerable input set, so a pull
+// request that touches none of it skips them (non-PR and release-base runs are
+// forced full and always run every one). A gate takes one of two forms:
+// - the head tree's static import closure of the job's entry points, computed
+//   per run so it cannot drift from a hand-kept list, plus the non-module
+//   inputs named by the job's pattern (prompt-history, linux-containment,
+//   supercollider-live, docker-containment-live);
+// - an explicit path list alone, when the closure would select the job on most
+//   diffs (macos-native; see its note).
+// Every pattern names ci.yml so a workflow edit proves the job still runs.
 export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
 // The guard reads git history of data.reference/prompts/stages and imports the
 // migrations that declare prompt hashes. The whole migrations directory is
@@ -643,6 +651,18 @@ export const DOCKER_CONTAINMENT_LIVE_ENTRIES = [
 ];
 // The job installs server dependencies from these before running anything.
 export const DOCKER_CONTAINMENT_LIVE_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+// The `macos-native` job runs the macOS launchd-coalition release-agent
+// boundary (#14781): suites that skip on every other platform, so the Linux
+// and Windows jobs can never prove them. macOS runners are the scarcest hosted
+// capacity, so the gate is this explicit path list, not an import closure —
+// the recovery suite's closure reaches most of the server.
+export const MACOS_NATIVE_TESTS = [
+  'server/lib/windowsAgentProcess.darwin.test.js',
+  'server/services/releaseCandidateRecovery.test.js',
+];
+// The supervision path itself, the dependency manifests and Vitest harness the
+// job installs and loads, and ci.yml so a workflow edit proves the job runs.
+export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/services\/(?:releaseCandidateRecovery[^/]*\.js|releaseCandidateSettlement\.js)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -987,7 +1007,7 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
  * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live) runs.
+ * Docker containment live, macOS native) runs.
  *
  * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
@@ -1011,6 +1031,7 @@ export function buildCiTestPlan(changedFiles, options = {}) {
       || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
     dockerContainmentLive: forceFull
       || touchesJobInputs(plan.changedFiles, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE),
+    macosNative: forceFull || plan.changedFiles.some((path) => MACOS_NATIVE_PATH_RE.test(path)),
   };
 }
 
@@ -1416,6 +1437,7 @@ export function emitGitHubPlan(plan) {
     linux_containment: plan.linuxContainment,
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
+    macos_native: plan.macosNative,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),

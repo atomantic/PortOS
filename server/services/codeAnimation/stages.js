@@ -30,7 +30,7 @@ import { checkSoundConsent, produceSoundtrack, muxSoundtrack } from './sound.js'
 import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 import { resolveBlenderExecution } from './execution.js';
 import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
-import { trackedRenderMap } from '../renderActivity.js';
+import { admittedRenderMap } from '../renderActivity.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];
@@ -42,7 +42,7 @@ const CANCEL_CODE = 'CODE_ANIMATION_RUN_CANCELED';
 
 const lifecycle = channel('portos.code-animation-stage.lifecycle');
 
-const activeRuns = trackedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
+const activeRuns = admittedRenderMap('code-animation', { noun: 'Code Animation production run', link: () => '/code-animation/production' });
 export const activeStageRunIds = () => [...activeRuns.keys()];
 
 const exhausted = dimension => new ServerError(`Production budget exhausted: ${dimension}`, { status: 409, code: BUDGET_CODE, context: { dimension } });
@@ -80,7 +80,9 @@ async function persist(ctx, status = 'running', { completed = false, revisionId 
   // scene bake) and the published output, so it commits under the backup
   // lease (#9982): a cut copies files before it dumps rows.
   await withBackupAssetPublication(() => store.saveStageRun(ctx.runId, status, snapshot(ctx), { completed, revisionId }));
-  emitCodeAnimationChanged(ctx.projectId);
+  // The terminal notification also needs the active slot retired; finish()
+  // emits it after this write settles while retaining admission through saving.
+  if (!completed) emitCodeAnimationChanged(ctx.projectId);
 }
 
 function remainingMs(ctx) {
@@ -304,7 +306,7 @@ function inspectStage(ctx, revision, style, pilot, review = null) {
 
 const repairPrompt = ({ manifest, files, entryPath, findings }) => [
   manifest.renderer.kind === 'blender'
-    ? 'Repair a Blender scene. Return the complete Python source in one ```python fence. Keep build_scene(config), deterministic baked constant subject/FX keys with portos_cadence 2 or 3, and smooth keyed camera. No live physics, external downloads or installers.'
+    ? `Repair a Blender scene. Return the complete Python source in one \`\`\`python fence. Keep build_scene(config), deterministic baked constant subject/FX keys with portos_cadence 2 or 3, and smooth keyed camera. No live physics, external downloads or installers. Target Blender ${manifest.renderer.version}; read keyframes with the provided action_fcurves(obj) helper, since Blender 5 removed Action.fcurves.`
     : 'Repair a browser animation. Return complete HTML in one ```html fence. Keep window.ANIMATION_META and window.renderFrame(t), pure time-based canvas rendering, no network or animation timers.',
   `Brief: ${manifest.brief.concept}`,
   `Format: ${manifest.format.width}x${manifest.format.height}, ${manifest.format.fps}fps, ${manifest.format.durationSeconds}s.`,
@@ -492,10 +494,12 @@ async function finish(ctx, run) {
     }
   }
   Object.assign(ctx.state, outcome || { stopReason: null }, { resumable: status !== 'completed' });
-  activeRuns.delete(ctx.runId);
   await persist(ctx, status, { completed: true, revisionId: ctx.state.currentRevisionId }).catch(error => {
+    activeRuns.markUnsettled(ctx.runId);
     console.error(`❌ Code Animation production run ${ctx.runId.slice(0, 8)} final status could not be saved: ${error.message}`);
   });
+  activeRuns.delete(ctx.runId);
+  emitCodeAnimationChanged(ctx.projectId);
   console.log(`🎞️ Code Animation production run ${ctx.runId.slice(0, 8)} ${status}${ctx.state.stopReason ? ` (${ctx.state.stopReason})` : ''}`);
   return status;
 }
@@ -549,7 +553,8 @@ export async function startProductionStageRun(projectId, input, deps = {}) {
   emitCodeAnimationChanged(projectId);
   console.log(`🎞️ Code Animation production run ${runId.slice(0, 8)} started on revision ${revision.id.slice(0, 8)}`);
   // Process boundary: nothing may reject unhandled out of the background run.
-  const done = finish(ctx, () => execute(ctx, revision)).catch(error => {
+  const done = activeRuns.run(runId, () => finish(ctx, () => execute(ctx, revision))).catch(error => {
+    activeRuns.markUnsettled(runId);
     console.error(`❌ Code Animation production run ${runId.slice(0, 8)} crashed: ${error.message}`);
     activeRuns.delete(runId);
     return 'failed';

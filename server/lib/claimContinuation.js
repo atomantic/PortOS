@@ -14,10 +14,11 @@
  * git listing and the agent list stay with the caller.
  */
 
-import { isAbsolute, resolve } from 'path';
+import { isAbsolute } from 'path';
 import { isPlainObject } from './objects.js';
 import { prHeldForOperator } from './prDisposition.js';
 import { isPathInsideDir } from './pathSafety.js';
+import { canonicalizePath } from './pathContainment.js';
 import { isHumanClaimWorktree, worktreeAgentId } from './worktreeOwnership.js';
 import { hasClaimFlowContract } from './claimFlowTaskTypes.js';
 import { isTruthyMeta } from './metadataFlags.js';
@@ -36,8 +37,8 @@ export function claimContinuationBranch(claimTarget) {
 
 function samePath(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
-  const left = resolve(a);
-  const right = resolve(b);
+  const left = canonicalizePath(a);
+  const right = canonicalizePath(b);
   return CASE_FOLD ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
@@ -310,7 +311,7 @@ function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ign
   for (const agent of agents) {
     if (!agent || ignoreIds.has(agent.id) || !isLiveAgent(agent)) continue;
     const workspace = agentWorkspace(agent);
-    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(holderPath, workspace))) {
+    if (samePath(workspace, holderPath) || (holderPath && workspace && isPathInsideDir(canonicalizePath(holderPath), canonicalizePath(workspace)))) {
       return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     }
     if (!inRepository(agent, sourceWorkspace)) continue;
@@ -318,7 +319,8 @@ function scanClaimHolders({ agents, holderPath, branchName, sourceWorkspace, ign
     if (reservations != null && (!Array.isArray(reservations) || reservations.some(target => !target || typeof target.branch !== 'string'))) { possible.push(agent.id); continue; }
     if (reservations?.some(target => target?.branch === branchName) || ownsClaimBranch(agent, branchName)
       || (agent.metadata?.taskAnalysisType === 'do-release' && (agent.metadata?.releaseCandidate?.branch === branchName
-        || agent.metadata?.releaseCandidateRecovery?.transfer?.branch === branchName))) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
+        || agent.metadata?.releaseCandidateRecovery?.transfer?.branch === branchName
+        || agent.metadata?.releaseSynchronizationCheckout?.branch === branchName))) return { occupancy: 'active', holderIds: [agent.id].filter(Boolean) };
     if (claimHolder && mayPickClaimBranch(agent, branchName)) possible.push(agent.id);
   }
   return possible.length ? { occupancy: 'ambiguous', holderIds: possible.filter(Boolean) } : { occupancy: null, holderIds: [] };

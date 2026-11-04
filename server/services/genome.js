@@ -399,17 +399,35 @@ export async function deleteMarker(id) {
 }
 
 /**
- * Delete all genome data: raw file, metadata, and clear cache.
+ * Delete raw genome data and re-derive identity without genetic inputs.
  */
 export async function deleteGenome() {
-  // Unlinking the raw file before the metadata would leave a copied record
-  // naming bytes that are gone, so both removals hold the lease (#9982).
+  // Load the rare deletion dependencies here: ordinary genome reads must not
+  // instantiate the identity services (which themselves read genome summaries).
+  const { deriveChronotype } = await import('./identity/chronotype.js');
+  const { deriveLongevity } = await import('./identity/longevity.js');
+  const { mutateGoals } = await import('./identity/store.js');
+
+  // Raw data and every derived identity snapshot share one backup lease, so a
+  // backup cannot capture a deleted genome alongside its cached genetic markers.
   await withBackupAssetPublication(async () => {
-    await unlinkGuarded(RAW_FILE).catch(() => {});
-    await unlinkGuarded(META_FILE).catch(() => {});
+    // Erase derived data first. A failed read/write must leave the source genome
+    // available, rather than delete it while retaining cached genetic conclusions.
+    // Recompute recommendations and scores while preserving behavioral inputs.
+    await deriveChronotype({ withoutGenetics: true });
+    await deriveLongevity(undefined, { withoutGenetics: true });
+    // setBirthDate also caches these genetic adjustments in the local goals
+    // document. Keep the actual goals and birth date, including MortalLoom data.
+    await mutateGoals(goals => {
+      goals.lifeExpectancy = null;
+      goals.timeHorizons = null;
+      return goals;
+    }, { localOnly: true });
+    await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    snpIndex = null;
+    indexBuiltAt = 0;
   });
-  snpIndex = null;
-  indexBuiltAt = 0;
   noteReadinessChanged();
   console.log('🧬 Genome data deleted');
 

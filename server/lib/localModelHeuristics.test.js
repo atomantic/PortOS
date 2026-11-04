@@ -25,6 +25,7 @@ describe('localModelHeuristics', () => {
         'ministral-3:8b',
         'lfm2.5:8b',
         'lfm2.5-thinking:1.2b',
+        'lfm3:1.7b',
         'ornith:35b',
         'muse-glimmer:30b',
         'north-mini-code-1.0',
@@ -167,6 +168,7 @@ describe('localModelHeuristics', () => {
         'qwen3-vl:8b',
         'minicpm-v4.6:1b',
         'nemotron-3.5-bolt',
+        'lfm3-vl:2b',
       ]) {
         expect(isVisionModel(id), id).toBe(true);
       }
@@ -197,10 +199,12 @@ describe('localModelHeuristics', () => {
       // regex would otherwise match — `gemma3:1b` is a text-only Gemma 3
       // (type:'llm'), not a vision model, even though `gemma-?3` matches.
       expect(isVisionModel({ id: 'gemma3:1b', type: 'llm' })).toBe(false);
+      expect(isVisionModel({ id: 'gemma3:1b', capabilities: ['completion'] })).toBe(false);
       expect(isVisionModel({ id: 'llava-phi3', type: 'embeddings' })).toBe(false);
       // …but a regex-matching id with NO type metadata (Ollama /api/tags) still
       // falls through to the heuristic.
       expect(isVisionModel({ id: 'gemma3:4b' })).toBe(true);
+      expect(isVisionModel({ id: 'gemma3:4b', capabilities: [] })).toBe(true);
     });
 
     it('handles non-values', () => {
@@ -215,6 +219,9 @@ describe('localModelHeuristics', () => {
     it('accepts codex / claude CLI providers', () => {
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
+      // A path-configured binary must pass, or an image review it ran is rejected as image-blind.
+      expect(isVisionCapableCliProvider({ type: 'cli', command: '/usr/local/bin/codex' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: 'C:\\tools\\Codex.exe' })).toBe(true);
     });
 
     it('rejects non-vision CLI commands and non-CLI providers', () => {

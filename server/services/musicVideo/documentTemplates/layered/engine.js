@@ -9,6 +9,8 @@
  *
  * Data: window.PORTOS_MV, written by PortOS as portos-mv.js at render time —
  * { project, render, song, lyrics, lyricMarkers, scenes, textCues, composition }.
+ * A scene's `wipe` ({ style, frames, cutFrame, fromSceneId, color }) plays over its
+ * first frames through globalThis.__portosMusicVideoWipe, which PortOS provides.
  * scenes[].media.src names a file PortOS copied into media/ (the selected take).
  * In the in-app preview window.PORTOS_MV_ASSETS resolves to { src: blob URL }.
  *
@@ -17,6 +19,7 @@
  */
 // portos-lyric-overlay-visibility: 1
 // portos-photo-sequence: 2
+// portos-selected-effects: 2
 (() => {
   'use strict';
   const MV = window.PORTOS_MV;
@@ -84,6 +87,7 @@
     .filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec) && s.endSec > s.startSec)
     .sort((a, b) => a.startSec - b.startSec)
     .map((s, i) => ({ ...s, index: i }));
+  const effectFrames = new Map((MV.effectFrames || []).map(effect => [effect.frame, effect.params]));
   function sceneAt(t) {
     let lo = 0; let hi = SCENES.length - 1; let r = -1;
     while (lo <= hi) { const m = (lo + hi) >> 1; if (SCENES[m].startSec <= t) { r = m; lo = m + 1; } else hi = m - 1; }
@@ -230,9 +234,13 @@
       if (!timing) return seekVideo(v, media, (media.inSec || 0) + local);
       return seekVideo(v, { ...media, inSec: timing.startSec }, timing.startSec + Math.max(0, local - timing.leadSec) * timing.rate);
     }
-    if (scene.photoSequence?.stacked && media.photos) return composePhotoStack(scene.photoSequence, media.photos, t);
     const photo = scene.photoSequence && media.photos?.[imageEffects.photoSequenceIndex(scene.photoSequence, t, { fps: FPS })];
-    return loadImage(photo?.src || media.src);
+    const source = scene.photoSequence?.stacked && media.photos
+      ? await composePhotoStack(scene.photoSequence, media.photos, t) : await loadImage(photo?.src || media.src);
+    // Keep both images ready: cooperative preview reuses this source while the
+    // effect changes inside the shot, so render must be able to blend either.
+    if (scene.imageEffect && media.end?.src) await loadImage(media.end.src);
+    return source;
   }
 
   // #14277: every photo visible at t, oldest first, onto one black frame, so the
@@ -539,11 +547,11 @@
 
   let imageEffects = null;
 
-  function render(t, scene, source, state, reviewFootage = false) {
+  // The scene's picture (its take or card, camera move, image effect and beat glitch), under every overlay.
+  function drawSceneLayer(t, scene, source, state, authored) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
-    const authored = sectionFunction(t);
     const effect = source && scene?.visualLayer === 'still' && scene.media?.kind === 'image' && scene.imageEffect
-      ? imageEffects?.imageEffectState(scene.imageEffect, t - scene.startSec) : null;
+      ? imageEffects?.imageEffectState(scene.imageEffect, (frameOf(t) - Math.round(scene.startSec * FPS)) / FPS, { fps: FPS }) : null;
     if (scene) {
       const lt = t - scene.startSec; const d = scene.endSec - scene.startSec;
       const card = authored?.fn ? null : cardFor(scene);
@@ -553,11 +561,50 @@
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
         ctx.save();
         if (effect) ctx.filter = `contrast(${effect.contrast}) saturate(${effect.saturation})`;
-        drawCover(source, cameraView(scene, seg(t, scene.startSec, scene.endSec)), punch);
+        const view = cameraView(scene, seg(t, scene.startSec, scene.endSec));
+        drawCover(source, view, punch);
+        const end = effect?.end > 0 && scene.media.end?.src ? images.get(scene.media.end.src)?.el : null;
+        if (end) { ctx.globalAlpha = effect.end; drawCover(end, view, punch); }
         ctx.restore();
         if (effect) _flash(effect.fog, imageEffects.IMAGE_EFFECT_FOG_COLOR);
       }
       if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
+    }
+    return effect;
+  }
+
+  // ---------- wipes (PORTOS_MV.scenes[].wipe, drawn by globalThis.__portosMusicVideoWipe) ----------
+  // A wipe runs from its scene's first frame: the outgoing scene's last frame, held, gives way to this one.
+  const wipeCanvases = {};
+  const wipeCanvas = (key) => {
+    const c = wipeCanvases[key] ||= document.createElement('canvas');
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    return c;
+  };
+  function wipeAt(scene, t) {
+    const wipe = scene?.wipe;
+    if (!wipe || !Number.isFinite(wipe.cutFrame) || !(wipe.frames > 0)) return null;
+    const index = frameOf(t) - wipe.cutFrame;
+    const from = index >= 0 && index < wipe.frames ? SCENES.find((s) => s.sceneId === wipe.fromSceneId) : null;
+    return from ? { ...wipe, index, from, fromT: (wipe.cutFrame - 0.5) / FPS } : null;
+  }
+  // Draw the outgoing scene's held frame now, before the incoming source is resolved (a photo stack reuses one canvas).
+  async function outgoingLayer(wipe) {
+    const fromSource = cardFor(wipe.from) ? null : await sourceFor(wipe.from, wipe.fromT);
+    drawSceneLayer(wipe.fromT, wipe.from, fromSource, eventState(wipe.fromT), sectionFunction(wipe.fromT));
+    const held = wipeCanvas('out');
+    held.getContext('2d').drawImage(canvas, 0, 0);
+    return held;
+  }
+
+  function render(t, scene, source, state, reviewFootage = false, wipe = null) {
+    const authored = sectionFunction(t);
+    const effect = drawSceneLayer(t, scene, source, state, authored);
+    if (wipe?.held) {
+      if (!globalThis.__portosMusicVideoWipe) throw new Error('Music-video wipe painter is unavailable');
+      const incoming = wipeCanvas('in');
+      incoming.getContext('2d').drawImage(canvas, 0, 0);
+      globalThis.__portosMusicVideoWipe(ctx, { outgoing: wipe.held, incoming, style: wipe.style, index: wipe.index, frames: wipe.frames, color: wipe.color || null, width: W, height: H });
     }
     const before = reviewFootage && source ? footagePixels() : null;
     if (authored?.fn) {
@@ -578,6 +625,11 @@
     vignette(0.5);
     grain(t, 0.09);
     if (effect) _flash(effect.flash);
+    const selectedEffect = effectFrames.get(frameOf(t));
+    if (selectedEffect) {
+      if (!globalThis.__portosMusicVideoGlitch) throw new Error('Music-video effect painter is unavailable');
+      ctx.save(); globalThis.__portosMusicVideoGlitch(canvas, selectedEffect, frameOf(t)); ctx.restore();
+    }
     drawHud(t);
     drawNarrativeEvents(state);
     if (lyricType) lyricType.draw(ctx, t, { width: W, height: H });
@@ -613,8 +665,10 @@
       const state = eventState(t);
       t = state.t;
       const scene = sceneAt(t);
+      const wipe = wipeAt(scene, t);
+      const held = wipe ? await outgoingLayer(wipe) : null;
       const source = scene && !cardFor(scene) ? await sourceFor(scene, t) : null;
-      render(t, scene, source, state, reviewFootage);
+      render(t, scene, source, state, reviewFootage, wipe ? { ...wipe, held } : null);
       return true;
     },
   };

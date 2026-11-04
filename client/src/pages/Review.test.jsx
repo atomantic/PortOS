@@ -112,6 +112,7 @@ vi.mock('../services/api', () => ({
   getGitHubDeploymentReview: vi.fn(),
   reviewGitHubDeployment: vi.fn(),
   getProviders: vi.fn(() => Promise.resolve({ providers: [] })),
+  getHarnessUpdateReference: vi.fn(() => Promise.resolve({ state: 'unknown' })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -150,7 +151,7 @@ const summaryValue = (label) => {
 const forceOverflow = () =>
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 beforeEach(() => {
   __resetActionQueue();
@@ -186,8 +187,66 @@ it('opens a software update action in the existing guarded updater', async () =>
     triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
   }] });
   render(<Review />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Open PortOS update' }));
+  const drawer = await screen.findByRole('dialog');
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Open PortOS update' }));
   expect(routerState.navigate).toHaveBeenCalledWith('/apps/portos-default/update');
+  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
+it('shows the harness update destination beside snooze in the action row', async () => {
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
+    title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example', drillLabel: 'Open harness',
+    triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
+  }] });
+  render(<Review />);
+  expect(await screen.findByRole('combobox', { name: 'Snooze Example CLI update available' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Open harness' }));
+  expect(routerState.navigate).toHaveBeenCalledWith('/ai/harnesses/example');
+  expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+});
+
+it('starts the guarded harness update from the action row without navigating away', async () => {
+  const request = vi.fn(async () => new Response(JSON.stringify({ error: 'Agent work is active.' }), { status: 409, headers: { 'content-type': 'application/json' } }));
+  vi.stubGlobal('fetch', request);
+  api.getHarnessUpdateReference.mockResolvedValueOnce({ state: 'unknown', ticket: '00000000-0000-4000-8000-000000000001' });
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'updates:harness:example', source: 'updates', sourceLabel: 'Software updates', required: true,
+    title: 'Example CLI update available', operations: [], drillTo: '/ai/harnesses/example',
+    harnessUpdate: { id: 'example', label: 'Example CLI', installedVersion: '1.2.3', candidateVersion: '1.2.4', updatable: true },
+  }] });
+  render(<Review />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Update Example CLI' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Start update' }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith('/api/harnesses/review-update?runtime=example&expectedVersion=1.2.3&candidateVersion=1.2.4&ticket=00000000-0000-4000-8000-000000000001', expect.objectContaining({ method: 'POST' })));
+  expect(routerState.navigate).not.toHaveBeenCalled();
+  expect(await screen.findByText('Agent work is active.')).toBeInTheDocument();
+});
+
+it('shows unverified update checks as background status instead of an action', async () => {
+  api.getReviewQueue.mockResolvedValueOnce({ partial: true, items: [], sources: {
+    updates: { label: 'Software updates', availability: 'partial', available: true, incomplete: true },
+  } });
+  render(<Review />);
+  expect(await screen.findByText('Some checks for Software updates are unverified; automatic checks will retry.')).toBeInTheDocument();
+  expect(screen.queryByText('Nothing needs you today')).not.toBeInTheDocument();
+  expect(screen.queryByRole('combobox', { name: /^Snooze/ })).not.toBeInTheDocument();
+});
+
+it('uses the source destination instead of sending a semantic review descriptor as a mutation', async () => {
+  routerState.actionId = 'x:draft-example';
+  api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+    id: 'x:draft-example', source: 'x', sourceLabel: 'X drafts', required: true,
+    title: 'Draft awaiting review', drillTo: '/x/example/drafts',
+    operations: [{ id: 'review', label: 'Review', available: true }],
+    triageOperations: [{ id: 'snooze', label: 'Snooze', available: true }],
+  }] });
+  render(<Review />);
+  const drawer = await screen.findByRole('dialog');
+  expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: 'Open source' })).toHaveLength(2);
+  fireEvent.click(within(drawer).getByRole('button', { name: 'Open source' }));
+  expect(routerState.navigate).toHaveBeenCalledWith('/x/example/drafts');
   expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
 });
 

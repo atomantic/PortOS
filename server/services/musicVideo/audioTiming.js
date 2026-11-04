@@ -9,7 +9,7 @@ import { presentMusicVideoDependencies } from '../../lib/musicVideoDependencies.
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { applyProjectPatch } from './projectsLogic.js';
+import { applyProjectPatch, CLEARED_VOCAL_STEM } from './projectsLogic.js';
 
 const refuse = (message, status = 409) => new ServerError(message, { status, code: 'AUDIO_TIMING_INVALID' });
 const projectBasis = (project) => checksum(presentMusicVideoDependencies(project));
@@ -135,7 +135,8 @@ export async function applyAudioTiming(id, { basis, ...input }) {
     const next = applyProjectPatch(current, { trackId: input.targetTrackId, uploadedAudioFilename: null });
     return { project: { ...next, scenes: preview.scenes.map((scene) => ({ ...scene, beatAligned: false, sectionIndex: null })),
       audioAnalysis: preview.analysis, status: 'analyzed', renderHistoryId: null,
-      midiTranscription: null, vocalStemFilename: null, performanceConditioningSource: 'master',
+      midiTranscription: null, ...CLEARED_VOCAL_STEM, performanceConditioningSource: 'master',
+      lyricTimingMasterFilename: preview.analysis.masterFilename || null,
       lyricCues: mapTimed(current.lyricCues, preview.intervals), phrases: mapTimed(current.phrases, preview.intervals),
       ...(current.composition ? { composition: { ...next.composition, posterSec: null, textCues: mapTimed(current.composition.textCues, preview.intervals) } } : {}),
       audioTimingRevisions: [...(current.audioTimingRevisions || []), revision] }, revision, alreadyApplied: false };

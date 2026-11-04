@@ -16,7 +16,8 @@
  *     direction,            // castAndSetsDirection.js shape (`medium`: absent = photographic)
  *     plan:   { [key]: { key, kind, label, prompt, deps, refKeys, refImages?, setId?, testIndex? } },
  *     images: { [key]: { status, jobId, imageId, history, failures, error, updatedAt,
- *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision? } },
+ *       submittedPrompt?, submittedPromptTruncated?, submittedReferences?, submittedRevision?,
+ *       inspection?, inspectionAcknowledgement? } },
  *     artifactId, artifactVersion, notesApplied,
  *     feedback,             // [{ id, text, at, revision }]: standing sheet feedback every direction call honors
  *     changeSummary,        // { revision, changes: [string], rerendered, at }: what the last revision changed
@@ -38,6 +39,7 @@
  * syncs as usual.
  */
 
+import { castSetsInspectionBlockers } from '../../lib/musicVideoCastSetsInspection.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 
@@ -47,7 +49,8 @@ export const CAST_SETS_WORKING = Object.freeze(['directing', 'imaging', 'assembl
 export const CAST_SETS_SETTLED = Object.freeze(['approved', 'skipped']);
 // A key whose render failed this many times in a row stops the stage.
 const MAX_IMAGE_FAILURES = 2;
-const MAX_HISTORY = 20;
+export const CAST_SETS_MAX_KEY_NOTES = 8;
+export const CAST_SETS_MAX_IMAGE_HISTORY = 20;
 const MAX_REASON = 500;
 
 const stageError = (status, code, message) => new ServerError(message, { status, code });
@@ -129,6 +132,7 @@ export function reviseCastAndSetsOnProject(project, { processId, notesApplied = 
     stopReason: null,
     error: null,
     processId,
+    manualImageEditReview: false,
     notesApplied: notesApplied.map((n) => ({ id: n.id || null, target: n.target || null, text: trimTo(n.text, 2000) })),
     approvedAt: null,
     approvedInputs: null,
@@ -238,27 +242,28 @@ export function linkCastAndSetsJob(project, key, jobId, submission = {}, now = n
  * Settle a key's render. `filename` = it landed; otherwise `error`. A job that
  * is not the key's current one (a superseded render) is ignored. A failure is
  * retried once (back to pending); the second consecutive failure stops the
- * stage `failed`. Returns `{ project, stage, changed }`.
+ * stage `failed`. A deterministic submission refusal can stop it immediately
+ * with `retryable: false`. Returns `{ project, stage, changed }`.
  */
-export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null }, now = new Date().toISOString()) {
+export function settleCastAndSetsImage(project, key, { jobId = null, filename = null, error = null, revision = null, retryable = true }, now = new Date().toISOString()) {
   const stage = project?.castAndSets;
   const img = stage?.images?.[key];
-  if (!img || img.status !== 'queued' || (revision != null && revision !== stage.revision)
+  if (!img || img.status !== 'queued' || (jobId && img.renderQualityRetry?.jobId === jobId) || (revision != null && revision !== stage.revision)
     || (jobId && img.jobId && img.jobId !== jobId)) return { project, stage, changed: false };
   if (filename) {
-    const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-MAX_HISTORY) : (img.history || []);
-    const next = { ...img, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };
+    const history = img.imageId && img.imageId !== filename ? [...(img.history || []), img.imageId].slice(-CAST_SETS_MAX_IMAGE_HISTORY) : (img.history || []);
+    const next = { ...img, inspection: null, inspectionAcknowledgement: null, status: 'done', jobId: jobId || img.jobId, imageId: filename, history, failures: 0, error: null, updatedAt: now };
     return { ...write(project, { ...stage, images: { ...stage.images, [key]: next } }, now), changed: true };
   }
   const failures = (img.failures || 0) + 1;
   const reason = trimTo(String(error || 'The render failed'), MAX_REASON);
-  const next = { ...img, status: failures >= MAX_IMAGE_FAILURES ? 'failed' : 'pending', jobId: null, failures, error: reason, updatedAt: now };
+  const next = { ...img, status: !retryable || failures >= MAX_IMAGE_FAILURES ? 'failed' : 'pending', jobId: null, failures, error: reason, updatedAt: now };
   const failed = next.status === 'failed';
   return {
     ...write(project, {
       ...stage,
       images: { ...stage.images, [key]: next },
-      ...(failed ? { status: 'failed', stopReason: `The ${stage.plan?.[key]?.label || key} image failed twice: ${reason}` } : {}),
+      ...(failed ? { status: 'failed', stopReason: `The ${stage.plan?.[key]?.label || key} image ${retryable ? 'failed twice' : 'could not be queued'}: ${reason}` } : {}),
     }, now),
     changed: true,
   };
@@ -293,5 +298,6 @@ export function reconfirmCastAndSetsOnProject(project, approvedInputs, approvedV
 export function assertCastAndSetsApprovable(project) {
   const stage = requireStage(project);
   if (stage.status !== 'review') throw stageError(409, 'CAST_SETS_NOT_IN_REVIEW', `The Cast & Sets check-in is ${stage.status}, not waiting for review`);
+  if (castSetsInspectionBlockers(stage).length) throw stageError(409, 'CAST_SETS_INSPECTION_REQUIRED', 'Retry vision, regenerate, or accept each flagged or unchecked image before approving.');
   return stage;
 }

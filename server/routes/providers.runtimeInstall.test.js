@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { request } from '../lib/testHelper.js';
@@ -18,6 +18,7 @@ const statusOf = (id, overrides) => ({ ...RUNTIMES[id], installed: false, method
 const installer = vi.hoisted(() => ({
   getProviderRuntime: vi.fn(),
   getProviderRuntimeStatus: vi.fn(),
+  getRuntimeUninstallTarget: vi.fn(),
   getProviderRuntimeStatuses: vi.fn(),
   spawnRuntimeInstaller: vi.fn(),
   stopRuntimeInstaller: vi.fn(),
@@ -27,9 +28,34 @@ const installer = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/providerRuntimeInstaller.js', () => installer);
+const fixture = vi.hoisted(() => ({ root: null, admission: null }));
+vi.mock('../lib/maintenanceAdmission.js', async () => {
+  const actual = await vi.importActual('../lib/maintenanceAdmission.js');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  fixture.root = mkdtempSync(join(tmpdir(), 'provider-harness-admission-'));
+  fixture.admission = actual.createMaintenanceAdmission(fixture.root, { harnessAbsent: pid => pid < 0 });
+  return { ...actual, maintenance: fixture.admission };
+});
+vi.mock('../lib/maintenanceDeferredUpdate.js', async () => {
+  const actual = await vi.importActual('../lib/maintenanceDeferredUpdate.js');
+  return { ...actual, processAbsent: pid => pid < 0 };
+});
+const supervisor = vi.hoisted(() => ({ spawnHarnessActionSupervisor: vi.fn() }));
+vi.mock('../services/harnessActionSupervisor.js', () => supervisor);
 
 import { createPortOSProviderRoutes } from './providers.js';
 import { __resetHarnessActionGuard } from '../services/harnessActionStream.js';
+const supervised = ['darwin', 'linux'].includes(process.platform);
+const launch = supervised ? supervisor.spawnHarnessActionSupervisor : installer.spawnRuntimeInstaller;
+const expectLaunch = (id) => supervised
+  ? expect(launch).toHaveBeenCalledWith(expect.objectContaining({ runtime: id, action: 'install' }))
+  : expect(launch).toHaveBeenCalledWith(id, { action: 'install' });
+afterAll(async () => {
+  const { rmSync } = await import('node:fs');
+  if (fixture.root) rmSync(fixture.root, { recursive: true, force: true });
+});
 
 const app = () => {
   const toolkit = { services: { providers: {} }, routes: { providers: Router() } };
@@ -78,10 +104,10 @@ describe('Provider runtime installer routes', () => {
     installer.getProviderRuntimeStatus
       .mockResolvedValueOnce(statusOf('codex'))
       .mockResolvedValueOnce(statusOf('codex', { installed: true }));
-    installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
+    launch.mockReturnValueOnce(child);
 
     const responsePromise = request(app()).post('/api/providers/runtimes/install?runtime=codex').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('codex', { action: 'install' }));
+    await vi.waitFor(() => expectLaunch('codex'));
     child.stdout.end('added Codex\n');
     child.stderr.end();
     child.emit('close', 0);
@@ -104,10 +130,10 @@ describe('Provider runtime installer routes', () => {
     installer.getProviderRuntimeStatus
       .mockResolvedValueOnce(statusOf('codex'))
       .mockResolvedValueOnce(statusOf('codex'));
-    installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
+    launch.mockReturnValueOnce(child);
 
     const responsePromise = request(app()).post('/api/providers/runtimes/install?runtime=codex').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledOnce());
     child.stdout.end();
     child.stderr.end();
     child.emit('close', 0);
@@ -127,7 +153,7 @@ describe('Provider runtime installer routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.text).toContain('npm is not available');
-    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
   });
 
   // A synchronous spawn failure must report through the already-open stream and
@@ -136,7 +162,7 @@ describe('Provider runtime installer routes', () => {
   // already running" until the server restarts.
   it('reports a spawn failure as a stream error and releases the install lock', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('codex'));
-    installer.spawnRuntimeInstaller.mockImplementationOnce(() => { throw new Error('spawn EAGAIN'); });
+    launch.mockImplementationOnce(() => { throw new Error('spawn EAGAIN'); });
 
     const failed = await request(app()).post('/api/providers/runtimes/install?runtime=codex');
     expect(failed.status).toBe(200);
@@ -144,9 +170,9 @@ describe('Provider runtime installer routes', () => {
 
     // A second attempt must reach the spawn again rather than being refused.
     const child = makeChild();
-    installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
+    launch.mockReturnValueOnce(child);
     const responsePromise = request(app()).post('/api/providers/runtimes/install?runtime=codex').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(2));
     child.stdout.end();
     child.stderr.end();
     child.emit('close', 1);
@@ -162,7 +188,7 @@ describe('Provider runtime installer routes', () => {
 
     expect(response.status).toBe(400);
     expect(installer.getProviderRuntimeStatus).not.toHaveBeenCalled();
-    expect(installer.spawnRuntimeInstaller).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
   });
 
   // A deployed client/dist can lag the server across an upgrade, so the
@@ -181,10 +207,10 @@ describe('Provider runtime installer routes', () => {
     installer.getProviderRuntimeStatus
       .mockResolvedValueOnce(statusOf('opencode'))
       .mockResolvedValueOnce(statusOf('opencode', { installed: true }));
-    installer.spawnRuntimeInstaller.mockReturnValueOnce(child);
+    launch.mockReturnValueOnce(child);
 
     const responsePromise = request(app()).post('/api/providers/opencode/install').then((response) => response);
-    await vi.waitFor(() => expect(installer.spawnRuntimeInstaller).toHaveBeenCalledWith('opencode', { action: 'install' }));
+    await vi.waitFor(() => expectLaunch('opencode'));
     child.stdout.end();
     child.stderr.end();
     child.emit('close', 0);

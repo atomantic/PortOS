@@ -53,6 +53,16 @@ router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
     const { recoverReleaseCandidate } = await import('../services/releaseCandidateRecovery.js');
     return res.json(await recoverReleaseCandidate(req.params.id, input.predecessorAgentId));
   }
+  if (input.action === 'retire') {
+    const { retireHeldReleaseCandidate } = await import('../services/releaseCandidateReconciliation.js');
+    // Server-derived, like the synchronization checkpoint reset: never a body field.
+    const operator = req.portosAuthContext?.method === 'session' ? 'operator-session' : 'local-operator';
+    return res.json(await retireHeldReleaseCandidate(req.params.id, input.reason, operator));
+  }
+  if (input.action === 'sync-reserve' || input.action === 'sync-capture') {
+    const { updateReleaseSynchronizationOwnership } = await import('../services/cosClaimOwnership.js');
+    return res.json(await updateReleaseSynchronizationOwnership(req.params.id, input.action));
+  }
   const { updateReleaseCandidateOwnership } = await import('../services/cosClaimOwnership.js');
   res.json(await updateReleaseCandidateOwnership(req.params.id, input.action));
 }));
@@ -90,6 +100,15 @@ router.post('/claim-ownership', asyncHandler(async (req, res) => {
   const input = validateRequest(claimOwnershipSchema, req.body ?? {});
   const { updateClaimOwnership, checkReconcileOwnership } = await import('../services/cosClaimOwnership.js');
   res.json(input.action === 'check' ? await checkReconcileOwnership(input) : await updateClaimOwnership(input));
+}));
+
+router.post('/claim-selection', asyncHandler(async (req, res) => {
+  const input = validateRequest(z.object({
+    agentId: z.string().min(1).max(200),
+    issueNumber: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).strict(), req.body ?? {});
+  const { recordClaimSelection } = await import('../services/cosClaimSelection.js');
+  res.json(await recordClaimSelection(input));
 }));
 
 // `reason` is persisted into task metadata + interpolated into logs; guard the

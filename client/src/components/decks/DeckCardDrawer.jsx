@@ -111,7 +111,7 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
                           type="button"
                           onClick={() => onSave({ primaryImageRef: filename })}
                           disabled={isPrimary || saving}
-                          className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded ${isPrimary ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
+                          className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded ${isPrimary ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
                           aria-label={isPrimary ? `v${versionNum} is active` : `Set v${versionNum} as active`}
                           title={isPrimary ? `v${versionNum} is active` : `Set v${versionNum} as active`}
                         >
@@ -121,7 +121,7 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
                           type="button"
                           onClick={() => onSave({ imageRefs: refs.filter((f) => f !== filename) })}
                           disabled={saving}
-                          className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-gray-500 hover:text-port-error"
+                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-gray-500 hover:text-port-error"
                           aria-label={`Remove v${versionNum} from card`}
                           title="Remove from card (the gallery keeps the image)"
                         >

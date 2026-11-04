@@ -69,11 +69,14 @@ function quickReferenceRows() {
 }
 
 describe('docs/DEPS.md', () => {
-  it('documents every dependency declared in every workspace manifest', () => {
+  it('documents every declared dependency with a current verdict', () => {
     // A Quick Reference row, not merely a backticked mention anywhere in the
     // file: prose elsewhere (a "Last audited" note, a detailed finding) names
     // packages in passing, and accepting that would let a deleted row pass.
-    const documented = new Set(quickReferenceRows().map(({ name }) => name));
+    // A historical removal in one workspace cannot justify an active use in another.
+    const documented = new Set(quickReferenceRows()
+      .filter(({ verdict }) => !/REMOVED|REPLACED/.test(verdict))
+      .map(({ name }) => name));
     const undocumented = [...DECLARED.entries()]
       .filter(([name]) => !documented.has(name))
       .map(([name, labels]) => `${name} (${labels.join(', ')})`);

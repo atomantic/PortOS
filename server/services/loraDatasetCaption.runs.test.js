@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Dependencies are doubled at the module edge so the REAL createSseRunner-backed
 // service drives the lifecycle (no provider, disk or settings access).
 
-const state = vi.hoisted(() => ({ dataset: null, vision: [] }));
+const state = vi.hoisted(() => ({ dataset: null, vision: [], capabilities: null, lmstudioModels: [], endpoint: 'http://localhost:11434/v1' }));
 
 vi.mock('./loraDatasets.js', () => ({
   getDataset: vi.fn(async () => structuredClone(state.dataset)),
@@ -17,7 +17,17 @@ vi.mock('./loraDatasets.js', () => ({
 }));
 vi.mock('fs/promises', () => ({ readFile: vi.fn(async () => Buffer.from('png')) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
-vi.mock('./localLlm.js', () => ({ listVisionModels: vi.fn(async () => []) }));
+vi.mock('./providers.js', () => ({
+  getProviderById: vi.fn(async (id) => ({ id, type: 'api', endpoint: state.endpoint })),
+}));
+vi.mock('./ollamaManager.js', () => ({
+  getBaseUrl: () => 'http://localhost:11434',
+  getModelCapabilities: vi.fn(async () => state.capabilities),
+}));
+vi.mock('./lmStudioManager.js', () => ({
+  getBaseUrl: () => 'http://localhost:1234',
+  getAvailableModels: vi.fn(async () => state.lmstudioModels),
+}));
 vi.mock('./loraDatasetSubject.js', () => ({
   loadDatasetSubject: vi.fn(async () => { throw new Error('no subject'); }),
   extractSubjectSignaturePhrases: vi.fn(() => []),
@@ -60,6 +70,9 @@ describe('caption run lifecycle', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     state.dataset = makeDataset();
     state.vision = [];
+    state.capabilities = null;
+    state.lmstudioModels = [];
+    state.endpoint = 'http://localhost:11434/v1';
     vi.clearAllMocks();
   });
   afterEach(async () => {
@@ -72,6 +85,47 @@ describe('caption run lifecycle', () => {
     }
     await vi.runAllTimersAsync();
     vi.useRealTimers();
+  });
+
+  it('rejects a text-only heuristic match before creating a run or sending images', async () => {
+    state.capabilities = ['completion'];
+    await expect(startCaptionRun('ds-1', { providerId: 'ollama', model: 'gemma3:1b' }))
+      .rejects.toMatchObject({ status: 409, code: 'LORA_CAPTION_NOT_VISION' });
+    expect(getActiveCaptionRun('ds-1')).toBeNull();
+    expect(describeImageDataUrlDetailed).not.toHaveBeenCalled();
+  });
+
+  it('rejects a text-only LM Studio model despite its vision-family name', async () => {
+    state.endpoint = 'http://127.0.0.1:1234/v1';
+    state.lmstudioModels = [{ id: 'gemma3:1b', type: 'llm' }];
+    await expect(startCaptionRun('ds-1', { providerId: 'lmstudio', model: 'gemma3:1b' }))
+      .rejects.toMatchObject({ status: 409, code: 'LORA_CAPTION_NOT_VISION' });
+    expect(describeImageDataUrlDetailed).not.toHaveBeenCalled();
+  });
+
+  it('accepts an opaque LM Studio VLM without switching its provider or model', async () => {
+    state.endpoint = 'http://localhost:1234/v1';
+    state.lmstudioModels = [{ id: 'opaque-id', type: 'vlm' }];
+    await startCaptionRun('ds-1', { providerId: 'lmstudio', model: 'opaque-id' });
+    await settle();
+    expect(describeImageDataUrlDetailed).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'lmstudio', model: 'opaque-id' }));
+  });
+
+  it.each([
+    { model: 'opaque-id', capabilities: ['completion', 'vision'] },
+    { model: 'gemma3:4b', capabilities: [] },
+    { model: 'gemma3:4b', capabilities: null },
+    { model: 'gemma3:4b', capabilities: ['completion'], endpoint: 'http://example.invalid:11434/v1' },
+    { model: 'gemma3:4b', capabilities: ['completion'], endpoint: 'http://localhost:11435/v1' },
+  ])('keeps the explicit caption selection with compatible or unknown support: %j', async ({ model, capabilities, endpoint }) => {
+    state.capabilities = capabilities;
+    if (endpoint) state.endpoint = endpoint;
+    await startCaptionRun('ds-1', { providerId: 'ollama', model });
+    await settle();
+    expect(getActiveCaptionRun('ds-1')).toMatchObject({ model });
+    expect(describeImageDataUrlDetailed).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'ollama', model }));
+    const { getModelCapabilities } = await import('./ollamaManager.js');
+    if (endpoint) expect(getModelCapabilities).not.toHaveBeenCalled();
   });
 
   it('exposes the active run by dataset id and adopts an identical second start', async () => {

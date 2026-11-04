@@ -395,7 +395,7 @@ export default function Eidoverse() {
             onClick={() => { void runProjection().catch(() => {}); }}
             disabled={projectionStatus === 'running' || draftDirty}
             title={draftDirty ? 'Save changes in World controls before refreshing' : 'Refresh the PortOS projection'}
-            className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-port-border px-2 text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-60"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-port-border px-2 text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-60"
           >
             <RotateCcw size={16} className={projectionStatus === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
           </button>

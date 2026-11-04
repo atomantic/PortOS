@@ -6,11 +6,14 @@ import CastSetsStage from './stages/CastSetsStage.jsx';
 import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
 import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
-const { listeners, api, getMediaJob } = vi.hoisted(() => ({
+const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
+  api: { selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), inspectMusicVideoCastAndSetsImages: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
+  greyboxData: { places: {} },
 }));
+vi.mock('../imageGen/GalleryImagePicker', () => ({ default: ({ onSelect }) => <button type="button" onClick={() => onSelect({ filename: 'gallery-choice.png' })}>Pick gallery choice</button> }));
+vi.mock('../../hooks/useMusicVideoGreyboxPlaces.js', () => ({ default: () => greyboxData.places }));
 vi.mock('../../services/socket', () => ({ default: {
   on: (event, fn) => { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event).add(fn); },
   off: (event, fn) => listeners.get(event)?.delete(fn),
@@ -56,12 +59,118 @@ beforeEach(() => {
   listeners.clear();
   vi.clearAllMocks();
   getMediaJob.mockResolvedValue({ status: 'queued' });
+  greyboxData.places = {};
   api.getMusicVideoCastAndSetsCastingChanges.mockResolvedValue({ changes: null });
   api.getMusicVideoProject.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
+it('selects a history take and a gallery image from the check-in and applies each returned project', async () => {
+  const initial = project({ character: { ...done('current.png', 'Keeper portrait'), history: ['earlier.png'] } }, { status: 'approved', direction: { protagonist: { name: 'Keeper' } } });
+  api.selectMusicVideoCastAndSetsImage.mockImplementation(async (_id, { imageId }) => ({ project: {
+    ...initial, castAndSets: { ...initial.castAndSets, revision: 2,
+      images: { character: { ...done(imageId, null), history: ['current.png'] } } },
+  } }));
+  render(<Harness initial={initial} locked={false} />);
+  fireEvent.click(card('Keeper').getByText('Earlier takes (1)'));
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Use this image' }));
+  await waitFor(() => expect(api.selectMusicVideoCastAndSetsImage).toHaveBeenCalledWith('example-project', { key: 'character', imageId: 'earlier.png' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('button', { name: 'Choose primary image for Keeper' }).disabled).toBe(false));
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Choose primary image for Keeper' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Pick gallery choice' }));
+  await waitFor(() => expect(api.selectMusicVideoCastAndSetsImage).toHaveBeenLastCalledWith('example-project', { key: 'character', imageId: 'gallery-choice.png' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('gallery-choice.png'));
+});
+
+describe('optional greybox references on Look', () => {
+  const sets = [{ id: 'lab', name: 'Lamp room' }, { id: 'harbor', name: 'Harbor' }];
+  const review = (concept, extra = {}) => ({ id: 'example-project', concept, castAndSets: {
+    revision: 1, status: 'review', direction: { sets }, plan: {}, images: {}, ...extra,
+  } });
+
+  it('leaves approval available and shows no empty set headings when nothing is linked', async () => {
+    render(<Harness initial={review({ subjects: [] })} locked={false} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    expect(screen.queryByText(/Set plate ·/)).toBeNull();
+    expect(screen.queryByText(/Greybox references/)).toBeNull();
+  });
+
+  it('keeps mixed environments optional and gates approval only after choosing a camera', async () => {
+    const subjects = [
+      { id: 'lab-place', kind: 'place', ingredientId: 'cat-lab', name: 'Lamp room' },
+      { id: 'harbor-place', kind: 'place', ingredientId: 'cat-harbor', name: 'Harbor' },
+    ];
+    greyboxData.places = {
+      'cat-lab': { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }, media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] },
+      'cat-harbor': { ingredient: { type: 'place', payload: {} }, media: [] },
+    };
+    let value = review({ subjects }, { direction: { sets: [{ ...sets[0], setReference: { subjectId: 'harbor-place' } }, sets[1]] }, greyboxPending: true });
+    api.editMusicVideoCastAndSetsDirection.mockImplementation(async (_id, { sets: updates }) => {
+      const direction = { ...value.castAndSets.direction, sets: value.castAndSets.direction.sets.map((set) => set.id === updates[0].id ? { ...set, setReference: updates[0].setReference } : set) };
+      const greyboxPending = direction.sets.some((set) => set.setReference?.greyboxShotId);
+      value = { ...value, castAndSets: { ...value.castAndSets, direction, greyboxPending } };
+      return { project: value, stage: value.castAndSets };
+    });
+    render(<Harness initial={value} locked={false} />);
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    expect(screen.queryByText(/Regenerate to render the set plates/)).toBeNull();
+    const disclosure = screen.getByText('Greybox references (optional)').closest('details');
+    expect(disclosure).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Greybox references (optional)'));
+    const lab = within(screen.getByText('Set plate · Lamp room').parentElement);
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Set' }), { target: { value: 'lab-place' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Camera shot' }), { target: { value: 'wide' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    expect(screen.getByText(/Regenerate to render the set plates/)).toBeInTheDocument();
+    await act(async () => { fireEvent.change(lab.getByRole('combobox', { name: 'Set' }), { target: { value: '' } }); });
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+  });
+
+  it('resolves an older mixed-environment flag using the camera actually sent to the plate', async () => {
+    const subjects = [{ id: 'lab-place', kind: 'place', ingredientId: 'cat-lab', name: 'Lamp room' }];
+    const setReference = { subjectId: 'lab-place', greyboxShotId: 'wide' };
+    const entry = { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }, media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] };
+    greyboxData.places = { 'cat-lab': entry };
+    const initial = review({ subjects }, { direction: { sets: [{ ...sets[0], setReference }, { ...sets[1], setReference: { subjectId: 'other-place' } }] },
+      plan: { 'set:lab': { key: 'set:lab', prompt: 'Empty lamp room', setReference, refImages: ['layout.png'] } }, greyboxPending: true,
+      images: { 'set:lab': { status: 'done', imageId: 'lamp-room.png', submittedRevision: 1, inspection: { verdict: 'pass', inputs: {
+        key: 'set:lab', imageId: 'lamp-room.png', imageRevision: 1, jobId: null, planPrompt: 'Empty lamp room', submittedPrompt: null,
+      } } } } });
+    render(<Harness initial={initial} locked={false} />);
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+    greyboxData.places = { 'cat-lab': { ...entry, media: [{ ...entry.media[0], mediaKey: 'new-layout.png' }] } };
+    await act(async () => selectProject({ ...initial }));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    greyboxData.places = {};
+    const afterEdit = { ...initial, castAndSets: { ...initial.castAndSets, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: ['lab'] } };
+    await act(async () => selectProject(afterEdit));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).toBeDisabled();
+    greyboxData.places = { 'cat-lab': entry };
+    await act(async () => selectProject({ ...afterEdit }));
+    expect(screen.getByRole('button', { name: 'Approve & continue' })).not.toBeDisabled();
+  });
+});
+
 describe('Cast & Sets incremental references', () => {
+  it('shows the angle template first and opens its own preview before and after submission', async () => {
+    const openPreview = vi.fn();
+    const template = { kind: 'template', filename: 'music-video-face-angles.png' };
+    const facePlan = { face: { key: 'face', label: 'Face sheet', prompt: 'Follow the angle guide', deps: ['character'], refKeys: ['character'], refTemplates: [template.filename] } };
+    const initial = project({ character: done('keeper.png', 'Keeper') }, { plan: facePlan });
+    render(<Harness initial={initial} openPreview={openPreview} />);
+    const input = card('Face sheet').getByRole('img', { name: `Face sheet input: ${template.filename}` });
+    expect(input).toHaveAttribute('src', `/data/templates/${template.filename}`);
+    fireEvent.click(input.closest('button'));
+    expect(openPreview).toHaveBeenCalledWith(`template:${template.filename}`);
+    expect(castAndSetsPreviewItems(initial.castAndSets)[0]).toMatchObject({ key: `template:${template.filename}`, previewUrl: `/data/templates/${template.filename}` });
+    const submitted = project({ face: { ...done('face.png', 'Exact sent prompt'), submittedReferences: [template, { kind: 'image', filename: 'keeper.png' }] } }, { plan: facePlan });
+    await stage(submitted);
+    expect(card('Face sheet').getAllByRole('img').filter((img) => img.alt.includes(' input: ')).map((img) => img.getAttribute('src'))).toEqual([`/data/templates/${template.filename}`, '/data/images/keeper.png']);
+  });
+
   it('shows plan, completion, failure and regeneration from sockets while prompts and images remain inspectable', async () => {
     const view = render(<Harness initial={project()} />);
     expect(card('Keeper').getByText('Planned prompt')).not.toBeDisabled();
@@ -237,6 +346,24 @@ describe('Cast & Sets per-image actions', () => {
 
     await act(async () => { fireEvent.click(card('Dad').getByRole('button', { name: 'Regenerate Dad' })); });
     expect(api.regenerateMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { keys: ['cast:dad'] }, { silent: true });
+  });
+
+  it('keeps an invalid prop line in the editor instead of silently deleting it', async () => {
+    const props = [{ id: 'camera', name: 'Camera', description: 'a red camera' }];
+    const plan = { ...photoPlan, props: { key: 'props', kind: 'props', label: 'Props', prompt: 'props', deps: [], refKeys: [] } };
+    const withProps = sheet('review', { direction: { ...direction, props }, plan });
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: withProps });
+    render(<Harness initial={withProps} locked={false} />);
+    fireEvent.click(card('Props').getByRole('button', { name: 'Edit Props' }));
+    const field = card('Props').getByLabelText(/One prop per line/);
+    fireEvent.change(field, { target: { value: 'Camera a red camera' } });
+    fireEvent.click(card('Props').getByRole('button', { name: 'Save and re-render' }));
+    expect(card('Props').getByRole('alert')).toHaveTextContent(/name and description/);
+    expect(field.value).toBe('Camera a red camera');
+    expect(api.editMusicVideoCastAndSetsDirection).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: 'Camera: a red camera' } });
+    await act(async () => { fireEvent.click(card('Props').getByRole('button', { name: 'Save and re-render' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenCalledWith('example-project', { props: [{ ...props[0], owner: '' }] }, { silent: true });
   });
 
   it('edits structured wardrobe sections and exposes automatic test controls', async () => {
@@ -420,8 +547,8 @@ describe('Cast & Sets per-image actions', () => {
     const Page = () => {
       const [value, setValue] = useState(sheet('review'));
       const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
-        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: false, stale: null, storyStale: { changedFields: ['story', 'cast guide'] } } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} /></MemoryRouter>;
     };
     render(<Page />);
     expect(screen.getByText(/Built before your latest story, cast guide/)).toBeInTheDocument();
@@ -456,8 +583,8 @@ describe('Cast & Sets per-image actions', () => {
       const [value, setValue] = useState(initial);
       selectProject = setValue;
       const actions = useMusicVideoCastAndSets({ project: value, replaceProject: setValue });
-      return <CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
-        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: value, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(),
+        productionReadiness: { castAndSets: { approved: true, stale: null, storyStale: null } }, approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS }} /></MemoryRouter>;
     };
     render(<Page initial={sheet('approved')} />);
     expect(await screen.findByText(/New Casting images for June\./)).toBeInTheDocument();
@@ -586,7 +713,7 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     const Page = () => {
       const [current, setCurrent] = useState(value);
       const actions = useMusicVideoCastAndSets({ project: current, replaceProject: setCurrent });
-      return <CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS, ...board }} />;
+      return <MemoryRouter><CastSetsStage board={{ project: current, locked: false, castSets: actions, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), approveCastAndSets: actions.approve, skipCastAndSets: actions.skip, ...DRAFTS, ...board }} /></MemoryRouter>;
     };
     return render(<Page />);
   };
@@ -625,16 +752,44 @@ describe('Cast & Sets tab: undo, regenerate and guide import', () => {
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
     expect(screen.getByText('approved · stale')).toBeInTheDocument();
     expect(screen.getByText(/^Approved earlier — changed since: concept, style\./)).toBeInTheDocument();
+    // Nothing is revertible: the only ways out are the Keep approved and Rebuild buttons shown (#14796).
+    expect(screen.queryByRole('button', { name: /^Revert/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Rebuild' })).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Keep approved' })); });
     expect(api.reconfirmMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', { silent: true });
+  });
+
+  // Uniquely catches Keep approved standing alone with Rebuild far below the image grid.
+  it('offers Rebuild beside Keep approved on a stale sheet, each saying what it does', async () => {
+    const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['subjects'] };
+    api.startMusicVideoCastAndSets.mockResolvedValue({ project: withStatus('directing', { revision: 2 }) });
+    open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } } });
+    const choices = screen.getByRole('group', { name: 'Keep or redo this approval' });
+    expect(within(choices).getByText('Use these images as they are.')).toBeInTheDocument();
+    expect(within(choices).getByText(/Redo the direction from the current inputs.*Faces can drift/)).toBeInTheDocument();
+    // The note never promises a rebuild the panel doesn't show (#14796).
+    expect(screen.queryByText(/rebuild it from the current inputs|Rebuild below/)).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Rebuild' })).toHaveLength(1);
+    await act(async () => { fireEvent.click(within(choices).getByRole('button', { name: 'Rebuild' })); });
+    expect(api.startMusicVideoCastAndSets).toHaveBeenCalledWith('example-project', {}, { silent: true });
+  });
+
+  // Uniquely catches a vision outage leaving a dozen images to retry one tap at a time.
+  it('retries vision on every unchecked image at once (#14794)', async () => {
+    api.inspectMusicVideoCastAndSetsImages.mockResolvedValue({ project: withStatus('approved') });
+    const done = (key) => ({ status: 'done', imageId: `${key}.png`, jobId: `job-${key}`, submittedRevision: 1, submittedPrompt: 'Example prompt' });
+    const vision = (verdict) => ({ id: 'inspection-x', inputs: { key: 'set:roof', imageId: 'set:roof.png', jobId: 'job-set:roof', imageRevision: 1, planPrompt: 'Example prompt', submittedPrompt: 'Example prompt' }, verdict });
+    const plan = Object.fromEntries(['character', 'set:lab', 'set:roof'].map((key) => [key, { key, label: key, prompt: 'Example prompt' }]));
+    open(withStatus('approved', { plan, images: { character: done('character'), 'set:lab': done('set:lab'), 'set:roof': { ...done('set:roof'), inspection: vision('pass') } } }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry vision on all' })); });
+    expect(api.inspectMusicVideoCastAndSetsImages).toHaveBeenCalledWith('example-project', { keys: ['character', 'set:lab'] }, { silent: true });
   });
 
   it('offers Revert only for changed inputs whose approved value was kept (#10241)', () => {
     const onRevertApproval = vi.fn();
     const stale = { approvedAt: '2026-01-01T00:00:00.000Z', changedFields: ['concept', 'song'], revertible: ['concept'] };
     open(withStatus('approved'), { productionReadiness: { castAndSets: { approved: true, stale } }, onRevertApproval });
-    // Keep approved sits in the same row as Revert, right under the stale note.
-    expect(screen.getByRole('button', { name: 'Keep approved' }).parentElement).toBe(screen.getByRole('button', { name: 'Revert concept' }).parentElement);
+    expect(screen.getByRole('button', { name: 'Keep approved' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Revert concept' }));
     expect(onRevertApproval).toHaveBeenCalledWith('castAndSets', 'concept');
     expect(screen.queryByRole('button', { name: 'Revert song' })).toBeNull();
@@ -658,7 +813,7 @@ describe('Cast & Sets stage before any check-in exists', () => {
   it('leaves Build to the checklist and keeps only Skip, wired to the skip action', async () => {
     const start = vi.fn();
     const skip = vi.fn();
-    render(<CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    render(<MemoryRouter><CastSetsStage board={{ project: { id: 'example-project', audioAnalysis: { sections: [{}] } }, locked: false, castSets: { busy: false, start, skip }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} /></MemoryRouter>);
     // The step's checklist and header already offer Build; a second copy here only repeated it.
     expect(screen.queryByRole('button', { name: 'Build cast & sets' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Skip cast & sets' }));
@@ -669,7 +824,43 @@ describe('Cast & Sets stage before any check-in exists', () => {
   it('says which style is empty and counts references and style images apart', () => {
     const project = { id: 'example-project', audioAnalysis: { sections: [{}] }, concept: { prompt: 'p', style: '', songStyle: 'synthwave' },
       visualSpec: { references: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, styleReferences: Array.from({ length: 15 }, (_, i) => ({ id: `s${i}` })) };
-    render(<CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} />);
+    render(<MemoryRouter><CastSetsStage board={{ project, locked: false, castSets: { busy: false, start: vi.fn(), skip: vi.fn() }, kickoff: { running: false }, devArtifacts: { busy: false }, openArtifact: vi.fn(), ...DRAFTS }} /></MemoryRouter>);
     expect(screen.getByText(/No visual style yet · Song style set · 3 references · 15 style images/)).toBeInTheDocument();
   });
+});
+
+
+it('previews an image edit beside the source and requires accept before replacing the card', async () => {
+  const source = done('example-source.png', 'Source portrait');
+  const original = project({ character: source }, { status: 'approved', direction: {}, plan: { character: plan.character } });
+  const queued = structuredClone(original);
+  queued.castAndSets.images.character.edit = { requestId: 'example-request', revision: 1, inputs: { imageId: source.imageId }, status: 'queued', instruction: 'Remove only the hat', prompt: 'Edit only the hat', promptAdditions: [] };
+  api.previewMusicVideoCastAndSetsImageEdit.mockResolvedValue({ sentPrompt: 'Edit the attached image. Remove only the hat', promptAdditions: [{ id: 'preserve', label: 'Preserve image', text: 'Keep everything else' }] });
+  api.editMusicVideoCastAndSetsImage.mockResolvedValue({ project: queued });
+  render(<Harness initial={original} locked={false} />);
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Edit this image: Keeper' }));
+  const field = card('Keeper').getByLabelText('Change only this');
+  fireEvent.change(field, { target: { value: 'Remove only the hat' } });
+  await waitFor(() => expect(card('Keeper').getByRole('button', { name: 'Render image edit' })).not.toBeDisabled());
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Show full prompt' }));
+  expect(card('Keeper').getByText(/Edit the attached image./)).toBeTruthy();
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Render image edit' }));
+  await waitFor(() => expect(api.editMusicVideoCastAndSetsImage).toHaveBeenCalledWith('example-project', {
+    key: 'character', imageId: source.imageId, revision: 1, instruction: 'Remove only the hat',
+  }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByText(/Rendering image edit/)).toBeTruthy());
+  expect(card('Keeper').queryByRole('button', { name: 'Accept image edit' })).toBeNull();
+  const completed = structuredClone(queued);
+  completed.castAndSets.images.character.edit = { ...queued.castAndSets.images.character.edit, status: 'done', imageId: 'example-candidate.png' };
+  await stage(completed);
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — before image edit' }).getAttribute('src')).toContain('example-source.png');
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — after image edit' }).getAttribute('src')).toContain('example-candidate.png');
+  expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('example-source.png');
+  const accepted = structuredClone(completed);
+  accepted.castAndSets = { ...accepted.castAndSets, status: 'review', revision: 2 };
+  accepted.castAndSets.images.character = { ...source, imageId: 'example-candidate.png', edit: null };
+  api.acceptMusicVideoCastAndSetsImageEdit.mockResolvedValue({ project: accepted });
+  fireEvent.click(card('Keeper').getByRole('button', { name: 'Accept image edit' }));
+  await waitFor(() => expect(api.acceptMusicVideoCastAndSetsImageEdit).toHaveBeenCalledWith('example-project', { key: 'character', requestId: 'example-request' }, { silent: true }));
+  await waitFor(() => expect(card('Keeper').getByRole('img', { name: 'Keeper — generated reference' }).getAttribute('src')).toContain('example-candidate.png'));
 });

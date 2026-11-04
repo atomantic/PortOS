@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Trash2, Sparkles, Download } from 'lucide-react';
 import useMounted from '../../hooks/useMounted.js';
-import { isOutsideReference, MAX_CONDITIONING_REFERENCES } from '../../hooks/useMusicVideoSceneMedia.js';
+import { isOutsideReference } from '../../hooks/useMusicVideoSceneMedia.js';
 import { getMoodBoard } from '../../services/apiMoodBoard.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
 import { labelMusicVideoReferencesFromCatalog } from '../../services/apiMusicVideo.js';
@@ -57,7 +57,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
   const [dirty, setDirty] = useState(false);
   const [working, setWorking] = useState(false); // a board import / universe pull is reading
   const idFor = (suffix) => `mv-look-${project.id}-${suffix}`;
-  const flagged = references.filter((r) => r.condition && !isOutsideReference(r)).length;
+  const hasConditioning = references.some((r) => r.condition && !isOutsideReference(r));
   const full = references.length >= MUSIC_VIDEO_MAX_REFERENCES;
 
   useEffect(() => {
@@ -207,7 +207,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                     </div>
                     <button type="button" onClick={() => saveReferences(references.filter((r) => r.id !== ref.id))}
                       aria-label="Remove reference" title="Remove reference"
-                      className="inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[32px] min-w-[32px] shrink-0 items-center justify-center text-port-error">
                       <Trash2 size={12} />
                     </button>
                   </div>
@@ -226,7 +226,6 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                   ) : (
                     <label className="flex min-h-[44px] min-w-0 items-start gap-1.5 text-[11px] sm:min-h-0">
                       <input type="checkbox" className="mt-0.5 shrink-0" checked={!!ref.condition}
-                        disabled={!ref.condition && flagged >= MAX_CONDITIONING_REFERENCES}
                         onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
                       <span className="break-words">Condition frames</span>
                     </label>
@@ -254,9 +253,9 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
           </li>
         ))}
       </ul>
-      {flagged > 0 && (
+      {hasConditioning && (
         <p className="text-[11px] text-port-text-muted">
-          Conditioning needs an image backend that accepts reference images (local FLUX.2 or Qwen Image 2.1, or a cloud image CLI); others refuse the render and say so. At most {MAX_CONDITIONING_REFERENCES} per frame.
+          Conditioning needs an image backend that accepts reference images (local FLUX.2, FLUX.3 or Qwen Image 2.1, or a cloud image CLI); others refuse the render and say so. Flag references as conditioning candidates; each shot sends them in priority order, up to its image renderer’s allowance. Flagging more references does not increase that renderer’s limit.
         </p>
       )}
       <fieldset disabled={busy} className="space-y-2">

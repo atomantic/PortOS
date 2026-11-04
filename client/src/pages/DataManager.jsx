@@ -707,7 +707,7 @@ export default function DataManager() {
           <button
             onClick={fetchOverview}
             disabled={overviewPending || backupsPending}
-            className="p-2 text-gray-400 hover:text-white hover:bg-port-card rounded transition-colors"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white hover:bg-port-card rounded transition-colors"
             title="Refresh" aria-label="Refresh"
           >
             <RefreshCw size={16} />

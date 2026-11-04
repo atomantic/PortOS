@@ -126,7 +126,13 @@ export function codeFirstProductionAssets(project) {
   const steps = [];
   // Without a lip-sync lane a performance direction is planned as a non-sync shot, so the shot mode cannot (and need not) become Performance.
   const lipSync = !!performanceCapability(project?.videoSettings?.backend || null);
-  const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance')).map((item) => item.message);
+  const scenes = new Map((project?.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const conflicts = plan.unresolved.filter((item) => item.blocking || item.message.startsWith('Visible performance'))
+    .map((item) => {
+      const label = scenes.get(item.sceneId)?.label;
+      const shot = label ? `${label} (${item.sceneId})` : item.sceneId;
+      return shot ? `${shot}: ${item.message}` : item.message;
+    });
   if (!Number.isInteger(project.treatment?.revision) || project.treatment.appliedRevision !== project.treatment.revision) {
     conflicts.push('Apply the current medium plan to approve it before production.');
   }
@@ -154,7 +160,7 @@ export function codeFirstProductionAssets(project) {
       steps.push({ sceneId: scene.sceneId, medium, action: 'generate-video' });
     }
   }
-  // Plan-level messages repeat once per shot; every caller joins them into one sentence.
+  // Deduplicate project-wide conflicts while retaining each affected shot in scene-specific messages.
   return { steps, conflicts: [...new Set(conflicts)],
     requiredRoutes: {
       image: steps.some((step) => step.action === 'generate-image'),

@@ -3,7 +3,7 @@ import { findCachedRepoFile, isSafeHfRepoRelativePath } from '../../lib/hfCache.
 import { ServerError } from '../../lib/errorHandler.js';
 import { downloadHfRepo } from '../hfDownload.js';
 import { sha256File } from '../../lib/fileUtils.js';
-import { MINIMAX_H3_LIGHTX2V_PROFILE, miniMaxH3SpeedProfileContract, isMiniMaxH3SpeedProfileRequest, miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
+import { MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE, miniMaxH3SpeedProfileContract, isMiniMaxH3SpeedProfileRequest, miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
 import { acceptedVideoModelTerms, isVideoModelTermsAccepted, videoModelTermsError } from '../../lib/videoDisclosure.js';
 import { resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable } from './runtimes.js';
 import { readSafetensorsHeader } from '../../lib/safetensors.js';
@@ -54,10 +54,10 @@ export async function validateMiniMaxH3MlxLoras(loras, speedProfile = null) {
   const seen = new Set(speedProfile ? [speedProfile.adapter.sha256] : []);
   for (const lora of loras || []) {
     const digest = await sha256File(lora.path);
-    if (!speedProfile && digest === MINIMAX_H3_LIGHTX2V_PROFILE.adapter.sha256) {
-      throw new ServerError('The LightX2V adapter requires its named MLX Speed profile. Remove it from the user LoRA stack and select LightX2V under Speed.', { status: 400, code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
-    }
     if (seen.has(digest)) throw new ServerError('The same H3 adapter was selected more than once, including the LightX2V speed adapter.', { status: 400, code: 'MINIMAX_H3_LORA_DUPLICATE' });
+    if ([MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE].some((profile) => digest === profile.adapter.sha256 && speedProfile?.id !== profile.id)) {
+      throw new ServerError('This distilled adapter requires its own named MLX Speed profile. Remove it from the user LoRA stack and select its profile under Speed.', { status: 400, code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
+    }
     seen.add(digest);
   }
 }
@@ -69,9 +69,9 @@ export async function prepareMiniMaxH3SpeedProfile(params, settings) {
   const reason = miniMaxH3SpeedProfileDeclineReason(params);
   if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
   if (!isVideoModelTermsAccepted(params.model, acceptedVideoModelTerms(settings))) throw videoModelTermsError(params.model);
-  if ((params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable()))
+  if ((params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable(params.profileId)))
     || !(await resolveByovRuntimeLoraCapable(params.model.runtime))) {
-    throw new ServerError('LightX2V requires its pinned H3 runtime and scheduler/quantized-LoRA capability probes. Install or repair the selected MiniMax H3 runtime in Video Gen.',
+    throw new ServerError('This speed profile requires its pinned H3 runtime and scheduler/quantized-LoRA capability probes. Install or repair the selected MiniMax H3 runtime in Video Gen.',
       { status: 400, code: 'MINIMAX_H3_SPEED_RUNTIME_UNSUPPORTED' });
   }
   const profile = miniMaxH3SpeedProfileContract(params.profileId);
@@ -80,8 +80,15 @@ export async function prepareMiniMaxH3SpeedProfile(params, settings) {
   const info = path ? await stat(path).catch(() => null) : null;
   const digest = info?.isFile() && info.size === adapter.sizeBytes ? await sha256File(path).catch(() => null) : null;
   if (digest !== adapter.sha256) {
-    throw new ServerError('LightX2V v1.3 weights are missing or fail the pinned SHA-256 check. Use Download adapter beside the Speed selector in Video Gen; generation never downloads this adapter.',
+    throw new ServerError('Speed profile weights are missing or fail the pinned SHA-256 check. Use Download adapter beside the Speed selector in Video Gen; generation never downloads this adapter.',
       { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+  }
+  for (const [file, expected] of Object.entries(adapter.supportFiles || {})) {
+    const supportPath = await findCachedRepoFile(adapter.repo, file, { revision: adapter.revision });
+    if (!supportPath || await sha256File(supportPath).catch(() => null) !== expected) {
+      throw new ServerError('Speed profile manifest, license or notice is missing or changed. Download the adapter again in Video Gen.',
+        { status: 400, code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+    }
   }
   if (params.model.runtime === 'minimax_h3') await ensureMiniMaxH3Weights(params.model, { cacheOnly: true });
   return { ...profile, adapterPath: path };

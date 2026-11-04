@@ -153,8 +153,23 @@ files under the ownership/retirement fence. It saves a separate transfer receipt
 and an honestly timestamped seed for the successor; it never edits the original
 seed, copies review files, advances a cutoff or changes a tag. A retry retains
 the original transfer. A merged promotion remains merged: verify its existing
-publication instead of opening another PR. Already recorded publication goes
-through the existing synchronization recovery, not candidate transfer.
+publication instead of opening another PR. Recovery also holds while the forge
+shows publication activity the candidate's own PR cannot explain: another open
+promotion PR into `release` (`candidate-publication-ambiguous`), the version
+tag already present before promotion (`candidate-release-tag-present`), or an
+unfinished `release.yml` run anywhere in its history, such as a re-run
+(`candidate-release-workflow-active`). Any of these may be a second publication
+in flight. An inline publication retains the
+same task and transfers both its candidate and synchronization checkout through
+this recovery; a legacy continuation keeps its existing recovery path.
+
+A restart before publication retains the predecessor on the same task only
+when its registered candidate and terminal checkout evidence still match. The
+successor recovers that candidate through the same endpoint; lineage does not
+prove process settlement. Missing or ambiguous evidence blocks the task with
+`release-candidate-recovery` instead of dispatching an unbound coordinator.
+Preserve the candidate and private review files, repair the recorded evidence,
+then explicitly retry the held task. Existing orphan/spawn budgets still apply.
 
 An unseeded candidate requires an independently captured service receipt from
 the original run with the exact Git pointer and administration identities. A
@@ -163,22 +178,90 @@ Missing/changed evidence yields a held `releaseCandidateRecovery` projection on
 the successor with a reason and safe next step. Preserve uncommitted work and
 the original checkout while resolving it.
 
+A managed candidate cannot report a completed release without its verified
+publication receipt. When the readiness check finds nothing to release, report a
+structured `no-action-needed` outcome with the evidence. The server checks the
+captured candidate and its promotion PR history before accepting that result;
+an existing PR or unreadable history remains held for reconciliation. Keep the
+candidate checkout through this verification. A no-release run has no published
+release outbox, so its candidate is retained for separately verified cleanup.
+
 Newly registered coordinators also record the reservation and checkout capture
 milestones in their service-owned lifecycle. A `registered` milestone says only
 that the service observed no reservation; it does not prove a candidate was not
 created through Git. It cannot authorize a resumed run to reserve another one.
 
-**Current recovery limits:** whole-process settlement uses the existing native
-Windows supervision receipt. macOS/Linux have no equivalent durable receipt yet
-and remain held with `candidate-process-proof-unavailable`, including when the
-original PID is absent or no process currently has the checkout as its cwd.
+**Current recovery limits:** whole-process settlement uses the native Windows
+Job receipt, the Linux subreaper receipt or the macOS launchd-coalition receipt
+(all described under the release coordinator's supervision below). A run
+launched without its supervisor remains held with
+`candidate-process-proof-unavailable`, including when the original PID is
+absent or no process currently has the checkout as its cwd.
 Historical runs missing from the trusted registry, unseeded candidates without
 contemporaneous physical evidence, and unknown private review receipt versions
 also remain held. V1 review evidence retains unknown inspection provenance; V2
 keeps its actual inspection separate from later completion. Both are validated
 with the shared receipt contract and preserved byte-for-byte, never re-certified
-as a new review. POSIX settlement support remains tracked in #13944; first
-reservation after a pre-reservation interruption is tracked in #14005.
+as a new review. First reservation after a pre-reservation interruption is
+tracked in #14005.
+
+**Attempt membership:** every dispatch of a release task appends its agent,
+start time and instance to the task's service-owned `releaseAttempts` record.
+Retry resets, revives, ordinary task edits and archival never clear it; callers
+cannot write it, and a peer merge only unions entries. A peer copy that shows
+dispatch history but no record (an older peer) leaves the record incomplete. Recovery requires a
+complete record listing the predecessor and successor. Every other member must
+be this instance's, completed (in the live registry or the service archive) and
+process-settled. A missing or incomplete record holds with
+`candidate-attempt-membership-unverified`. This includes a task that already had
+dispatches before membership was recorded. An unfinished member holds with
+`candidate-attempt-unsettled`, and another instance's member with
+`candidate-peer-attempt-unsettled`. A legacy candidate that lacks this evidence
+is reconciled with the operator action below.
+
+**Reconciling a legacy held candidate:** a release interrupted before this
+evidence existed can stay held forever. After deciding to abandon it, an
+operator (or a PortOS-spawned agent holding `PORTOS_API_TOKEN`; a peer credential
+or a remote caller on a password-free install is refused by the host-control
+gate) retires the hold on the **held successor's** agent ID:
+
+```bash
+node scripts/portos-api.js POST "/api/cos/agents/$HELD_AGENT_ID/release-candidate" \
+  '{"action":"retire","reason":"Abandon the pre-hardening candidate; cut a fresh release"}'
+```
+
+Only the insufficient-evidence reasons are eligible
+(`INSUFFICIENT_EVIDENCE_HOLD_REASONS` in `server/lib/releasePublication.js`:
+missing contemporaneous lineage, terminal receipt, successor/task lineage or
+attempt membership, and an unrecognized private review receipt). Process and
+settlement holds, unsettled attempts, publication conflicts and transient
+forge/Git failures are never retired this way. It answers `{ "retired": false,
+"reason": ... }` and changes nothing when any of these holds:
+
+- a release or release synchronization agent of the **same repository** is live
+  (including the held successor itself; other repositories are unaffected);
+- the forge shows an open or merged promotion PR for the candidate branch;
+- the `release` branch no longer points at the candidate's recorded `Release-Base`;
+- the abandoned candidate's identity cannot be read from Git, or the task is not
+  `blocked`/`pending`.
+
+On success the server records a reconciliation receipt (server-derived operator,
+your reason, the prior hold reason, and the immutable cutoff, pin, head, tree,
+release base, branch and checkout path) on the held successor's
+`releaseCandidateRecovery.reconciliation` and on the task's
+`releaseCandidateReconciliation`, then closes the task with
+`resolution: "candidate-reconciled"` so a new release run can reserve a fresh
+cutoff. It never edits candidate commits, tags, attempt membership or the
+predecessor's history, and never marks a release published. It then removes the
+abandoned checkout and local branch, because no sweep retires an unmerged candidate
+and a later run would otherwise recover it into the same hold; the commits stay
+reachable at `refs/portos/retired-candidates/<branch>`. A checkout with uncommitted
+work or a moved head is kept, reported as `checkoutRemoved: false`. Deleting a held
+release task does not abandon its candidate: the next run holds on the same checkout
+and is retired the same way. Repeating the same request after a partial failure
+completes the task update; a different reason is refused. The
+hold must still be in the live agent registry: retry the held task first if its
+successor has aged out.
 
 Resolve the previous **published** version tag and its peeled commit from the
 captured release history (not the latest tag on moving `main`). Verify the GitHub
@@ -276,7 +359,8 @@ non-prerelease GitHub Release. A merged PR alone is not completion.
 A running scheduled release coordinator can persist the verified publication before
 starting synchronization. POST `/api/cos/agents/:id/release-publication`
 using the authenticated PortOS API transport, with JSON fields `version` (without
-`v`), `promotionPrNumber`, and `workflowRunId`. The server resolves the repository
+`v`), `promotionPrNumber`, `workflowRunId`, and `synchronizationMode: "inline"`.
+The server resolves the repository
 from the registered workspace, reads the candidate's metadata-only pin and ancestry
 from its local Git objects, and independently verifies the merged promotion,
 published stable release, successful release workflow and peeled tag tree against
@@ -285,32 +369,62 @@ or inconclusive forge responses cannot establish publication. No supplied URL or
 terminal prose is accepted as proof. Repeating the same verified publication
 retains the original receipt and verification timestamp.
 
-The agent card shows the release link and publication time as soon as the receipt
-is saved, even while execution continues. This receipt verifies **publication
-only**: synchronization remains explicitly unverified. After saving the receipt,
-the endpoint persists a publication-keyed outbox and registers exactly one
-`task-release-sync-<publication identity>` continuation on this instance. A
-successful response confirms that durable task ownership; the publishing
-coordinator then stops doing synchronization and may complete without waiting
-for another agent slot. Every terminal agent write repeats the ownership check.
-This is execution/publication completion, not end-to-end release completion.
-The registered continuation is eligible without a separate `release-sync`
-schedule; it remains subject to the normal owner, instance, pause, capacity and
-budget controls. While synchronization or cleanup is unfinished, another
-`do-release` preparation for that app waits on the existing continuation rather
-than selecting a version from a development branch that still has the old version.
-On a registration failure, retain the original receipt, branch/head/PR and
-checkout evidence and retry the same handoff; do not create another task or
-publish again. Interrupted handoffs resume through ordinary delivery recovery.
-Legacy receipts are not enrolled at startup. Only an explicit publication
-verification request can enroll one, retaining its original verification time;
-an upgrade never silently generates new synchronization work from old releases.
+The card shows publication immediately, but that receipt verifies **publication
+only**. With `synchronizationMode: "inline"`, the publication-keyed outbox binds
+synchronization to the same release task and returns its frozen
+`synchronizationPolicy`. The same coordinator follows it through the synchronization
+PR, reviews, CI and merge. The server independently verifies those obligations,
+and after the process exits it verifies settlement and eligible checkout retirement.
+Another release for the app waits for verified delivery and an inactive release owner;
+checkout retirement may remain outstanding without holding the next release.
+An interrupted run resumes the same task, subject to the existing ownership and
+process-settlement checks. Do not create a follow-up task or republish the release.
+
+Requests from older running coordinators that omit `synchronizationMode` retain
+the existing version-1 continuation contract. Existing continuation tasks,
+outboxes, budgets and ambiguous-policy holds keep their original identities.
+Legacy receipts are not enrolled at startup: only an explicit verification
+request can enroll one, retaining the original verification timestamp.
+
+At registration the outbox freezes the effective PR disposition with the reviewer
+roster. Explicit task dispositions and leave-open holds take precedence; otherwise
+normal managed-app defaults apply, including the legacy review toggle when the
+app has no configured disposition. Later settings changes do not alter the payload.
+
+An older continuation with neither a stored disposition nor a legacy review toggle
+has an ambiguous policy. Automatic registration and dispatch hold it with
+`RELEASE_SYNC_REVIEW_POLICY_UNVERIFIED` / `review-policy-unverified`; they do not
+infer intent from its roster or today's app settings. Recover using the original
+run's saved prompt, pinned delivery policy and exact PR/head review receipts.
+Resume the same branch/PR through ordinary delivery recovery only when that
+historical evidence establishes the obligations, retaining reviewer order,
+optionality, models and spent round/spawn budgets. Do not rewrite the immutable
+outbox/task, mint another continuation or invent missing review evidence. A
+provider-confirmed merge can still be observed by the existing synchronization
+verifier; this dispatch hold does not invalidate completed delivery evidence.
+If the historical policy cannot be established, keep the checkpoint held and use
+the existing operator reset below only after an explicit decision to abandon it.
+
+If a separate merged PR delivered a historical release, an operator can POST
+`{ "identity": "<identity>", "prNumber": 123 }` to
+`/api/cos/schedule/release-synchronization/verify-delivery`. The server checks the
+merged PR and current default branch, candidate and published ancestry, and the
+development version and lockfile. It records that independent delivery separately;
+the original task and review verdicts remain historical. Future release dispatch
+rechecks the delivery and active owners. This operation does not retire checkouts,
+start a release, or release the checkout-review retention gate.
 
 The outbox keeps the original reviewer policy, publication ancestry and retained
-physical checkout seeds. It never transfers checkout authority. The continuation
+physical checkout seeds. It never transfers checkout authority. The owner
 uses the procedure below and ordinary delivery, admission and retirement recovery.
-Completed task history still owns its publication identity and cannot be deleted
-through task CRUD. Execution success does **not** mark synchronization verified:
+Task CRUD cannot delete a synchronization task directly. Deleting one from the
+task list (or `DELETE /api/cos/tasks/:id`) is the owner's decision to abandon
+it: the route records the operator reset below with an empty checkout list unless
+synchronization is already verified or reset, then removes the row. The outbox
+keeps the publication receipt, and the reset refuses while a release or
+synchronization is active. The outbox is machine-local, so the delete also
+refuses on an instance that has no entry for the task; delete it on the
+publishing instance. Execution success does **not** mark synchronization verified:
 the delivery and other obligations remain pending until their evidence is observed. A bounded recovery
 sweep checks the same outbox after restart, including completed task/agent history.
 It records pending, running, blocked or verified synchronization separately from the
@@ -319,6 +433,11 @@ revision-bound proof and durable retry times; conflicting owners remain blocked.
 
 Verification inspects the exact same-repository synchronization PR/head and its
 merged development ancestry (including the candidate head and published promotion).
+For inline releases it also reads the package version at the observed development
+head and requires it to be at least the published version. When the published tree
+contains `package-lock.json`, its development copy must agree with the package
+version. A newer development version is preserved; unreadable or older versions
+remain a synchronization hold.
 A provider-confirmed merge establishes delivery under the repository's merge
 policy. The legacy local-review, hosted-review, CI and admission obligation names
 record that provider authority; they do not claim that PortOS independently
@@ -335,7 +454,10 @@ quality evidence. Runtime, runner, PID and checkout process checks establish
 process settlement separately from task execution success. Every retained physical
 checkout generation requires its exact service retirement receipt plus checkout
 and local/remote ref absence; generic delivery/retirement recovery remains the
-only writer of those receipts. No verifier merges a PR, changes a published tag,
+only writer of those receipts. After an inline owner's process settles, the
+bounded server sweep asks that same retirement service to review and retire only
+the exact delivered candidate and synchronization checkout generations. A hold
+leaves their evidence in place; it does not queue another agent. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
 
@@ -381,14 +503,74 @@ or conflicting receipts remain blocked. API-only agents without a supervised
 process root also retain the explicit hold. An empty Windows cwd listing is never
 a substitute for this proof.
 
+On Linux, the same release agents launch under a small supervisor
+(`server/lib/linuxAgentSupervisor.py`, run with `python3 -I`). It marks itself a
+child subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`), so a `setsid` or double-fork
+descendant is reparented to it rather than escaping, and it reaps until
+`wait()` reports no children left. Only then does it write the settled receipt,
+carrying the owner nonce, root PID and `/proc/<pid>/stat` start time, through
+the same reservation, launch and started records as Windows. Every stop request,
+including a forced kill, is written as the same durable `cancel` request the
+Windows supervisor reads (SIGTERM or SIGHUP to the supervisor also cancel), so
+it survives a supervisor that has not finished starting. The supervisor sends the
+tracked tree SIGTERM, escalates to SIGKILL after five seconds (signalling each
+process through a pidfd checked against its scanned start time), and waits for
+the same empty-tree proof. Candidate recovery accepts the receipt only when it
+matches the registered agent, task, start time and reservation nonce. The
+supervisor needs `python3` (3.9 or later) with `ctypes` and pidfd support (Linux
+5.3 or later); when the startup probe fails, the agent runs unsupervised and its
+recovery stays held. Legacy, unsupervised, lost-supervisor and mismatched records
+stay held, and an absent PID is never treated as settlement. Processes started
+outside the tree through IPC (`systemd-run`, `at`, a session manager or another
+daemon) are out of scope, as with the Windows Job. Synchronization retirement on
+Linux still uses its existing PID and cwd checks.
+
+On macOS, which offers an unprivileged process neither a child subreaper nor a
+Job, the same release agents launch through
+`server/lib/darwinAgentSupervisor.py` (run with `python3 -I`). It bootstraps a
+single-use launchd job (`gui/<uid>`, falling back to `user/<uid>`) whose body
+is the supervisor's own stub. launchd starts every job in a fresh resource
+coalition. Membership is inherited across fork and exec, survives `setsid` and
+double forks, and cannot be left without a privileged spawn, and the kernel
+counts the members that started and exited. The supervisor accepts the job only
+when the stub that connects back over its private socket is in a coalition
+other than the supervisor's own and is that coalition's only member. It then
+passes the agent's stdio to the stub (for a PTY agent, a fresh pseudo-terminal
+that it relays, so the agent keeps a controlling terminal, `/dev/tty`, raw input
+and resize signals). The stub starts the agent and reports its exit status.
+Once the job is unloaded and the coalition reports no live member (or the
+kernel has reaped it, which happens only when it is empty), the supervisor
+writes the settled receipt. That receipt carries an explicit, versioned proof,
+`{ "kind": "launchd-coalition", "version": 1, "coalition": "<id>" }`, which
+recovery requires on macOS and refuses elsewhere. Stops use the same durable
+`cancel` request: SIGTERM to every coalition member, then SIGKILL after five
+seconds. Each member's coalition and start time are rechecked just before it is
+signalled, and the supervisor waits for the same empty-coalition proof. The
+startup probe runs a real launchd round trip; when it fails (no `python3`, no
+launchd user domain), the agent runs unsupervised and its recovery stays held.
+Processes started outside the coalition through IPC (another launchd job,
+`open`, a session manager) are out of scope, as with the Windows Job.
+Synchronization retirement on macOS still uses its existing PID and cwd checks.
+
+A forge publication fence was evaluated for macOS and rejected as the
+settlement mechanism. Under that design, a successor would resume only the
+identical candidate PR, pin its merge with `--match-head-commit`, and refuse
+while another promotion or synchronization PR existed. A surviving predecessor
+still holds the same forge credentials, though. Between the successor's check
+and its merge, it can open or merge a different promotion. No forge rule makes
+"at most the identical, single publication" enforceable against it, so the
+fence could be stated honestly only as best-effort, never as settlement. The
+forge checks it would have used remain as additional recovery holds (above),
+alongside the kernel-backed coalition proof.
+
 #### 6. Synchronize back without changing the published release
 
-After publication, the durable continuation opens a normal **`release` → `main`** synchronization PR and
-merge it with a merge commit after its own required checks/reviews/admission.
+After publication, the release coordinator opens a normal **`release` → `main`** synchronization PR and
+merges it with a merge commit after its own required checks and reviews.
 This carries version metadata, notes and candidate-only fixes back to development
 and preserves the release merge ancestry for the next candidate. The PR's head is a
-temporary branch pushed at the published release commit
-(`git push origin <release-sha>:refs/heads/codex/release-sync-<id>`), never `release`
+temporary branch containing the published release commit, pushed as
+`refs/heads/codex/release-sync-<id>`, never `release`
 itself: the repository deletes merged head branches, so a `--head release` PR
 removes the `release` branch when it merges. Run the
 repository-required quality snapshot after publication as a development update;
@@ -396,6 +578,27 @@ it never changes this release. If conflicts require edits, use a temporary sync 
 and the current `main`, resolve them there, and merge that branch into `main`.
 Preserve newer development work. Never retarget the candidate, tag, or `release`
 ref to `main`, and never back-merge development commits into the published tree.
+
+For an inline PortOS release, the coordinator must reserve its separate sync
+checkout before creating it and capture its physical generation before editing:
+
+```bash
+SYNC_BRANCH=$(curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+  -d '{"action":"sync-reserve"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -er 'select(.reserved == true) | .branch')
+git fetch origin main
+git worktree add -b "$SYNC_BRANCH" "$SYNC_WORKTREE" FETCH_HEAD
+curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: application/json' \
+  -d '{"action":"sync-capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
+git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
+```
+
+Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is a
+hold, not authority to adopt another checkout. On recovery, reuse the returned
+checkout and branch; do not create a second synchronization branch.
+If interruption leaves a synchronization reservation without a captured
+checkout generation, recovery holds with `candidate-synchronization-checkout-unverified`.
+An absent branch does not prove an unknown checkout was never created or
+detached; preserve any work and resolve that lineage before continuing.
 
 Keep synchronization failures tracked with the exact PR, owner and next step;
 they do not invalidate an already verified publication or require revalidating it.

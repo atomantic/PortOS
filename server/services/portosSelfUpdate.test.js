@@ -1,3 +1,7 @@
+vi.mock('./activeProcessing.js', () => { const activity = vi.fn(async () => ({
+  jobs: [], agents: { trusted: true, active: 0, queued: 0 }, mind: { trusted: true, thinking: false, queued: 0 },
+  llm: { trusted: true, active: 0 }, extras: { imageTo3d: [] }, appOperations: [], renders: [], backup: { inProgress: false },
+})); return { getSystemActivity: activity, getObservedUpdateActivity: activity }; });
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // The release and reconcile modes are already driven end-to-end through
@@ -51,6 +55,12 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(inSyncStatus());
     launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
+  });
+  it('preserves a late interruption-consent refusal in the async UI error', async () => {
+    launchUpdate.mockResolvedValueOnce({ started: true, completion: Promise.resolve({ success: false,
+      errorCode: 'UPDATE_INTERRUPTION_REQUIRED', errorMessage: 'Save your work before continuing' }) });
+    await startPortosSelfUpdate({ io, mode: 'refresh' });
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({ code: 'UPDATE_INTERRUPTION_REQUIRED' })));
   });
 
   it('runs on an in-sync install, where a reconcile would refuse', async () => {
@@ -169,13 +179,14 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
       .resolves.toEqual({ started: true, tag: 'v1.26.0' });
     fail(new Error('completion failed'));
-    await vi.waitFor(() => expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.any(Object)));
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
     expect(io.emit).toHaveBeenCalledWith('portos:update:error', {
       message: 'completion failed', step: 'unknown',
     });
   });
 
-  it('releases the update lock when the launch itself rejects', async () => {
+  it('reports launch failure without claiming or releasing admission', async () => {
     // The executor clears the flag through recordUpdateResult on refusal and
     // completion; a rejection reports none, and the stuck flag then
     // wedges every later update and every CoS agent spawn (#6036).
@@ -183,7 +194,8 @@ describe('startPortosSelfUpdate — refresh mode', () => {
 
     await startPortosSelfUpdate({ io, mode: 'refresh' }).catch(() => {});
 
-    await vi.waitFor(() => expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.any(Object)));
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
     expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({
       message: 'spawn EACCES',
     }));

@@ -525,7 +525,7 @@ export default function LocalLlmPlayground() {
             </p>
           </div>
         </div>
-        <button onClick={() => { loadStatus(); loadedResource.refetch(); }} disabled={loadingStatus} className="p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
+        <button onClick={() => { loadStatus(); loadedResource.refetch(); }} disabled={loadingStatus} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white transition-colors" title="Refresh models" aria-label="Refresh models">
           <RefreshCw size={16} className={loadingStatus ? 'animate-spin' : ''} />
         </button>
       </div>

@@ -366,22 +366,33 @@ export async function getNodeRuntimeStatus() {
 let currentJob = null;
 
 /** Refuse unless nothing is running that a restart would kill. */
-async function assertIdleForRestart() {
-  const [{ getSystemActivity }, { describeActivityBlockers }, { checkPortosUpdatePreflight }] = await Promise.all([
+/**
+ * Refuse while PortOS is busy, naming what is running. The owner can proceed anyway
+ * (`acknowledgeBusy`): the guard warns, it does not lock the owner out. `action`
+ * completes the refusal sentence ("…, so it waits until that finishes").
+ */
+export async function assertIdleUnlessAcknowledged({ acknowledgeBusy = false, action = 'Switching Node restarts PortOS' } = {}) {
+  const [{ getSystemActivity }, { describeActivityBlockers }] = await Promise.all([
     import('./activeProcessing.js'),
     import('../lib/systemIdle.js'),
-    import('./updatePreflight.js'),
   ]);
   const processing = await getSystemActivity().catch(() => null);
   if (!processing?.activity) {
+    if (acknowledgeBusy) return;
     throw new ServerError('Could not confirm PortOS is idle. Try again in a moment.', { status: 503, code: 'ACTIVITY_UNAVAILABLE' });
   }
-  if (!processing.activity.idle) {
-    throw new ServerError(
-      `PortOS is busy (${describeActivityBlockers(processing.activity.blockers)}). Switching Node restarts PortOS, so it waits until that finishes.`,
-      { status: 409, code: 'SYSTEM_BUSY' },
-    );
+  if (processing.activity.idle) return;
+  const busy = describeActivityBlockers(processing.activity.blockers);
+  if (acknowledgeBusy) {
+    console.log(`⏭️ Proceeding while busy (${busy}) at the owner's request`);
+    return;
   }
+  throw new ServerError(`PortOS is busy (${busy}). ${action}, so it waits until that finishes.`, { status: 409, code: 'SYSTEM_BUSY' });
+}
+
+async function assertIdleForRestart({ acknowledgeBusy = false } = {}) {
+  await assertIdleUnlessAcknowledged({ acknowledgeBusy });
+  const { checkPortosUpdatePreflight } = await import('./updatePreflight.js');
   // A fork's own main is what it runs; a runtime switch is not the moment to
   // demand a fork sync.
   await checkPortosUpdatePreflight({ acknowledgeFork: true });
@@ -422,8 +433,8 @@ const nodeVersionOf = (nodeBinary) => nodeBinary.match(/(v\d+\.\d+\.\d+)/)?.[1] 
  * previous pin when the launch is refused, so a later plain restart never picks
  * up a runtime whose native modules were not rebuilt.
  */
-async function pinAndRestart({ io, emit, nodeBinary }) {
-  await assertIdleForRestart();
+async function pinAndRestart({ io, emit, nodeBinary, acknowledgeBusy = false }) {
+  await assertIdleForRestart({ acknowledgeBusy });
   const previous = readPortosEnvValue(NODE_INTERPRETER_ENV_KEY);
   if (nodeBinary) {
     emit('node-pin', 'running', 'Pinning PortOS to the new Node…');
@@ -462,7 +473,12 @@ function launchJob(kind, io, work, { restart = true } = {}) {
       console.error(`❌ ${kind} failed: ${error.message}`);
       io?.emit('portos:update:error', { message: error.message, step: kind });
     })
-    .finally(() => { currentJob = null; runtimeUpdateEvents.emit('changed'); });
+    .finally(() => {
+      currentJob = null;
+      runtimeUpdateEvents.emit('changed');
+      // After the job slot clears, so a status read on this event sees it finished.
+      io?.emit('portos:node-runtime:changed', { reason: 'job-finished', kind });
+    });
   // `restart: false` tells the Update tab not to wait for a restart.
   return { started: true, restart };
 }
@@ -471,7 +487,7 @@ function launchJob(kind, io, work, { restart = true } = {}) {
  * Install `version` with nvm, make it nvm's default, give it the pm2 CLI
  * PortOS ships, then restart PortOS on it.
  */
-export async function startNodeUpdate({ version, io }) {
+export async function startNodeUpdate({ version, io, acknowledgeBusy = false }) {
   if (!VERSION_RE.test(version || '')) {
     throw new ServerError('version must look like v26.12.1', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -481,7 +497,7 @@ export async function startNodeUpdate({ version, io }) {
     throw new ServerError(`${version} is not an available update for Node ${status.node.version}.`, { status: 400, code: 'NODE_VERSION_NOT_OFFERED' });
   }
   // Refuse up front so a busy install isn't left with a download it can't use yet.
-  await assertIdleForRestart();
+  await assertIdleForRestart({ acknowledgeBusy });
   const nvm = resolveNvm();
   const nodeBinary = nvmNodeBinary(nvm.dir, version);
 
@@ -496,7 +512,7 @@ export async function startNodeUpdate({ version, io }) {
     await runStep(emit, 'node-default', `Making ${version} nvm's default…`, aliasCmd, aliasArgs,
       { timeoutMs: 60_000, env: withoutServerSecretsEnv(process.env) });
     if (status.pm2.shipped) await installGlobalPm2(emit, nodeBinary, status.pm2.shipped);
-    await pinAndRestart({ io, emit, nodeBinary });
+    await pinAndRestart({ io, emit, nodeBinary, acknowledgeBusy });
   });
 }
 
@@ -505,7 +521,7 @@ export async function startNodeUpdate({ version, io }) {
  * under PortOS's Node, and the daemon (reloaded by the restart lifecycle) when
  * it runs an older pm2 or Node. No restart when only the CLI was behind.
  */
-export async function startPm2Update({ io }) {
+export async function startPm2Update({ io, acknowledgeBusy = false }) {
   const status = await getNodeRuntimeStatus();
   const { shipped, cliBehind, daemonStale } = status.pm2;
   if (!shipped) throw new ServerError('PortOS\'s own pm2 is missing. Run the PortOS update first.', { status: 409, code: 'PM2_MISSING' });
@@ -513,12 +529,12 @@ export async function startPm2Update({ io }) {
   if (!cliBehind && !daemonStale) {
     throw new ServerError(`pm2 is already on ${shipped}.`, { status: 409, code: 'PM2_CURRENT' });
   }
-  if (daemonStale) await assertIdleForRestart();
+  if (daemonStale) await assertIdleForRestart({ acknowledgeBusy });
 
   return launchJob('pm2-update', io, async (emit) => {
     if (cliBehind) await installGlobalPm2(emit, cliNode, shipped);
     if (daemonStale) {
-      await pinAndRestart({ io, emit, nodeBinary: null });
+      await pinAndRestart({ io, emit, nodeBinary: null, acknowledgeBusy });
     } else {
       io?.emit('portos:node-runtime:changed', { reason: 'pm2-cli' });
     }

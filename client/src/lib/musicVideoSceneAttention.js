@@ -9,13 +9,14 @@
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan } from './musicVideoLayers.js';
+import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
 export { COVERAGE_TOLERANCE_SEC } from './musicVideoLayers.js';
 
 export const SCENE_ATTENTION_LABELS = Object.freeze({
+  'beat-needs-review': 'Needs its own beat',
   'missing-frame': 'No frame',
   'missing-clip': 'No clip',
   'under-covered': 'Clip too short',
@@ -25,8 +26,6 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'plate-unverified': 'Plate unverified',
   'no-span': 'No time span',
   'last-failure': 'Last render failed',
-  'still-unlocked': 'Still not locked',
-  'video-unlocked': 'Video not locked',
   'song-changed': 'Lyrics changed',
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
@@ -51,21 +50,6 @@ function takeKindsInUse(scene, layer) {
   return isEndFrameImageEffect(scene.imageEffect) ? ['image', 'endImage'] : ['image'];
 }
 
-/**
- * The shots the Shots checklist counts as not locked yet, from production
- * readiness: `stills` once the director locks shots one at a time and the board
- * is not approved, `videos` once any clip has been locked. The checklist rows
- * and the board's attention codes both read this, so their counts agree.
- */
-export function unlockedShots(readiness) {
-  const storyboard = readiness?.storyboard;
-  const clips = Object.values(storyboard?.clipLocks || {});
-  return {
-    stills: storyboard?.approved ? [] : storyboard?.unlocked || [],
-    videos: clips.some((state) => state === 'locked' || state === 'changed') ? storyboard.clipsUnlocked || [] : [],
-  };
-}
-
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */
 export const parseSceneFilter = (value) => (SCENE_FILTERS.includes(value) ? value : 'all');
 
@@ -85,13 +69,13 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  * that failed this session, and `songReview` (the project's revised-song
  * verdicts by sceneId) so a shot the new lyrics changed is flagged until acted on.
  * `locked`: the director locked this shot, so its other takes are not waiting on review.
- * `unlocked`: `'still'` or `'video'` when the Shots checklist counts this shot's still or video as not locked yet (`unlockedShots`).
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, unlocked = null } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
+  if (scene.beatNeedsReview) codes.push('beat-needs-review');
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   // A code-rendered clip was made without a seed frame, so it needs none.
@@ -99,7 +83,7 @@ export function sceneAttention(scene, ctx = {}) {
   if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
   if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
-  if (layer === 'footage' && scene.beatAligned && sceneHasAuthoredSpan(scene)
+  if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
     && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
       holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
@@ -111,8 +95,6 @@ export function sceneAttention(scene, ctx = {}) {
     if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
-  if (unlocked === 'still') codes.push('still-unlocked');
-  if (unlocked === 'video') codes.push('video-unlocked');
   return codes;
 }
 

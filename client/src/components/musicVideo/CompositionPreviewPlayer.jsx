@@ -4,8 +4,10 @@ import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../..
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { hashString } from '../../utils/hashString.js';
-import ShotStepper, { shotSteps } from './ShotStepper.jsx';
+import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
+import toast from '../ui/Toast';
+import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -31,6 +33,37 @@ const lyricAt = (cues, t) => {
   return line?.text || '';
 };
 
+// The shot effect inputs a document session stages at open, including what
+// makes an end-frame effect eligible (its still's media and medium). A change
+// reopens it, so a new effect draws (or is named as unsupported) and a removed one clears.
+const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durationSec ?? null, project.productionPolicy?.strategy ?? null,
+  (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
+  (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
+    s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
+    s.referenceImageId, s.photoSequence, s.direction?.medium])]);
+const shotEffectsVersion = (project) => {
+  const key = shotEffectsKey(project);
+  return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
+};
+
+const EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
+const SHOTS_SHOWN = 6;
+
+/** "glitch transitions (shots 3, 7), end-frame effects (shot 12)" from the preview's unsupported list. */
+export function unsupportedEffectsSummary(unsupported, scenes) {
+  const numbers = shotNumbers(scenes);
+  return Object.entries(EFFECT_LABELS).map(([kind, label]) => {
+    const entries = unsupported.filter((entry) => entry.effects?.includes(kind));
+    if (!entries.length) return null;
+    // A cold-open shot has no number on the song clock.
+    const shots = entries.map((entry) => numbers.get(entry.sceneId)).filter(Boolean).sort((a, b) => a - b);
+    if (!shots.length) return label;
+    const listed = shots.slice(0, SHOTS_SHOWN).join(', ');
+    const more = shots.length > SHOTS_SHOWN ? ` +${shots.length - SHOTS_SHOWN} more` : '';
+    return `${label} (${shots.length === 1 ? 'shot' : 'shots'} ${listed}${more})`;
+  }).filter(Boolean).join(', ');
+}
+
 // A phone's collapsed mini-player has no picture to show, so it must not start
 // the isolated renderer up front. Without matchMedia, load eagerly.
 const DESKTOP_QUERY = '(min-width: 1024px)';
@@ -46,9 +79,11 @@ const startsDeferred = (collapsed) => collapsed && window.matchMedia?.(DESKTOP_Q
  * `lyrics` previews timed lyrics instead of the document. `draft` previews the
  * candidate document. `shotNav` adds Back and Next shot buttons (and the arrow
  * keys) and frame-by-frame stepping for the docked player; `onEditShot(sceneId)`
- * there adds Edit shot, which pauses first.
+ * there adds Edit shot, which pauses first. When the document's engine predates
+ * selected shot effects, the preview plays without them and names those shots;
+ * `onProject(project)` there adds a one-tap engine update.
  */
-export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, onEditShot = null, scrubId: givenScrubId = null }) {
+export default function CompositionPreviewPlayer({ project, audioUrl, seekRequest = null, collapsed = false, draft = false, lyrics = false, shotNav = false, onEditShot = null, onProject = null, scrubId: givenScrubId = null }) {
   const doc = lyrics ? { playthrough: true } : (draft ? project.composition?.documentDraft : project.composition?.document) || null;
   const scrubId = givenScrubId || (lyrics ? 'mv-lyrics-scrub' : draft ? 'mv-doc-draft-scrub' : 'mv-doc-scrub');
   const [wanted, setWanted] = useState(() => !startsDeferred(collapsed));
@@ -63,6 +98,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef(null);
+  const reportedAudioError = useRef(false);
   const mounted = useMounted();
   const intent = useRef(0);
   const wantsPlay = useRef(false);
@@ -73,10 +109,12 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const resyncs = useRef([]);
   const [preparing, setPreparing] = useState(false);
   const [audioError, setAudioError] = useState('');
+  const [upgrading, setUpgrading] = useState(false);
+  useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
   const filmLook = lyrics ? null : (project.filmLook ?? null);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
-  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}` : null;
+  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
   const request = useMemo(() => {
     if (!wanted || !revision || !doc) return null;
     return {
@@ -109,6 +147,15 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     setT(next);
   }, [duration, fps, preview.pausePlayback, cancelAudioStart]);
 
+  const handleAudioError = (event) => {
+    if (reportedAudioError.current || event.currentTarget !== audioRef.current) return;
+    reportedAudioError.current = true;
+    const kind = { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'unsupported' }[event.currentTarget.error?.code] || 'unknown';
+    console.error(`❌ Generated preview audio failed (${kind})`);
+    stopPlayback();
+    setAudioError('The song audio could not be played. Check the file or connection, then retry the preview.');
+  };
+
   const playFrom = useCallback((time) => {
     const audio = audioRef.current;
     if (!audio || !preview.ready) return;
@@ -117,8 +164,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     const live = () => mounted.current && generation === intent.current && wantsPlay.current;
     wantsPlay.current = true;
     setAudioError('');
-    const failed = (error) => {
+    const failed = (error, stage) => {
       if (!live()) return;
+      console.error(`❌ Generated preview failed during ${stage}`);
       stopPlayback(audio.currentTime || time);
       setAudioError(error?.message || 'Audio playback could not start. Retry the preview.');
     };
@@ -131,7 +179,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         waiting.timer = setTimeout(() => {
           if (audioStartWait.current !== waiting) return;
           cancelAudioStart();
-          failed(new Error('The audio clock did not start. Retry the preview.'));
+          failed(new Error('The audio clock did not start. Retry the preview.'), 'audio-clock');
         }, 3000);
       }
       const started = audio.play?.();
@@ -174,14 +222,14 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           waiting.frame = requestAnimationFrame(observe);
         };
         observe();
-      }).catch(failed);
+      }).catch((error) => failed(error, 'audio-start'));
     };
     if (preview.playback) {
       audio.pause?.();
       nativePlaying.current = false;
       setPlaying(false);
       setPreparing(true);
-      preview.preparePlayback(time).then((native) => { if (live() && native !== null) startAudio(native); }).catch(failed);
+      preview.preparePlayback(time).then((native) => { if (live() && native !== null) startAudio(native); }).catch((error) => failed(error, 'native-prepare'));
     } else startAudio(false);
   }, [mounted, preview.ready, preview.playback, preview.preparePlayback, preview.startPlayback, stopPlayback, cancelAudioStart]);
   playFromRef.current = playFrom;
@@ -251,6 +299,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
       const now = performance.now();
       resyncs.current = resyncs.current.filter((at) => now - at < 10000);
       if (resyncs.current.length >= 3) {
+        console.error('❌ Generated preview repeatedly lost audio synchronization');
         stopPlayback();
         setAudioError('Native preview repeatedly lost synchronization. Retry the preview.');
         return;
@@ -277,7 +326,33 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     else playFrom(audioRef.current?.currentTime || 0);
   };
 
+  const retryPreview = () => {
+    stopPlayback();
+    const audio = audioRef.current;
+    const reloadAudio = reportedAudioError.current && audio;
+    reportedAudioError.current = false;
+    setAudioError('');
+    if (reloadAudio) {
+      const position = audio.currentTime;
+      audio.load();
+      // Setting currentTime before metadata arrives preserves the requested start position.
+      audio.currentTime = position;
+    }
+    preview.resume();
+  };
+
+  const upgradeEngine = async () => {
+    setUpgrading(true);
+    const result = await upgradeMusicVideoCompositionEngine(project.id, doc.directory, { silent: true })
+      .catch((error) => { toast.error(error?.message || 'The layered engine could not be updated'); return null; });
+    if (mounted.current) setUpgrading(false);
+    if (!result) return;
+    if (result.project) onProject(result.project);
+    toast.success(result.changed ? 'Layered engine updated; every effect now previews' : 'Layered engine is already current');
+  };
+
   if (!doc) return null;
+  const unsupported = lyrics ? [] : preview.unsupportedEffects || [];
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
@@ -292,6 +367,16 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     <div className="space-y-2" aria-label={lyrics ? 'Lyric timing playthrough' : 'Composition preview'}>
       {failed && <p className="text-xs text-port-error" role="alert">{audioError || preview.reason || 'Preview unavailable'}</p>}
       {preview.playbackReason && <p className="text-xs text-port-text-muted" role="status">{preview.playbackReason}</p>}
+      {unsupported.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning" role="status">
+          <span className="min-w-0 break-words">Playing without effects this engine can't draw: {unsupportedEffectsSummary(unsupported, project.scenes)}.</span>
+          {onProject && !draft && (
+            <button type="button" className={buttonCls} disabled={upgrading || !!project.composition?.documentDraft} onClick={upgradeEngine}>
+              {upgrading ? 'Updating…' : 'Update layered engine'}
+            </button>
+          )}
+        </div>
+      )}
       <div title={title} className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview.frameUrl ? (
@@ -301,7 +386,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={() => { stopPlayback(); setAudioError(''); preview.resume(); }}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
+        {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={retryPreview}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview.ready || !audioUrl || (failed && !playing)}>
           {playing || preparing ? <Pause size={14} /> : <Play size={14} />} {playing || preparing ? 'Pause' : 'Play'}
         </button>
@@ -325,7 +410,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         />
       )}
       {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onEnded={() => stopPlayback()} />}
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
     </div>
   );
 }

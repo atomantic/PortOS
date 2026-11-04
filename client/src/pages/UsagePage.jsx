@@ -2,7 +2,7 @@ import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, Network, BarChart3 } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3 } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -10,6 +10,7 @@ import Pill from '../components/ui/Pill';
 import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useSocketResource } from '../hooks/useSocketResource';
+import useMounted from '../hooks/useMounted';
 import { useQuotaUpdates } from '../hooks/useQuotaUpdates';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokensCard';
@@ -20,10 +21,24 @@ import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
+import { expireQuotaWindows, groupQuotaCards, mergeRefreshedFamily, nextQuotaReset, reconcileLocalQuota } from '../lib/quotaCards';
 
 
 const BACKFILL_EVENTS = ['usage-backfill:updated'];
 const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
+const FLEET_SYNC_EVENTS = ['sync:progress'];
+const FLEET_BILLING_EVENTS = ['usage:fleet-billing-updated'];
+const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
+const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
+const refreshDiagnostic = (card, requestOrder) => ({ ...card, requestOrder,
+  ...(card.refreshUnavailable ? { error: 'Live quota refresh was unavailable; displayed readings may be out of date.', quotaStatus: undefined, quotaScope: undefined } : {}),
+  refreshAttemptAt: new Date().toISOString() });
+
+function retainedEligiblePeers(cards, result) {
+  if (!Array.isArray(result.excludedInstanceIds)) return [];
+  const excluded = new Set(result.excludedInstanceIds);
+  return cards.filter((card) => card.origin?.self === false && !excluded.has(card.origin.instanceId));
+}
 
 function joinAnd(parts) {
   if (parts.length <= 1) return parts[0] || '';
@@ -51,27 +66,32 @@ function agyRepairLine(agy) {
   return agy.note ? `${added} ${agy.note}` : added;
 }
 
-// A subscription is one account across every federated instance, but each
-// instance can only read its own CLI's panel. When peers have contributed a
-// reading, say so on the card and name them — the meters are the freshest
-// reading across the fleet and the activity counts are summed, which is a
-// different claim than "what this box saw".
-function FleetSourcesPill({ fleet }) {
-  if (!fleet || fleet.count < 2) return null;
-  const describe = (i) => `${i.self ? 'this machine' : (i.name || i.instanceId)}${i.self || !i.fetchedAt ? '' : ` (read ${timeAgo(i.fetchedAt)})`}`;
-  return (
-    <Pill tone="context" size="xs" icon={Network} className="hidden sm:inline-flex shrink-0" title={fleet.instances.map(describe).join(' · ')}>
-      {fleet.count} instances
-    </Pill>
-  );
-}
-
 // One subscription-quota card per enabled provider family. Providers with no
 // queryable usage surface (supported: false) render a muted note, never an
 // error; a supported adapter that failed transiently shows a soft warning.
-function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
+function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshError, passiveError, imageReadError }) {
+  const issueText = (issue) => {
+    if (!issue?.error || issue.quotaStatus === 'expired') return null;
+    if (issue.quotaStatus === 'limit_reached') {
+      const at = Date.parse(issue.fetchedAt);
+      const window = issue.quotaScope && quota.limits?.find((limit) => limit.key === issue.quotaScope);
+      const readAt = Date.parse(window?.readAt);
+      if (Number.isFinite(at) && Number.isFinite(readAt) && at <= readAt) return null;
+      return issue.error;
+    }
+    return issue.error;
+  };
+  let diagnostics = [...new Set([quota.providerIssue, refreshError, passiveError, imageReadError].map(issueText).filter(Boolean))];
+  const bodyQuota = { ...quota, note: null };
+  if (!quota.imageRefusals && !quota.limits?.length && diagnostics.length) {
+    if (bodyQuota.error) diagnostics = diagnostics.filter((diagnostic) => diagnostic !== bodyQuota.error);
+    else {
+      bodyQuota.error = diagnostics[0];
+      diagnostics = diagnostics.slice(1);
+    }
+  }
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
+    <div className="min-w-0 bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
       <div className="flex items-center justify-between gap-1 sm:gap-2 mb-1 sm:mb-2">
         {/* min-w-0 so the provider name shrinks with the card instead of being
             crushed to nothing by the fixed-width controls beside it. */}
@@ -80,13 +100,12 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           {quota.plan && quota.plan !== 'unknown' && (
             <Pill tone="context" size="xs" className="hidden sm:inline-flex">{quota.plan}</Pill>
           )}
-          <FleetSourcesPill fleet={quota.fleet} />
           {/* Per-card refresh: every family's reading is its own multi-second
               CLI/TUI scrape, so re-reading one provider must not respawn all
               of them. The button is a 44px touch target around the small
               icon; its negative margins let it overhang the header's line box
               and the card padding, so the compact phone card doesn't grow. */}
-          <button
+          {quota.canRefresh && <button
             type="button"
             onClick={() => onRefresh(quota.family)}
             disabled={refreshing || disabled}
@@ -97,11 +116,22 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
             {/* `will-change-transform` — see the section-level Refresh button's
                 comment on the compositor-layer artifact this avoids. */}
             <RefreshCw size={14} className={`w-3 h-3 sm:w-3.5 sm:h-3.5 will-change-transform ${refreshing ? 'animate-spin' : ''}`} />
-          </button>
+          </button>}
         </div>
       </div>
 
-      <ProviderQuotaBody quota={quota} />
+      {quota.imageRefusals ? (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">Image providers do not report a quota meter.</p>
+          {quota.imageRefusals.map(([key, refusal]) => <p key={key} className="text-xs text-port-warning break-words">{refusal.label || key}: refusal observed · {refusal.fetchedAt ? `reported ${timeAgo(refusal.fetchedAt, 'time unavailable')}` : 'report time unavailable'}; current availability may have changed.</p>)}
+        </div>
+      ) : (
+        <>
+          <ProviderQuotaBody quota={bodyQuota} showActivity={false} showNote={false} showSource={false} />
+          {quota.routingOverridden && <p className="mt-2 text-xs text-gray-500">Model routing may bypass this quota.</p>}
+        </>
+      )}
+      {diagnostics.map((diagnostic) => <p key={diagnostic} className="mt-2 text-xs text-port-warning break-words">{diagnostic}</p>)}
     </div>
   );
 }
@@ -125,7 +155,7 @@ const GROUPED_FAMILIES = new Set(CELL_GROUPS.flat());
 // order — this is a display preference, never a filter.
 export function arrangeQuotaCells(quotas) {
   const byFamily = new Map(quotas.map((q) => [q.family, q]));
-  const toCell = (cards) => ({ key: cards.map((q) => q.family).join('+'), cards });
+  const toCell = (cards) => ({ key: cards.map((q) => q.groupKey || q.family).join('+'), cards });
 
   const grouped = CELL_GROUPS
     .map((families) => families.map((f) => byFamily.get(f)).filter(Boolean))
@@ -139,26 +169,219 @@ export function arrangeQuotaCells(quotas) {
 // Subscription usage for every enabled provider family (claude, codex, agy,
 // grok). Self-contained fetch/loading/error state so it always renders above
 // the PortOS-internal metrics.
-function ProviderQuotaSection() {
+function ProviderQuotaSection({ billingRevision }) {
   const [quotas, setQuotas] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [localLoaded, setLocalLoaded] = useState(false);
   const [error, setError] = useState(false);
+  const [refreshAllError, setRefreshAllError] = useState(false);
+  const [coverage, setCoverage] = useState(null);
+  const [imageQuotaComplete, setImageQuotaComplete] = useState(null);
+  const [imageReadError, setImageReadError] = useState(null);
+  const [refreshErrors, setRefreshErrors] = useState({});
+  const [passiveErrors, setPassiveErrors] = useState({});
   const [refreshingFamilies, setRefreshingFamilies] = useState(() => new Set());
+  const mountedRef = useMounted();
+  const [peerBillingError, setPeerBillingError] = useState(false);
+  const [peerBillingLoading, setPeerBillingLoading] = useState(false);
+  const quotaRequest = useRef(0);
+  const quotaRequestOrder = useRef(0);
+  const familyRequestOrder = useRef(new Map());
+  const familyObservations = useRef(new Map());
+  const localPresence = useRef(new Map());
+  const fullInFlight = useRef(null);
+  const mounted = useRef(false);
+  const explicitRequest = useRef(0);
+  const fullRevision = useRef(0);
+  const localFullRevision = useRef(0);
+  const coverageRequest = useRef(0);
+  const imageStatusRequest = useRef(0);
+  const imageStatusApplied = useRef(0);
+  const familyRevisions = useRef(new Map());
+  const peerFamilyRevisions = useRef(new Map());
+  const activeFamilies = useRef(new Set());
+  const billingEpoch = useRef(0);
+
+  const applyImageStatus = useCallback((result, token) => {
+    if (!mounted.current || token === null || token <= imageStatusApplied.current || result?.imageQuotaComplete == null) return;
+    imageStatusApplied.current = token;
+    setImageQuotaComplete(result.imageQuotaComplete);
+    const local = result.providers?.find((card) => card.family === 'imagegen' && card.origin?.self !== false);
+    setImageReadError((previous) => result.imageQuotaComplete ? null : local?.error ? local : previous);
+  }, []);
 
   const load = useCallback(async (refresh = false) => {
+    const token = ++quotaRequest.current;
+    const requestOrder = ++quotaRequestOrder.current;
+    const startingBillingEpoch = billingEpoch.current;
+    const explicitToken = refresh ? ++explicitRequest.current : null;
+    fullInFlight.current = token;
+    const coverageToken = ++coverageRequest.current;
+    const imageToken = ++imageStatusRequest.current;
+    const startingFamilies = new Map(familyRevisions.current);
     setLoading(true);
     setError(false);
-    const result = await api.getProviderUsage({ refresh }).catch(() => null);
+    if (refresh) setRefreshAllError(false);
+    const result = await api.getProviderUsage({ refresh, scope: 'instances' }).catch(() => null);
+    applyImageStatus(result, imageToken);
+    const familyOrderAtCompletion = new Map(familyRequestOrder.current);
+    // Even if a socket-driven cached read overtook Refresh all, its forced
+    // scrape outcomes still matter. A newer family refresh owns that family's
+    // status, so do not overwrite it with an older full request's result.
+    if (refresh && mounted.current && explicitToken === explicitRequest.current) {
+      setRefreshAllError(!result?.providers);
+      const changedFamilies = new Set([...familyOrderAtCompletion]
+        .filter(([, order]) => order > requestOrder).map(([family]) => family));
+      if (result?.providers) setRefreshErrors((previous) => {
+        const next = { ...previous };
+        const localCards = result.providers.filter((item) => item.origin?.self !== false);
+        const localFamilies = new Set(localCards.map((card) => card.family));
+        for (const family of Object.keys(next)) {
+          if (!changedFamilies.has(family) && !localFamilies.has(family) && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+        }
+        for (const card of localCards.filter((item) => !changedFamilies.has(item.family))) {
+          const familyReadAt = Date.parse(familyObservations.current.get(card.family)?.fetchedAt);
+          const fullReadAt = Date.parse(card.fetchedAt);
+          if (card.error && !card.refreshUnavailable && Number.isFinite(familyReadAt)
+            && Number.isFinite(fullReadAt) && fullReadAt < familyReadAt) continue;
+          if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card, requestOrder);
+          else if (resolvesQuotaRefresh(card)) delete next[card.family];
+        }
+        return next;
+      });
+      // A successful explicit read supersedes older passive diagnostics, but
+      // not a passive read that started after this request.
+      if (result?.providers) setPassiveErrors((previous) => {
+        const next = { ...previous };
+        const localCards = result.providers.filter((card) => card.origin?.self !== false);
+        const present = new Set(localCards.map((card) => card.family));
+        for (const family of Object.keys(next)) {
+          const newerFamily = (familyOrderAtCompletion.get(family) || 0) > requestOrder;
+          if (!newerFamily && (next[family]?.requestOrder || 0) <= requestOrder && !present.has(family)
+            && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+        }
+        for (const card of localCards) {
+          const newerFamily = (familyOrderAtCompletion.get(card.family) || 0) > requestOrder;
+          if (!newerFamily && (next[card.family]?.requestOrder || 0) <= requestOrder
+            && !card.error && !card.refreshUnavailable && resolvesQuotaRefresh(card)) delete next[card.family];
+        }
+        return next;
+      });
+    }
+    if (token !== quotaRequest.current) return;
+    fullInFlight.current = null;
     if (result?.providers) {
-      setQuotas(result.providers);
+      setLocalLoaded(true);
+      const billingChanged = startingBillingEpoch !== billingEpoch.current;
+      if (!refresh) {
+        // A family request only supersedes reads that began before it. A newer
+        // passive failure must remain visible while an older refresh finishes.
+        const changedFamilies = new Set([...familyOrderAtCompletion]
+          .filter(([, order]) => order > requestOrder).map(([family]) => family));
+        const localCards = result.providers.filter((card) => card.origin?.self !== false && !changedFamilies.has(card.family));
+        // A definitive removal also retires the local refresh failure. Do not
+        // clear a failure merely because a cached read of a present provider
+        // succeeded, and never infer removal from an incomplete image read.
+        setRefreshErrors((previous) => {
+          let next = previous;
+          for (const [family, diagnostic] of Object.entries(previous)) {
+            const local = localCards.find((card) => card.family === family);
+            if (changedFamilies.has(family) || (diagnostic.requestOrder || 0) > requestOrder
+              || (family === 'imagegen' && result.imageQuotaComplete !== true)
+              || (local && local.supported !== false)) continue;
+            if (next === previous) next = { ...previous };
+            delete next[family];
+          }
+          return next;
+        });
+        setPassiveErrors((previous) => {
+          const next = { ...previous };
+          const present = new Set(localCards.map((card) => card.family));
+          for (const family of Object.keys(next)) {
+            if (!changedFamilies.has(family) && !present.has(family)
+              && (family !== 'imagegen' || result.imageQuotaComplete === true)) delete next[family];
+          }
+          for (const card of localCards) {
+            if (card.error || card.refreshUnavailable) next[card.family] = refreshDiagnostic(card, requestOrder);
+            else if (resolvesQuotaRefresh(card)) delete next[card.family];
+          }
+          return next;
+        });
+      }
+      const localCards = result.providers.filter((card) => card.origin?.self !== false);
+      const byFamily = new Map(localCards.map((card) => [card.family, card]));
+      const knownFamilies = new Set([...localPresence.current.keys(), ...familyRequestOrder.current.keys(), ...byFamily.keys()]);
+      for (const family of knownFamilies) {
+        // An incomplete image read says neither that the provider exists nor
+        // that it was removed; keep the last definitive observation.
+        if (family === 'imagegen' && result.imageQuotaComplete !== true) continue;
+        localPresence.current.set(family, { order: requestOrder, card: byFamily.get(family) || null });
+      }
+      const presence = new Map(localPresence.current);
+      const familyOrders = familyOrderAtCompletion;
+      localFullRevision.current += 1;
+      if (!result.federationUnavailable && !billingChanged) {
+        fullRevision.current += 1;
+        setPeerBillingError(false);
+      }
+      // A family refresh can finish while this full read is in flight. Retain
+      // its newer local card while still taking the full read's peer cards.
+      const active = new Set(activeFamilies.current);
+      const preserve = new Set(active);
+      for (const [family, revision] of familyRevisions.current) {
+        if (revision !== (startingFamilies.get(family) || 0)) preserve.add(family);
+      }
+      if (result.imageQuotaComplete === false) preserve.add('imagegen');
+      setQuotas((previous) => {
+        if (!previous) return billingChanged ? result.providers.filter((card) => card.origin?.self !== false) : result.providers;
+        const priorLocals = previous.filter((card) => card.origin?.self !== false);
+        const priorFamilies = new Set(priorLocals.map((card) => card.family));
+        const peers = billingChanged ? previous.filter((card) => card.origin?.self === false)
+          : result.federationUnavailable ? retainedEligiblePeers(previous, result)
+            : result.providers.filter((card) => card.origin?.self === false);
+        return [
+          ...peers,
+          ...result.providers.filter((card) => card.origin?.self !== false && (!preserve.has(card.family) || !priorFamilies.has(card.family)))
+            .map((card) => reconcileLocalQuota(priorLocals.find((prior) => prior.family === card.family), card)),
+          ...priorLocals.filter((card) => preserve.has(card.family)).flatMap((card) => {
+            const familyIsNewer = (familyOrders.get(card.family) || 0) > requestOrder;
+            const observed = presence.get(card.family);
+            if (!familyIsNewer && observed?.order === requestOrder && !observed.card) return [];
+            if (!familyIsNewer && observed?.order === requestOrder && observed.card?.supported === false) return [observed.card];
+            if (!active.has(card.family)) return [card];
+            const incoming = result.providers.find((item) => item.origin?.self !== false && item.family === card.family);
+            return [incoming && incoming.supported !== false ? reconcileLocalQuota(card, incoming, { preferNewer: true }) : card];
+          }),
+        ];
+      });
+      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
     } else {
       // Keep previously-loaded cards on a transient refresh failure.
       setError(true);
     }
     setLoading(false);
-  }, []);
+  }, [applyImageStatus]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; quotaRequest.current += 1; fullInFlight.current = null; }; }, [load]);
+
+  // One deadline-based timer updates the UI at the earliest known reset. A
+  // longer delay is re-armed at the browser timeout limit, without polling.
+  useEffect(() => {
+    const reset = nextQuotaReset(quotas);
+    if (reset === null) return undefined;
+    const maxDelay = 2_147_483_647;
+    let timer;
+    const schedule = () => {
+      const remaining = reset - Date.now();
+      timer = setTimeout(() => {
+        if (!mountedRef.current) return;
+        if (reset > Date.now()) schedule();
+        else setQuotas((previous) => previous ? expireQuotaWindows(previous) : previous);
+      }, Math.min(Math.max(remaining, 0), maxDelay));
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  }, [quotas, mountedRef]);
 
   // Refresh ONE provider card. The whole-section Refresh spawns every family's
   // scrape at once (10-20s each); this asks for the single card the user
@@ -166,27 +389,130 @@ function ProviderQuotaSection() {
   // reading — and its age — untouched. A failure toasts through the request
   // helper; the catch here only clears the spinner, it owns no error UI.
   const refreshFamily = useCallback(async (family) => {
+    const startingFullRevision = fullRevision.current;
+    const startingLocalFullRevision = localFullRevision.current;
+    const requestOrder = ++quotaRequestOrder.current;
+    familyRequestOrder.current.set(family, requestOrder);
+    const startingBillingEpoch = billingEpoch.current;
+    const coverageToken = ++coverageRequest.current;
+    const imageToken = family === 'imagegen' ? ++imageStatusRequest.current : null;
+    const revision = (familyRevisions.current.get(family) || 0) + 1;
+    familyRevisions.current.set(family, revision);
+    activeFamilies.current.add(family);
     setRefreshingFamilies((prev) => new Set(prev).add(family));
-    const result = await api.getProviderUsage({ refresh: true, family, silent: false }).catch(() => null);
+    const result = await api.getProviderUsage({ refresh: true, family, scope: 'instances', silent: false }).catch(() => null);
+    if (familyRevisions.current.get(family) !== revision) return;
+    applyImageStatus(result, imageToken);
+    activeFamilies.current.delete(family);
+    // A full read may have started after this refresh began; advancing again
+    // records that its response predates the refresh completion.
+    familyRevisions.current.set(family, revision + 1);
     if (result?.providers) {
-      const card = result.providers.find((q) => q.family === family);
       // No card back for a family we asked for means it is no longer enabled
       // (its provider was turned off) — drop it rather than leave a reading
       // that can never refresh again. `prev` is always an array here: the
       // button that got us here only renders once quotas have loaded.
-      setQuotas((prev) => (card
-        ? prev.map((q) => (q.family === family ? card : q))
-        : prev.filter((q) => q.family !== family)));
+      const billingChanged = startingBillingEpoch !== billingEpoch.current;
+      const fullReadApplied = billingChanged || startingFullRevision !== fullRevision.current;
+      const localFullReadApplied = startingLocalFullRevision !== localFullRevision.current;
+      const local = result.providers.find((card) => card.family === family && card.origin?.self !== false);
+      const presence = localPresence.current.get(family);
+      const newerRemoval = presence?.order > requestOrder && (!presence.card || presence.card.supported === false);
+      if (!newerRemoval && local && !local.error && !local.refreshUnavailable && local.supported !== false && resolvesQuotaRefresh(local)) {
+        familyObservations.current.set(family, local);
+      }
+      const familyProviders = newerRemoval
+        ? [...result.providers.filter((card) => card.origin?.self === false), ...(presence.card ? [presence.card] : [])]
+        : result.providers;
+      const localUnavailable = !newerRemoval && family === 'imagegen'
+        && (result.imageQuotaComplete === false || (!local && result.imageQuotaComplete !== true));
+      if (!billingChanged && !result.federationUnavailable) {
+        peerFamilyRevisions.current.set(family, (peerFamilyRevisions.current.get(family) || 0) + 1);
+      }
+      const providers = billingChanged ? familyProviders.filter((card) => card.origin?.self !== false) : familyProviders;
+      setQuotas((prev) => {
+        const safePrevious = !billingChanged && result.federationUnavailable
+          ? [...prev.filter((card) => card.origin?.self !== false), ...retainedEligiblePeers(prev, result)] : prev;
+        return mergeRefreshedFamily(safePrevious, providers, family, { fullReadApplied, localFullReadApplied, federationUnavailable: result.federationUnavailable, localUnavailable });
+      });
+      setRefreshErrors((previous) => {
+        const next = { ...previous };
+        if (newerRemoval) {
+          if ((next[family]?.requestOrder || 0) <= presence.order) delete next[family];
+          return next;
+        }
+        if ((next[family]?.requestOrder || 0) > requestOrder) return previous;
+        if (local?.error || local?.refreshUnavailable) next[family] = refreshDiagnostic(local, requestOrder);
+        else if ((!local && !localUnavailable) || resolvesQuotaRefresh(local)) delete next[family];
+        return next;
+      });
+      if (newerRemoval || ((!local && !localUnavailable)
+        || (local && !local.error && !local.refreshUnavailable && resolvesQuotaRefresh(local)))) setPassiveErrors((previous) => {
+        if ((previous[family]?.requestOrder || 0) > (newerRemoval ? presence.order : requestOrder)) return previous;
+        const next = { ...previous };
+        delete next[family];
+        return next;
+      });
+      if (!billingChanged && coverageToken === coverageRequest.current) setCoverage(result);
+      // The older full response may contain an older peer slot even when it
+      // preserves this local refresh. Supersede it with a fresh cached read.
+      if (fullInFlight.current !== null) void load();
+    } else {
+      // A full read may have preserved the old card while this refresh was
+      // pending. Reconcile after a failure so its newer result is not lost.
+      void load();
     }
     setRefreshingFamilies((prev) => {
       const next = new Set(prev);
       next.delete(family);
       return next;
     });
+  }, [load, applyImageStatus]);
+
+  // Billing invalidations carry no account data. Discard unverified peer cards
+  // immediately, even when a prior peer read is still in flight.
+  const invalidateBillingPeers = useCallback(() => {
+    const epoch = ++billingEpoch.current;
+    coverageRequest.current += 1;
+    setPeerBillingLoading(true);
+    setPeerBillingError(false);
+    setQuotas((previous) => previous?.filter((card) => card.origin?.self !== false) ?? previous);
+    return epoch;
   }, []);
+
+  // Reload only saved eligible peers; this scope never starts a CLI scrape.
+  const reloadBillingPeers = useCallback(async () => {
+    const epoch = invalidateBillingPeers();
+    const startingFullRevision = fullRevision.current;
+    const startingFamilies = new Map(peerFamilyRevisions.current);
+    const coverageToken = coverageRequest.current;
+    const result = await api.getProviderUsage({ scope: 'peers', silent: true }).catch(() => null);
+    if (!mounted.current || epoch !== billingEpoch.current) return;
+    setPeerBillingLoading(false);
+    if (startingFullRevision !== fullRevision.current) return;
+    if (!result?.providers || result.federationUnavailable) {
+      setPeerBillingError(true);
+      return;
+    }
+    const changedFamilies = new Set();
+    for (const [family, revision] of peerFamilyRevisions.current) {
+      if (revision !== (startingFamilies.get(family) || 0)) changedFamilies.add(family);
+    }
+    setQuotas((previous) => [
+      ...(previous || []).filter((card) => card.origin?.self !== false),
+      ...result.providers.filter((card) => !changedFamilies.has(card.family)),
+      ...(previous || []).filter((card) => card.origin?.self === false && changedFamilies.has(card.family)),
+    ]);
+    if (coverageToken === coverageRequest.current) setCoverage(result);
+  }, [invalidateBillingPeers]);
+
+  useEffect(() => { if (billingRevision) void reloadBillingPeers(); }, [billingRevision, reloadBillingPeers]);
+  useSocketResource(() => reloadBillingPeers(), { events: FLEET_BILLING_EVENTS, immediate: false,
+    matchesEvent: () => { invalidateBillingPeers(); return true; } });
 
   // Cards still being scraped come back `pending`; completion events reload them. See hooks/useQuotaUpdates.js.
   useQuotaUpdates(load);
+  useSocketResource(() => load(), { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
   return (
     <div className="space-y-3">
@@ -207,7 +533,15 @@ function ProviderQuotaSection() {
         </button>
       </div>
 
-      {loading && !quotas && (
+      <p className="text-xs text-gray-500">Readings from the same provider are assumed to share an account. The latest available reading for each quota window is shown; allowances are not added.</p>
+      {coverage?.federationUnavailable && <p className="text-xs text-port-warning" role="status">Some peer quota readings are unavailable; displayed quotas may be incomplete.</p>}
+      {peerBillingLoading && <p className="text-xs text-gray-500" role="status">Updating peer quota readings…</p>}
+      {peerBillingError && <p className="text-xs text-port-warning" role="status">Couldn&rsquo;t update peer quota readings; displayed quotas may be incomplete.</p>}
+      {imageQuotaComplete === false && <p className="text-xs text-port-warning">Image quota status is unavailable.</p>}
+      {error && localLoaded && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh quota readings; retained readings may be stale.</p>}
+      {refreshAllError && !error && <p className="text-xs text-port-warning">Couldn&rsquo;t refresh all provider quotas; retained readings may be stale.</p>}
+
+      {loading && !localLoaded && (
         // Reserve the quota-card grid below rather than a centered spinner
         // (#4147) — the cards are the whole section, so the reading arriving
         // shouldn't jump the page down by their height.
@@ -220,32 +554,35 @@ function ProviderQuotaSection() {
         />
       )}
 
-      {!loading && error && !quotas && (
+      {!loading && error && !localLoaded && (
         <div className="flex items-start gap-2 text-sm text-gray-400 py-2">
           <AlertTriangle size={16} className="text-port-warning mt-0.5 shrink-0" />
           <span>Couldn&rsquo;t read provider usage.</span>
         </div>
       )}
 
-      {quotas && (
+      {quotas && (localLoaded || !loading) && (
         // `contents` makes the grouped desktop cells transparent to the mobile
         // grid, so each provider gets its own compact cell without duplicating
         // the card tree (which would confuse screen readers and text queries).
         <div className="grid grid-cols-2 sm:grid-cols-1 lg:grid-cols-2 gap-2 sm:gap-3 lg:gap-4 items-start" aria-label="Subscription provider usage">
-          {arrangeQuotaCells(quotas).map((cell) => (
+          {arrangeQuotaCells(groupQuotaCards(quotas)).map((cell) => (
             <div key={cell.key} className="contents sm:block sm:space-y-4">
               {cell.cards.map((quota) => (
                 <ProviderQuotaCard
-                  key={quota.family}
+                  key={quota.groupKey}
                   quota={quota}
                   onRefresh={refreshFamily}
                   refreshing={refreshingFamilies.has(quota.family)}
                   disabled={loading}
+                  refreshError={refreshErrors[quota.family]}
+                  passiveError={passiveErrors[quota.family]}
+                  imageReadError={quota.family === 'imagegen' ? imageReadError : null}
                 />
               ))}
             </div>
           ))}
-          {quotas.length === 0 && (
+          {quotas.length === 0 && localLoaded && (
             <div className="col-span-2 sm:col-span-1 text-gray-500 text-sm">No enabled providers report subscription usage.</div>
           )}
         </div>
@@ -284,7 +621,7 @@ function CostReportTable({ report }) {
       {/* Mobile view (< sm): Card list for easy mobile reading without horizontal scroll */}
       <div className="block sm:hidden space-y-3">
         {report.providers.map((provider) => (
-          <div key={provider.id} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+          <div key={provider.rowKey || provider.id} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="font-medium text-white text-sm truncate">{provider.name}</span>
@@ -294,7 +631,7 @@ function CostReportTable({ report }) {
                 {!provider.free && <SourcePill source={provider.source} className="shrink-0" />}
               </div>
               <span className="text-sm font-semibold text-port-success shrink-0" title={approxMark(provider.rateMatch) ? 'Approximate pricing' : undefined}>
-                {approxMark(provider.rateMatch)}{formatUsd(provider.estimatedCost)}
+                {provider.estimatedCost == null ? '—' : `${approxMark(provider.rateMatch)}${formatUsd(provider.estimatedCost)}`}
               </span>
             </div>
 
@@ -324,7 +661,7 @@ function CostReportTable({ report }) {
                   <div key={m.model} className="bg-port-card/30 p-2 rounded text-xs space-y-1">
                     <div className="flex items-center justify-between font-mono text-gray-300 text-[11px]">
                       <span className="truncate pr-2" title={m.model}>{m.model}</span>
-                      <span className="text-gray-400 shrink-0 font-sans font-medium">{approxMark(m.rateMatch)}{formatUsd(m.estimatedCost)}</span>
+                      <span className="text-gray-400 shrink-0 font-sans font-medium">{m.estimatedCost == null ? '—' : `${approxMark(m.rateMatch)}${formatUsd(m.estimatedCost)}`}</span>
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-gray-400">
                       <span>{formatNumber(m.sessions)} sess</span>
@@ -343,7 +680,7 @@ function CostReportTable({ report }) {
 
         <div className="bg-port-bg border border-port-border rounded-lg p-3 flex items-center justify-between text-xs font-semibold text-white">
           <span>Total ({formatNumber(report.totals.sessions)} sessions)</span>
-          <span className="text-port-success text-sm">{formatUsd(report.totals.estimatedCost)}</span>
+              <span className="text-port-success text-sm">{report.totals.costIncomplete ? '≥ ' : ''}{formatUsd(report.totals.estimatedCost)}</span>
         </div>
       </div>
 
@@ -363,7 +700,7 @@ function CostReportTable({ report }) {
           </thead>
           <tbody>
             {report.providers.map((provider) => (
-              <ProviderCostRows key={provider.id} provider={provider} />
+              <ProviderCostRows key={provider.rowKey || provider.id} provider={provider} />
             ))}
           </tbody>
           <tfoot>
@@ -374,7 +711,7 @@ function CostReportTable({ report }) {
               <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheReadTokens)}</td>
               <td className="py-2 px-2 text-right hidden md:table-cell">{formatNumber(report.totals.cacheWriteTokens)}</td>
               <td className="py-2 px-2 text-right">{formatNumber(report.totals.tokensOut)}</td>
-              <td className="py-2 pl-2 text-right text-port-success">{formatUsd(report.totals.estimatedCost)}</td>
+              <td className="py-2 pl-2 text-right text-port-success">{report.totals.costIncomplete ? '≥ ' : ''}{formatUsd(report.totals.estimatedCost)}</td>
             </tr>
           </tfoot>
         </table>
@@ -420,7 +757,7 @@ function ProviderCostRows({ provider }) {
           className="py-2 pl-2 text-right"
           title={approxMark(provider.rateMatch) ? 'Approximate — provider or legacy usage uses fallback pricing' : undefined}
         >
-          {approxMark(provider.rateMatch)}{formatUsd(provider.estimatedCost)}
+          {provider.estimatedCost == null ? '—' : `${approxMark(provider.rateMatch)}${formatUsd(provider.estimatedCost)}`}
         </td>
       </tr>
       {provider.models.map((m) => (
@@ -442,7 +779,7 @@ function ProviderCostRows({ provider }) {
           <td className="py-1.5 px-2 text-right text-xs hidden md:table-cell">{formatNumber(m.cacheWriteTokens)}</td>
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.tokensOut)}</td>
           <td className="py-1.5 pl-2 text-right text-xs" title={approxMark(m.rateMatch) ? 'Approximate — no exact published rate for this model id' : undefined}>
-            {approxMark(m.rateMatch)}{formatUsd(m.estimatedCost)}
+            {m.estimatedCost == null ? '—' : `${approxMark(m.rateMatch)}${formatUsd(m.estimatedCost)}`}
           </td>
         </tr>
       ))}
@@ -508,16 +845,34 @@ function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
 }
 
 // Derive top providers for the active period (or fallback to usage.topProviders)
+function combineSummaryRows(rows, keyOf) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, { ...row, estimatedCost: row.rawEstimatedCost ?? row.estimatedCost ?? 0, costIncomplete: row.estimatedCost == null });
+      continue;
+    }
+    for (const field of ['sessions', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens']) existing[field] = (existing[field] || 0) + (row[field] || 0);
+    existing.estimatedCost += row.rawEstimatedCost ?? row.estimatedCost ?? 0;
+    existing.costIncomplete ||= row.estimatedCost == null;
+    if (existing.free !== row.free) existing.free = null;
+    if (existing.source !== row.source) existing.source = 'mixed';
+  }
+  return [...groups.values()].map((row) => ({ ...row, estimatedCost: Math.round(row.estimatedCost * 100) / 100 }));
+}
+
 function getPeriodTopProviders(usage) {
-  if (usage?.report?.providers?.length) {
+  if (usage?.report?.providers) {
     const totalTokens = usage.report.providers.reduce(
-      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0),
+      (sum, p) => sum + (p.tokensIn || 0) + (p.tokensOut || 0) + (p.cacheReadTokens || 0) + (p.cacheWriteTokens || 0),
       0
     ) || usage.report.providers.reduce((sum, p) => sum + (p.sessions || 0), 0) || 1;
 
-    return usage.report.providers
+    const rows = usage.report.providers
       .map((p) => {
-        const tokens = (p.tokensIn || 0) + (p.tokensOut || 0);
+        const tokens = (p.tokensIn || 0) + (p.tokensOut || 0) + (p.cacheReadTokens || 0) + (p.cacheWriteTokens || 0);
         return {
           id: p.id,
           name: p.name,
@@ -528,12 +883,15 @@ function getPeriodTopProviders(usage) {
           cacheReadTokens: p.cacheReadTokens,
           cacheWriteTokens: p.cacheWriteTokens,
           estimatedCost: p.estimatedCost,
+          rawEstimatedCost: p.rawEstimatedCost,
           free: p.free,
           source: p.source,
           rateMatch: p.rateMatch,
           percent: Math.min(100, Math.round(((tokens || p.sessions || 0) / totalTokens) * 100))
         };
-      })
+      });
+    return combineSummaryRows(rows, (row) => row.id)
+      .map((row) => ({ ...row, percent: Math.min(100, Math.round(((row.tokens || row.sessions || 0) / totalTokens) * 100)) }))
       .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
       .slice(0, 5);
   }
@@ -552,11 +910,11 @@ function getPeriodTopProviders(usage) {
 
 // Derive top models for the active period (or fallback to usage.topModels)
 function getPeriodTopModels(usage) {
-  if (usage?.report?.providers?.length) {
+  if (usage?.report?.providers) {
     const allModels = [];
     for (const p of usage.report.providers) {
       for (const m of (p.models || [])) {
-        const tokens = (m.tokensIn || 0) + (m.tokensOut || 0);
+        const tokens = (m.tokensIn || 0) + (m.tokensOut || 0) + (m.cacheReadTokens || 0) + (m.cacheWriteTokens || 0);
         allModels.push({
           model: m.model,
           providerName: p.name,
@@ -567,6 +925,8 @@ function getPeriodTopModels(usage) {
           cacheReadTokens: m.cacheReadTokens,
           cacheWriteTokens: m.cacheWriteTokens,
           estimatedCost: m.estimatedCost,
+          rawEstimatedCost: m.rawEstimatedCost,
+          providerId: p.id,
           rateMatch: m.rateMatch
         });
       }
@@ -575,7 +935,7 @@ function getPeriodTopModels(usage) {
       const totalTokens = allModels.reduce((sum, m) => sum + m.tokens, 0)
         || allModels.reduce((sum, m) => sum + m.sessions, 0) || 1;
 
-      return allModels
+      return combineSummaryRows(allModels, (row) => `${row.providerId}\u0000${row.model}`)
         .map((m) => ({
           ...m,
           percent: Math.min(100, Math.round(((m.tokens || m.sessions || 0) / totalTokens) * 100))
@@ -583,6 +943,7 @@ function getPeriodTopModels(usage) {
         .sort((a, b) => b.tokens - a.tokens || b.sessions - a.sessions)
         .slice(0, 5);
     }
+    return [];
   }
 
   const totalTokens = usage?.topModels?.reduce((sum, m) => sum + (m.tokens || 0), 0)
@@ -596,7 +957,8 @@ function getPeriodTopModels(usage) {
   }));
 }
 
-function InternalUsageMetrics() {
+function InternalUsageMetrics({ onBillingSaved }) {
+  const [fleetRevision, setFleetRevision] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const period = searchParams.get('period') || DEFAULT_USAGE_PERIOD;
   const from = searchParams.get('from') || '';
@@ -621,7 +983,7 @@ function InternalUsageMetrics() {
     const token = ++requestRef.current;
     const params = isCustom ? { from, to } : { period };
     const rangeLabel = isCustom
-      ? `${from || 'Beginning'} to ${to || 'Today'}`
+      ? `${from || 'Beginning'} to ${to || 'No end'}`
       : (USAGE_PERIOD_OPTIONS.find((option) => option.id === period)?.label || period);
     setLoading(true);
     setReadError(false);
@@ -643,6 +1005,9 @@ function InternalUsageMetrics() {
   }, [fetchUsage]);
 
   useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
+  useSocketResource(fetchUsage, { events: FLEET_BILLING_EVENTS, immediate: false });
+  useSocketResource(() => { setFleetRevision((value) => value + 1); return fetchUsage(); },
+    { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
   const [startBackfill, startingBackfill] = useAsyncAction(async () => {
     const status = await api.startUsageBackfill({ silent: true });
@@ -701,7 +1066,7 @@ function InternalUsageMetrics() {
     );
   }
 
-  const maxActivity = Math.max(1, ...(usage.last7Days?.map(d => d.sessions) || []));
+  const maxActivity = Math.max(1, ...(usage.activity?.map(d => d.sessions) || []));
   const report = usage.report;
 
   const topProvidersList = getPeriodTopProviders(usage);
@@ -711,9 +1076,22 @@ function InternalUsageMetrics() {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
-      <RollingCostCard />
-      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} />
+      <RollingCostCard coverage={usage.coverage} fleetRevision={fleetRevision} />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} />
       {reportControls}
+      {usage.coverage && (
+        <div className="text-xs text-gray-400 space-y-1" role="status">
+          <p>Usage from {formatCount(usage.coverage.instanceCount)} reported instance{usage.coverage.instanceCount === 1 ? '' : 's'}; peer data reflects the last sync.</p>
+          {usage.coverage.instanceCount > 1 && <p>Each instance snapshot is counted once. Runs recorded independently on multiple machines cannot be deduplicated from the available aggregates.</p>}
+          <p>Cost classifications use each instance&rsquo;s current provider configuration; historical configuration changes are not available.</p>
+          {usage.coverage.pricingIncomplete && <p className="text-port-warning">Some provider classifications are unavailable. Fleet API cost includes only classified usage and is incomplete.</p>}
+          {usage.coverage.classificationUnreported?.length > 0 && <p className="text-port-warning">Provider classifications have not been reported by {usage.coverage.classificationUnreported.join(', ')}.</p>}
+          {usage.coverage.missingInstances?.length > 0 && <p className="text-port-warning">No usage snapshot from {usage.coverage.missingInstances.join(', ')}. Totals are incomplete.</p>}
+          {usage.coverage.notSyncingInstances?.length > 0 && <p>Usage sync is off for {usage.coverage.notSyncingInstances.join(', ')}. Their saved history remains included.</p>}
+          {usage.coverage.transcriptUnreported?.length > 0 && <p className="text-port-warning">Claude transcript history has not been reported by {usage.coverage.transcriptUnreported.join(', ')}; the monthly chart may be incomplete.</p>}
+          {usage.coverage.incompleteMonths?.length > 0 && <p className="text-port-warning">Older usage is available only by month. Partial months {usage.coverage.incompleteMonths.join(', ')} are excluded; totals are incomplete.</p>}
+        </div>
+      )}
 
       <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -757,11 +1135,12 @@ function InternalUsageMetrics() {
 
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
-          <h3 className="text-sm font-medium text-white">Codex image usage · this machine</h3>
+          <h3 className="text-sm font-medium text-white">Codex image usage</h3>
           {usage.imageRenders.error ? (
             <p className="text-sm text-gray-400" role="status">Image render usage is unavailable. Text usage remains available.</p>
           ) : (
             <>
+          {usage.imageRenders.incomplete && <p className="text-xs text-port-warning" role="status">Partial: some instances did not report complete image receipts or reported conflicting identities.</p>}
           <p className="text-sm text-gray-300">
             {formatCount(usage.imageRenders.codexSessions)} Codex sessions · {formatCount(usage.imageRenders.savedOutputs)} saved outputs in this period
           </p>
@@ -769,7 +1148,8 @@ function InternalUsageMetrics() {
             Image tokens, image cost and subscription allowance attribution: unknown.
             Any driver tokens already captured by text accounting stay in the text report. Image costs are excluded from the API estimate.
             Saved outputs show observed activity; they do not measure every image-tool call or failed attempt.
-            Historical saved records do not establish which machine executed a render.
+            Mirrored outputs are counted once by their saved identity.
+            Sessions and driver totals are attributed to the day of the first saved output; outputs are counted on their own day.
           </p>
           <p className="text-xs text-gray-400">
             {usage.imageRenders.driverTokens
@@ -785,18 +1165,18 @@ function InternalUsageMetrics() {
         </section>
       )}
 
-      {/* Summary Stats (all-time) */}
+      {/* Summary Stats for the selected report window */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalSessions)}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(report?.totals?.sessions)}</div>
           <div className="text-xs sm:text-sm text-gray-400">Sessions</div>
         </div>
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(usage.totalMessages)}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber(report?.totals?.messages)}</div>
           <div className="text-xs sm:text-sm text-gray-400">Messages</div>
         </div>
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 text-center">
-          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber((usage.totalTokens?.input ?? 0) + (usage.totalTokens?.output ?? 0))}</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{formatNumber((report?.totals?.tokensIn ?? 0) + (report?.totals?.tokensOut ?? 0) + (report?.totals?.cacheReadTokens ?? 0) + (report?.totals?.cacheWriteTokens ?? 0))}</div>
           <div className="text-xs sm:text-sm text-gray-400">Tokens</div>
         </div>
       </div>
@@ -814,7 +1194,7 @@ function InternalUsageMetrics() {
           </div>
           <div className="flex items-center gap-2">
             {report?.totals?.source && <SourcePill source={report.totals.source} />}
-            <span className="text-xl font-bold text-port-success">{formatUsd(report?.totals?.estimatedCost)}</span>
+            <span className="text-xl font-bold text-port-success">{report?.totals?.costIncomplete ? '≥ ' : ''}{formatUsd(report?.totals?.estimatedCost)}</span>
           </div>
         </div>
         <CostReportTable report={report} />
@@ -839,23 +1219,23 @@ function InternalUsageMetrics() {
       <FreeTierUsageCard freeTier={usage.freeTier} />
 
       {/* Claude Code tokens per model (all instances) for the same window. */}
-      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} />
+      <ClaudeCodeModelTokensCard period={period} from={from} to={to} isCustom={isCustom} onRefreshed={fetchUsage} transcriptUpdatedAt={usage.transcriptUpdatedAt} fleetRevision={fleetRevision} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}
-      <FleetUsageCard fleet={usage.fleet} onSaved={fetchUsage} />
+      <FleetUsageCard fleet={usage.fleet} onSaved={async () => { onBillingSaved(); await fetchUsage(); }} />
 
       {/* Directly under the API estimate it is derived from: the estimate is the
           opportunity cost, this is what the quota plans actually cost to avoid it. */}
       <SubscriptionSavingsCard savings={usage.subscriptionSavings} onSaved={fetchUsage} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-        {/* 7-Day Activity */}
+        {/* Selected-period activity */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Last 7 Days</h3>
+          <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Sessions in selected period</h3>
           <div className="flex items-end gap-1 sm:gap-2 h-32 sm:h-40">
-            {usage.last7Days?.map((day, i) => (
-              <div key={i} className="flex-1 h-full flex flex-col items-center">
+            {usage.activity?.map((day) => (
+              <div key={day.date} title={`${day.date}: ${formatCount(day.sessions)} sessions`} className="flex-1 min-w-0 h-full flex flex-col items-center">
                 {/* percent heights need a definite-height parent, so the bar sits in a flex-1 slot */}
                 <div className="flex-1 w-full flex items-end min-h-0">
                   <div
@@ -863,16 +1243,26 @@ function InternalUsageMetrics() {
                     style={{ height: `${(day.sessions / maxActivity) * 100}%`, minHeight: day.sessions > 0 ? 4 : 0 }}
                   />
                 </div>
-                <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>
-                <div className="text-[10px] sm:text-xs text-gray-400">{day.sessions}</div>
+                {usage.activity.length <= 12 && <div className="text-[10px] sm:text-xs text-gray-500 mt-1 sm:mt-2">{day.label}</div>}
+                {usage.activity.length <= 12 && <div className="text-[10px] sm:text-xs text-gray-400">{formatCount(day.sessions)}</div>}
               </div>
             ))}
+            {usage.activity?.length === 0 && <p className="text-sm text-gray-500">No sessions in this period.</p>}
           </div>
+          {usage.activity?.length > 12 && (
+            <details className="mt-2 text-xs text-gray-400">
+              <summary className="cursor-pointer">View session counts by date</summary>
+              <ul className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-1">
+                {usage.activity.map((day) => <li key={day.date}>{day.date}: {formatCount(day.sessions)}</li>)}
+              </ul>
+            </details>
+          )}
         </div>
 
         {/* Hourly Distribution */}
         <div className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 sm:mb-4">Hourly Distribution</h3>
+          {usage.hourlyActivity ? <>
           <div className="flex items-end gap-0.5 h-24 sm:h-32">
             {(() => {
               const maxHour = Math.max(1, ...(usage.hourlyActivity || []));
@@ -894,6 +1284,9 @@ function InternalUsageMetrics() {
             <span>6pm</span>
             <span>12am</span>
           </div>
+          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by each instance&rsquo;s local clock.</p>
+          {usage.coverage?.hourlyIncomplete && <p className="text-xs text-port-warning mt-1">Partial: older sessions or unavailable instances do not provide hourly detail.</p>}
+          </> : <p className="text-sm text-gray-500">Hourly data is unavailable for this period.</p>}
         </div>
       </div>
 
@@ -919,7 +1312,7 @@ function InternalUsageMetrics() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 text-xs">
                     {provider.estimatedCost != null && provider.estimatedCost > 0 && (
-                      <span className="text-port-success font-semibold">{formatUsd(provider.estimatedCost)}</span>
+                      <span className="text-port-success font-semibold">{provider.costIncomplete ? '≥ ' : ''}{formatUsd(provider.estimatedCost)}</span>
                     )}
                     <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
                       {provider.percent}%
@@ -937,12 +1330,12 @@ function InternalUsageMetrics() {
 
                 {/* Detailed Breakdown stats */}
                 <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>{provider.sessions} session{provider.sessions === 1 ? '' : 's'}</span>
+                  <span>{formatCount(provider.sessions)} session{provider.sessions === 1 ? '' : 's'}</span>
                   <div className="flex items-center gap-1 sm:gap-2">
                     <span>{formatNumber(provider.tokens)} tokens</span>
                     {provider.tokensIn != null && provider.tokensOut != null && (
                       <span className="text-[10px] text-gray-500 hidden sm:inline">
-                        ({formatNumber(provider.tokensIn)} in / {formatNumber(provider.tokensOut)} out)
+                        ({formatNumber(provider.tokensIn)} fresh in / {formatNumber(provider.tokensOut)} out / {formatNumber((provider.cacheReadTokens || 0) + (provider.cacheWriteTokens || 0))} cache)
                       </span>
                     )}
                   </div>
@@ -973,7 +1366,7 @@ function InternalUsageMetrics() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0 text-xs">
                     {model.estimatedCost != null && model.estimatedCost > 0 && (
-                      <span className="text-port-success font-semibold">{formatUsd(model.estimatedCost)}</span>
+                      <span className="text-port-success font-semibold">{model.costIncomplete ? '≥ ' : ''}{formatUsd(model.estimatedCost)}</span>
                     )}
                     <span className="text-gray-400 bg-port-bg border border-port-border px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-mono">
                       {model.percent}%
@@ -991,12 +1384,12 @@ function InternalUsageMetrics() {
 
                 {/* Detailed Breakdown stats */}
                 <div className="flex items-center justify-between text-xs text-gray-400">
-                  <span>{model.sessions} session{model.sessions === 1 ? '' : 's'}</span>
+                  <span>{formatCount(model.sessions)} session{model.sessions === 1 ? '' : 's'}</span>
                   <div className="flex items-center gap-1 sm:gap-2">
                     <span>{formatNumber(model.tokens)} tokens</span>
                     {model.tokensIn != null && model.tokensOut != null && (
                       <span className="text-[10px] text-gray-500 hidden sm:inline">
-                        ({formatNumber(model.tokensIn)} in / {formatNumber(model.tokensOut)} out)
+                        ({formatNumber(model.tokensIn)} fresh in / {formatNumber(model.tokensOut)} out / {formatNumber((model.cacheReadTokens || 0) + (model.cacheWriteTokens || 0))} cache)
                       </span>
                     )}
                   </div>
@@ -1014,11 +1407,13 @@ function InternalUsageMetrics() {
 }
 
 export function UsagePage() {
+  const [billingRevision, setBillingRevision] = useState(0);
+  const onBillingSaved = useCallback(() => setBillingRevision((value) => value + 1), []);
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
-        <ProviderQuotaSection />
-        <InternalUsageMetrics />
+        <ProviderQuotaSection billingRevision={billingRevision} />
+        <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>
     </PageLayout>
   );

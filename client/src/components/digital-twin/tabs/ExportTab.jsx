@@ -270,14 +270,14 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
               </span>
               <button
                 onClick={handleCopyExport}
-                className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                 title="Copy to clipboard" aria-label="Copy to clipboard"
               >
                 {copied ? <Check size={18} className="text-port-success" /> : <Copy size={18} />}
               </button>
               <button
                 onClick={downloadFile}
-                className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                 title="Download" aria-label="Download"
               >
                 <Download size={18} />

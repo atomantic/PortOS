@@ -158,7 +158,7 @@ export default function DraftsTab({ accounts }) {
         <button
           onClick={fetchDrafts}
           aria-label="Refresh drafts"
-          className="p-2 text-gray-400 hover:text-white transition-colors"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white transition-colors"
         >
           <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>

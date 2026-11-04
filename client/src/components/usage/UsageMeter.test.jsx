@@ -55,6 +55,11 @@ describe('readingAttribution', () => {
     expect(readingAttribution(limit)).toMatch(/^read .+ on Example Box$/);
   });
 
+  it('attributes a fresh window when it came from another grouped source', () => {
+    const limit = { readAt: '2026-09-03T11:00:00.000Z', readBy: 'self', readByName: 'this instance', stale: false, showAttribution: true };
+    expect(readingAttribution(limit)).toMatch(/^read .+ on this instance$/);
+  });
+
   it('captions a stale LOCAL reading too, with no "on <machine>" attribution', () => {
     const limit = { readAt: '2026-09-03T11:00:00.000Z', readBy: null, stale: true };
     expect(readingAttribution(limit)).toMatch(/^read .+$/);

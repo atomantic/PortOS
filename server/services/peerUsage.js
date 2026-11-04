@@ -26,6 +26,7 @@
  */
 
 import { join } from 'path';
+import { stat } from 'fs/promises';
 import { atomicWrite, readJSONFile, dataPath, PATHS } from '../lib/fileUtils.js';
 import { isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -34,15 +35,21 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
-import { familyForProviderId, familyLabel } from '../lib/providerFamilies.js';
+import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
-import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
+import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
+import { buildUsageDigest, buildUsageReport, getUsage, providerVolumeSinceBlock, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE } from './claudeCodeTranscriptUsage.js';
 import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
+import { getAllProviders } from './providers.js';
+import { readRenderReceipts, summarizeRenderReceipts } from './imageRenderUsage.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
+const PROVIDERS_FILE = join(PATHS.data, 'providers.json');
+const IMAGE_RECEIPTS_DIR = join(PATHS.data, 'image-render-usage');
+const MAX_IMAGE_RECEIPTS = 10000;
 
 // Upper bound on stored peer digests. A home federation runs a handful of
 // machines; the cap only stops an unbounded file if a peer ever forwards a long
@@ -100,8 +107,10 @@ function sanitizeProviderBucket(raw) {
   if (isPlainObject(raw?.byModel)) {
     out.byModel = {};
     for (const [model, mRaw] of Object.entries(raw.byModel).slice(0, MAX_MODELS_PER_PROVIDER)) {
-      if (!isNonBlankStr(model)) continue;
-      out.byModel[model.slice(0, 200)] = sanitizeModelBucket(mRaw);
+      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model)) continue;
+      const trimmedModel = model.slice(0, 200);
+      if (POLLUTING_KEYS.has(trimmedModel)) continue;
+      out.byModel[trimmedModel] = sanitizeModelBucket(mRaw);
     }
   }
   return out;
@@ -109,11 +118,16 @@ function sanitizeProviderBucket(raw) {
 
 function sanitizeActivityBucket(raw) {
   const out = takeCounts(raw, {});
+  if (Array.isArray(raw?.hourlyActivity) && raw.hourlyActivity.length === 24) {
+    out.hourlyActivity = raw.hourlyActivity.map((value) => Number.isSafeInteger(value) && value >= 0 ? value : 0);
+  }
   if (isPlainObject(raw?.byProvider)) {
     out.byProvider = {};
     for (const [pid, pRaw] of Object.entries(raw.byProvider).slice(0, MAX_PROVIDERS_PER_BUCKET)) {
-      if (!isNonBlankStr(pid)) continue;
-      out.byProvider[pid.slice(0, 200)] = sanitizeProviderBucket(pRaw);
+      if (!isNonBlankStr(pid) || POLLUTING_KEYS.has(pid)) continue;
+      const trimmedPid = pid.slice(0, 200);
+      if (POLLUTING_KEYS.has(trimmedPid)) continue;
+      out.byProvider[trimmedPid] = sanitizeProviderBucket(pRaw);
     }
   }
   return out;
@@ -123,7 +137,7 @@ function sanitizeActivityMap(raw, keyRe, limit) {
   const out = {};
   if (!isPlainObject(raw)) return out;
   for (const [key, bucket] of Object.entries(raw).slice(0, limit)) {
-    if (!keyRe.test(key)) continue;
+    if (!keyRe.test(key) || POLLUTING_KEYS.has(key)) continue;
     out[key] = sanitizeActivityBucket(bucket);
   }
   return out;
@@ -175,6 +189,7 @@ async function readStore() {
   return {
     instances: isPlainObject(raw?.instances) ? raw.instances : {},
     tombstones: normalizeTombstones(raw?.tombstones, 'instanceId'),
+    selfVersion: isPlainObject(raw?.selfVersion) ? raw.selfVersion : null,
   };
 }
 
@@ -183,9 +198,108 @@ async function readStore() {
  * none (or an unorderable one). Rebuilt to the fixed day → model → counts shape.
  */
 function sanitizeClaudeCode(raw) {
-  if (!isPlainObject(raw) || parseTsMs(raw.updatedAt) === null) return null;
+  if (!isPlainObject(raw) || !isPlainObject(raw.days) || parseTsMs(raw.updatedAt) === null) return null;
   const days = sanitizeTranscriptDays(raw.days);
-  return Object.keys(days).length > 0 ? { updatedAt: raw.updatedAt, days } : null;
+  return { updatedAt: raw.updatedAt, days };
+}
+
+// Only a provider's accounting classification crosses the wire. Commands,
+// endpoints, environment variables and credentials never leave this instance.
+function sanitizeProviderClasses(raw) {
+  if (!isPlainObject(raw)) return null;
+  const out = {};
+  for (const [id, value] of Object.entries(raw).slice(0, MAX_PROVIDERS_PER_BUCKET)) {
+    if (!isNonBlankStr(id) || POLLUTING_KEYS.has(id) || !isPlainObject(value) || typeof value.free !== 'boolean') continue;
+    if (value.family !== null && !PROVIDER_FAMILY_IDS.includes(value.family)) continue;
+    out[id.slice(0, 200)] = { free: value.free, family: value.family };
+  }
+  return out;
+}
+
+// Only stable hashed identities and accounting evidence cross the wire. A
+// capped or malformed projection is explicitly partial, never an empty set.
+function sanitizeImageReceipts(raw) {
+  if (!isPlainObject(raw) || !Array.isArray(raw.receipts)) return null;
+  const receipts = [];
+  let complete = raw.complete === true && raw.receipts.length <= MAX_IMAGE_RECEIPTS;
+  for (const item of raw.receipts.slice(0, MAX_IMAGE_RECEIPTS)) {
+    if (!/^[a-f0-9]{64}$/.test(item?.id || '') || !/^[a-f0-9]{64}$/.test(item?.renderKey || '')
+      || typeof item.occurredAt !== 'string' || parseTsMs(item.occurredAt) === null
+      || new Date(item.occurredAt).toISOString() !== item.occurredAt
+      || !['codex-session', 'portos-job'].includes(item.identitySource)
+      || (item.driverTotal !== null && (!Number.isSafeInteger(item.driverTotal) || item.driverTotal < 0))) {
+      complete = false;
+      continue;
+    }
+    receipts.push({ id: item.id, renderKey: item.renderKey, occurredAt: item.occurredAt, identitySource: item.identitySource, driverTotal: item.driverTotal });
+  }
+  return { complete, receipts };
+}
+
+function sanitizeBlocks(raw) {
+  if (!Array.isArray(raw)) return null;
+  const selected = raw.slice(-200);
+  const events = selected.flatMap((block) => {
+    const providerId = str(block?.providerId, 200);
+    if (!providerId || !Number.isSafeInteger(block?.at) || block.at < 0 || block.at > 8640000000000000) return [];
+    return [{ providerId, model: str(block.model, 200), at: block.at }];
+  });
+  return events.length === selected.length ? events : null;
+}
+
+let imageProjectionMemo = null;
+async function readImageProjection(directoryStat) {
+  const stamp = directoryStat ? `${directoryStat.ino}:${directoryStat.mtimeMs}:${directoryStat.size}` : 'missing';
+  if (imageProjectionMemo?.stamp === stamp) return imageProjectionMemo.projection;
+  const receipts = await readRenderReceipts({ directory: IMAGE_RECEIPTS_DIR });
+  receipts.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.id.localeCompare(b.id));
+  const projection = { complete: receipts.length <= MAX_IMAGE_RECEIPTS, receipts: receipts.slice(0, MAX_IMAGE_RECEIPTS).map((receipt) => ({
+    id: receipt.id, renderKey: receipt.renderKey, occurredAt: receipt.occurredAt, identitySource: receipt.identitySource,
+    driverTotal: receipt.driverTokens?.reportedTotal ?? null,
+  })) };
+  imageProjectionMemo = { stamp, projection };
+  return projection;
+}
+
+async function readProviderClasses() {
+  const data = await getAllProviders().catch(() => null);
+  const providers = Array.isArray(data) ? data : data?.providers;
+  if (!Array.isArray(providers)) return null;
+  return sanitizeProviderClasses(Object.fromEntries(providers.filter((provider) => isNonBlankStr(provider.id))
+    .map((provider) => [provider.id, { free: isFreeProvider(provider), family: familyForProvider(provider) }])));
+}
+
+// Pair a projection with a stable file generation; a concurrent save must not
+// publish old contents under the new generation and then remain stuck there.
+const fileStamp = (info) => info ? `${info.ino}:${info.mtimeMs}:${info.size}` : 'missing';
+async function optionalStat(path) {
+  return stat(path).catch((err) => { if (err.code === 'ENOENT') return null; throw err; });
+}
+async function stableProjection(path, read) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await optionalStat(path);
+    const value = await read(before);
+    const after = await optionalStat(path);
+    if (fileStamp(before) === fileStamp(after)) return { value, info: after };
+  }
+  throw new Error('Usage projection changed while reading');
+}
+
+// The manifest protocol and older peers compare millisecond timestamps only.
+// Persist just the self projection's version in the existing peer store so a
+// projection-only update advances the slot even after an upgrade or restart.
+async function versionSelfProjection(projection, componentTimes) {
+  const fingerprint = canonicalSnapshotChecksum(projection);
+  return withLock(async () => {
+    const store = await readStore();
+    const previous = store.selfVersion;
+    if (previous?.instanceId === projection.instanceId && previous.fingerprint === fingerprint && parseTsMs(previous.capturedAt) !== null) return previous.capturedAt;
+    const latest = Math.max(Date.now(), parseTsMs(previous?.capturedAt) ?? 0, ...componentTimes.map((time) => parseTsMs(time) ?? 0));
+    const capturedAt = new Date(latest + 1).toISOString();
+    store.selfVersion = { instanceId: projection.instanceId, fingerprint, capturedAt };
+    await atomicWrite(PEER_USAGE_FILE, store);
+    return capturedAt;
+  });
 }
 
 /**
@@ -208,9 +322,13 @@ function sanitizeEntry(entry, expectedId) {
     // Optional: a peer running an older build publishes no quota readings, and
     // the fleet quota view simply has one fewer contributor.
     quotas: sanitizeQuotaCards(entry.quotas),
+    quotaReported: entry.quotaReported === true,
     // Optional and additive, like `quotas`: a peer on an older build publishes
     // no Claude Code token history and simply contributes nothing to that report.
     claudeCode: sanitizeClaudeCode(entry.claudeCode),
+    providerClasses: sanitizeProviderClasses(entry.providerClasses),
+    imageReceipts: sanitizeImageReceipts(entry.imageReceipts),
+    blockEvents: sanitizeBlocks(entry.blockEvents),
   };
 }
 
@@ -234,19 +352,29 @@ function selfDigest(usageData) {
  * whenever anything in the entry does — a quota refresh that left it pinned to
  * `usage.lastUpdated` would never be pulled by a peer.
  */
+const withSelfCapture = createMutex();
 async function buildSelfEntry() {
-  const { instanceId, name } = await readSelfIdentity();
-  if (!instanceId) return null;
-  const usage = selfDigest(getUsage());
-  const { quotas, capturedAt: quotasAt } = await readLocalQuotaCards();
-  // An unreadable store publishes no history rather than failing every sync read.
-  const local = await readLocalTranscriptUsage().catch(() => null);
-  const claudeCode = local?.updatedAt && Object.keys(local.days).length > 0 ? local : null;
-  // capturedAt is the LWW stamp AND manifest fingerprint: the newest of every
-  // component, so a transcript-store refresh alone still gets pulled by peers.
-  const capturedAt = [usage.lastUpdated, quotasAt, claudeCode?.updatedAt].reduce(
-    (newest, ts) => (compareNewerWins(ts, newest) ? ts : newest));
-  return { instanceId, name: name || instanceId, capturedAt, usage, quotas, ...(claudeCode && { claudeCode }) };
+  return withSelfCapture(async () => {
+    const { instanceId, name } = await readSelfIdentity();
+    if (!instanceId) return null;
+    const usage = selfDigest(getUsage());
+    const [{ quotas, capturedAt: quotasAt, reported: quotaReported }, providerResult, imageResult] = await Promise.all([
+      readLocalQuotaCards(),
+      stableProjection(PROVIDERS_FILE, readProviderClasses).catch(() => ({ value: null, info: null })),
+      stableProjection(IMAGE_RECEIPTS_DIR, readImageProjection).catch(() => ({ value: null, info: null })),
+    ]);
+    const { value: providerClasses, info: providerStat } = providerResult;
+    const { value: imageReceipts, info: imageStat } = imageResult;
+    // An unreadable store publishes no history rather than failing every sync read.
+    const local = await readLocalTranscriptUsage().catch(() => null);
+    const claudeCode = local?.updatedAt ? local : null;
+    // capturedAt is the LWW stamp AND manifest fingerprint: the newest of every
+    // component, so a transcript-store refresh alone still gets pulled by peers.
+    const blockEvents = sanitizeBlocks(getUsage()?.blockEvents);
+    const projection = { instanceId, name: name || instanceId, usage, quotas, quotaReported, ...(claudeCode && { claudeCode }), ...(providerClasses && { providerClasses }), ...(imageReceipts && { imageReceipts }), ...(blockEvents && { blockEvents }) };
+    const capturedAt = await versionSelfProjection(projection, [usage.lastUpdated, quotasAt, claudeCode?.updatedAt, providerStat?.mtime?.toISOString(), imageStat?.mtime?.toISOString()]);
+    return { ...projection, capturedAt };
+  });
 }
 
 /**
@@ -440,54 +568,289 @@ function sumFleetTotals(rows) {
     }
     return acc;
   }, {});
-  totals.estimatedCost = roundCents(totals.estimatedCost || 0);
+  totals.estimatedCost = roundCents(totals.rawEstimatedCost ?? totals.estimatedCost ?? 0);
+  totals.costIncomplete = rows.some((row) => row.totals?.costIncomplete);
   return totals;
+}
+
+// Daily histograms were added after the original lifetime-only counter. Keep
+// the available observations and explicitly flag days that predate them.
+function fleetHourlyActivity(sources, { from, to }) {
+  const hourly = Array(24).fill(0);
+  let incomplete = false;
+  const representedSessions = (bucket) => Math.max(bucket.sessions || 0, Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
+  for (const { activity } of sources) {
+    if (!from && !to) {
+      const values = Array.isArray(activity.hourlyActivity) ? activity.hourlyActivity : [];
+      for (let hour = 0; hour < 24; hour++) hourly[hour] += values[hour] || 0;
+      const bucketSessions = [...Object.values(activity.dailyActivity || {}), ...Object.values(activity.monthlyActivity || {})]
+        .reduce((sum, bucket) => sum + representedSessions(bucket), 0);
+      if (values.reduce((sum, n) => sum + (n || 0), 0) < Math.max(activity.totalSessions || 0, bucketSessions)) incomplete = true;
+      continue;
+    }
+    for (const [day, bucket] of Object.entries(activity.dailyActivity || {})) {
+      if ((from && day < from) || (to && day > to)) continue;
+      const values = Array.isArray(bucket.hourlyActivity) ? bucket.hourlyActivity : [];
+      for (let hour = 0; hour < 24; hour++) hourly[hour] += values[hour] || 0;
+      if (values.reduce((sum, n) => sum + (n || 0), 0) < representedSessions(bucket)) incomplete = true;
+    }
+    for (const [month, bucket] of Object.entries(activity.monthlyActivity || {})) {
+      if ((!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)) && representedSessions(bucket) > 0) incomplete = true;
+    }
+  }
+  return { hourly, incomplete };
+}
+
+// The billing toggle answers a different question: API-billed peers can still
+// participate in usage sync. Only an explicitly disabled peer or its effective
+// usage category removes the expectation of a fresh report. A forwarded digest
+// with no local peer configuration remains an expected source.
+async function usageParticipation() {
+  const { loadData } = await import('./instanceIdentity.js');
+  const configured = (await loadData()).peers || [];
+  const participating = configured.filter((peer) => peer.enabled !== false && resolveEffectiveCategories(peer).usage);
+  const notParticipating = configured.filter((peer) => peer.enabled === false || !resolveEffectiveCategories(peer).usage);
+  // A newly added peer can have no ID until its first probe. Never let one
+  // such opt-out suppress a different unprobed peer or a forwarded snapshot.
+  // Several configured routes can also name one instance: any active route
+  // means that instance is expected to report.
+  const activeIds = new Set(participating.map((peer) => peer.instanceId).filter(isNonBlankStr));
+  const optedOut = new Set(notParticipating.map((peer) => peer.instanceId).filter((id) => isNonBlankStr(id) && !activeIds.has(id)));
+  return { participating, notParticipating, optedOut };
+}
+
+const peerLabel = (peer) => peer.name || peer.host || peer.instanceId || 'Unnamed instance';
+
+function distinctPeerInstances(peers) {
+  const seen = new Set();
+  return peers.filter((peer) => {
+    if (!isNonBlankStr(peer.instanceId)) return true;
+    if (seen.has(peer.instanceId)) return false;
+    seen.add(peer.instanceId);
+    return true;
+  });
 }
 
 export async function getFleetUsage({ from = null, to = null, providers = [], apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
-  if (peers.length === 0) return { instances: [], totals: null };
+  const localIdentity = self || await readSelfIdentity();
 
   // Instances the viewer marked as paying API rates (not subscriptions). They
   // stay in `instances` so the spend is still visible, but they do not feed
   // the combined total. Default ON (not in the set) — a missing id counts.
   const apiBilled = new Set(Array.isArray(apiBilledInstanceIds) ? apiBilledInstanceIds : []);
+  const localTranscript = self ? self.claudeCode : await readLocalTranscriptUsage().catch(() => null);
 
-  const row = ({ instanceId, name, capturedAt, activity, isSelf }) => {
-    const report = buildUsageReport(activity.dailyActivity || {}, {
+  const localClasses = Object.fromEntries(providers.map((provider) => [provider.id, { free: isFreeProvider(provider), family: familyForProvider(provider) }]));
+  const sources = [
+    { instanceId: localIdentity?.instanceId || 'local', name: localIdentity?.name || 'This machine', capturedAt: self?.capturedAt, activity: getUsage() || {}, transcript: localTranscript?.days, providerClasses: localClasses, isSelf: true },
+    ...peers.map((entry) => ({ ...entry, activity: entry.usage, transcript: entry.claudeCode?.days, providerClasses: entry.providerClasses, isSelf: false })),
+  ];
+  const reportSource = ({ activity, providerClasses }) => ({
+    dailyActivity: activity.dailyActivity || {},
+    monthlyActivity: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to),
+    totalTokens: from || to ? null : activity.totalTokens,
+    totalSessions: from || to ? null : activity.totalSessions,
+    totalMessages: from || to ? null : activity.totalMessages,
+    providerClasses,
+  });
+  const reportFor = (entries) => {
+    const [first = {}, ...additionalSources] = entries.map(reportSource);
+    return buildUsageReport(first.dailyActivity || {}, {
       from,
       to,
       providers,
-      // A month bucket is folded in WHOLE whenever its month overlaps the window
-      // — fine locally, where months only exist past the 400-day daily retention
-      // and so can't land inside a range anyone asks for. A peer's digest rolls
-      // up at 120 days, well inside a reachable range, so an explicit narrow
-      // from/to over a rolled-up month would silently count days outside it.
-      // Drop the partially-covered months rather than over-report; the row's
-      // whole-month periods are unaffected.
-      monthlyActivity: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to),
-      // Same rule as the single-instance summary: the all-time (unbounded)
-      // window folds in legacy totals no bucket represents; a bounded window
-      // must not, or it attributes all-time residue to the range.
-      totalTokens: from || to ? null : activity.totalTokens,
+      monthlyActivity: first.monthlyActivity,
+      totalTokens: first.totalTokens,
+      totalSessions: first.totalSessions,
+      totalMessages: first.totalMessages,
+      providerClasses: first.providerClasses,
+      additionalSources,
     });
+  };
+  const row = ({ instanceId, name, capturedAt, activity, providerClasses, isSelf }) => {
+    const report = reportFor([{ activity, providerClasses }]);
     return {
       instanceId,
       name: name || instanceId,
       self: isSelf,
-      capturedAt,
+      capturedAt: activity.lastUpdated || capturedAt,
       totals: report.totals,
       usesSubscriptions: !apiBilled.has(instanceId),
     };
   };
 
-  const rows = peers.map((e) => row({ ...e, activity: e.usage, isSelf: false }));
-  if (self) rows.unshift(row({ ...self, activity: getUsage(), isSelf: true }));
+  const rows = sources.map(row);
 
   rows.sort((a, b) => (b.self ? 1 : 0) - (a.self ? 1 : 0) || b.totals.estimatedCost - a.totals.estimatedCost);
 
   const included = rows.filter((r) => r.usesSubscriptions);
-  return { instances: rows, totals: sumFleetTotals(included) };
+  const { participating, notParticipating, optedOut } = await usageParticipation();
+  const known = new Set(sources.map((source) => source.instanceId));
+  const missingPeers = distinctPeerInstances(participating.filter((peer) => !known.has(peer.instanceId)));
+  const missingInstances = missingPeers.map(peerLabel);
+  const notSyncingInstances = distinctPeerInstances(notParticipating.filter((peer) => optedOut.has(peer.instanceId) && known.has(peer.instanceId))).map(peerLabel);
+  const expectedPeers = peers.filter((peer) => !optedOut.has(peer.instanceId));
+  const incompleteMonthsFor = (entries) => [...new Set(entries.flatMap(({ activity }) => {
+    const months = activity.monthlyActivity || {};
+    const covered = dropPartiallyCoveredMonths(months, from, to);
+    return Object.keys(months).filter((month) => !covered[month]
+      && (!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7)));
+  }))].sort();
+  const incompleteMonths = incompleteMonthsFor(sources);
+  const subscriptionSources = sources.filter((source) => !apiBilled.has(source.instanceId));
+  const subscriptionIncomplete = missingPeers.some((peer) => !apiBilled.has(peer.instanceId))
+    || incompleteMonthsFor(subscriptionSources).length > 0;
+  const report = reportFor(sources);
+  const hourly = fleetHourlyActivity(sources, { from, to });
+  const localImage = self ? sanitizeImageReceipts(self.imageReceipts) : await stat(IMAGE_RECEIPTS_DIR).catch(() => null)
+    .then(readImageProjection).then(sanitizeImageReceipts).catch(() => null);
+  const imageSources = [localImage, ...peers.map((peer) => peer.imageReceipts)];
+  const imageRenders = summarizeRenderReceipts(imageSources.flatMap((source) => (source?.receipts || []).map((receipt) => ({
+    ...receipt, driverTokens: receipt.driverTotal === null ? null : { reportedTotal: receipt.driverTotal, source: 'codex-cli-footer' },
+  }))), { from, to });
+  imageRenders.scope = 'federated-codex-saved-renders';
+  // A missing projection from an opted-out peer is not an expected report.
+  // A projection explicitly marked partial, or a conflict in retained data,
+  // still describes a real gap in the historical observations we include.
+  imageRenders.incomplete = !localImage?.complete
+    || expectedPeers.some((peer) => !peer.imageReceipts?.complete)
+    || peers.some((peer) => optedOut.has(peer.instanceId) && peer.imageReceipts && !peer.imageReceipts.complete)
+    || missingInstances.length > 0 || imageRenders.conflicts;
+  const localBlockProjection = sanitizeBlocks(getUsage()?.blockEvents);
+  const localBlocks = localBlockProjection?.map((event, index) => ({
+    ...event, resetHint: str(getUsage().blockEvents.slice(-200)[index]?.resetHint, 120),
+  }));
+  const blockSources = [{ name: localIdentity?.name || 'This instance', activity: getUsage(), events: localBlocks },
+    ...peers.map((peer) => ({ name: peer.name || peer.instanceId, activity: peer.usage, events: peer.blockEvents }))];
+  const blocks = blockSources.flatMap(({ name, activity, events }) => (events || []).flatMap((event) => {
+    const day = new Date(event.at).toISOString().slice(0, 10);
+    if ((from && day < from) || (to && day > to)) return [];
+    const daily = Object.fromEntries(Object.entries(activity.dailyActivity || {}).filter(([key]) => !to || key <= to));
+    const monthly = dropPartiallyCoveredMonths(activity.monthlyActivity, null, to);
+    return [{ ...event, originName: name, volumeSince: providerVolumeSinceBlock(daily, monthly, event.providerId, day) }];
+  })).sort((a, b) => b.at - a.at).slice(0, 20);
+  const subscriptionReport = reportFor(subscriptionSources);
+  const activity = fleetPeriodActivity(sources, { from, to });
+  if (!from && !to) {
+    const undated = report.totals.sessions - activity.reduce((sum, item) => sum + item.sessions, 0);
+    if (undated > 0) activity.push({ date: 'undated', label: 'Undated', sessions: undated });
+  }
+  return {
+    instances: peers.length ? rows : [],
+    totals: peers.length ? sumFleetTotals(included) : null,
+    report,
+    subscriptionReport,
+    imageRenders,
+    blocks,
+    firstActivityDay: earliestDay(sources.map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
+    subscriptionFirstActivityDay: earliestDay(subscriptionSources
+      .map(({ activity }) => ({ daily: activity.dailyActivity, monthly: activity.monthlyActivity }))),
+    activity,
+    last7Days: fleetPeriodActivity(sources, { from: utcDay(Date.now() - 6 * DAY_MS), to: utcDay(Date.now()) })
+      .map((day) => ({ ...day, label: new Date(`${day.date}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }) })),
+    totalToolCalls: from || to ? null : sources.reduce((sum, source) => sum + (source.activity.totalToolCalls || 0), 0),
+    monthly: fleetPeriodMonthly(sources, { from, to }, providers),
+    transcriptUpdatedAt: localTranscript?.updatedAt || null,
+    hourlyActivity: hourly.hourly,
+    coverage: {
+      instanceCount: sources.length, missingInstances, notSyncingInstances, incompleteMonths, subscriptionIncomplete,
+      pricingIncomplete: Boolean(report.totals.costIncomplete),
+      hourlyIncomplete: hourly.incomplete || missingInstances.length > 0,
+      classificationUnreported: peers.filter((entry) => !entry.providerClasses
+        && (!optedOut.has(entry.instanceId) || reportFor([{ activity: entry.usage, providerClasses: entry.providerClasses }]).totals.costIncomplete))
+        .map((entry) => entry.name || entry.instanceId),
+      blockEventsUnreported: [...(!localBlockProjection ? [localIdentity?.name || 'This instance'] : []),
+        ...expectedPeers.filter((entry) => !entry.blockEvents).map((entry) => entry.name || entry.instanceId)],
+      transcriptUnreported: expectedPeers.filter((entry) => !entry.claudeCode).map((entry) => entry.name || entry.instanceId),
+    },
+  };
+}
+
+function fleetPeriodMonthly(sources, { from, to }, providers) {
+  const histories = sources.map(({ activity, transcript, providerClasses }) => ({
+    daily: activity.dailyActivity || {}, monthly: dropPartiallyCoveredMonths(activity.monthlyActivity, from, to), transcript: transcript || {}, providerClasses,
+  }));
+  const first = earliestDay(histories);
+  if (!first) return { instanceCount: sources.length, series: [], history: [] };
+  const start = from || first;
+  const end = to || utcDay(Date.now());
+  if (start > end) return { instanceCount: sources.length, series: [], history: [] };
+  const monthNumber = (day) => Number(day.slice(0, 4)) * 12 + Number(day.slice(5, 7)) - 1;
+  const firstMonth = monthNumber(start);
+  const lastMonth = monthNumber(end);
+  // A corrupt or extreme date range must not allocate an unbounded chart.
+  if (lastMonth - firstMonth > 1200) return { instanceCount: sources.length, series: [], history: [], rangeTooWide: true };
+  const labels = new Map();
+  const rows = [];
+  for (let value = firstMonth; value <= lastMonth; value++) {
+    const year = Math.floor(value / 12);
+    const number = (value % 12) + 1;
+    const month = `${String(year).padStart(4, '0')}-${String(number).padStart(2, '0')}`;
+    const last = new Date(dayMs(`${month}-01`) + 31 * DAY_MS);
+    last.setUTCDate(0);
+    const monthEnd = last.toISOString().slice(0, 10);
+    const beginDay = start > `${month}-01` ? start : `${month}-01`;
+    const endDay = end < monthEnd ? end : monthEnd;
+    const span = Array.from({ length: Math.floor((dayMs(endDay) - dayMs(beginDay)) / DAY_MS) + 1 }, (_, i) => utcDay(dayMs(beginDay) + i * DAY_MS));
+    const costs = {};
+    let tokens = 0;
+    for (const history of histories) {
+      for (const usage of instanceDailyUsage(history, span, providers, labels)) {
+        addInto(costs, usage.costs);
+        tokens += usage.tokens;
+      }
+    }
+    rows.push({ month, costs, tokens, partial: beginDay !== `${month}-01` || endDay !== monthEnd });
+  }
+  const { series, values } = stackCosts(rows.map((row) => row.costs), labels);
+  return {
+    instanceCount: sources.length,
+    series,
+    history: rows.map((row, index) => ({
+      month: row.month,
+      estimatedCost: roundCents(values[index].reduce((sum, value) => sum + value, 0)),
+      values: values[index].map(roundCents),
+      tokens: Math.round(row.tokens),
+      partial: row.partial,
+    })),
+  };
+}
+
+// Short windows show days, long windows show months. Rolled-up months clipped
+// by the selected range are omitted and separately reported as incomplete.
+function fleetPeriodActivity(sources, { from, to }) {
+  const end = to || new Date().toISOString().slice(0, 10);
+  const hasMonthlyBuckets = sources.some(({ activity }) => Object.keys(dropPartiallyCoveredMonths(activity.monthlyActivity, from, to))
+    .some((month) => (!from || month >= from.slice(0, 7)) && (!to || month <= to.slice(0, 7))));
+  const daily = from && dayMs(end) >= dayMs(from) && dayMs(end) - dayMs(from) <= 31 * DAY_MS && !hasMonthlyBuckets;
+  const sessionsIn = (bucket) => Math.max(bucket.sessions || 0,
+    Object.values(bucket.byProvider || {}).reduce((sum, provider) => sum + (provider.sessions || 0), 0));
+  const counts = new Map();
+  const add = (key, bucket) => {
+    const current = counts.get(key) || { sessions: 0, messages: 0, tokens: 0 };
+    current.sessions += sessionsIn(bucket);
+    current.messages += bucket.messages || 0;
+    current.tokens += bucket.tokens || 0;
+    counts.set(key, current);
+  };
+  if (daily) {
+    for (let ms = dayMs(from); ms <= dayMs(end); ms += DAY_MS) counts.set(utcDay(ms), { sessions: 0, messages: 0, tokens: 0 });
+  }
+  for (const { activity } of sources) {
+    for (const [day, bucket] of Object.entries(activity.dailyActivity || {})) {
+      if ((from && day < from) || (to && day > to) || (daily && day > end)) continue;
+      const key = daily ? day : day.slice(0, 7);
+      add(key, bucket);
+    }
+    if (!daily) {
+      for (const [month, bucket] of Object.entries(dropPartiallyCoveredMonths(activity.monthlyActivity, from, to))) {
+        if ((from && month < from.slice(0, 7)) || (to && month > to.slice(0, 7))) continue;
+        add(month, bucket);
+      }
+    }
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, label: daily ? date.slice(5) : date, ...count }));
 }
 
 export const ROLLING_COST_WINDOW_DAYS = 30;
@@ -507,29 +870,38 @@ const OTHER_GROUP = 'other';
  * family when it has one (a peer's provider may not be configured here, so the
  * id is tried too), else it stands alone under its own name.
  */
-function costByGroup(report, labels) {
+function reportFamily(row) {
+  return row.classificationKnown === false ? null : row.family;
+}
+
+function costByGroup(report, labels, providers) {
   const out = {};
   for (const row of report.providers) {
-    if (!(row.estimatedCost > 0)) continue;
-    const family = row.family || familyForProviderId(row.id);
+    const cost = row.rawEstimatedCost ?? row.estimatedCost;
+    if (!(cost > 0)) continue;
+    const family = reportFamily(row, providers);
     const key = family || `provider:${row.id}`;
     if (!labels.has(key)) labels.set(key, family ? familyLabel(family) : row.name || row.id);
-    out[key] = (out[key] || 0) + row.estimatedCost;
+    out[key] = (out[key] || 0) + cost;
   }
   return out;
 }
 
 const addInto = (target, source, scale = 1) => {
-  for (const [key, cost] of Object.entries(source)) target[key] = (target[key] || 0) + cost * scale;
+  if (!isPlainObject(source)) return;
+  for (const [key, cost] of Object.entries(source)) {
+    if (POLLUTING_KEYS.has(key)) continue;
+    target[key] = (Object.hasOwn(target, key) && typeof target[key] === 'number' ? target[key] : 0) + cost * scale;
+  }
 };
 
 const reportTokens = (row) => row.tokensIn + row.tokensOut + row.cacheReadTokens + row.cacheWriteTokens;
 
-function dailyUsage(report, labels) {
+function dailyUsage(report, labels, providers) {
   return {
-    costs: costByGroup(report, labels),
+    costs: costByGroup(report, labels, providers),
     tokens: reportTokens(report.totals),
-    claudeTokens: report.providers.reduce((sum, row) => sum + ((row.family || familyForProviderId(row.id)) === 'claude' ? reportTokens(row) : 0), 0),
+    claudeTokens: report.providers.reduce((sum, row) => sum + (reportFamily(row, providers) === 'claude' ? reportTokens(row) : 0), 0),
   };
 }
 
@@ -546,33 +918,54 @@ function dailyUsage(report, labels) {
  * Claude Code use outside PortOS also comes from the instance's transcript
  * history (see `withTranscriptClaude`).
  */
-function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span, providers, labels) {
+function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {}, providerClasses = undefined }, span, providers, labels) {
   const missingDays = new Map();
   for (const day of span) {
     const month = day.slice(0, 7);
     if (!daily[day] && monthly[month]) missingDays.set(month, (missingDays.get(month) || 0) + 1);
   }
   const monthShare = new Map();
+  const monthSupplement = new Map();
   for (const [month, count] of missingDays) {
-    const report = buildUsageReport({}, { monthlyActivity: { [month]: monthly[month] }, providers });
+    const report = buildUsageReport({}, { monthlyActivity: { [month]: monthly[month] }, providers, providerClasses });
     // Days of the month outside the span still carry their share, so divide by
     // every rolled-up day of the month, not only the `count` in view.
     const [y, m] = month.split('-').map(Number);
     const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
     const rolledDays = daysInMonth - Object.keys(daily).filter((d) => d.startsWith(`${month}-`)).length;
     const divisor = Math.max(rolledDays, count);
-    const usage = dailyUsage(report, labels);
+    const usage = dailyUsage(report, labels, providers);
     const costs = {};
     addInto(costs, usage.costs, 1 / divisor);
     monthShare.set(month, { costs, tokens: usage.tokens / divisor, claudeTokens: usage.claudeTokens / divisor });
+    // A rollup containing only other providers cannot overlap Claude
+    // transcripts; preserve their exact day instead of spreading them.
+    if (!(usage.claudeTokens > 0) && !(usage.costs.claude > 0)) continue;
+    // The rollup no longer says which day contained a run. Compare its full
+    // month with transcripts before spreading any excess, or a transcript on
+    // one day would be added to the same rollup spread over the other days.
+    const first = `${month}-01`;
+    const last = utcDay(dayMs(first) + (daysInMonth - 1) * DAY_MS);
+    const ledger = dailyUsage(buildUsageReport(daily, { from: first, to: last, monthlyActivity: { [month]: monthly[month] }, providers, providerClasses }), labels, providers);
+    const observed = summarizeTranscriptDays(transcript, { from: first, to: last }).totals;
+    const extraCost = Math.max(0, (observed.rawEstimatedCost ?? observed.estimatedCost ?? 0) - (ledger.costs.claude || 0));
+    const extraTokens = Math.max(0, (observed.total || 0) - ledger.claudeTokens);
+    if (extraCost && !labels.has('claude')) labels.set('claude', familyLabel('claude'));
+    monthSupplement.set(month, { cost: extraCost / daysInMonth, tokens: extraTokens / daysInMonth });
   }
   return span.map((day) => {
     const usage = daily[day]
-      ? dailyUsage(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers }), labels)
+      ? dailyUsage(buildUsageReport({ [day]: daily[day] }, { from: day, to: day, providers, providerClasses }), labels, providers)
       : monthShare.get(day.slice(0, 7)) || { costs: {}, tokens: 0, claudeTokens: 0 };
+    const supplement = monthSupplement.get(day.slice(0, 7));
+    if (supplement) {
+      const costs = { ...usage.costs };
+      if (supplement.cost) costs.claude = (costs.claude || 0) + supplement.cost;
+      return { costs, tokens: usage.tokens + supplement.tokens };
+    }
     const transcriptTotals = transcript[day] && summarizeTranscriptDays({ [day]: transcript[day] }).totals;
     return {
-      costs: withTranscriptClaude({ ...usage.costs }, transcriptTotals?.estimatedCost, labels),
+      costs: withTranscriptClaude({ ...usage.costs }, transcriptTotals?.rawEstimatedCost ?? transcriptTotals?.estimatedCost, labels),
       // Transcript sessions overlap the Claude ledger; reconcile tokens by the
       // same per-day maximum as cost, retaining every other provider's tokens.
       tokens: usage.tokens + Math.max(0, (transcriptTotals?.total || 0) - usage.claudeTokens),
@@ -585,8 +978,8 @@ function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {} }, span,
  * the terminal, the desktop app's Code tab, AND the runs PortOS spawned. The
  * ledger holds PortOS runs plus the terminal sessions the interactive scan
  * billed (usageInteractiveScan.js, which reaches back only ~35 days from its
- * first run), so each is a partial view of the same spend: the day's Claude
- * cost is the larger of the two, never their sum.
+ * first run), so each is a partial view of the same spend. Day-level history
+ * uses the larger value; a rolled-up month is reconciled over that whole month.
  */
 function withTranscriptClaude(costs, transcriptCost, labels) {
   if ((transcriptCost || 0) > (costs.claude || 0)) {
@@ -605,7 +998,7 @@ function earliestDay(sources) {
   return earliest;
 }
 
-async function usageHistorySources() {
+async function usageHistorySources(providers = []) {
   const { self, peers } = await entriesWithSelf();
   const local = getUsage();
   // An unreadable transcript store charts PortOS runs only rather than failing.
@@ -619,6 +1012,7 @@ async function usageHistorySources() {
       daily: local?.dailyActivity,
       monthly: local?.monthlyActivity,
       transcript: localTranscript?.days,
+      providerClasses: Object.fromEntries(providers.map((provider) => [provider.id, { free: isFreeProvider(provider), family: familyForProvider(provider) }])),
     },
     ...peers.map((e) => ({
       id: e.instanceId,
@@ -626,6 +1020,7 @@ async function usageHistorySources() {
       daily: e.usage.dailyActivity,
       monthly: e.usage.monthlyActivity,
       transcript: e.claudeCode?.days,
+      providerClasses: e.providerClasses,
     })),
   ];
 }
@@ -649,7 +1044,7 @@ function stackCosts(rows, labels) {
 
 /** Calendar months over the same fleet, ledger and transcript sources as rolling cost. */
 export async function getFleetMonthlyUsage({ providers = [], now = new Date() } = {}) {
-  const sources = await usageHistorySources();
+  const sources = await usageHistorySources(providers);
   const first = earliestDay(sources);
   if (!first) return { instanceCount: sources.length, series: [], history: [] };
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)).getTime();
@@ -695,7 +1090,7 @@ let rollingMemo = null;
  * fresh as their last sync.
  */
 export async function getFleetRollingCost({ providers = [], range = '3m', now = new Date() } = {}) {
-  const sources = await usageHistorySources();
+  const sources = await usageHistorySources(providers);
 
   const todayMs = dayMs(utcDay(now.getTime()));
   const rangeId = Object.hasOwn(ROLLING_COST_RANGES, range) ? range : '3m';
@@ -706,7 +1101,7 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
   const spanLength = pointCount + ROLLING_COST_WINDOW_DAYS - 1;
   const span = Array.from({ length: spanLength }, (_, i) => utcDay(todayMs - (spanLength - 1 - i) * DAY_MS));
 
-  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p)])]);
+  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p), familyForProvider(p)])]);
   if (rollingMemo?.key === key) return rollingMemo.value;
 
   const labels = new Map();
@@ -727,7 +1122,10 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
     const values = running.map((v) => Math.max(0, roundCents(v)));
     points.push({ date: span[i], cost: roundCents(values.reduce((sum, v) => sum + v, 0)), values });
   }
-  const value = { range: rangeId, windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, series, points };
+  const pricingIncomplete = sources.some((source) => buildUsageReport(source.daily || {}, {
+    from: span[0], to: span.at(-1), providers, monthlyActivity: source.monthly, providerClasses: source.providerClasses,
+  }).totals.costIncomplete);
+  const value = { range: rangeId, windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, series, points, pricingIncomplete };
   rollingMemo = { key, value };
   return value;
 }
@@ -735,12 +1133,13 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
 /**
  * Fleet-wide Claude Code tokens per model, priced at API rates, for a window.
  * One row per instance that has published transcript history (this machine
- * reads its live store), plus a combined per-model list. As with `getFleetUsage`,
- * an instance the viewer marked as API-billed stays listed but does not feed the
- * combined figures. Peer rows are as fresh as the last sync (`capturedAt`).
+ * reads its live store), plus a combined per-model list. API-billed instances
+ * still contribute to fleet-wide token totals. Peer rows are as fresh as their
+ * last snapshot (`capturedAt`).
  */
 export async function getFleetClaudeCodeModels({ from = null, to = null, apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
+  const { optedOut } = await usageParticipation();
   const apiBilled = new Set(Array.isArray(apiBilledInstanceIds) ? apiBilledInstanceIds : []);
   const row = (e, isSelf) => {
     const { models, totals } = summarizeTranscriptDays(e.claudeCode.days, { from, to });
@@ -750,10 +1149,10 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
     ...(self?.claudeCode ? [row(self, true)] : []),
     ...peers.filter((e) => e.claudeCode).map((e) => row(e, false)),
   ];
-  const combined = mergeModelRows(instances.filter((i) => i.usesSubscriptions).map((i) => i.models));
+  const combined = mergeModelRows(instances.map((i) => i.models));
   // Peers we know of that published no history (older build, or not scanned yet)
   // — named so the UI can say why they are missing rather than dropping them.
-  const pending = peers.filter((e) => !e.claudeCode).map((e) => e.name || e.instanceId);
+  const pending = peers.filter((e) => !optedOut.has(e.instanceId) && !e.claudeCode).map((e) => e.name || e.instanceId);
   return { instances, pendingInstances: pending, ...combined };
 }
 
@@ -766,12 +1165,22 @@ export async function getFleetClaudeCodeModels({ from = null, to = null, apiBill
  * Instances card uses. Those machines meter a different account, so folding
  * their readings into these meters would be a wrong number, not a fuller one.
  */
-export async function getFleetQuotaEntries({ excludeInstanceIds = [] } = {}) {
+export async function getFleetQuotaEntries({ excludeInstanceIds = [], includeEmpty = false } = {}) {
   const { peers } = await entriesWithSelf();
   const excluded = new Set(Array.isArray(excludeInstanceIds) ? excludeInstanceIds : []);
-  return peers
-    .filter((e) => !excluded.has(e.instanceId) && e.quotas?.length)
-    .map(({ instanceId, name, capturedAt, quotas }) => ({ instanceId, name, capturedAt, quotas }));
+  const { participating, optedOut } = includeEmpty ? await usageParticipation() : { participating: [], optedOut: new Set() };
+  const entries = peers
+    .filter((e) => !excluded.has(e.instanceId) && (includeEmpty || e.quotas?.length))
+    .map(({ instanceId, name, capturedAt, quotas, quotaReported }) => ({ instanceId, name, capturedAt, quotas,
+      ...(includeEmpty ? { quotaReported, usageExpected: !optedOut.has(instanceId) } : {}) }));
+  if (includeEmpty) {
+    const known = new Set(entries.map((entry) => entry.instanceId));
+    for (const peer of distinctPeerInstances(participating)) {
+      if (known.has(peer.instanceId) || excluded.has(peer.instanceId)) continue;
+      entries.push({ instanceId: peer.instanceId, name: peerLabel(peer), quotas: [], quotaReported: false, usageExpected: true });
+    }
+  }
+  return entries;
 }
 
 /**
@@ -799,6 +1208,6 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, dataPath('instances.json')];
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, IMAGE_RECEIPTS_DIR, dataPath('instances.json')];
 
 export { PEER_USAGE_FILE };

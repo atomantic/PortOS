@@ -135,31 +135,40 @@ export default function VoiceWidget() {
   }, [enabled]);
 
   useEffect(() => {
+    // Events can overtake the bootstrap read. Only hydrate fields that have
+    // not already received a newer value; bootstrap-only personality still loads.
+    const updatedFields = new Set();
+    let active = true;
     getVoiceConfig()
       .then((cfg) => {
-        if (disposedRef.current) return;
-        setEnabled(!!cfg?.enabled);
-        setHotkey(cfg?.hotkey || 'Space');
-        if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
-        if (cfg?.stt?.language) setSttLanguage(cfg.stt.language);
-        setFastPath(cfg?.llm?.fastPath || null);
+        if (!active || disposedRef.current) return;
+        if (!updatedFields.has('enabled')) setEnabled(!!cfg?.enabled);
+        if (!updatedFields.has('hotkey')) setHotkey(cfg?.hotkey || 'Space');
+        if (!updatedFields.has('sttEngine') && cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
+        if (!updatedFields.has('sttLanguage') && cfg?.stt?.language) setSttLanguage(cfg.stt.language);
+        if (!updatedFields.has('fastPath')) setFastPath(cfg?.llm?.fastPath || null);
         personalityRef.current = cfg?.llm?.personality || null;
         const engine = cfg?.tts?.engine;
-        ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
+        if (!updatedFields.has('tts')) {
+          ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
+        }
       })
       .catch(() => {});
     // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
     // voice:config:changed — keep the widget's enabled/engine/hotkey/fastPath in
     // sync so toggling voice mode mid-session takes effect without a reload.
     const off = onVoiceEvent('voice:config:changed', (cfg) => {
-      if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
-      if (cfg?.hotkey) setHotkey(cfg.hotkey);
-      if (cfg?.sttEngine) setSttEngine(cfg.sttEngine);
-      if (cfg?.sttLanguage) setSttLanguage(cfg.sttLanguage);
-      if ('fastPath' in (cfg || {})) setFastPath(cfg.fastPath || null);
-      if (cfg?.ttsEngine) ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
+      if (typeof cfg?.enabled === 'boolean') { updatedFields.add('enabled'); setEnabled(cfg.enabled); }
+      if (cfg?.hotkey) { updatedFields.add('hotkey'); setHotkey(cfg.hotkey); }
+      if (cfg?.sttEngine) { updatedFields.add('sttEngine'); setSttEngine(cfg.sttEngine); }
+      if (cfg?.sttLanguage) { updatedFields.add('sttLanguage'); setSttLanguage(cfg.sttLanguage); }
+      if ('fastPath' in (cfg || {})) { updatedFields.add('fastPath'); setFastPath(cfg.fastPath || null); }
+      if (cfg?.ttsEngine) {
+        updatedFields.add('tts');
+        ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
+      }
     });
-    return off;
+    return () => { active = false; off(); };
   }, []);
 
   // Keep the cascade refs pointed at the latest config so the routeFinal closure
@@ -761,7 +770,7 @@ export default function VoiceWidget() {
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
-            className={`p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full bg-port-card border text-gray-400 hover:text-white ${fabSurface}`}
           >
             <EyeOff size={14} />
           </button>
@@ -828,7 +837,7 @@ export default function VoiceWidget() {
             disabled={!draft.trim()}
             title="Send text (Enter)"
             aria-label="Send text"
-            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400"
           >
             <Send size={14} />
           </button>
@@ -912,14 +921,14 @@ export default function VoiceWidget() {
               onClick={interrupt}
               title="Interrupt"
               aria-label="Interrupt"
-              className="p-2 rounded-full text-port-error hover:bg-port-error/10"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-port-error hover:bg-port-error/10"
             >
               <Square size={14} />
             </button>
           )}
           <button
             onClick={toggleCapture}
-            className={`p-3 rounded-full transition-colors ${
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 rounded-full transition-colors ${
               capturing
                 ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
                 : 'bg-port-accent-2/20 hover:bg-port-accent-2/40 text-port-accent-2'
@@ -944,7 +953,7 @@ export default function VoiceWidget() {
             onClick={() => setExpanded(false)}
             title="Minimize voice controls"
             aria-label="Minimize voice controls"
-            className="md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <X size={14} />
           </button>
@@ -952,7 +961,7 @@ export default function VoiceWidget() {
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
-            className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
           >
             <EyeOff size={14} />
           </button>

@@ -83,7 +83,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
  * nothing to play yet it says what makes something playable. `seekRequest`
  * (`{ t, n }`) is the scene-card seek.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const source = sources.find((entry) => entry.id === requested) || sources[0] || null;
@@ -126,7 +126,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
             aria-pressed={expanded}
             aria-label={expanded ? 'Return preview to sidebar' : 'Expand preview into main area'}
             title={expanded ? 'Return preview to sidebar' : 'Expand preview into main area'}
-            className="ml-auto hidden min-h-[28px] min-w-[28px] shrink-0 items-center justify-center rounded border border-port-border text-port-text hover:border-port-accent xl:flex"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-auto hidden min-h-[28px] min-w-[28px] shrink-0 items-center justify-center rounded border border-port-border text-port-text hover:border-port-accent xl:flex"
           >
             <SizeIcon size={14} aria-hidden="true" />
           </button>
@@ -149,7 +149,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
-      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} /></div>}
+      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
       {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}

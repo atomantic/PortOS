@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
 import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProcessTypes.js';
@@ -11,8 +11,13 @@ import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProce
 // `listProcessesStrict`'s real return type); an array (incl. []) = a
 // successful read. Default to a successful empty read.
 const pm2Mock = vi.hoisted(() => ({ processes: [] }));
+const osMock = vi.hoisted(() => ({ username: 'synthetic-user' }));
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn(async () => pm2Mock.processes) }));
 vi.mock('./appIconDetect.js', () => ({ detectAppIcon: vi.fn(async () => null) }));
+vi.mock('os', async (importOriginal) => ({
+  ...(await importOriginal()),
+  userInfo: () => ({ username: osMock.username }),
+}));
 
 describe('detectGodotNativeLaunch', () => {
   let dir;
@@ -46,6 +51,138 @@ describe('detectGodotNativeLaunch', () => {
 });
 
 describe('parseEcosystemConfig', () => {
+  it('resolves PM2_HOME usernames from os.userInfo when USER is unset', () => {
+    const previousUser = process.env.USER;
+    const previousUsername = process.env.USERNAME;
+    delete process.env.USER;
+    process.env.USERNAME = 'fallback-user';
+    try {
+      const content = 'const PM2_HOME = `${require("os").homedir()}/.pm2-${require("os").userInfo().username}`;\nmodule.exports = { apps: [] };';
+      expect(parseEcosystemConfig(content).pm2Home).toBe(`${homedir()}/.pm2-synthetic-user`);
+    } finally {
+      if (previousUser === undefined) delete process.env.USER;
+      else process.env.USER = previousUser;
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  it('aligns PM2_HOME parsing across variable assignments, quotes, and env expansions', () => {
+    // Variable assignment without declaration keyword expanding process.env.HOME
+    const bareVarWithHome = `
+      PM2_HOME = \`\${process.env.HOME}/.pm2-custom\`;
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarWithHome).pm2Home).toBe(`${homedir()}/.pm2-custom`);
+
+    // Variable assignment with single quotes
+    const bareVarSingleQuote = `
+      PM2_HOME = '/custom/single/pm2';
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarSingleQuote).pm2Home).toBe('/custom/single/pm2');
+
+    // Variable assignment with double quotes
+    const bareVarDoubleQuote = `
+      PM2_HOME = "/custom/double/pm2";
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: PM2_HOME } }] };
+    `;
+    expect(parseEcosystemConfig(bareVarDoubleQuote).pm2Home).toBe('/custom/double/pm2');
+
+    // let declaration with process.env.HOME
+    const letWithHome = `
+      let PM2_HOME = \`\${process.env.HOME}/.pm2-let\`;
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(letWithHome).pm2Home).toBe(`${homedir()}/.pm2-let`);
+
+    // var declaration with single quotes
+    const varSingleQuote = `
+      var PM2_HOME = '/var/pm2';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(varSingleQuote).pm2Home).toBe('/var/pm2');
+
+    // env property assignment with template literal
+    const envPropertyTemplate = `
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: \`\${process.env.HOME}/.pm2-env\` } }] };
+    `;
+    expect(parseEcosystemConfig(envPropertyTemplate).pm2Home).toBe(`${homedir()}/.pm2-env`);
+
+    // env property assignment with quoted string
+    const envPropertyString = `
+      module.exports = { apps: [{ name: 'app', env: { "PM2_HOME": "/env/direct/pm2" } }] };
+    `;
+    expect(parseEcosystemConfig(envPropertyString).pm2Home).toBe('/env/direct/pm2');
+
+    // node:os prefix support in require
+    const nodeOsPrefix = `
+      const PM2_HOME = \`\${require("node:os").homedir()}/.pm2-node-os\`;
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(nodeOsPrefix).pm2Home).toBe(`${homedir()}/.pm2-node-os`);
+
+    // ignores matches inside string literals
+    const stringLiteralIgnored = `
+      const desc = "Description: PM2_HOME = '/wrong/in/string'";
+      const PM2_HOME = "/actual/from/decl";
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(stringLiteralIgnored).pm2Home).toBe('/actual/from/decl');
+
+    // decodes escaped quotes in paths
+    const escapedQuotePath = `
+      const PM2_HOME = '/srv/it\\'s/pm2';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(escapedQuotePath).pm2Home).toBe("/srv/it's/pm2");
+
+    // comments are ignored and declarations take precedence over env properties
+    const commentAndPrecedence = `
+      // PM2_HOME: '/old-commented'
+      module.exports = { apps: [{ name: 'app', env: { PM2_HOME: '/from-env' } }] };
+      const PM2_HOME = '/from-decl';
+    `;
+    expect(parseEcosystemConfig(commentAndPrecedence).pm2Home).toBe('/from-decl');
+
+    // literal strings in single/double quotes do not expand template expressions
+    const literalSingleQuote = `
+      const PM2_HOME = '\${process.env.HOME}/.pm2-literal';
+      module.exports = { apps: [] };
+    `;
+    expect(parseEcosystemConfig(literalSingleQuote).pm2Home).toBe('${process.env.HOME}/.pm2-literal');
+
+    // returns null for unrelated identifiers or files without PM2_HOME
+    expect(parseEcosystemConfig('const PM2_HOME_DIR = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
+    expect(parseEcosystemConfig('const NOT_PM2_HOME = "/other/path";\nmodule.exports = { apps: [] };').pm2Home).toBeNull();
+    expect(parseEcosystemConfig('module.exports = { apps: [] };').pm2Home).toBeNull();
+  });
+
+  it('parses quoted keys in inline ports and nested PORTS objects', () => {
+    const content = `const PORTS = {
+  "server": { "api": 6000 },
+  'client': { 'ui': 5000 },
+};
+module.exports = { apps: [
+  { name: 'quoted-api', script: 'server.js', ports: PORTS.server },
+  { name: 'quoted-ui', script: 'vite', ports: { 'ui': 5000 } },
+] };`;
+
+    const { processes } = parseEcosystemConfig(content);
+    expect(processes.map(({ name, ports }) => [name, ports])).toEqual([
+      ['quoted-api', { api: 6000 }],
+      ['quoted-ui', { devUi: 5000 }],
+    ]);
+  });
+
+  it('preserves a quoted property name that contains a port-label suffix', () => {
+    const content = `module.exports = { apps: [
+  { name: 'x', script: 'server.js', ports: { "admin-api": 6000 } },
+] };`;
+
+    expect(parseEcosystemConfig(content).processes[0].ports).toEqual({ 'admin-api': 6000 });
+  });
+
   it('captures arbitrary *_PORT env vars and labels them by camelCased stem', () => {
     // Mirror the critical-mass shape: a server process that fans out IPC ports
     // to per-exchange engine processes.
@@ -365,6 +502,24 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
     expect(out).toContain('API: 5555'); // untouched
   });
 
+  it('refuses a batch containing an unreferenced constant and preserves unrelated PORTS entries', () => {
+    const content = `const PORTS = { "API": 6000, 'UI': 5000 };
+module.exports = { apps: [{ name: 'quoted-api', ports: { "api": 6000 } }] };`;
+    expect(rewriteEcosystemPorts(content, [[6000, 6100], [5000, 5100]])).toBe(content);
+    expect(rewriteEcosystemPorts(content, [[6000, 6100]])).toBe(content.replace('"api": 6000', '"api": 6100'));
+  });
+
+  it('does not treat a suffix of a quoted property name as the api key', () => {
+    const content = `module.exports = { apps: [
+  { name: 'x', script: 'server.js', ports: { "admin-api": 6000 } },
+] };`;
+    const edit = { processName: 'x', label: 'api', oldPort: 6000, newPort: 6100 };
+
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
   it('does not touch unrelated numbers that merely equal an old port', () => {
     const content = `module.exports = {
   apps: [{ name: 'x', script: 's.js', watch_delay: 1000, env: { PORT: 1000 } }]
@@ -389,7 +544,7 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API, V
 
   it('resolves 11+ remap pairs without placeholder prefix collision (index 1 vs 10)', () => {
     const pairs = Array.from({ length: 11 }, (_, k) => [7000 + k, 8000 + k]);
-    const content = pairs.map(([o]) => `PORT: ${o}`).join('\n');
+    const content = `module.exports = { apps: [${pairs.map(([o], i) => `{ name: 'app-${i}', env: { PORT: ${o} } }`).join(',')}] };`;
     const out = rewriteEcosystemPorts(content, pairs);
     for (const [, newP] of pairs) expect(out).toContain(`PORT: ${newP}`);
     expect(out).not.toMatch(/PORT_REMAP/);
@@ -453,6 +608,175 @@ module.exports = { apps: [{ name: 'x', script: 's.js', env: { PORT: PORTS.API } 
 });
 
 describe('rewriteEcosystemPortsByProcess', () => {
+  it.each([
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; module.exports = { apps: apps.filter(() => false) };",
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; module.exports = apps.filter(() => false);",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; app.name = 'new-api'; module.exports = { apps: [app] };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; app['name'] = 'new-api'; module.exports = { apps: [app] };",
+    "const apps = [{ name: 'old-api', env: { PORT: 6100 } }]; apps[0] = { name: 'new-api' }; module.exports = { apps };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; const alias = app; alias.name = 'new-api'; module.exports = { apps: [app] };",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; module.exports.apps[0].env.PORT = 6200;",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; module.exports.apps[0].name = 'new-api';",
+    "module.exports = { apps: [{ name: 'old-api', env: { PORT: 6100 } }] }; exports.apps = [];",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; const alias = app; ++alias.env.PORT; module.exports = { apps: [app] };",
+    "const app = { name: 'old-api', env: { PORT: 6100 } }; --app['env'].PORT; module.exports = { apps: [app] };",
+  ])('does not discover or rewrite dynamically changed ecosystem apps', (content) => {
+    const edit = { processName: 'old-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({ content, applied: [], unapplied: [edit] });
+  });
+
+  it('rewrites quoted inline port keys for only the selected process', () => {
+    const content = `module.exports = { apps: [
+  { name: 'quoted-api', script: 'server.js', ports: { "api": 6000 } },
+  { name: 'other-api', script: 'other.js', ports: { 'api': 6000 } },
+] };`;
+    const edit = { processName: 'quoted-api', label: 'api', oldPort: 6000, newPort: 6100 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.unapplied).toEqual([]);
+    expect(result.content).toContain('"api": 6100');
+    expect(result.content).toContain("'api': 6000");
+    expect(parseEcosystemConfig(result.content).processes.map(({ ports }) => ports.api)).toEqual([6100, 6000]);
+  });
+
+  it('rewrites quoted ui and devUi keys while preserving other processes', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv', script: 'server.js', ports: { api: 5999 } },
+  { name: 'srv-ui', script: 'vite', ports: { "devUi": 6000 } },
+  { name: 'legacy-ui', script: 'vite', ports: { 'ui': 6001 } },
+  { name: 'other-ui', script: 'vite', ports: { 'ui': 6001 } },
+] };`;
+    const edits = [
+      { processName: 'srv-ui', label: 'devUi', oldPort: 6000, newPort: 6100 },
+      { processName: 'legacy-ui', label: 'devUi', oldPort: 6001, newPort: 6101 },
+    ];
+
+    const result = rewriteEcosystemPortsByProcess(content, edits);
+    expect(result.applied).toEqual(expect.arrayContaining(edits));
+    expect(result.unapplied).toEqual([]);
+    expect(result.content).toContain('"devUi": 6100');
+    expect(result.content).toContain("'ui': 6101");
+    expect(result.content).toContain("'ui': 6001");
+  });
+
+  it('rejects unknown labels without changing UI ports or undefined keys', () => {
+    const content = `module.exports = { apps: [
+  { name: 'srv-ui', script: 'vite', ports: { ui: 5173 }, env: { VITE_PORT: 5173, undefined: 5173 } }
+] };`;
+    const edit = { processName: 'srv-ui', label: 'unknown_label', oldPort: 5173, newPort: 5174 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
+  it('discovers static names and targets only the requested bound process', () => {
+    const content = `const API_NAME = 'example-api';
+let ALIAS = API_NAME;
+var WORKER_NAME = \`example-worker\`;
+module.exports = { apps: [
+  { name: ALIAS, script: 'server.js', env: { PORT: 6100 } },
+  { name: WORKER_NAME, script: 'worker.js', env: { PORT: 6100 } },
+  { name: \`example-static\`, script: 'static.js', env: { PORT: 6100 } }
+] };`;
+    expect(parseEcosystemConfig(content).processes.map(p => p.name)).toEqual([
+      'example-api', 'example-worker', 'example-static',
+    ]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.unapplied).toEqual([]);
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100], ['example-static', 6100],
+    ]);
+    expect(result.content).toContain('name: ALIAS');
+  });
+
+  it.each(["console.log('not executed')", '{}', "'unused directive'"])('resolves semicolonless bindings before %s without executing them', (statement) => {
+    const content = "const NAME = 'example-api'\n" + statement + "\n" +
+      "const apps = [{ name: NAME, env: { PORT: 6100 } }]\n" + statement + "\n" +
+      "module.exports = { apps };";
+    expect(parseEcosystemConfig(content).processes.map(p => p.name)).toEqual(['example-api']);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(parseEcosystemConfig(result.content).processes[0].ports.api).toBe(6200);
+  });
+
+  it.each([
+    "NAME = 'example-worker'", "NAME += '-worker'", 'NAME++', 'NAME <<= 1',
+    "({ value: NAME } = { value: 'example-worker' })", "[NAME] = ['example-worker']",
+  ])('refuses stale names after %s, including aliases', (write) => {
+    const content = "let NAME = 'example-api'; const ALIAS = NAME;\n" + write +
+      "; module.exports = { apps: [{ name: ALIAS, env: { PORT: 6100 } }] };";
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
+  it('leaves dynamic, empty, unresolved and cyclic process names undiscovered and untouched', () => {
+    const content = "const COMPUTED = 'example-api'\n + suffix;\n" +
+      "const FIRST = SECOND; const SECOND = FIRST; const EMPTY = '';\n" +
+      "module.exports = { apps: [\n" +
+      "{ name: COMPUTED, env: { PORT: 6100 } },\n" +
+      "{ name: `example-${suffix}`, env: { PORT: 6100 } },\n" +
+      "{ name: MISSING, env: { PORT: 6100 } },\n" +
+      "{ name: FIRST, env: { PORT: 6100 } },\n" +
+      "{ name: EMPTY, env: { PORT: 6100 } }\n] };";
+    expect(parseEcosystemConfig(content).processes).toEqual([]);
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content, applied: [], unapplied: [edit],
+    });
+  });
+
+  it('rewrites only the active matching app when name follows other properties', () => {
+    const active = `{ script: 'server.js', pattern: /[}]/, metadata: { name: 'nested' }, name: 'example-api', env: { PORT: 6100 } }`;
+    const content = `// { name: 'example-api', env: { PORT: 6100 } }
+/* { name: 'example-api', env: { PORT: 6100 } } */
+const example = "{ name: 'example-api', env: { PORT: 6100 } }";
+const pattern = /[}\"']/;
+const template = \`outer \${\`inner }\`}\`;
+const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+module.exports = { apps: [
+  ${active},
+  { name: 'example-worker', env: { PORT: 6100 } }
+] };`;
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+
+    expect(result).toEqual({
+      content: content.replace(active, active.replace('6100', '6200')),
+      applied: [edit],
+      unapplied: [],
+    });
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100],
+    ]);
+  });
+
+  it('rewrites a statically bound apps array referenced by the exported config', () => {
+    const active = `{ script: 'server.js', name: 'example-api', env: { PORT: 6100 } }`;
+    const content = `const example = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+const apps = [${active}, { name: 'example-worker', env: { PORT: 6100 } }];
+module.exports = { apps };`;
+    const edit = { processName: 'example-api', label: 'api', oldPort: 6100, newPort: 6200 };
+
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+
+    expect(result).toEqual({
+      content: content.replace(active, active.replace('6100', '6200')),
+      applied: [edit], unapplied: [],
+    });
+    expect(parseEcosystemConfig(result.content).processes.map(p => [p.name, p.ports.api])).toEqual([
+      ['example-api', 6200], ['example-worker', 6100],
+    ]);
+  });
+
   it('splits a shared value (prod UI served by API, uiPort === apiPort) — rewrites only the touched label', () => {
     // Single process: bare PORT 6000 is BOTH the api port and (since no
     // dedicated ui process) the derived ui port. Changing only ui must NOT
@@ -547,24 +871,14 @@ describe('rewriteEcosystemPortsByProcess', () => {
     expect(parseEcosystemConfig(r.content).processes.find(p => p.name === 'srv-ui').ports.devUi).toBe(7002);
   });
 
-  it('does NOT rewrite env PORT as a fallback for a ports: PORTS.x reference block (honest unapplied, no false success)', () => {
-    // The block derives api/ui from `ports: PORTS.server` (a reference to a
-    // const outside the app block), so the parser ignores env.PORT. A targeted
-    // edit can't reach the external const from inside the block — so it must
-    // report `unapplied` (→ caller 422s) rather than rewriting env.PORT, which
-    // would falsely report success while the displayed/derived port reverts AND
-    // silently change the runtime API env port.
+  it('updates a resolved ports reference and its runtime env together', () => {
     const content = `const PORTS = { server: { api: 6000, ui: 6000 } };
-module.exports = { apps: [
-  { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // env.PORT untouched, nothing falsely rewritten
+module.exports = { apps: [{ name: 'srv', ports: PORTS.server, env: { PORT: 6000 } }] };`;
+    const edit = { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 };
+    expect(rewriteEcosystemPortsByProcess(content, [edit])).toEqual({
+      content: content.replace('api: 6000', 'api: 7000').replace('PORT: 6000', 'PORT: 7000'),
+      applied: [edit], unapplied: [],
+    });
   });
 
   it('rewrites only the edited key when an inline ports object has ui and devUi sharing a value', () => {
@@ -693,41 +1007,13 @@ module.exports = { apps: [
     expect(r.content).toContain('port: 7000');
   });
 
-  it('does NOT match a same-valued lowercase metadata field in a ports-reference block (no false api success)', () => {
-    // api is derived from `ports: PORTS.server` (external const). The block also
-    // carries a lowercase metadata field that happens to share the value. An
-    // unscoped `api:`/`ui:` key pattern would rewrite that metadata and falsely
-    // report applied while the real const reverts — so label-key patterns are
-    // scoped to inline ports objects only → this edit is unapplied.
-    const content = `const PORTS = { server: { api: 6000 } };
-module.exports = { apps: [
-  { name: 'srv', script: 's.js', ports: PORTS.server, max_restarts: 6000 }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // metadata field untouched
-  });
-
-  it('does NOT report success from an env-only ui rewrite when the ui port comes from a ports reference', () => {
-    // ui is derived from `ports: PORTS.client` (external const), but the block
-    // ALSO carries a same-valued VITE_PORT. Rewriting only VITE_PORT would be
-    // false success — the parser re-derives ui from the unchanged const. So the
-    // env/args fallback must be skipped for a reference block → unapplied.
+  it('updates referenced ports and matching runtime env while preserving metadata', () => {
     const content = `const PORTS = { client: { ui: 6000 } };
-module.exports = { apps: [
-  { name: 'srv-ui', script: 'npx', args: 'vite --host', ports: PORTS.client, env: { VITE_PORT: 6000 } }
-] };
-`;
-    const r = rewriteEcosystemPortsByProcess(content, [
-      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7000 },
-    ]);
-    expect(r.applied).toHaveLength(0);
-    expect(r.unapplied).toHaveLength(1);
-    expect(r.content).toBe(content); // VITE_PORT untouched, no false rewrite
+module.exports = { apps: [{ name: 'srv-ui', ports: PORTS.client, metadata: { ui: 6000 }, env: { VITE_PORT: 6000 } }] };`;
+    const edit = { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7000 };
+    const result = rewriteEcosystemPortsByProcess(content, [edit]);
+    expect(result.applied).toEqual([edit]);
+    expect(result.content).toBe(content.replace('client: { ui: 6000', 'client: { ui: 7000').replace('VITE_PORT: 6000', 'VITE_PORT: 7000'));
   });
 
   it('still rewrites VITE_PORT/--port for a ui edit when there is no ports reference (inline or sole source)', () => {
@@ -828,11 +1114,11 @@ describe('writeEcosystemPortsByProcess', () => {
 
   it('does NOT persist a partial batch — leaves the file untouched when any edit is unapplied', async () => {
     // 'srv' has a literal api PORT (rewritable) but the same-valued ui lives in
-    // a ports: PORTS.client reference (not reachable in-block). The route 422s
+    // a dynamic ports: PORTS.client reference. The route 422s
     // such a request, so the applied subset must NOT be written to disk — else
     // config diverges from the un-updated registry for a "failed" request.
     dir = mkdtempSync(join(tmpdir(), 'eco-tgt-'));
-    const original = `const PORTS = { client: { ui: 6000 } };
+    const original = `const PORTS = { client: { ui: resolveUiPort() } };
 module.exports = { apps: [
   { name: 'srv', script: 's.js', env: { PORT: 6000 } },
   { name: 'srv-ui', script: 'npx', ports: PORTS.client }
@@ -841,7 +1127,7 @@ module.exports = { apps: [
     writeFileSync(join(dir, 'ecosystem.config.cjs'), original);
     const result = await writeEcosystemPortsByProcess(dir, [
       { processName: 'srv', label: 'api', oldPort: 6000, newPort: 7000 },      // applies
-      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (external const)
+      { processName: 'srv-ui', label: 'ui', oldPort: 6000, newPort: 7001 },    // unapplied (dynamic source)
     ]);
     expect(result.changed).toBe(false);
     expect(result.applied).toHaveLength(0); // nothing persisted
@@ -878,11 +1164,11 @@ describe('writeEcosystemPortEdits (combined value-keyed + targeted, atomic)', ()
 
   it('persists NOTHING (not even the value-keyed pass) when a targeted edit is unapplied', async () => {
     // The atomicity bug: the value-keyed remap (devUiPort 5556→7001) is
-    // rewritable, but the shared uiPort lives in an external PORTS.server const
-    // the targeted pass can't reach → unapplied → the route 422s. The
+    // rewritable, but the shared uiPort lives in a dynamic PORTS.server value
+    // the static planner cannot resolve → unapplied → the route 422s. The
     // value-keyed change must NOT have already hit disk.
     dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
-    const original = `const PORTS = { server: { api: 6000, ui: 6000 } };
+    const original = `const PORTS = { server: { api: 6000, ui: resolveUiPort() } };
 module.exports = { apps: [
   { name: 'srv', script: 's.js', ports: PORTS.server, env: { PORT: 6000 } },
   { name: 'srv-ui', script: 'npx', args: 'vite --host --port 5556', env: { VITE_PORT: 5556 } }
@@ -892,7 +1178,7 @@ module.exports = { apps: [
     const result = await writeEcosystemPortEdits(
       dir,
       [[5556, 7001]],                                                          // distinct, rewritable
-      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // shared, in external const → unapplied
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]      // dynamic source → unapplied
     );
     expect(result.changed).toBe(false);
     expect(result.remapApplied).toBe(false); // reported as not-persisted
@@ -956,6 +1242,27 @@ module.exports = { apps: [
     const result = await writeEcosystemPortEdits(dir, [], []);
     expect(result.changed).toBe(false);
     expect(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).toBe(original);
+  });
+
+  it.each([null, undefined])('applies targeted edits when remap is %s', async remap => {
+    dir = mkdtempSync(join(tmpdir(), 'eco-edits-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = { apps: [
+  { name: 'srv', script: 's.js', ports: { api: 6000, ui: 6000 } }
+] };\n`);
+    const result = await writeEcosystemPortEdits(
+      dir,
+      remap,
+      [{ processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 }]
+    );
+    expect(result.changed).toBe(true);
+    expect(result.remapApplied).toBe(false);
+    expect(result.applied).toEqual([
+      { processName: 'srv', label: 'ui', oldPort: 6000, newPort: 7000 },
+    ]);
+    expect(result.unapplied).toEqual([]);
+    const ports = parseEcosystemConfig(readFileSync(join(dir, 'ecosystem.config.cjs'), 'utf-8')).processes[0].ports;
+    expect(ports.ui).toBe(7000);
+    expect(ports.api).toBe(6000);
   });
 });
 
@@ -1331,6 +1638,94 @@ describe('streamDetection frame sequence', () => {
       pm2ProcessNames: ['example-app'],
       pm2Status: [{ name: 'example-app', status: 'online', pid: 42 }]
     });
+  });
+
+  it('ignores ecosystem app examples in comments and strings during import', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `
+// { name: 'example-old-api', env: { PORT: 6109 } },
+/* module.exports = { apps: [{ name: 'example-block-api', env: { PORT: 6108 } }] }; */
+const example = "apps: [{ name: 'example-string-api', env: { PORT: 6107 } }]";
+const pattern = /[}\"']/;
+const template = \`outer \${\`inner }\`}\`;
+const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+const exampleObject = { apps: [{ name: 'example-object-api', env: { PORT: 6106 } }] };
+module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+throw new Error('ecosystem source must not execute');
+`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({
+      pm2ProcessNames: ['example-api'], apiPort: 6100, uiPort: null,
+    });
+  });
+
+  it('imports a literal app with script and nested properties before its name', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `module.exports = {
+  apps: [
+    { script: 'server.js', metadata: { name: 'example-nested' },
+      /* name: 'example-comment' */ name: 'example-api', env: { PORT: 6100 } },
+    { script: 'worker.js', env: { PORT: 6101 }, "name": "example-worker" },
+    { script: 'dynamic.js', name: process.env.PROCESS_NAME, env: { PORT: 6102 } }
+  ]
+};`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({
+      pm2ProcessNames: ['example-api', 'example-worker'], apiPort: 6100, uiPort: null,
+    });
+  });
+
+  it('imports apps from a static binding referenced by the exported configuration', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-ecosystem-'));
+    writeFileSync(join(dir, 'ecosystem.config.cjs'), `
+const example = { apps: [{ name: 'example-old-api', env: { PORT: 6109 } }] };
+const apps = [{ script: 'server.js', name: 'example-api', env: { PORT: 6100 } }];
+const config = { apps };
+module.exports = config;
+`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.success).toBe(true);
+    expect(completed.result).toMatchObject({ pm2ProcessNames: ['example-api'], apiPort: 6100 });
+  });
+
+  it('reads PORT and VITE_PORT as exact independent active keys', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), 'VITE_PORT=6101\nSOME_PORT=6200\nPORT=6100\n');
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 6100, devUiPort: 6101, uiPort: 6100 });
+  });
+
+  it('ignores commented keys and accepts quoted numeric ports', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), '# PORT=6109\nPORT="6100"\n# VITE_PORT=6200\nVITE_PORT=\'6101\'\n');
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 6100, devUiPort: 6101, uiPort: 6100 });
+  });
+
+  it('keeps ecosystem ports as fallback when active .env ports are invalid', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'detect-env-ports-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-app' }));
+    writeFileSync(join(dir, '.env'), 'PORT=70000\nVITE_PORT=0\n');
+    writeFileSync(join(dir, 'ecosystem.config.cjs'),
+      `module.exports = { apps: [{ name: 'example-app', script: 'server.js', ports: { api: 4321, ui: 4322, devUi: 4323 } }] };\n`);
+
+    const { completed } = await run(dir);
+
+    expect(completed.result).toMatchObject({ apiPort: 4321, uiPort: 4322, devUiPort: 4323 });
   });
 
   it('stops after the validate error frame when the directory is missing', async () => {

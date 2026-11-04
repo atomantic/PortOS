@@ -20,6 +20,7 @@ export {
   sceneShotGlitchFrames,
   sceneTransitions,
   sceneTransitionSections,
+  sceneWipeCuts,
   transitionFrameAt,
   transitionGlitchFrames,
 } from '../../../server/lib/musicVideoTransitions.js';

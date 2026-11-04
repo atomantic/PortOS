@@ -131,7 +131,7 @@ export default function CatalogCard({
         <button
           type="button"
           onClick={() => onArm(it.id)}
-          className="absolute top-2 right-2 p-2 rounded text-gray-500 hover:text-port-error bg-port-card"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute top-2 right-2 p-2 rounded text-gray-500 hover:text-port-error bg-port-card"
           aria-label={`Delete ${name}`}
           title="Delete ingredient"
         >

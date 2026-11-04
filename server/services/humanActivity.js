@@ -1,4 +1,5 @@
 import { messageIngestionIdentity } from '../lib/messageBrowserIdentity.js';
+import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
 /**
  * Human Activity timeline (#2150) — unified, machine-local event store.
  *
@@ -433,6 +434,44 @@ export async function stripParticipantsForAccount(accountId, source, aliasEmails
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
 // pointers. `accountId` scopes to one source account (#2820). Newest first,
 // capped by `limit` (default 500, max 2000).
+// Historical WhatsApp scopes and filename titles occupy different namespaces.
+// Encode each management selector as a JSON tuple, so even delimiter-like user
+// labels remain distinct. New and historical records of the same type converge.
+const WHATSAPP_RAW_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'chatScope', ''), NULLIF(metadata->>'chatTitle', ''), '')";
+const WHATSAPP_ID_TYPE_SQL = `CASE
+  WHEN NULLIF(metadata->>'chatGuid', '') IS NOT NULL THEN 'guid'
+  WHEN NULLIF(metadata->>'conversationId', '') IS NOT NULL THEN
+    CASE WHEN metadata->>'conversationId' = metadata->>'chatScope' THEN 'scope'
+         WHEN metadata->>'conversationId' = metadata->>'chatTitle' THEN 'title' ELSE 'id' END
+  WHEN NULLIF(metadata->>'chatScope', '') IS NOT NULL THEN 'scope'
+  ELSE 'title' END`;
+const WHATSAPP_CONVERSATION_SQL = `jsonb_build_array(${WHATSAPP_ID_TYPE_SQL}, ${WHATSAPP_RAW_ID_SQL})::text`;
+const DISCORD_CONVERSATION_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'channelId', ''), '')";
+const MESSAGE_THREAD_RAW_ID_SQL = "COALESCE(NULLIF(metadata->>'chatGuid', ''), NULLIF(metadata->>'conversationId', ''), NULLIF(metadata->>'threadId', ''), '')";
+const MESSAGE_THREAD_CONVERSATION_SQL = `CASE
+  WHEN ${MESSAGE_THREAD_RAW_ID_SQL} = '' THEN ''
+  WHEN NULLIF(account_id, '') IS NOT NULL THEN jsonb_build_array(account_id, ${MESSAGE_THREAD_RAW_ID_SQL})::text
+  ELSE ${MESSAGE_THREAD_RAW_ID_SQL} END`;
+const CONVERSATION_ID_SQL = `CASE WHEN source = 'whatsapp' THEN ${WHATSAPP_CONVERSATION_SQL}
+  WHEN source = 'discord' THEN ${DISCORD_CONVERSATION_SQL}
+  WHEN source IN (${MESSAGE_ACCOUNT_TYPES.map((s) => `'${s}'`).join(', ')}) THEN ${MESSAGE_THREAD_CONVERSATION_SQL}
+  ELSE COALESCE(NULLIF(metadata->>'chatGuid', ''), metadata->>'conversationId', '') END`;
+
+function conversationFilter(field, source, parameter) {
+  if (source === 'discord') return `${DISCORD_CONVERSATION_SQL} = $${parameter}`;
+  // Message threads are keyed by [account_id, threadId] when an account is present,
+  // or raw threadId for unscoped imports (e.g. mbox); MESSAGE_THREAD_CONVERSATION_SQL
+  // evaluates to the exact selector for both chatGuid and conversationId.
+  if (MESSAGE_ACCOUNT_TYPES.includes(source)) return `${MESSAGE_THREAD_CONVERSATION_SQL} = $${parameter}`;
+  if (source !== 'whatsapp') return `metadata->>'${field}' = $${parameter}`;
+  if (field === 'chatGuid') return `${WHATSAPP_CONVERSATION_SQL} = $${parameter}`;
+  // Raw conversationId remains supported. An ambiguous scope/title label must
+  // be selected using the typed chatGuid returned by listConversations instead.
+  return `${WHATSAPP_RAW_ID_SQL} = $${parameter} AND
+    (SELECT COUNT(DISTINCT ${WHATSAPP_ID_TYPE_SQL}) FROM human_activity_events
+     WHERE source = 'whatsapp' AND ${WHATSAPP_RAW_ID_SQL} = $${parameter}) = 1`;
+}
+
 export async function listEvents({ from, to, source, accountId, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
@@ -453,11 +492,11 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
   }
   if (chatGuid != null && String(chatGuid).length > 0) {
     params.push(String(chatGuid));
-    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+    clauses.push(conversationFilter('chatGuid', source, params.length));
   }
   if (conversationId != null && String(conversationId).length > 0) {
     params.push(String(conversationId));
-    clauses.push(`metadata->>'conversationId' = $${params.length}`);
+    clauses.push(conversationFilter('conversationId', source, params.length));
   }
   if (threadId != null && String(threadId).length > 0) {
     params.push(String(threadId));
@@ -485,20 +524,22 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
  *
  * Safety: refuses unbounded wipes. Accepts either:
  *   - `ids` (optionally scoped with `source`), or
- *   - `source` + (`chatGuid` and/or `handle`), or
+ *   - `source` + (`chatGuid`, `conversationId`, `threadId` and/or `handle`), or
  *   - `accountId` (alone or with `source`) — erases everything an account's sync
  *     copied in when the account is deleted (#12984)
  *
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, handle, accountId } = {}) {
-  await ensureReady();
+export async function deleteEvents({ ids, source, chatGuid, conversationId, threadId, handle, accountId, client } = {}) {
+  if (!client) await ensureReady();
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
+  const hasConversation = conversationId != null && String(conversationId).length > 0;
+  const hasThread = threadId != null && String(threadId).length > 0;
   const hasHandle = handle != null && String(handle).length > 0;
   const hasAccount = accountId != null && String(accountId).length > 0;
-  if (!hasIds && !hasAccount && !(source && (hasChat || hasHandle))) return { deleted: 0 };
+  if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasThread || hasHandle))) return { deleted: 0 };
 
   const clauses = [];
   const params = [];
@@ -516,14 +557,23 @@ export async function deleteEvents({ ids, source, chatGuid, handle, accountId } 
   }
   if (hasChat) {
     params.push(String(chatGuid));
-    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+    clauses.push(conversationFilter('chatGuid', source, params.length));
+  }
+  if (hasConversation) {
+    params.push(String(conversationId));
+    clauses.push(conversationFilter('conversationId', source, params.length));
+  }
+  if (hasThread) {
+    params.push(String(threadId));
+    clauses.push(`metadata->>'threadId' = $${params.length}`);
   }
   if (hasHandle) {
     params.push(String(handle));
     clauses.push(`metadata->>'handle' = $${params.length}`);
   }
 
-  const result = await query(
+  const execute = client ? client.query.bind(client) : query;
+  const result = await execute(
     `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
     params,
   );
@@ -577,8 +627,10 @@ export async function listSourceCounts() {
 
 /**
  * Aggregate conversations for a single source (iMessage, Signal, …) grouped by
- * `metadata.chatGuid`. Newest activity first. Optional free-text `q` filters
- * title/handle/summary. Cap defaults to 500 conversations.
+ * source conversation selector (CONVERSATION_ID_SQL: falls back to channelId for Discord,
+ * threadId for message-account sources such as Gmail/Outlook/Teams, and typed tuples for
+ * WhatsApp). Newest activity first. Optional free-text `q` filters title/handle/summary.
+ * Cap defaults to 500 conversations.
  */
 export async function listConversations({ source, q, limit } = {}) {
   if (!source) return [];
@@ -591,14 +643,14 @@ export async function listConversations({ source, q, limit } = {}) {
       LOWER(COALESCE(title, '')) LIKE $${params.length}
       OR LOWER(COALESCE(summary, '')) LIKE $${params.length}
       OR LOWER(COALESCE(metadata->>'handle', '')) LIKE $${params.length}
-      OR LOWER(COALESCE(metadata->>'chatGuid', '')) LIKE $${params.length}
+      OR LOWER(${CONVERSATION_ID_SQL}) LIKE $${params.length}
     )`);
   }
   const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
   params.push(cap);
   const result = await query(
     `SELECT
-       COALESCE(metadata->>'chatGuid', '') AS chat_guid,
+       ${CONVERSATION_ID_SQL} AS chat_guid,
        MAX(title) AS title,
        MAX(NULLIF(metadata->>'handle', '')) AS handle,
        COUNT(*)::int AS event_count,
@@ -608,7 +660,7 @@ export async function listConversations({ source, q, limit } = {}) {
           FILTER (WHERE summary IS NOT NULL AND summary <> ''))[1] AS last_summary
      FROM human_activity_events
      WHERE ${clauses.join(' AND ')}
-     GROUP BY COALESCE(metadata->>'chatGuid', '')
+     GROUP BY ${CONVERSATION_ID_SQL}
      ORDER BY MAX(happened_at) DESC
      LIMIT $${params.length}`,
     params,
@@ -664,7 +716,7 @@ export async function sourceStats(source) {
   const result = await query(
     `SELECT
        COUNT(*)::int AS event_count,
-       COUNT(DISTINCT COALESCE(metadata->>'chatGuid', ''))::int AS conversation_count,
+       COUNT(DISTINCT ${CONVERSATION_ID_SQL})::int AS conversation_count,
        MIN(happened_at) AS earliest_at,
        MAX(happened_at) AS latest_at
      FROM human_activity_events

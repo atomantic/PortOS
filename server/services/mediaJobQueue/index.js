@@ -52,6 +52,8 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
+import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
+import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from '../../lib/imageGenCapabilities.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
 import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
@@ -67,6 +69,7 @@ import {
   decideOwnershipRelease, OWNERSHIP_RELEASE,
 } from './recoverySettlement.js';
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
+import { mediaRecoveryPending } from '../../lib/mediaRecoveryActivity.js';
 import { videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema, mergeVideoExecutionDiagnostics } from './videoExecution.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
@@ -421,6 +424,7 @@ let resettingForTests = false;
 const testLifecycleDisposals = new Set();
 const laneOperations = new Set();
 let initPromise = null;
+let recoveryInventoryReady = false;
 // Shutdown latch (#8691): once set, nothing promotes a waiting job to running —
 // neither the worker nor Run Now — and nothing re-arms the worker. Waiting jobs
 // stay durably queued for the next process, which restores them untouched.
@@ -460,12 +464,29 @@ export function getJob(jobId) {
 // Completion hooks may attach a generated artifact to a domain record after
 // the audio worker has emitted its result. Persist that attachment on the job
 // too so a remounted client can discover the created track without guessing.
+const resultUpdates = new Map();
 export async function updateJobResult(jobId, patch) {
-  const job = findJob(jobId);
-  if (!job || !patch || typeof patch !== 'object') return false;
-  job.result = { ...(job.result || {}), ...patch };
-  await persist();
-  return true;
+  if (!patch || typeof patch !== 'object') return false;
+  const prior = resultUpdates.get(jobId) ?? Promise.resolve();
+  const pending = prior.catch(() => {}).then(async () => {
+    const job = findJob(jobId);
+    if (!job) return false;
+    const archiveIndex = archive.indexOf(job);
+    const previous = job.result;
+    const next = { ...(previous || {}), ...patch };
+    job.result = next;
+    try { await persist(); return true; }
+    catch (error) {
+      if (job.result === next) {
+        job.result = previous;
+        if (archiveIndex >= 0 && !archive.includes(job)) archive.splice(Math.min(archiveIndex, archive.length), 0, job);
+      }
+      throw error;
+    }
+  });
+  resultUpdates.set(jobId, pending);
+  try { return await pending; }
+  finally { if (resultUpdates.get(jobId) === pending) resultUpdates.delete(jobId); }
 }
 
 // Await this receipt before spawning a local video child. A rejected snapshot
@@ -1029,7 +1050,8 @@ async function restorePersistedJob(persisted) {
     archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
     return { failedId: j.id };
   }
-  if (j.status === 'running' && maintenance.held()) {
+  const manualUpdate = maintenance.status().hold?.owner === 'manual-update';
+  if (j.status === 'running' && maintenance.held() && !manualUpdate) {
     maintenance.recoverOwned('media', j.id);
     const reattach = await reattachSurvivingTrainer(j);
     if (reattach) {
@@ -1107,6 +1129,10 @@ async function restoreInterruptedRunningJob(j) {
   // cycle. Falls through to the fail path when nothing survived.
   const reattach = await reattachSurvivingTrainer(j);
   if (reattach) {
+    if (maintenance.held()) {
+      maintenance.recoverOwned('media', j.id);
+      recoveringJobs.add(j.id);
+    }
     console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
     return { reattach };
   }
@@ -1145,6 +1171,10 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
       // indication that repairing or deleting one file restores it.
       console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting so it is preserved; repair or delete it and restart to re-enable persistence`);
     }
+    if (ok && !Array.isArray(data?.jobs)) {
+      persistBlocked = true;
+      console.error('❌ media-job queue: invalid jobs snapshot — preserving it for recovery');
+    }
     if (!restoreQuotaCooldowns(data?.quotaCooldowns)) {
       // Same latch as a malformed hold: preserve the file rather than
       // overwriting it, but boot normally with no cooldown in force.
@@ -1175,7 +1205,9 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
     // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
     // initLoraTraining.) This runs before the worker starts, so every dir
     // present is an orphan from the prior process.
-    const videoReap = maintenance.held() ? { reaped: 0 }
+    // Acknowledged manual updates use normal restart recovery: owned orphan
+    // videos are reaped and interrupted jobs fail honestly; queues survive.
+    const videoReap = maintenance.held() && maintenance.status().hold?.owner !== 'manual-update' ? { reaped: 0 }
       : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const persisted of persistedJobs) {
@@ -1232,8 +1264,18 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
       await persist();
       startWorker();
     }
+    recoveryInventoryReady = true;
   })();
   return initPromise;
+}
+
+// A queued recovery can still own a remote or detached job, and a terminal
+// callback can still be publishing after its visible status changed.
+export function getMediaRecoveryActivity() {
+  const jobs = listJobs();
+  const pending = pendingTransitions.size > 0 || terminalOperations.size > 0 || dispatchOperations.size > 0
+    || recoveringJobs.size > 0 || jobs.some(mediaRecoveryPending);
+  return { trusted: recoveryInventoryReady && !persistBlocked, pending };
 }
 
 function startWorker() {
@@ -1587,7 +1629,7 @@ export async function importArchivedJobs(records) {
 // should cancel them first.
 export function removeArchivedJob(jobId) {
   const idx = archive.findIndex((j) => j.id === jobId);
-  if (idx < 0 || archive[idx].durabilityPending || archive[idx].params?.remotePeerReservation === true || archive[idx].result?.topazUncertain === true) return false;
+  if (idx < 0 || resultUpdates.has(jobId) || archive[idx].durabilityPending || archive[idx].params?.remotePeerReservation === true || archive[idx].result?.topazUncertain === true) return false;
   archive.splice(idx, 1);
   // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
   // window before dropping the entry — a bare `sseJobs.delete()` here would
@@ -2309,6 +2351,15 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   if (!JOB_KINDS.includes(kind)) {
     throw new Error(`enqueueJob: invalid kind '${kind}'`);
   }
+  if (kind === 'image' && !isRemoteMediaJob({ kind, params }) && !CLOUD_IMAGE_GEN_MODES.includes(params?.mode)
+    && params?.referenceImagePaths?.length && (params.initImagePath || params.loraFilenames?.length || params.loraPaths?.length)) {
+    const { getImageModels } = await import('../../lib/mediaModels.js');
+    const model = getImageModels().find(entry => entry.id === (params.modelId ?? LOCAL_IMAGEGEN_DEFAULT_MODEL));
+    assertFlux2InputsCompatible(model, {
+      hasInitImage: Boolean(params.initImagePath), referenceCount: params.referenceImagePaths.length,
+      loraCount: (params.loraFilenames?.length || 0) + (params.loraPaths?.length || 0),
+    });
+  }
   assertMediaQueueRoom(1);
   const id = randomUUID();
   let preparedParams = params;
@@ -2633,6 +2684,7 @@ export async function __resetForTests() {
   dispatchQuiesced = false;
   resettingForTests = false;
   initPromise = null;
+  recoveryInventoryReady = false;
   // Reset the lane limit too — a test that called setCodexParallelLimit(N)
   // otherwise leaks N into subsequent tests and makes ordering matter.
   codexParallelLimit = CODEX_PARALLEL_DEFAULT;

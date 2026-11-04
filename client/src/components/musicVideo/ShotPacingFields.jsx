@@ -2,7 +2,7 @@
 // by the input rather than applied locally and then rejected by the server.
 const PACING_FIELDS = [
   ['minShotSec', 'Shortest shot (s)', 'Floor for a planned shot; a shorter section stays one shot.', 0.5, 60],
-  ['maxShotSec', 'Longest shot (s)', 'Ceiling for a planned shot, never longer than one generated clip (5s local, 6/10s Grok).', 1, 120],
+  ['maxShotSec', 'Longest shot (s)', 'Ceiling for a planned shot; 3s when blank, about one bar. Never longer than one generated clip (5s local, 6/10s Grok).', 1, 120],
   ['hookSec', 'Opening hook (s)', 'Cap on the very first shot so the video opens on a cut.', 0.5, 60],
 ];
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVideoFileSrc } from './useVideoFileSrc.js';
-import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate } from '../lib/musicVideoLayers.js';
+import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate, sceneUsesAuthoredTiming } from '../lib/musicVideoLayers.js';
 import { selectedPerformanceInstruction } from '../lib/musicVideoShotTiming.js';
 
 /** A shot's native clip metadata and render-adjusted coverage. Keep mounted with the card. */
@@ -20,7 +20,7 @@ export default function useSceneClipPlayback(scene) {
   const edit = selectedPerformanceInstruction(scene)?.edit;
   const canLoop = clipCanLoop(scene, edit);
   const loops = clipLoops(scene, edit);
-  const spanSec = scene.beatAligned && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
+  const spanSec = sceneUsesAuthoredTiming(scene) && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     ? scene.endSec - scene.startSec
     : null;
   const clipRate = clipSpeedRate(scene);

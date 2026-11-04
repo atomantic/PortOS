@@ -1,13 +1,16 @@
 /** Owned Blender driver. Package source only supplies build_scene(config). */
+import { BLENDER_COMPAT_PY } from '../../lib/blenderVersion.js';
+
 export const BLENDER_DRIVER = String.raw`import bpy, json, os, runpy, math
+${BLENDER_COMPAT_PY}
 root = os.environ['PORTOS_WORKER_INPUT']
 out = os.environ['PORTOS_WORKER_OUTPUT']
 with open(os.path.join(root, 'portos-render.json')) as handle:
     config = json.load(handle)
-if bpy.app.version_string != config['version']:
+if portos_version() != config['version']:
     raise RuntimeError('Blender version does not match checked runtime')
 bpy.ops.wm.read_factory_settings(use_empty=True)
-namespace = runpy.run_path(os.path.join(root, config['entrypoint']))
+namespace = runpy.run_path(os.path.join(root, config['entrypoint']), init_globals={'action_fcurves': action_fcurves})
 if not callable(namespace.get('build_scene')):
     raise RuntimeError('Scene entrypoint must define build_scene(config)')
 namespace['build_scene'](config)
@@ -21,7 +24,7 @@ for obj in scene.objects:
 for group in bpy.data.node_groups:
     if any(node.bl_idname.startswith('GeometryNodeSimulation') for node in group.nodes):
         raise RuntimeError('Bake Geometry Nodes simulations into immutable geometry/keyframes')
-scene.render.engine = config['engine']
+portos_set_engine(scene, config['engine'])
 scene.cycles.device = 'CPU'
 scene.cycles.samples = config['samples']
 scene.cycles.seed = config['seed']
@@ -48,7 +51,7 @@ if not subjects:
     raise RuntimeError('Tag at least one baked subject/FX object with portos_cadence=2 or 3')
 for obj in subjects:
     step = int(obj['portos_cadence'])
-    curves = obj.animation_data.action.fcurves if obj.animation_data and obj.animation_data.action else []
+    curves = action_fcurves(obj)
     if not curves or any(p.interpolation != 'CONSTANT' or (round(p.co.x) - 1) % step != 0 for c in curves for p in c.keyframe_points):
         raise RuntimeError('Stepped subjects/FX need constant keys on their declared cadence')
     # Cycles excludes held subjects from shutter interpolation. EEVEE motion
@@ -58,7 +61,7 @@ for obj in subjects:
         child.cycles.use_motion_blur = False
 if config['engine'] != 'CYCLES':
     scene.render.use_motion_blur = False
-camera_curves = scene.camera.animation_data.action.fcurves if scene.camera.animation_data and scene.camera.animation_data.action else []
+camera_curves = action_fcurves(scene.camera)
 if not camera_curves or any(p.interpolation == 'CONSTANT' for c in camera_curves for p in c.keyframe_points):
     raise RuntimeError('Camera needs continuous, non-constant baked keyframes')
 # Measure evaluated transforms across EVERY frame, rather than trusting tags.
@@ -91,7 +94,7 @@ device, backend = 'CPU', 'CPU'
 if config['engine'] != 'CYCLES':
     import gpu
     device, backend = 'GPU', gpu.platform.backend_type_get()
-report = dict(version=bpy.app.version_string, engine=scene.render.engine, device=device, backend=backend,
+report = dict(version=portos_version(), engine=config['engine'], device=device, backend=backend,
     width=scene.render.resolution_x, height=scene.render.resolution_y, fps=scene.render.fps,
     frames=config['frames'], frameCount=config['frameCount'], samples=config['samples'], seed=scene.cycles.seed,
     cadence=[dict(name=o.name, step=int(o['portos_cadence']), holdsVerified=True, motionBlur=False) for o in subjects],

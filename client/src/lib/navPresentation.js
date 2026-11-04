@@ -274,6 +274,7 @@ export const NAV_PRESENTATION = {
   '/ai/services': { icon: Plug },
   '/settings/security': { icon: Lock },
   '/settings/sharing': { icon: Share2 },
+  '/settings/software': { icon: Package },
   '/settings/telegram': { icon: MessageSquare },
   '/settings/voice': { icon: Mic },
   '/digital-twin/accounts': { icon: Globe },

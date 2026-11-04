@@ -250,7 +250,7 @@ export function RenderStyleSelect({ project, onRenderStyle }) {
 /** Render the complete video, or cancel the render in flight for this project. */
 export function RenderFinalButton({ project, renderJob, readiness }) {
   // A composed render reuses every shot already rendered and stitches.
-  const { status: shotRenders } = useMusicVideoShotRenders(project);
+  const { status: shotRenders, retry: retryShotRenders } = useMusicVideoShotRenders(project);
   const finalCurrent = isFinalRenderCurrent(project);
   const scenes = project.scenes || [];
   const sceneCount = scenes.length;
@@ -324,6 +324,14 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
           {shotRenders.ready === shotRenders.total ? 'Every shot is ready: Render final only stitches them.'
             : `${formatCount(shotRenders.ready)} of ${formatCount(shotRenders.total)} ${shotRenders.outro ? 'shots and the outro card' : 'shots'} ready. Render final renders the rest, then stitches.`}
         </p>
+      )}
+      {!finalCurrent && shotRenders?.error && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-port-warning" data-testid="shot-renders-error">
+          <span role="status">{shotRenders.error.message}</span>
+          <button type="button" onClick={() => retryShotRenders?.()} className="min-h-[44px] underline hover:text-port-warning/80 sm:min-h-0">
+            Retry
+          </button>
+        </div>
       )}
     </div>
   );

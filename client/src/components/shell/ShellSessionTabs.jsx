@@ -68,7 +68,7 @@ export default function ShellSessionTabs({ sessions, activeSessionId, onSwitch, 
       })}
       <button
         onClick={onNew}
-        className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:text-white hover:bg-port-border rounded transition-colors min-h-[40px] shrink-0"
+        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:text-white hover:bg-port-border rounded transition-colors min-h-[40px] shrink-0"
         title="New session" aria-label="New session"
       >
         <Plus size={14} />

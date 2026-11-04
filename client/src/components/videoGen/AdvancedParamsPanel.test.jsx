@@ -371,21 +371,26 @@ describe('AdvancedParamsPanel — speed profiles', () => {
   const h3 = { runtime: 'minimax_h3_cuda', samplerLocked: true, steps: 8, guidance: 0,
     supportedModes: ['text', 'image', 'fflf'], speedProfiles: [H3_PROFILE] };
 
-  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('offers %s on a locked stock sampler and downloads only on a click', (type) => {
+  it.each([
+    ['minimax-h3-lightx2v', 1383677808, 'Download (~1.38 GB adapter)'],
+    ['minimax-h3-mlx-lightx2v', 1383677808, 'Download (~1.38 GB adapter)'],
+    ['minimax-h3-mlx-flex', 2767274120, 'Download (~2.77 GB adapter)'],
+    ['minimax-h3-mlx-flex', undefined, 'Download'],
+  ])('offers %s with its declared download size and downloads only on a click', (type, sizeBytes, downloadLabel) => {
     const onDownload = vi.fn();
-    renderPanel({ currentModel: { ...h3, runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type }] }, speedProfileId: H3_PROFILE.id,
+    renderPanel({ currentModel: { ...h3, runtime: type.includes('mlx') ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type, adapter: { ...H3_PROFILE.adapter, sizeBytes } }] }, speedProfileId: H3_PROFILE.id,
       speedProfileStatus: { cached: false }, onSpeedProfileDownload: onDownload, width: 1344, height: 768 });
     expect(screen.getByLabelText('Speed').value).toBe(H3_PROFILE.id);
     expect(screen.getByText(/alpha 8\/rank 128/)).toBeTruthy();
     expect(onDownload).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /download.*adapter/i }));
+    fireEvent.click(screen.getByRole('button', { name: downloadLabel }));
     expect(onDownload).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText(/Steps/).disabled).toBe(true);
   });
 
-  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v'])('retains an incompatible %s selection visibly and leaves Quality reachable', (type) => {
+  it.each(['minimax-h3-lightx2v', 'minimax-h3-mlx-lightx2v', 'minimax-h3-mlx-flex'])('retains an incompatible %s selection visibly and leaves Quality reachable', (type) => {
     const onChange = vi.fn();
-    renderPanel({ currentModel: { ...h3, runtime: type === 'minimax-h3-mlx-lightx2v' ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type }] }, mode: 'fflf', speedProfileId: H3_PROFILE.id, onSpeedProfileChange: onChange });
+    renderPanel({ currentModel: { ...h3, runtime: type.includes('mlx') ? 'minimax_h3' : 'minimax_h3_cuda', speedProfiles: [{ ...H3_PROFILE, type }] }, mode: 'fflf', speedProfileId: H3_PROFILE.id, onSpeedProfileChange: onChange });
     const select = screen.getByLabelText('Speed');
     expect(select.value).toBe(H3_PROFILE.id);
     expect(screen.getByRole('alert').textContent).toContain('1344×768');

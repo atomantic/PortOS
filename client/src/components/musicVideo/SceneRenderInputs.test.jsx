@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
+import { previewVideoPrompt } from '../../services/apiImageVideo.js';
+
+vi.mock('../../services/apiImageVideo.js', () => ({ previewVideoPrompt: vi.fn() }));
 
 const models = [
   { id: 'ltx25_example', name: 'LTX-2.5 Example', runtime: 'ltx25', supportedModes: ['text', 'image', 'fflf', 'a2v'] },
@@ -22,6 +25,19 @@ describe('shotCardRenderRequest', () => {
     expect(h3.promptAdditions).toContainEqual(expect.objectContaining({ id: 'prompt-expansion', text: expect.stringContaining('disabled') }));
     const hailuo = shotCardRenderRequest({ scene: scene(), settings: { backend: 'fal' } });
     expect(hailuo.promptAdditions.some((a) => a.id === 'prompt-expansion')).toBe(false);
+  });
+
+  it('shows the same named references the fal clip request will send', () => {
+    const project = { visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider' },
+      { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+    ] } };
+    const selected = scene({ clipReferenceIds: ['rider', 'bike'] });
+    const request = shotCardRenderRequest({ project, scene: selected, settings: { backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video' } });
+    expect(request.prompt).toContain('Image 1 is the reference for Rider. Image 2 is the reference for Bike.');
+    expect(request.promptAdditions).toContainEqual(expect.objectContaining({ id: 'clip-references' }));
+    const loose = shotCardRenderRequest({ project, scene: selected, settings: { backend: 'fal', falModelId: 'bytedance/seedance-2.5/reference-to-video' } });
+    expect(loose.prompt).toContain('Use @Image1 as the opening view. @Image2 is the reference for Rider. @Image3 is the reference for Bike.');
   });
 
   it('offers song audio for a cutaway on an LTX-2 model, off unless toggled, and drops the end frame with it', () => {
@@ -84,5 +100,21 @@ describe('SceneRenderInputs', () => {
     expect(screen.getByLabelText('Still').disabled).toBe(true);
     fireEvent.click(screen.getByLabelText('Song audio'));
     expect(onChange).toHaveBeenCalledWith({ songAudio: true });
+  });
+
+  it('shows the server preview of Grok cast instructions beside the shot prompt', async () => {
+    previewVideoPrompt.mockResolvedValueOnce({
+      backend: 'grok',
+      sentPrompt: 'Animate the still. <IMAGE_1> shows how Person looks. A person waves.',
+      promptAdditions: [{ id: 'agent-instructions', label: 'Grok video tool instructions', text: 'Use the cast reference.' }],
+    });
+    const request = shotCardRenderRequest({ scene: scene({ prompt: 'A person waves' }), settings: { backend: 'grok' } });
+    const grokPreview = { backend: 'grok', prompt: request.authored, sourceImageFile: 'still.png',
+      musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+    render(<SceneRenderInputs id="card" request={request} onChange={vi.fn()} grokPreview={grokPreview} />);
+    expect(await screen.findByRole('button', { name: '+ Grok video tool instructions' })).toBeTruthy();
+    expect(previewVideoPrompt).toHaveBeenCalledWith(grokPreview, { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+    expect(screen.getByText(/<IMAGE_1> shows how Person looks/)).toBeTruthy();
   });
 });

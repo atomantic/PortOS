@@ -139,7 +139,25 @@ describe('treatment compile', () => {
       expect(proof.passCriteria.length).toBe(proof.checks.length);
     }
     expect(stored.proofs[1].checks).toEqual(expect.arrayContaining(['cut-continuity', 'audio-alignment']));
-    expect(stored.capabilityGaps.map((g) => g.id)).toEqual(expect.arrayContaining(['lip-sync', 'aspect-ratio']));
+    expect(stored.capabilityGaps.map((g) => g.id)).toContain('aspect-ratio');
+    expect(stored.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
+  });
+
+  it('keeps sung cutaways out of performance directions and preserves only explicitly selected performance shots', async () => {
+    const project = await plannedProject({ backend: 'fal' });
+    expect(project.scenes.every((scene) => scene.shotMode === 'cutaway')).toBe(true);
+    const cutaway = await compile(project.id, { baseRevision: 0, useAi: false });
+    expect(cutaway.status).toBe(200);
+    expect(cutaway.body.treatment.shotDirections.every((direction) => direction.mode !== 'performance')).toBe(true);
+    expect(cutaway.body.treatment.arc.balance.performance).toBe(0);
+
+    const performing = project.scenes.findLast((scene) => scene.lyricText);
+    await projects.updateScene(project.id, performing.sceneId, { shotMode: 'performance' });
+    const mixed = await compile(project.id, { baseRevision: cutaway.body.treatment.revision, useAi: false });
+    expect(mixed.status).toBe(200);
+    expect(mixed.body.treatment.shotDirections.filter((direction) => direction.mode === 'performance').map((direction) => direction.sceneId))
+      .toEqual([performing.sceneId]);
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
   });
 
   it('keeps an instrumental song free of lyric interpretation, typography and lip-sync promises', async () => {
@@ -371,7 +389,8 @@ describe('treatment apply', () => {
 describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer)', () => {
   it('states the lip-sync gap for a backend without it and never marks scenes as performances there', async () => {
     const project = await plannedProject({ backend: 'grok' });
-    const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
+    runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ shots: [{ index: 0, mode: 'performance', focalSubject: 'Example performer' }] }) });
+    const { body } = await compile(project.id, { baseRevision: 0 });
     const gap = body.treatment.capabilityGaps.find((g) => g.id === 'lip-sync');
     expect(gap.detail).toMatch(/fal\.ai/);
     const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: body.treatment.revision });
@@ -381,7 +400,9 @@ describe('treatment → scene render fields (#8977 shot mode, #8985 visual layer
 
   it('maps performance direction onto shotMode on a lip-sync backend and proves sync in the render', async () => {
     const project = await plannedProject({ backend: 'fal' });
-    const { body } = await compile(project.id, { baseRevision: 0, useAi: false });
+    const sungIndex = project.scenes.findIndex((scene) => scene.startSec >= 22 && scene.lyricText);
+    runPromptThroughProvider.mockResolvedValueOnce({ text: JSON.stringify({ shots: [{ index: sungIndex, mode: 'performance', focalSubject: 'Example performer' }] }) });
+    const { body } = await compile(project.id, { baseRevision: 0 });
     expect(body.treatment.capabilityGaps.map((g) => g.id)).not.toContain('lip-sync');
     const riskShot = body.treatment.proofs.find((p) => p.kind === 'risk-shot');
     expect(riskShot.checks).toContain('lip-sync');
@@ -585,7 +606,7 @@ describe('code-first medium planning (#9299)', () => {
     return compiled.body.project;
   }
 
-  it('persists a zero-video plan, shows unmet performance, and applies without changing manual prompts, takes or renderer', async () => {
+  it('persists a zero-video cutaway plan without inventing performance, and applies without changing manual prompts, takes or renderer', async () => {
     const project = await hundredSecondPlan();
     let treatment = project.treatment;
     expect(treatment.shotDirections.map((d) => d.medium)).not.toContain('generated-footage');
@@ -601,7 +622,7 @@ describe('code-first medium planning (#9299)', () => {
     const before = await reload(project.id);
     const preview = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
     expect(preview.body.mediumPlan).toMatchObject({ generatedSec: 0, allowedGeneratedSec: 0, blocked: false });
-    expect(preview.body.mediumPlan.unresolved).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringMatching(/performance is unresolved/) })]));
+    expect(preview.body.mediumPlan.unresolved).toEqual([]);
     expect(preview.body.scenes.every((s) => Object.keys(s.renderFields).length === 0)).toBe(true);
     const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: treatment.revision });
     expect(applied.status).toBe(200);

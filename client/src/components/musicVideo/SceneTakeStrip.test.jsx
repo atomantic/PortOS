@@ -1,3 +1,4 @@
+import { plateReviewEvidence, plateRequirements } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
@@ -21,4 +22,17 @@ describe('rejecting a take versus marking it bad', () => {
     fireEvent.click(toggle);
     expect(onMark).toHaveBeenLastCalledWith(scene.takes[1], null);
   });
+});
+
+// Uniquely pins the displayed defect and exact acknowledgement payload on the take the operator saw.
+it('shows a rendering defect with an acknowledgement bound to that image and note', () => {
+  const selected = { ...scene, framePrompt: 'A desk with a chair', takes: [take('t1', 'a.png')] };
+  selected.takes[0].plateEvidence = plateReviewEvidence(selected, 'a.png', 'run-example', JSON.stringify({ checks: plateRequirements(selected).map(({ id }) => ({
+    id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'The chair is fused into the desk.' : 'Matches',
+  })) }));
+  const onReview = vi.fn();
+  render(<SceneTakeStrip scene={selected} kind="image" onReview={onReview} />);
+  expect(screen.getByText('Rendering defect: The chair is fused into the desk.')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Acknowledge rendering defect' }));
+  expect(onReview).toHaveBeenCalledWith(selected.takes[0], { acknowledgeRenderQuality: { basis: selected.takes[0].plateEvidence.basis, note: 'The chair is fused into the desk.' } });
 });

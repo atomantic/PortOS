@@ -296,7 +296,10 @@ Both encoders use the same bounded RGB curves and deterministic, song-time
 frame-addressed grain. Composed footage is graded before typography, and
 excerpt trimming happens after grading. Document captures receive the same
 filter before encoding, with the excerpt offset and document frame rate, so
-section changes and grain stay on the song clock. Black/white endpoints are
+section changes and grain stay on the song clock. On a wipe between two sections
+with different looks, the encoder masks each wipe frame so the part still
+showing the outgoing scene takes that scene's look, lettering included; a wipe
+between sections with one look renders as if the mask did not exist. Black/white endpoints are
 preserved to keep document lettering readable. Source assets are unchanged;
 selecting a grade does not infer a look from references or invoke a provider.
 Saving the selection gates rendering until the server has accepted it.
@@ -475,18 +478,58 @@ snapshot freezes (`server/services/musicVideo/documentRender.js`):
   { width, height, fps, frames, durationSec }, song: { durationSec, bpm, beats,
   downbeats, sections, words }, lyrics, lyricMarkers, scenes: [{ sceneId,
   label, startSec, endSec, shotMode, visualLayer, stillMove, cardText,
-  cardColor, textZone, lyricRole, lyricSize, lyricText, direction, media: { kind, src, inSec, outSec, fps,
+  cardColor, textZone, lyricRole, lyricSize, lyricText, lyricAnchor?, direction, media: { kind, src, inSec, outSec, fps,
   width, height } | null }], titleCard: { position, windows: [{ startSec, endSec }] }
   | null, textCues, composition: { mode, style, posterSec, overlay } }`. Load it with `<script src="portos-mv.js">`; the sandbox
   refuses `fetch`.
+  A shot cut on a sung word carries `lyricAnchor: { cueId, wordIndex,
+  wordCount, onsetSec, text }`: the words it was cut on and where they are
+  sung now (`onsetSec` is null when they lost their timing), so a composition
+  can key a reveal to that word. Document shot manifests accept the same
+  `lyricAnchor: { cueId, wordIndex, wordCount? }` on a shot, and the
+  storyboard check names a shot whose start is no longer on its word.
   A shot's `speedFps`/`offsetFrames` are baked into the staged clip, so a render
   seeks `media.inSec + (t - startSec)`. The live preview bridges the original
   bytes instead: its `media` keeps source-time `inSec`/`outSec` and adds
   `timing: { rate, leadSec, startSec }` (only for a retimed shot), and the page
   seeks `startSec + max(0, (t - scene.startSec) - leadSec) * rate`.
 - `song.json` — the same song block the code-rendered mode reads.
-- `media/scene-<sceneId>.<ext>` — each scene's selected take (its clip when
-  it has one, else its still), named by `scenes[].media.src`.
+- `media/scene-<sceneId>.<ext>` — each scene's selected take, named by
+  `scenes[].media.src`. A selected still effect or photo sequence uses the
+  still even if the shot retains a clip; otherwise a clip takes precedence.
+
+Selected still effects also carry `scenes[].imageEffect` and, when an end
+image exists, `scenes[].media.end.src` naming its staged file. `effectFrames`
+lists the selected cut, end-glitch and in-shot effect parameters by absolute
+song frame. The layered template blends the end image using
+`imageEffectState(spec, shotFrame / fps, { fps })` from
+`musicVideoImageEffects.js`, then paints a matching effect frame with
+`globalThis.__portosMusicVideoGlitch(canvas, params, frame)`. PortOS installs
+that painter in the sandbox when the edit has selected glitches.
+
+A wipe on a cut (`server/lib/musicVideoWipes.js`: shape, pattern and move
+wipes) arrives on the scene it runs into as `scenes[].wipe = { style, frames,
+lengthSec, cutFrame, fromSceneId, color }`, with `color` as `#rrggbb` or null.
+It adds no time: from `cutFrame` the incoming scene's clock runs as usual, and
+for `frames` frames the outgoing scene's last frame, held, gives way to it.
+When the edit has wipes PortOS installs
+`globalThis.__portosMusicVideoWipe(ctx, { outgoing, incoming, style, index,
+frames, color, width, height })`, which draws wipe frame `index` from two
+drawables already fitted to the frame. It is the same definition the final
+render's ffmpeg filter and the storyboard animatic paint, so a document that
+calls it shows the chosen wipe with no code of its own. A cut carries a glitch
+or a wipe, never both (the outgoing shot's choice wins).
+
+Custom documents declare which selected effects they implement with
+`// portos-selected-effects: N` in `engine.js` or
+`<!-- portos-selected-effects: N -->` in `index.html`: level 1 covers cut
+glitches, end-image effects and in-shot glitches; level 2 adds wipes.
+
+An older document that does not declare this support is refused when selected
+effects need it, rather than silently omitting them. In **Document source**,
+**Update layered engine** adopts an unmodified shipped layered engine as a new
+document version; customized engines remain untouched and need their own
+implementation. Updating invalidates earlier render-review evidence.
 
 Staged audio/video is streamed from disk by byte range rather than held in
 memory, so a song's worth of footage fits. The document stays on song time:

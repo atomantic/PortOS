@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { manualUpdateBlockers } from '../lib/systemIdle.js';
 
 const deps = vi.hoisted(() => ({
   capability: vi.fn(), utilization: vi.fn(), jobs: vi.fn(), running: vi.fn(), models: vi.fn(), loaded: vi.fn(), tasks: vi.fn(), status: vi.fn(), agents: vi.fn(),
   mind: vi.fn(), operations: vi.fn(), updating: vi.fn(), runCount: vi.fn(), backupRunning: vi.fn(),
+  capacity: vi.fn(), modelCount: vi.fn(), mindRunning: vi.fn(), runnerAgents: vi.fn(),
 }));
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability, getCudaUtilization: deps.utilization }));
-vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running }));
+vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running, getQueueCapacity: deps.capacity }));
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
-vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models }));
+vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models, getActiveModelOperationCount: deps.modelCount }));
+vi.mock('./persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: deps.mindRunning }));
+vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: deps.runnerAgents }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: () => null }));
 vi.mock('./cosTaskStore.js', () => ({ getPendingTaskIds: deps.tasks }));
 vi.mock('./cos.js', () => ({ getStatus: deps.status }));
@@ -32,6 +36,63 @@ describe('active processing snapshot', () => {
     deps.updating.mockReturnValue(false);
     deps.runCount.mockResolvedValue(0);
     deps.backupRunning.mockReturnValue(false);
+    deps.capacity.mockReturnValue({ byKind: {} }); deps.modelCount.mockReturnValue(0);
+    deps.mindRunning.mockReturnValue(false); deps.runnerAgents.mockResolvedValue([]);
+  });
+
+  it('does not confuse saved running records or failed status reads with observed manual-update work', async () => {
+    deps.jobs.mockReturnValue([{ id: 'lost', kind: 'image', status: 'running', params: {} }]);
+    deps.models.mockResolvedValue([{ id: 'lost-model' }]); deps.tasks.mockResolvedValue([]);
+    deps.agents.mockResolvedValue([{ id: 'lost-agent', status: 'running' }]);
+    deps.mind.mockResolvedValue({ trusted: true, persistentMind: { activeTurn: { id: 'lost-turn' } } });
+    deps.backupRunning.mockImplementation(() => { throw new Error('Status unavailable'); });
+    const { getSystemActivity } = await import('./activeProcessing.js');
+    const snapshot = await getSystemActivity({ includeUpdateOwnership: true });
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.backup.inProgress).toBe(true);
+    expect(manualUpdateBlockers(snapshot)).toEqual([]);
+  });
+
+  it('warns about current execution handles, including a fresh runner and provider call', async () => {
+    deps.capacity.mockReturnValue({ byKind: { image: { running: 1 } } });
+    deps.modelCount.mockReturnValue(1); deps.mindRunning.mockReturnValue(true);
+    deps.runnerAgents.mockResolvedValue([{ id: 'real-agent', processActive: true }, { id: 'lost-agent', processActive: false }]);
+    deps.runCount.mockResolvedValue(1); deps.backupRunning.mockReturnValue(true);
+    const { getObservedUpdateActivity } = await import('./activeProcessing.js');
+    const kinds = manualUpdateBlockers(await getObservedUpdateActivity()).map(blocker => blocker.kind);
+    expect(kinds).toEqual(['media-running:image', 'image-to-3d', 'agents-running', 'mind-thinking', 'llm-running', 'backup-running']);
+  });
+
+  it('counts a direct Codex subscription call outside the toolkit and rejects a new call behind the update fence', async () => {
+    deps.jobs.mockReturnValue([]); deps.models.mockResolvedValue([]); deps.tasks.mockResolvedValue([]); deps.agents.mockResolvedValue([]);
+    const codex = await import('./codexAppServer.js');
+    let complete;
+    const turn = vi.spyOn(codex, 'runCodexTextTurn').mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const { callProviderAISimple } = await import('./aiProvider.js');
+    const { maintenance } = await import('../lib/maintenanceAdmission.js');
+    const provider = { id: 'codex', type: 'cli', command: 'codex', textTransport: 'codex-app-server',
+      textTransportEnabled: true, textTransportReadRiskAcknowledged: true };
+    const call = callProviderAISimple(provider, 'example', 'Example text');
+    let hold;
+    try {
+      await vi.waitFor(() => expect(turn).toHaveBeenCalledOnce());
+      const { getSystemActivity } = await import('./activeProcessing.js');
+      const snapshot = await getSystemActivity();
+      expect(await deps.runCount.mock.results.at(-1).value).toBe(0);
+      expect(snapshot.llm).toMatchObject({ trusted: true, active: 1, directCallsTracked: true });
+      expect(snapshot.activity.idle).toBe(false);
+      expect(maintenance.operations()).toContainEqual(expect.objectContaining({ kind: 'api-run', pid: process.pid }));
+      ({ hold } = maintenance.begin({ owner: 'manual-update', reason: 'Update' }));
+      await expect(callProviderAISimple(provider, 'example', 'New text')).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+      expect(turn).toHaveBeenCalledOnce();
+      complete({ text: 'Done', usage: {} });
+      await call;
+      expect((await getSystemActivity()).llm.active).toBe(0);
+    } finally {
+      complete?.({ text: 'Done', usage: {} }); await call;
+      if (hold) maintenance.resume({ id: hold.id, revision: hold.revision });
+      turn.mockRestore();
+    }
   });
 
   it('reports sanitized audio work, GPU utilization, and non-media extras', async () => {

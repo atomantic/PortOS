@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// resolveCaptionModel takes an injectable `listVision`, so the resolution
-// branches are testable without touching the network/DB. The module still
-// pulls in localLlm transitively at import; that's import-only (no calls fire
-// until resolveCaptionModel runs with our stub), so no mocks are needed.
+// Capability IO is doubled; model resolution and caption contracts run normally.
+vi.mock('./localLlm.js', () => ({
+  getModelVisionSupport: vi.fn(async () => null),
+  listVisionModels: vi.fn(async () => []),
+}));
 const {
   resolveCaptionModel, buildCaption, withCaptionVisionLock, buildCaptionPrompt, CAPTION_PROMPT,
 } = await import('./loraDatasetCaption.js');
@@ -39,11 +40,11 @@ const VISION = [
 ];
 
 describe('resolveCaptionModel', () => {
-  it('short-circuits an explicit regex-recognized vision model WITHOUT scanning', async () => {
+  it('retains an explicit known-family model when capability metadata is unavailable', async () => {
     const listVision = vi.fn(async () => VISION);
     const out = await resolveCaptionModel({ providerId: 'ollama', model: 'llava:latest', listVision });
     expect(out).toEqual({ providerId: 'ollama', model: 'llava:latest' });
-    expect(listVision).not.toHaveBeenCalled(); // heuristic-first fast path
+    expect(listVision).not.toHaveBeenCalled();
   });
 
   it('accepts an explicit opaque id that the live scan confirms is vision-capable', async () => {

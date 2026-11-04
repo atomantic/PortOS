@@ -93,6 +93,27 @@ describe('IngredientPicker', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('loads later pages and retains selected rows when a page fails and is retried', async () => {
+    const first = Array.from({ length: 50 }, (_, i) => ({ id: `item-${i}`, name: `Item ${i}`, type: 'object', payload: {} }));
+    listCatalogIngredients.mockImplementation(({ offset }) => {
+      if (!offset) return Promise.resolve({ items: first, nextOffset: 50 });
+      return Promise.reject(new Error('later page unavailable'));
+    });
+    const onSelect = vi.fn();
+    renderPicker({ multi: true, onSelect });
+    fireEvent.click(await screen.findByLabelText('Select Item 0'));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more ingredients' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('later page unavailable');
+    expect(screen.getByLabelText('Select Item 0')).toBeChecked();
+    listCatalogIngredients.mockResolvedValue({ items: [{ id: 'item-50', name: 'Older item', type: 'object', payload: {} }], nextOffset: 51 });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+    fireEvent.click(await screen.findByLabelText('Select Older item'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Selected' }));
+    expect(onSelect).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({ id: 'item-0' }), expect.objectContaining({ id: 'item-50' }),
+    ]));
+  });
+
   it('renders the empty state with a link to the catalog when nothing matches', async () => {
     listCatalogIngredients.mockResolvedValue({ items: [] });
     renderPicker();

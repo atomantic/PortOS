@@ -14,7 +14,8 @@ import { captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/
 import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 
 const SONG_SAMPLE_RATE = 48000;
@@ -29,7 +30,7 @@ async function silentMusicVideoMotionPrompt(prompt, project, scene) {
 }
 
 /** Rewrites `params.prompt` for the shot and returns the labeled additions the composer put around it. */
-async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox }) {
+export async function composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox }) {
   const { musicVideo } = body;
   // A take that hears nothing (no lip-sync or supplied song audio) gets plain physical
   // motion: the model would act out song cues and look words instead of reading them.
@@ -132,6 +133,8 @@ function stampSceneTakeCost({ body, params, scene, project, performance, backend
   const quote = SCENE_TAKE_BY_BACKEND[backend];
   if (!scene || !quote || body.musicVideo.productionRunId) return;
   const { costUsd, modelId } = quote({ body, scene, project, performance });
+  // The H3 output rate does not include shape-dependent reference-image fees.
+  if (modelId === 'minimax/h3-max/reference-to-video' && params.referenceImagePaths?.length) return;
   if (Number.isFinite(costUsd)) Object.assign(params, { musicVideoCostUsd: costUsd, musicVideoCostModelId: modelId });
 }
 
@@ -150,12 +153,34 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   }
   const { getProject } = await import('./projects.js');
   const project = await getProject(musicVideo.projectId);
+  const run = musicVideo.productionRunId && project?.productionRuns?.find((entry) => entry.id === musicVideo.productionRunId);
+  if (run?.limits?.spendCapUsd != null && backend === VIDEO_GEN_MODE.FAL
+    && params.modelId === 'minimax/h3-max/reference-to-video' && params.referenceImagePaths?.length) {
+    refuse(409, 'PRODUCTION_COST_UNKNOWN', 'The selected H3 reference-image cost is unknown, so this run\'s dollar cap cannot price the clip.');
+  }
   // A brief that names tools and no video tool never dispatches generated footage;
   // an approved plan or sheet stays as saved until the director replans.
   if (project && !musicVideoBriefAllowsVideo(project)) {
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.');
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
+  if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
+    const actual = backend === VIDEO_GEN_MODE.GROK ? (params.castReferences || []).map((ref) => basename(ref.path))
+      : (params.referenceImagePaths || []).map((path) => basename(path));
+    if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
+      refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed or could not be loaded. Review them and render again.');
+    }
+  }
+  if (musicVideo.expectedShot) {
+    const preparedShot = !performance ? 'cutaway' : performance.shotInstruction?.performanceStyle === 'music' ? 'music' : 'lipsync';
+    if (sceneRenderShot(scene) !== musicVideo.expectedShot || preparedShot !== musicVideo.expectedShot) {
+      refuse(409, 'MUSIC_VIDEO_SHOT_TYPE_CHANGED', 'The shot type changed or has not saved yet — save it and submit again');
+    }
+  }
+  if (musicVideo.storyboardStill && (scene?.referenceImageId !== musicVideo.storyboardStill
+    || sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) !== 'footage')) {
+    refuse(409, 'MUSIC_VIDEO_STORYBOARD_STALE', 'The storyboard still or shot layer changed — submit the clip again');
+  }
   assertShotActionContract(scene);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);

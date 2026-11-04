@@ -535,7 +535,7 @@ describe('CoS Routes', () => {
       const response = await request(app).delete('/api/cos/tasks/task-001');
 
       expect(response.status).toBe(200);
-      expect(deleteTask).toHaveBeenCalledWith('task-001', 'user');
+      expect(deleteTask).toHaveBeenCalledWith('task-001', 'user', { releaseSynchronizationRetired: false });
     });
 
     it('should return 404 if task not found', async () => {

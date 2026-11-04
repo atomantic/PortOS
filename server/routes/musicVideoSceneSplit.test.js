@@ -112,14 +112,16 @@ describe('POST /:id/scenes/:sceneId/split', () => {
 
   // Uniquely catches a cut at a chosen time losing the director's still locks, or a new mid-song shot landing at the end of the board.
   it('cuts a shot in two at a chosen time, keeping its still locked on both pieces and the board in song order', async () => {
-    const { setShotLocks, shotLocks } = await import('../services/musicVideo/productionReview.js');
+    const { productionReviewBasis, shotLocks } = await import('../services/musicVideo/productionReview.js');
     const intro = await projects.addProjectScene(project.id, { label: 'Intro', startSec: 0, endSec: 10, prompt: 'Wide room' });
     const outro = await projects.addProjectScene(project.id, { label: 'Outro', startSec: 20, endSec: 30, prompt: 'Door' });
     // Added after the outro but timed between the two: it goes in between.
     const middle = await projects.addProjectScene(project.id, { label: 'Middle', startSec: 10, endSec: 20, prompt: 'Close-up' });
     expect((await projects.getProject(project.id)).scenes.map((s) => [s.sceneId, s.order])).toEqual([[intro.sceneId, 0], [middle.sceneId, 1], [outro.sceneId, 2]]);
     await projects.updateScene(project.id, middle.sceneId, { referenceImageId: 'singer.png' });
-    await projects.mutateProjectRecord(project.id, (current) => ({ project: setShotLocks(current, { sceneIds: [intro.sceneId, middle.sceneId], locked: true }) }));
+    // A board approved before lock removal reads every shot it covers as locked.
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionReview: { ...current.productionReview, approvals: { storyboard: { basis: productionReviewBasis(current).storyboard } } } } }));
 
     expect((await split(middle.sceneId, { atSec: 25 })).body.code).toBe('MUSIC_VIDEO_SPLIT_OUT_OF_RANGE');
     const res = await split(middle.sceneId, { atSec: 13.5 });
@@ -135,6 +137,6 @@ describe('POST /:id/scenes/:sceneId/split', () => {
     expect(stored.scenes.map((s) => s.order)).toEqual([0, 1, 2, 3, 4]);
     const locks = shotLocks(stored);
     expect([locks[intro.sceneId], locks[middle.sceneId], locks[second.sceneId], locks[outro.sceneId], locks[insert.sceneId]])
-      .toEqual(['locked', 'locked', 'locked', 'open', 'open']);
+      .toEqual(['locked', 'locked', 'locked', 'locked', 'open']);
   });
 });

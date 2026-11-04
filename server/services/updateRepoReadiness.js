@@ -36,9 +36,10 @@ import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
+import { REPO_REPAIR_TASK_DESCRIPTION } from './updateRepoRepairCompletion.js';
 
 /** First line of the repair task — stable so `addTask`'s dedup collapses reruns. */
-export const REPO_REPAIR_TASK_DESCRIPTION = 'Restore the PortOS checkout to a clean default branch so automatic updates can run';
+export { REPO_REPAIR_TASK_DESCRIPTION };
 
 /** Why a checkout is not ready, ordered most-blocking first for the UI. */
 const REASON_LABELS = {
@@ -90,9 +91,10 @@ async function divergence(repoPath, branch) {
  *   answers "is there anything to update to?" rather than "was there, last
  *   time something fetched?". The auto-updater wants this; a status read for
  *   the UI does not.
+ * @param {string|null} [options.excludeAgentId] - completion-only exclusion, after dispatch ownership is verified.
  * @returns {Promise<object>} the readiness verdict.
  */
-export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {}) {
+export async function checkUpdateRepoReadiness({ repoPath, fetch = false, excludeAgentId = null } = {}) {
   const dir = resolveRepoPath(repoPath);
   // ONE verdict shape on every path, including the failure ones — the scheduler
   // and the UI both read `summary` and `repairable`, and an early return that
@@ -144,7 +146,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
     // Moving it, or running update.sh's pm2 restart under it, is the branch-jack
     // `repoSync` refuses on for the same reason — and the idle gate alone would
     // not catch a paused agent that still holds the tree.
-    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true }).catch(() => 'unknown'),
+    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId: excludeAgentId }).catch(() => 'unknown'),
   ]);
   if (branch === null || porcelain === null) {
     return verdict({ defaultBranch, reasons: ['git-unreadable'] });
@@ -291,17 +293,22 @@ export async function queueRepoRepairTask(verdict) {
       + 'and push or PR any local commits that are not on origin. Do not run the update itself; PortOS resumes automatically '
       + 'once the checkout is clean.',
     '',
+    'Preserve recursive submodule work in each child repository using its own published refs/PRs; the server-owned contract binds child origins, parent gitlinks, commits and staged/working file versions. Restore clean children to the parent pins after preservation.',
     'Work in the primary checkout, not a worktree — the state that needs fixing is there.',
   ].filter((line) => line !== null).join('\n');
 
-  return import('./cosTaskStore.js')
-    .then(({ addTask }) => addTask({
-      description: REPO_REPAIR_TASK_DESCRIPTION,
-      priority: 'HIGH',
-      app: PORTOS_APP_ID,
-      context,
-      useWorktree: false,
-    }, 'internal'))
+  return Promise.all([import('./cosTaskStore.js'), import('./updateRepoRepairCompletion.js')])
+    .then(async ([{ addTask }, { captureRepoRepairContract }]) => {
+      const repoRepairContract = await captureRepoRepairContract(verdict);
+      return addTask({
+        description: REPO_REPAIR_TASK_DESCRIPTION,
+        priority: 'HIGH',
+        app: PORTOS_APP_ID,
+        context,
+        useWorktree: false,
+        targetInstanceId: repoRepairContract.instanceId,
+      }, 'internal', { repoRepairContract });
+    })
     .catch((err) => {
       console.error(`❌ Failed to queue auto-update repo repair task: ${err.message}`);
       return null;

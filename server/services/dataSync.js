@@ -1504,7 +1504,11 @@ export async function getChecksum(category, { forPeerId } = {}) {
     // mask peer-C's. `*` is the unscoped key (no forPeerId).
     const cacheKey = `${category}:${forPeerId || '*'}`;
     const cached = checksumCache.get(cacheKey);
-    if (cached && fingerprintsEqual(cached.fingerprints, fingerprints)) {
+    // Usage contains fallible projections and the provider service has a short
+    // TTL cache. Revisit unchanged files periodically so a transient read or a
+    // stale provider cache cannot pin a partial projection indefinitely.
+    const freshEnough = category !== 'usage' || Date.now() - cached?.computedAt < 5000;
+    if (cached && freshEnough && fingerprintsEqual(cached.fingerprints, fingerprints)) {
       return { checksum: cached.checksum };
     }
     // Cache miss only: resolve the per-peer exclude-set (a dynamic peerSync
@@ -1513,7 +1517,7 @@ export async function getChecksum(category, { forPeerId } = {}) {
     // that I/O on every poll that hits the cache.
     const exclude = await resolveExcludeSet(category, forPeerId);
     const { checksum } = await checksumSource(cat, exclude);
-    setChecksumCache(cacheKey, { fingerprints, checksum });
+    setChecksumCache(cacheKey, { fingerprints, checksum, computedAt: Date.now() });
     return { checksum };
   }
   const exclude = await resolveExcludeSet(category, forPeerId);

@@ -145,6 +145,7 @@ export function discordMessageToCandidate(record, channel = null) {
     metadata: {
       messageId,
       channelId,
+      conversationId: channelId,
       channelName: label,
       guildName: channel?.guild?.name || null,
       channelType: channel?.type ?? null,

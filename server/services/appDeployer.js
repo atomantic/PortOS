@@ -6,6 +6,7 @@ import { getAppById } from './apps.js';
 import { resolveBashBinary } from '../lib/bashResolver.js';
 import { withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { DEPLOY_FLAGS } from '../lib/appDeployFlags.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 export { DEPLOY_FLAGS };
 const VALID_FLAGS = new Set(DEPLOY_FLAGS);
@@ -92,25 +93,30 @@ export function deployApp(app, flags, emit) {
     child.stdout.on('data', (data) => { stdoutBuf += data.toString(); });
     child.stderr.on('data', (data) => { stderrBuf += data.toString(); });
 
+    let spawnedError = null;
     child.on('close', (code) => {
       clearTimeout(deployTimer);
       clearTimeout(killTimer);
-      const success = code === 0;
-      const result = finish(success, code);
+      const success = code === 0 && !spawnedError;
+      const exitCode = spawnedError && code === 0 ? -1 : code;
+      const result = finish(success, exitCode);
       emit('status', {
-        message: success ? 'Deploy complete' : `Deploy failed (exit code ${code})`,
+        message: success ? 'Deploy complete' : `Deploy failed (exit code ${exitCode})`,
         phase: 'complete',
         success,
-        code
+        code: exitCode
       });
       resolve(result);
     });
 
     child.on('error', (err) => {
+      emit('error', { message: err.message });
+      // A failed kill can report an error after spawn while the deploy is
+      // still running. Its close event owns cleanup in that case.
+      if (child.pid) { spawnedError = err; return; }
       clearTimeout(deployTimer);
       clearTimeout(killTimer);
       const result = finish(false, -1);
-      emit('error', { message: err.message });
       resolve(result);
     });
   });
@@ -149,7 +155,8 @@ export async function runDeployFlow(
   if (!checkScript(app)) return { ok: false, error: 'No deploy.sh found for this app' };
 
   console.log(`🚀 Deploy started for ${app.name} [${flags.join(', ') || 'default'}]`);
-  const result = await runDeploy(app, flags, onOutput || (() => {}));
+  const result = await maintenance.run('app-operation', String(app.id).slice(0, 256),
+    () => runDeploy(app, flags, onOutput || (() => {})));
   // A failed deploy is an error line (#7945); a successful one is progress.
   const logDeploy = result.success ? console.log : console.error;
   logDeploy(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);

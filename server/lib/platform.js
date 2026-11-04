@@ -71,7 +71,7 @@ export function parseListeningPorts(stdout, targetPlatform = platform) {
   } else {
     for (const line of String(stdout || '').split('\n')) {
       if (!/\bLISTENING\b/i.test(line)) continue;
-      const match = line.match(/^\s*TCP\s+\S+:(\d+)\s+/i);
+      const match = line.match(/^\s*TCP(?:v6)?\s+\S+:(\d+)\s+/i);
       if (match) addPort(match[1]);
     }
   }

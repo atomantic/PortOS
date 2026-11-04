@@ -19,7 +19,7 @@
  *                   the API surface changing later.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Search, Plus, Loader2, X, Sparkles } from 'lucide-react';
 import Modal from './ui/Modal';
@@ -28,6 +28,8 @@ import { CATALOG_BADGE_BY_ID, payloadSnippet } from '../lib/catalogTypes';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard';
 import { ingredientPath, usageSummary } from '../lib/creativeLibraries';
 import ListLoadError from './ui/ListLoadError';
+import InfiniteScrollFooter from './ui/InfiniteScrollFooter';
+import { usePagedCollection } from '../hooks/usePagedCollection';
 
 // Type chip color comes from the shared registry. Snippet uses the registry's
 // per-type fallback chain at a slightly longer cap for the picker rows.
@@ -43,16 +45,15 @@ export default function IngredientPicker({
 }) {
   const [searchInput, setSearchInput] = useState('');
   const [q, setQ] = useState('');
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  // A failed read is not an empty catalog: keep it distinct so the picker
-  // offers Retry instead of "No matching ingredients" + create-new.
-  const [loadError, setLoadError] = useState(null);
-  const [retryCount, setRetryCount] = useState(0);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  // Track in-flight fetch generation so a late response from a stale query
-  // can't overwrite the current results.
-  const generationRef = useRef(0);
+  const fetchPage = useCallback(async ({ cursor, signal }) => {
+    const offset = cursor || 0;
+    const data = await listCatalogIngredients({ type: type || undefined, q: q || undefined, limit: 50, offset, signal, silent: true });
+    if (!Array.isArray(data?.items)) throw new Error('Ingredient search is unavailable');
+    return { items: data.items, nextCursor: data.items.length === 50 ? data.nextOffset : null };
+  }, [q, type]);
+  const page = usePagedCollection(fetchPage, { enabled: open });
+  const { items, loading, error: loadError } = page;
 
   // Debounce search input (300ms) before pinning to `q`.
   useEffect(() => {
@@ -62,42 +63,13 @@ export default function IngredientPicker({
   }, [searchInput, open]);
 
   // Reset transient state every time the modal opens — single-shot pickers
-  // should never inherit yesterday's checkboxes. Clear `items` too so the
-  // first frame of a new open doesn't flash stale results before the fetch
-  // resolves (especially visible when `type` changes between opens).
+  // should never inherit yesterday's checkboxes or search.
   useEffect(() => {
     if (!open) return;
     setSearchInput('');
     setQ('');
     setSelectedIds(new Set());
-    setItems([]);
   }, [open]);
-
-  // Fetch results. Refetch on q / type changes while open.
-  useEffect(() => {
-    if (!open) return undefined;
-    const gen = ++generationRef.current;
-    setLoading(true);
-    setLoadError(null);
-    listCatalogIngredients({
-      type: type || undefined,
-      q: q || undefined,
-      limit: 50,
-      silent: true,
-    })
-      .then((data) => {
-        if (gen !== generationRef.current) return;
-        setItems(Array.isArray(data?.items) ? data.items : []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (gen !== generationRef.current) return;
-        setItems([]);
-        setLoadError(err instanceof Error ? err : new Error('Request failed'));
-        setLoading(false);
-      });
-    return undefined;
-  }, [open, q, type, retryCount]);
 
   // Exclusion set lookup — Set is O(1), array .includes is O(n) per row.
   const excludeSet = useMemo(() => new Set(excludeIds || []), [excludeIds]);
@@ -174,16 +146,16 @@ export default function IngredientPicker({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
             Searching…
           </div>
-        ) : loadError ? (
+        ) : loadError && items.length === 0 ? (
           <ListLoadError
             what="ingredients"
             error={loadError}
-            onRetry={() => setRetryCount((n) => n + 1)}
+            onRetry={page.loadMore}
           />
         ) : filtered.length === 0 ? (
           <div className="text-sm text-gray-400 space-y-2">
@@ -260,6 +232,8 @@ export default function IngredientPicker({
             })}
           </ul>
         )}
+        {items.length > 0 && (page.hasMore || loadError) && <InfiniteScrollFooter hasMore={page.hasMore} loading={loading} error={loadError}
+          onLoadMore={page.loadMore} autoLoad={false} label="Load more ingredients" />}
       </div>
 
       {multi && (

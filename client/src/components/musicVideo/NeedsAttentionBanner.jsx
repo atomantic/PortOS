@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, ExternalLink, Link2, Play, X } from 'lucide-react';
+import { AlertTriangle, Check, ExternalLink, Link2, Play, RefreshCw, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
 import StaleApprovalActions from './StaleApprovalActions.jsx';
@@ -84,6 +84,17 @@ function ItemActions({ item, busy, actions }) {
           </button>
         </>
       );
+    case 'song-audio':
+      return (
+        <>
+          <button type="button" disabled={busy} aria-label="Re-analyze and re-time the song" onClick={() => actions.onRefreshSong?.()} className={PRIMARY}>
+            <RefreshCw size={12} aria-hidden="true" /> Re-analyze &amp; re-time
+          </button>
+          <button type="button" disabled={busy} aria-label="Keep the old song timing" onClick={() => actions.onKeepSongTiming?.()} className={BUTTON}>
+            <Check size={12} aria-hidden="true" /> Keep old timing
+          </button>
+        </>
+      );
     case 'stale-approvals':
       return (
         <>
@@ -120,7 +131,8 @@ function OpenLink({ item }) {
  * `onResumeCastAndSets()`, `onContinueAutoReview(runId)`,
  * `onCancelAutoReview(runId)`, `onReattachRender()`, and for the parked-run
  * rows `onResumeAutonomous()` / `onResumeProduction(runId, opts)`; for stale
- * approvals `onKeepApproval(stage)` / `onRevertApproval(stage, field)`). Renders nothing when
+ * approvals `onKeepApproval(stage)` / `onRevertApproval(stage, field)`; for a song
+ * whose audio was replaced `onRefreshSong()` / `onKeepSongTiming()`). Renders nothing when
  * there is nothing to attend to.
  */
 export default function NeedsAttentionBanner({ items, busy = false, actions = {} }) {

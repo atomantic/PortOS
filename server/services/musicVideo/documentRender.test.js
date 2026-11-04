@@ -79,6 +79,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
 const { runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
 const { PATHS } = await import('../../lib/paths.js');
 const { encodeDocumentComposition, documentRenderClock, openIsolatedDocumentPreview, resolveSceneMedia } = await import('./documentRender.js');
+const { buildDocumentPreview } = await import('./documentPreview.js');
 
 afterAll(() => cleanupTempDataRoots());
 beforeEach(() => { runFfmpegProcess.mockClear(); probeVideoGeometry.mockReset(); probeVideoGeometry.mockResolvedValue(null); browser.seen = null; browser.contract = null; browser.visibility = null; browser.lyricUnfit = []; browser.sampleTimes = []; browser.send = null; browser.closed = []; browser.frameCallbacks = true; browser.capabilityProbes = 0; browser.version = 'Chrome/155.0.8059.41'; browser.versionCalls = []; browser.authoredContext = null; browser.authoredInspections = 0; });
@@ -382,6 +383,63 @@ describe('composition document staging', () => {
     // The source document is untouched and the job folder is gone.
     expect(existsSync(join(PATHS.data, plan.directory, 'portos-mv.js'))).toBe(false);
     expect(await scratchEntries()).toEqual([]);
+  });
+
+  it('stages an end frame and the same timed effect data for preview and export, including photo sequences', async () => {
+    const { project, plan } = await canonicalPreview();
+    await writeFile(join(PATHS.images, 'end.png'), 'end-image');
+    await writeFile(join(PATHS.images, 'photo-two.png'), 'photo-two');
+    Object.assign(project.scenes[1], {
+      imageEffect: 'end-flash', imageEffectSec: 1, endImageId: 'end.png',
+      photoSequence: { imageIds: ['still-b.png', 'photo-two.png'], intervalFrames: 6 },
+      glitches: [{ atSec: 0.5, style: 'light-leak', lengthSec: 0.25, strength: 0.5, color: '#00ff00', edge: 'right', count: 2, everySec: 0.5 }],
+    });
+    const preview = await buildDocumentPreview(project);
+    expect(preview.assets).toContainEqual({ key: 'media/scene-b-end.png', url: '/data/images/end.png', bytes: null });
+    expect(preview.assets).toContainEqual({ key: 'media/scene-b-photo-1.png', url: '/data/images/photo-two.png', bytes: null });
+    await expect(encode(project, plan, 'job-selected-effects')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene.imageEffect).toEqual({ effect: 'end-flash', changeSec: 1 });
+    expect(scene.media.end.src).toBe('media/scene-b-end.png');
+    expect(browser.seen.media['scene-b-end.png']).toBe('end-image');
+    expect(browser.seen.media['scene-b-photo-1.png']).toBe('photo-two');
+    const frames = browser.seen.data.effectFrames;
+    expect(frames.find(item => item.frame === 107)).toBeUndefined();
+    expect(frames.find(item => item.frame === 108).params.glows[0]).toMatchObject({ side: 'right', color: '00ff00', alpha: 0.06 });
+    expect(frames.find(item => item.frame === 120)).toBeDefined();
+    expect(preview.html).toContain(`window.PORTOS_MV = ${JSON.stringify(browser.seen.data).replace(/</g, '\\u003c')}`);
+    expect(browser.seen.initScripts.some(script => script.includes('__portosMusicVideoGlitch'))).toBe(true);
+  });
+
+  it.each([null, 'missing.png'])('keeps the start still when an end frame is absent or missing (%s)', async endImageId => {
+    const { project, plan } = await fixture();
+    Object.assign(project.scenes[1], { videoHistoryId: 'vh-a', imageEffect: 'end-glitch', endImageId });
+    await expect(encode(project, plan, 'job-missing-end')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene.imageEffect).toBeNull();
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
+    expect(scene.media).not.toHaveProperty('end');
+    expect(browser.seen.data.effectFrames).toEqual([]);
+  });
+
+  it('uses a selected still effect even when a previous video take remains selected', async () => {
+    const { project, plan } = await fixture();
+    await writeFile(join(PATHS.images, 'end.png'), 'end-image');
+    Object.assign(project.scenes[1], { videoHistoryId: 'vh-a', imageEffect: 'end-flash', imageEffectSec: 1, endImageId: 'end.png' });
+    await expect(encode(project, plan, 'job-selected-still')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene.imageEffect).toEqual({ effect: 'end-flash', changeSec: 1 });
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png', end: { src: 'media/scene-b-end.png' } });
+  });
+
+  it('honors a generated code-first footage direction over stale still-effect settings', async () => {
+    const { project } = await fixture();
+    project.productionPolicy = { strategy: 'code-first' };
+    project.treatment = { shotDirections: [{ sceneId: 'b', medium: 'generated-footage' }] };
+    Object.assign(project.scenes[1], { videoHistoryId: 'vh-a', imageEffect: 'end-flash', endImageId: 'missing.png' });
+    const history = JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8'));
+    const media = await resolveSceneMedia(project, { history, strictLayers: true });
+    expect(media.get('b')).toMatchObject({ kind: 'video', path: join(PATHS.videos, 'clip-a.mp4') });
   });
 
   it('refuses a document that ships a file under a name PortOS writes at render time', async () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { join } from 'path';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 
 // Mock dependencies before importing the module
 vi.mock('../lib/fileUtils.js', () => ({
@@ -419,6 +420,27 @@ describe('clearStaleUpdateInProgress', () => {
     vi.clearAllMocks();
     atomicWrite.mockResolvedValue(undefined);
     ensureDir.mockResolvedValue(undefined);
+  });
+
+  it.each([false, true])('preserves a newer result and active runtime update after a retained deferred outcome (previously consumed: %s)', async (consumed) => {
+    const outcome = { id: 'completed-self-update', success: true, completedAt: '2026-01-01T00:00:00.000Z' };
+    const reconcile = vi.spyOn(maintenance.deferredUpdate, 'reconcile').mockReturnValue({ operation: null, result: outcome });
+    let persisted = { updateInProgress: false, lastUpdateResult: null };
+    readJSONFile.mockImplementation(async path => path.endsWith('package.json') ? { version: '1.0.0' } : persisted);
+    atomicWrite.mockImplementation(async (_path, text) => { persisted = JSON.parse(text); });
+    try {
+      if (consumed) expect(await clearStaleUpdateInProgress()).toBe(true);
+      const newer = { success: false, completedAt: '2026-01-02T00:00:00.000Z', log: 'A later launch was refused' };
+      await recordUpdateResult(newer);
+      await setUpdateInProgress(true);
+      expect(await clearStaleUpdateInProgress()).toBe(false);
+      expect(persisted.lastUpdateResult).toEqual(newer);
+      expect(persisted.lastDeferredUpdateId).toBe(outcome.id);
+      expect(isUpdateInProgress()).toBe(true);
+    } finally {
+      reconcile.mockRestore();
+      await setUpdateInProgress(false);
+    }
   });
 
   it('should return false when updateInProgress is false', async () => {
@@ -963,6 +985,20 @@ describe('processUpdateMarker', () => {
     const saved = JSON.parse(atomicWrite.mock.calls.at(-1)[1]);
     expect(saved.lastUpdateResult).toMatchObject({ version: '1.2.3', success: true });
     expect(unlink).toHaveBeenCalledTimes(1);
+  });
+
+  it('consumes a deferred update marker left across restart without replaying over a newer outcome', async () => {
+    const outcome = { id: 'old-update', success: true, completedAt: '2026-07-01T00:00:00Z' };
+    const get = vi.spyOn(maintenance.deferredUpdate, 'get').mockReturnValue({ operation: null, result: outcome });
+    const reconcile = vi.spyOn(maintenance.deferredUpdate, 'reconcile').mockReturnValue({ operation: null, result: outcome });
+    const newer = { success: false, completedAt: '2026-07-02T00:00:00Z', log: 'Later update refused' };
+    readJSONFile.mockResolvedValue({ lastDeferredUpdateId: outcome.id, lastUpdateResult: newer, updateInProgress: false });
+    readFile.mockResolvedValueOnce(JSON.stringify({ version: '1.2.3', completedAt: '2026-06-30T00:00:00Z' }));
+    try {
+      await processUpdateMarker();
+      expect(atomicWrite).not.toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalledTimes(1);
+    } finally { get.mockRestore(); reconcile.mockRestore(); }
   });
 
   it('records failure when the marker version mismatches the running version', async () => {

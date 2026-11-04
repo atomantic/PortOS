@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { AUDIT_DEFINITIONS, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
@@ -29,7 +30,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'ui-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
   observability: 'Inventory critical workflows and their failure/status signals; rank invisible data loss, silent failures and operations that cannot be diagnosed.',
   copy: 'Inventory shared messages, destructive confirmations, setup and empty/error screens; rank wording that causes wrong actions or prevents task completion.',
-  'better-complexity': 'Run an available language-aware complexity analyzer over all first-party source roots. Otherwise use repository-wide branching searches to shortlist functions, then count decision points manually. Publish the top measured functions and counts; file length is only a discovery hint.',
+  'better-complexity': 'If the target repository has server/scripts/complexity-report.js, run npm run quality:complexity from its root and use its bounded source and test shortlists for investigation. Report its ESLint classic counts as measured, including optional chains and default arguments; record scan failures and separately analyze first-party languages the report does not cover. If the command is absent or fails, use another language-aware complexity analyzer or repository-wide branching searches to shortlist functions and count decision points manually. Include the top measured functions and counts in the run narrative, not QUALITY_AUDIT_JSON; file length is only a discovery hint. A high count alone is not a finding.',
   'better-cognitive-load': 'Scan deeply nested control flow, boolean flags, mixed abstraction levels and misleading names across source roots; rank reader cost in critical, widely used workflows.',
   'better-structural-drift': 'Inventory generators, duplicated registries and derived artifacts; inspect independently edited sources of truth and position-keyed records, ranking demonstrated drift and merge churn.',
   'better-runtime-safety': 'Scan asynchronous callbacks, resource cleanup, nullable access and process lifecycles across source roots; rank reachable crashes, corrupted state and leaked resources.',
@@ -75,8 +76,8 @@ export const appListQuerySchema = appQualityQuerySchema.extend({
 });
 
 const scoreSchema = z.number().int().min(0).max(100).nullable();
-const categorySchema = z.string().transform(normalizeAuditTaskType)
-  .refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value));
+const historicalCategorySchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).transform(normalizeAuditTaskType);
+const categorySchema = historicalCategorySchema.refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value));
 // Key order is the stored JSON order; keep the score fields where v1 wrote them.
 const reportFields = {
   worstSeverity: z.number().int().min(0).max(10),
@@ -95,12 +96,16 @@ const reportFields = {
  * (`summarizeAppQuality`). Both shapes stay parseable forever: stored v1 rows and
  * older peers keep rendering, and the run score is read from either.
  */
-export const auditQualityReportSchema = z.discriminatedUnion('version', [
-  z.object({ version: z.literal(1), category: categorySchema, score: scoreSchema, ...reportFields }).strict(),
-  z.object({ version: z.literal(2), category: categorySchema, slice: z.string().trim().min(1).max(500), sliceScore: scoreSchema, ...reportFields }).strict(),
+const qualityReportSchema = category => z.discriminatedUnion('version', [
+  z.object({ version: z.literal(1), category, score: scoreSchema, ...reportFields }).strict(),
+  z.object({ version: z.literal(2), category, slice: z.string().trim().min(1).max(500), sliceScore: scoreSchema, ...reportFields }).strict(),
 ]).refine(r => r.scannedFiles <= r.totalFiles)
   .refine(r => ['unavailable', 'not-applicable'].includes(r.coverage) ? qualityRunScore(r) === null : r.scannedFiles > 0 && (r.coverage === 'partial' || qualityRunScore(r) !== null))
   .refine(r => r.coverage !== 'broad' || (r.totalFiles > 0 && r.scannedFiles === r.totalFiles));
+export const auditQualityReportSchema = qualityReportSchema(categorySchema);
+// Historical files can carry a retired or newer category without registering it
+// as an active audit or admitting it to the older peer wire contract.
+export const historicalQualityReportSchema = qualityReportSchema(historicalCategorySchema);
 
 /** The one run's 0–100 assessment from either report shape; `null` when unscored. */
 function qualityRunScore(report) {
@@ -231,16 +236,22 @@ function windowScore(window) {
  * "3 of 30 rated" because seven UI audits have nothing to look at.
  * `totalCategories` keeps its catalog-size meaning for existing readers.
  */
-export function summarizeAppQuality(records = [], now = Date.now(), { inapplicable = {} } = {}) {
+export function summarizeAppQuality(records = [], now = Date.now(), { inapplicable = {}, includeHistoricalCategories = false } = {}) {
   const runsByCategory = new Map();
   for (const record of records) {
     const category = normalizeAuditTaskType(record.category);
-    const report = auditQualityReportSchema.safeParse(record.report);
+    const report = (includeHistoricalCategories ? historicalQualityReportSchema : auditQualityReportSchema).safeParse(record.report);
     const valid = report.success && report.data.category === category;
     if (!runsByCategory.has(category)) runsByCategory.set(category, []);
     runsByCategory.get(category).push({ record, valid, report: valid ? report.data : null });
   }
-  const categories = Object.entries(AUDIT_DEFINITIONS).map(([id, definition]) => {
+  const definitions = Object.entries(AUDIT_DEFINITIONS);
+  if (includeHistoricalCategories) {
+    for (const id of runsByCategory.keys()) {
+      if (!Object.hasOwn(AUDIT_DEFINITIONS, id) && historicalCategorySchema.safeParse(id).success) definitions.push([id, { label: id }]);
+    }
+  }
+  const categories = definitions.map(([id, definition]) => {
     const runs = (runsByCategory.get(id) || []).sort((a, b) => compareQualityRecords(b.record, a.record));
     const latest = runs[0];
     const record = latest?.record;
@@ -248,7 +259,7 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const assessedAt = record?.assessedAt;
     const stale = valid && !isFreshAssessment(assessedAt, now);
     const window = runs.filter(run => qualifiesForWindow(run, now)).slice(0, QUALITY_WINDOW_RUNS);
-    const contributes = window.length > 0;
+    const contributes = Object.hasOwn(AUDIT_DEFINITIONS, id) && window.length > 0;
     // Only this install's own ruling, as the dispatch gate reads it: a peer's
     // or a release snapshot's describes a different checkout of the repository.
     const local = !record?.sourcePeerId && !record?.sourcePeerName;
@@ -260,7 +271,7 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const { version: _version, category: _category, score: _score, sliceScore: _sliceScore, slice, ...latestFields } = latest?.report || {};
     const runScore = valid ? qualityRunScore(latest.report) : null;
     return { id, label: definition.label, ...(valid ? latestFields : { coverage: 'unavailable' }),
-      score: contributes ? windowScore(window) : runScore, runScore, slice: valid ? slice ?? null : null,
+      score: window.length ? windowScore(window) : runScore, runScore, slice: valid ? slice ?? null : null,
       window: { runs: window.length, worstSeverity: window.length ? Math.max(...window.map(run => run.report.worstSeverity)) : null },
       assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason };
   });
@@ -285,6 +296,9 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
   const dayMs = 86400000;
   const today = Math.floor(now / dayMs) * dayMs;
   const sorted = dailyQualityRecords(records.filter(r => Number.isFinite(Date.parse(r.assessedAt))));
+  const additionalCategories = [...new Set(sorted.map(record => record.category)
+    .filter(id => !Object.hasOwn(AUDIT_DEFINITIONS, id) && historicalCategorySchema.safeParse(id).success))]
+    .sort().map(id => ({ id, label: `Other / previous: ${id}` }));
   const latest = new Map();
   let known = [];
   let cursor = 0;
@@ -299,14 +313,14 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
     // A run older than the freshness window can no longer feed any category's
     // rolling figure; only the newest per category still matters, as its evidence row.
     known = known.filter(record => Date.parse(record.assessedAt) >= asOf - AUDIT_FRESHNESS_MS || latest.get(record.category) === record);
-    const summary = summarizeAppQuality(known, asOf);
+    const summary = summarizeAppQuality(known, asOf, { includeHistoricalCategories: true });
     points.push({ date: new Date(day).toISOString().slice(0, 10), score: summary.score,
       ratedCategories: summary.ratedCategories,
       categories: Object.fromEntries(summary.categories.map(c => [c.id, {
         score: c.stale ? null : c.score, coverage: c.coverage, confidence: c.confidence ?? null,
       }])) });
   }
-  return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, points };
+  return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, additionalCategories, points };
 }
 
 /**
@@ -329,8 +343,28 @@ export function dailyQualityRecords(records) {
 }
 
 export function compareQualityRecords(a, b) {
-  return Date.parse(a.assessedAt) - Date.parse(b.assessedAt)
-    || (a.measurementId || a.agentId || '').localeCompare(b.measurementId || b.agentId || '');
+  const aDate = /^\d{4}-\d{2}-\d{2}$/.test(a.assessedAt);
+  const bDate = /^\d{4}-\d{2}-\d{2}$/.test(b.assessedAt);
+  const timeA = Date.parse(a.assessedAt);
+  const timeB = Date.parse(b.assessedAt);
+  const dayA = Number.isFinite(timeA) ? new Date(timeA).toISOString().slice(0, 10) : String(a.assessedAt);
+  const dayB = Number.isFinite(timeB) ? new Date(timeB).toISOString().slice(0, 10) : String(b.assessedAt);
+  return dayA.localeCompare(dayB) || (aDate !== bDate ? (aDate ? -1 : 1) : 0)
+    || timeA - timeB
+    || qualityTieKey(a).localeCompare(qualityTieKey(b))
+    || Number(!a.sourcePeerId && !a.sourcePeerName) - Number(!b.sourcePeerId && !b.sourcePeerName);
+}
+
+/** Stable numeric tie-break shared by local, peer and checked-in records. */
+export function qualityTieKey(record) {
+  const report = record.report ? numericQualityReport(record.report) : record;
+  const value = record.assessedAt;
+  const time = Date.parse(value);
+  const assessedAt = /^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(time) ? value : new Date(time).toISOString();
+  return createHash('sha256').update(JSON.stringify([
+    assessedAt, normalizeAuditTaskType(record.category ?? report.category), qualityRunScore(report),
+    report.worstSeverity, report.coverage, report.confidence, report.scannedFiles, report.totalFiles,
+  ])).digest('hex');
 }
 
 export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({

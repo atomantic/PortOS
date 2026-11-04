@@ -40,7 +40,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandOutput } from '../lib/commandExists.js';
-import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
+import { adoptNpmGlobalBinDir, inspectNpmGlobalCommand } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
@@ -507,6 +507,12 @@ export function buildRuntimeUninstallCommand(id) {
   return { command: 'npm', args: ['uninstall', '--global', '--no-progress', runtime.npmPackage] };
 }
 
+/** Private evidence for the single npm-compatible package supplying PATH's CLI. */
+export function getRuntimeUninstallTarget(id, { env = safeChildProcessEnv() } = {}) {
+  const runtime = getProviderRuntime(id);
+  return runtime?.npmPackage ? inspectNpmGlobalCommand(runtime.command, runtime.npmPackage, { env }) : null;
+}
+
 /** The argv builder for each supported harness action. */
 const ACTION_BUILDERS = Object.freeze({
   install: buildRuntimeInstallCommand,
@@ -541,11 +547,20 @@ export function describeRuntimeInstall(id, action = 'install') {
  * `action` selects install / update / uninstall from the table; an unsupported
  * pairing returns `null` rather than falling back to a different action.
  */
-export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install' } = {}) {
+export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install', verifiedCommand = null, uninstallTarget = null, detached = !IS_WIN } = {}) {
   const invocation = buildRuntimeActionCommand(id, action);
   if (!invocation) return null;
+  const runtime = getProviderRuntime(id);
+  if (verifiedCommand && (action !== 'update' || !runtime?.selfUpdate || invocation.command !== runtime.command)) throw new Error('Verified command is not valid for this updater');
   const env = safeChildProcessEnv();
-  const { command, args } = prepareCliSpawn(invocation.command, invocation.args, env);
+  if (action === 'uninstall') {
+    const current = getRuntimeUninstallTarget(id, { env });
+    if (!current || !uninstallTarget || JSON.stringify(current) !== JSON.stringify(uninstallTarget)) {
+      throw Object.assign(new Error('The npm package or its executable could not be verified. Refresh and try again.'), { code: 'UNVERIFIED_NPM_UNINSTALL' });
+    }
+    invocation.args.splice(invocation.args.length - 1, 0, '--prefix', current.prefix);
+  }
+  const { command, args } = prepareCliSpawn(verifiedCommand || invocation.command, invocation.args, env);
   return spawnImpl(command, args, safeChildProcessOptions({
     env,
     shell: false,
@@ -553,7 +568,7 @@ export function spawnRuntimeInstaller(id, { spawnImpl = spawn, action = 'install
     // npm and vendor install scripts both run lifecycle children. Give the
     // POSIX install its own group so closing the modal stops that entire
     // install, not just the parent.
-    detached: !IS_WIN,
+    detached,
   }));
 }
 

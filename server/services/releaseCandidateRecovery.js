@@ -8,12 +8,14 @@ import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
-import { releaseCandidateTransferSchema } from '../lib/releasePublication.js';
+import { INSUFFICIENT_EVIDENCE_HOLD_REASONS, releaseCandidateTransferSchema } from '../lib/releasePublication.js';
 import { localReviewReceiptEvidence } from '../lib/localReviewLifecycle.js';
 import { ownershipTransaction, checkoutRetirementFenceReason } from './cosClaimOwnership.js';
-import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
+import { captureCheckoutSeeds, captureSeededCompletionCheckouts, completedCheckoutReceiptValid, readCompletedCheckoutIdentity,
+  releaseCandidateBranch, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
 import { readReleaseCandidate } from './releaseCandidateEvidence.js';
 import { readReleaseCandidateSettlement } from './releaseCandidateSettlement.js';
+import { RELEASE_ATTEMPTS_KEY, parseReleaseAttempts } from '../lib/releaseAttemptMembership.js';
 
 const refuse = reason => { throw Object.assign(new Error(reason), { recoveryReason: reason }); };
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -21,13 +23,20 @@ const run = agent => ({ agentId: agent.id, taskId: agent.taskId, startedAt: agen
 const releaseRun = agent => agent?.metadata?.taskAnalysisType === 'do-release' && agent.metadata.isWorktree === false;
 const repository = agent => agent.sourceWorkspace || agent.metadata?.sourceWorkspace || agent.workspacePath || agent.metadata?.workspacePath;
 const nextStep = 'Preserve the original checkout and private review files; resolve the recorded lineage or process hold, then retry recovery. Do not reserve another candidate.';
+// Retrying cannot create missing historical evidence, so name the only way out.
+const nextStepFor = reason => (INSUFFICIENT_EVIDENCE_HOLD_REASONS.includes(reason)
+  ? `${nextStep} This evidence cannot be recreated by retrying: an operator who abandons the candidate retires this hold with the "retire" action (docs/VERSIONING.md, "Reconciling a legacy held candidate"), after which a new release run may reserve a fresh cutoff.`
+  : nextStep);
 
 async function sourceCheckout(source) {
   if (source.metadata.checkoutSeeds?.length) {
     const rows = await captureSeededCompletionCheckouts(source);
-    if (rows?.length !== 1 || source.metadata.checkoutSeeds.length !== 1) refuse('candidate-terminal-receipt-unverified');
-    const { capturedAt: _observedAt, ...receipt } = rows[0];
-    return { kind: 'seeded', receipt, seed: source.metadata.checkoutSeeds[0] };
+    const branch = releaseCandidateBranch(source.metadata);
+    const candidates = rows?.filter(row => row.branch === branch) || [];
+    const seeds = source.metadata.checkoutSeeds.filter(seed => seed.branch === branch);
+    if (candidates.length !== 1 || seeds.length !== 1 || rows.length !== source.metadata.checkoutSeeds.length) refuse('candidate-terminal-receipt-unverified');
+    const { capturedAt: _observedAt, ...receipt } = candidates[0];
+    return { kind: 'seeded', receipt, seed: seeds[0] };
   }
   // This independently captured, preterminal v1 receipt is the only unseeded
   // lineage currently supported. Its private Git pointer and administration
@@ -40,6 +49,44 @@ async function sourceCheckout(source) {
   if (!current || !equal(current, { repoPath: receipt.repoPath, branch: receipt.branch,
     path: receipt.path, head: receipt.head, incarnation: receipt.incarnation })) refuse('candidate-generation-changed');
   return { kind: 'contemporaneous-receipt', receipt };
+}
+
+/** Retain same-task lineage before requeueing an unpublished coordinator.
+ * This proves only the registered checkout binding, never process settlement.
+ * Recovery rechecks that binding and all publication/review/process fences. */
+export async function releaseCandidateResumePointer(task, agentId) {
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const source = await getAgentRecord(agentId);
+  if (!releaseRun(source) || source.id !== agentId || source.status !== 'completed' || source.taskId !== task.id
+    || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
+    || !hasReleaseCandidateBinding(source.metadata)) refuse('candidate-registration-unverified');
+  await sourceCheckout(source);
+  return { resumedFromAgentId: agentId };
+}
+
+/** Every recorded attempt except the successor must be this instance's,
+ * completed and process-settled. A retry count, PID or registry absence is not
+ * membership: only the store-owned dispatch record is. */
+async function settleAttemptMembership(task, source, successor, agents) {
+  const membership = parseReleaseAttempts(task?.metadata?.[RELEASE_ATTEMPTS_KEY]);
+  if (!membership?.complete) refuse('candidate-attempt-membership-unverified');
+  const instanceId = source.metadata.instanceId;
+  if (membership.attempts.some(row => row.instanceId !== instanceId)) refuse('candidate-peer-attempt-unsettled');
+  const listed = agent => membership.attempts.some(row => row.agentId === agent.id && row.startedAt === agent.startedAt);
+  if (!listed(source) || !listed(successor)) refuse('candidate-attempt-membership-unverified');
+  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  for (const row of membership.attempts) {
+    if (row.agentId === successor.id) {
+      if (row.startedAt !== successor.startedAt) refuse('candidate-attempt-membership-unverified');
+      continue;
+    }
+    // Completed attempts leave the live registry; the service archive keeps them.
+    const record = row.agentId === source.id ? source : agents[row.agentId] || await getAgentRecord(row.agentId);
+    if (record?.id !== row.agentId || record.taskId !== task.id || record.startedAt !== row.startedAt
+      || record.status !== 'completed' || record.metadata?.instanceId !== instanceId) refuse('candidate-attempt-unsettled');
+    if (record !== source) await readReleaseCandidateSettlement(record);
+  }
+  return membership;
 }
 
 async function reviewSnapshot(checkout, pr, origin) {
@@ -73,19 +120,58 @@ async function reviewSnapshot(checkout, pr, origin) {
   return { files: evidence, legacyPublished: Boolean(pr && !files.includes('portos-local-review-lifecycle')) };
 }
 
-async function publicationSnapshot(checkout, candidate) {
+/** Read-only GitHub access for the repository's origin; anything else is unavailable. */
+export async function openCandidateForge(repoPath) {
   const [{ getOriginInfo }, { resolveForgeExecOptions }, { execGh }] = await Promise.all([
     import('../lib/gitRemote.js'), import('./forgeExecOptions.js'), import('./github.js'),
   ]);
-  const origin = await getOriginInfo(checkout.repoPath);
+  const origin = await getOriginInfo(repoPath);
   if (!origin.isGithub || origin.host !== 'github.com' || !origin.fullName) refuse('candidate-forge-unavailable');
-  const options = await resolveForgeExecOptions(checkout.repoPath);
+  const options = await resolveForgeExecOptions(repoPath);
   const api = async path => JSON.parse(await execGh(['api', '--hostname', origin.host, `repos/${origin.fullName}/${path}`], undefined, options));
-  const rows = await api(`pulls?state=all&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${checkout.branch}`)}&per_page=100`);
+  return { origin, api };
+}
+
+/** Every PR, in any state, whose head is this branch of the origin repository. */
+export const candidateBranchPulls = ({ origin, api }, branch) =>
+  api(`pulls?state=all&head=${encodeURIComponent(`${origin.fullName.split('/')[0]}:${branch}`)}&per_page=100`);
+
+/** The `release` branch tip, or null when the ref is not a plain commit ref. */
+export async function readReleaseBaseTip({ api }) {
+  const base = await api('git/ref/heads/release');
+  return base.ref === 'refs/heads/release' && base.object?.type === 'commit' ? base.object.sha : null;
+}
+
+const UNFINISHED_RUN_STATUSES = ['queued', 'in_progress', 'waiting', 'requested', 'pending'];
+
+/** Publication activity this candidate's own PR cannot explain: another open
+ * promotion, the version tag before promotion, or an unfinished release
+ * workflow run (including a re-run of an earlier one). Any of these may be a
+ * second publication in flight, so recovery holds rather than transfers. */
+async function publicationFence({ origin, api }, checkout, candidate, published) {
+  const promotions = await api('pulls?state=open&base=release&per_page=100');
+  if (!Array.isArray(promotions) || promotions.length >= 100 || promotions.some(row => row?.head?.ref !== checkout.branch
+    || row.head.repo?.full_name !== origin.fullName)) refuse('candidate-publication-ambiguous');
+  if (!published) {
+    const tags = await api(`git/matching-refs/tags/v${candidate.version}`);
+    if (!Array.isArray(tags) || tags.some(row => row?.ref === `refs/tags/v${candidate.version}`)) refuse('candidate-release-tag-present');
+  }
+  // A re-run keeps its original creation order, so a newest-runs page can miss
+  // it. Each unfinished status's total count covers the whole history.
+  for (const status of UNFINISHED_RUN_STATUSES) {
+    const { total_count: count } = await api(`actions/workflows/release.yml/runs?status=${status}&per_page=1`);
+    if (count !== 0) refuse('candidate-release-workflow-active');
+  }
+}
+
+async function publicationSnapshot(checkout, candidate) {
+  const forge = await openCandidateForge(checkout.repoPath);
+  const { origin, api } = forge;
+  const rows = await candidateBranchPulls(forge, checkout.branch);
   if (!Array.isArray(rows) || rows.length > 1) refuse('candidate-publication-ambiguous');
   if (!rows.length) {
-    const base = await api('git/ref/heads/release');
-    if (base.ref !== 'refs/heads/release' || base.object?.type !== 'commit' || base.object.sha !== candidate.releaseBase) refuse('candidate-release-base-changed');
+    if (await readReleaseBaseTip(forge) !== candidate.releaseBase) refuse('candidate-release-base-changed');
+    await publicationFence(forge, checkout, candidate, false);
     return null;
   }
   const pr = rows[0];
@@ -104,6 +190,7 @@ async function publicationSnapshot(checkout, candidate) {
     if (promotion.tree?.sha !== candidate.tree || promotion.parents?.length !== 2
       || promotion.parents[0].sha !== candidate.releaseBase || promotion.parents[1].sha !== checkout.head) refuse('candidate-promotion-conflict');
   } else if (detail.state !== 'open' || detail.base?.sha !== candidate.releaseBase) refuse('candidate-release-base-changed');
+  await publicationFence(forge, checkout, candidate, detail.merged === true);
   return { number: pr.number, url: pr.html_url, head: checkout.head, merged: detail.merged === true,
     merge: detail.merged === true ? detail.merge_commit_sha : null };
 }
@@ -133,25 +220,42 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       // A failed retry must never revoke a completed transfer's reservation.
       if (previous?.status !== 'transferred') {
         state.agents[successor.id] = { ...successor, metadata: { ...successor.metadata,
-          releaseCandidateRecovery: { version: 1, status: 'held', predecessorAgentId, reason, nextStep } } };
+          releaseCandidateRecovery: { version: 1, status: 'held', predecessorAgentId, reason, nextStep: nextStepFor(reason) } } };
         await save();
         const { cosEvents } = await import('./cosEvents.js');
         cosEvents.emit('agent:updated', state.agents[successor.id]);
       }
-      return { recovered: false, reason, nextStep };
+      return { recovered: false, reason, nextStep: nextStepFor(reason) };
     };
     let persisting = false;
     try {
+      const resumed = source?.result?.resumed === true && source.result.resumedTaskId === successor.taskId;
+      const retriedInline = source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+        && source.result?.deliveryRecoveryOwned === true && ['blocked', 'incomplete'].includes(source.result?.taskOutcome?.status);
+      // Orphan recovery requeues the same task after retiring a killed run. It
+      // has no delivery-recovery marker, but records failed execution and the
+      // server-observed orphan disposition. A claimed success sentinel becomes
+      // the standard incomplete outcome when the killed run is retired.
+      const orphanOutcome = source?.result?.taskOutcome;
+      const unclaimedOrphanOutcome = orphanOutcome == null
+        || equal(orphanOutcome, { status: 'incomplete', reason: 'Delivery checks did not pass.' });
+      const orphanedRelease = (source?.metadata?.releasePublication?.synchronizationHandoffVersion === 2
+        || hasReleaseCandidateBinding(source?.metadata))
+        && source.result?.orphaned === true && source.result?.success === false && source.result?.executionSuccess === false
+        && unclaimedOrphanOutcome && !source.result?.executionInterruption && !source.metadata?.executionInterruption;
       if (!releaseRun(source) || source.status !== 'completed'
         || !(Date.parse(source.completedAt) >= Date.parse(source.startedAt)) || Date.parse(source.completedAt) > Date.now()
         || !(Date.parse(successor.startedAt) >= Date.parse(source.completedAt)) || !source.taskId
-        || source.taskId !== successor.taskId || source.result?.resumed !== true || source.result.resumedTaskId !== successor.taskId
+        || source.taskId !== successor.taskId || (!resumed && !retriedInline && !orphanedRelease)
         || successor.metadata.resumedFromAgentId !== source.id || !source.metadata.instanceId
         || source.metadata.instanceId === 'unknown' || source.metadata.instanceId !== successor.metadata.instanceId) refuse('candidate-successor-lineage-unverified');
       const { getTaskById } = await import('./cosTaskStore.js');
       const task = await getTaskById(successor.taskId);
       if (task?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
-      if (source.metadata.releasePublication || successor.metadata.releasePublication) refuse('candidate-already-published');
+      const publication = source.metadata.releasePublication;
+      if ((publication && publication.synchronizationHandoffVersion !== 2)
+        || (successor.metadata.releasePublication && (!publication || previous?.status !== 'transferred'
+          || !equal(successor.metadata.releasePublication, publication)))) refuse('candidate-already-published');
       if (successor.metadata.releaseCandidate || (previous?.status === 'transferred' && previous.predecessorAgentId !== source.id)
         || (source.metadata.releaseCandidateSuccessor && source.metadata.releaseCandidateSuccessor.successor.agentId !== successor.id)) refuse('candidate-successor-conflict');
       const repoPath = await realpath(repository(source));
@@ -159,6 +263,15 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       return await withCheckoutPublication(repoPath, async () => {
         const evidence = await inspectCandidate(source);
         const target = evidence.lineage.receipt;
+        if (publication && (publication.status !== 'verified' || publication.candidateHead !== target.head
+          || evidence.publication?.number !== publication.promotionPrNumber || evidence.publication?.merged !== true
+          || evidence.publication?.merge !== publication.promotionMerge)) refuse('candidate-publication-conflict');
+        const sync = source.metadata.releaseSynchronizationCheckout;
+        const sourceSync = sync && source.metadata.checkoutSeeds?.find(seed => seed.branch === sync.branch);
+        if (sync && (!publication || sync.identity !== publication.identity || !sourceSync)) refuse('candidate-synchronization-checkout-unverified');
+        if (sourceSync && checkoutRetirementFenceReason({ repoPath, branch: sourceSync.branch, path: sourceSync.path })) refuse('checkout-retirement-reserved');
+        if (sourceSync && claimCheckoutOwnerReason({ branchName: sourceSync.branch, holderPath: sourceSync.path,
+          sourceWorkspace: repoPath, agents: Object.values(state.agents), ignoreIds: [source.id, successor.id] })) refuse('candidate-owner-ambiguous');
         const fenced = checkoutRetirementFenceReason({ repoPath, branch: target.branch, path: target.path });
         if (fenced) refuse(fenced);
         const other = claimCheckoutOwnerReason({ branchName: target.branch, holderPath: target.path,
@@ -168,14 +281,18 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
           if (agent.id === source.id || agent.id === successor.id || !releaseRun(agent) || agent.status === 'completed') continue;
           if (await realpath(repository(agent)) === repoPath) refuse('candidate-owner-ambiguous');
         }
+        const membership = await settleAttemptMembership(task, source, successor, state.agents);
         const settlement = await readReleaseCandidateSettlement(source);
         // Recheck physical generation, immutable head, forge and private review
         // bytes after the process/forge reads, before the single state commit.
         if (!equal(evidence, await inspectCandidate(source))) refuse('candidate-evidence-changed');
-        if ((await getTaskById(successor.taskId))?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
+        const current = await getTaskById(successor.taskId);
+        if (current?.metadata?.resumedFromAgentId !== source.id) refuse('candidate-task-lineage-unverified');
+        if (!equal(parseReleaseAttempts(current.metadata[RELEASE_ATTEMPTS_KEY]), membership)) refuse('candidate-attempt-membership-unverified');
         if (previous?.status === 'transferred') {
           if (!equal(previous.transfer, source.metadata.releaseCandidateSuccessor)) refuse('candidate-transfer-receipt-conflict');
-          return { recovered: true, branch: target.branch, path: target.path, transfer: previous.transfer };
+          return { recovered: true, branch: target.branch, path: target.path,
+            ...(sourceSync && { synchronization: { branch: sourceSync.branch, path: sourceSync.path } }), transfer: previous.transfer };
         }
         const transfer = { version: 1, source: run(source), successor: run(successor),
           origin: source.metadata.releaseCandidateRecovery?.transfer?.origin || run(source),
@@ -183,12 +300,16 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
           ...evidence, settlement };
         if (!releaseCandidateTransferSchema.safeParse(transfer).success) refuse('candidate-transfer-receipt-unavailable');
         const updated = { ...successor, metadata: { ...successor.metadata,
-          releaseCandidateRecovery: { version: 1, status: 'transferred', predecessorAgentId, transfer } } };
+          releaseCandidateRecovery: { version: 1, status: 'transferred', predecessorAgentId, transfer },
+          ...(publication && { releasePublication: publication }),
+          ...(sync && { releaseSynchronizationCheckout: { ...sync, startedAt: successor.startedAt, reservedAt: new Date().toISOString() } }) } };
         // A new, honestly timestamped seed for the current owner. The original
         // seed/receipt and private review files are never rewritten or copied.
         updated.metadata.checkoutSeeds = await captureCheckoutSeeds(updated, { allowUncreated: false });
-        if (updated.metadata.checkoutSeeds.length !== 1
-          || !equal(updated.metadata.checkoutSeeds[0].incarnation, target.incarnation)) refuse('candidate-generation-changed');
+        const candidateSeed = updated.metadata.checkoutSeeds.find(seed => seed.branch === target.branch);
+        const syncSeed = sourceSync && updated.metadata.checkoutSeeds.find(seed => seed.branch === sourceSync.branch);
+        if (!candidateSeed || !equal(candidateSeed.incarnation, target.incarnation)
+          || (sourceSync && (!syncSeed || !equal(syncSeed.incarnation, sourceSync.incarnation)))) refuse('candidate-generation-changed');
         state.agents[source.id] = { ...source, metadata: { ...source.metadata, releaseCandidateSuccessor: transfer } };
         state.agents[successor.id] = updated;
         persisting = true;
@@ -196,7 +317,8 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
         const { cosEvents } = await import('./cosEvents.js');
         cosEvents.emit('agent:updated', updated);
         cosEvents.emit('agent:updated', state.agents[source.id]);
-        return { recovered: true, branch: target.branch, path: target.path, transfer };
+        return { recovered: true, branch: target.branch, path: target.path,
+          ...(sourceSync && { synchronization: { branch: sourceSync.branch, path: sourceSync.path } }), transfer };
       });
     } catch (error) {
       if (persisting) throw error;
@@ -204,5 +326,5 @@ export async function recoverReleaseCandidate(successorAgentId, predecessorAgent
       return hold(error.recoveryReason || (/^candidate-[a-z-]+$/.test(error.message) ? error.message : 'candidate-evidence-unavailable'));
     }
   });
-  return result.recovered ? result : { ...result, nextStep };
+  return result.recovered ? result : { nextStep, ...result };
 }

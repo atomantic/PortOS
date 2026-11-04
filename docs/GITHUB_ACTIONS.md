@@ -124,6 +124,29 @@ same rules to external pull-request content before the model-abuse classifier
 sees it — and which honors no marker, because that author is not trusted to
 grant one.
 
+Next, `node scripts/scan-commit-session-links.js` refuses a pull request whose
+commit messages link to an AI conversation session (`claude.ai/code/session`,
+`claude.ai/chat/`, `claude.ai/share/`, `chatgpt.com/c/` or `/share/`, and the
+`chat.openai.com` spellings), naming each offending commit. History on `main` is
+permanent, so this runs before merge. The depth-2 checkout does not hold the
+pull request's commits, so the script reads them from the compare API against
+the default branch: commits already on `main` never fail it, and a release PR
+does not answer for the `main` commits it promotes. A squash merge copies the
+pull request's description into `main`'s commit message, so the separate
+`pr-description.yml` workflow runs the same script with `--description` on every
+open, push and description edit; fixing a flagged description turns it green
+without re-running CI. Pregate runs the same check
+over `<merge base>..HEAD` right after the hidden-content scan, excluding commits
+already on `origin/main` when that ref is available. This keeps release candidates
+from answering for historical main commits while still checking candidate-only work.
+
+The import-growth guard measures one development change. Release promotions and
+pushes retain the existing exception for a whole release cycle's aggregate growth.
+Local pregate carries its exact chosen base ref alongside `CI_BASE_SHA`, so the
+documented release refs use that same policy; main, other refs and raw SHAs keep
+the normal growth assertion. Other structural guards and full release suites run
+unchanged.
+
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the
 server job with those files selected. The one exception is a PR that changes
@@ -172,8 +195,8 @@ CI run that never needed it — they keep the documented skip.
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
 diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural guards, lint, and
-focused unit tests: edited test files and sibling tests for changed sources,
+hidden-content and commit-message scans, early server and client structural
+guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
 including untracked tests, without expanding through transitive imports.
 
 `npm run pregate -- --full` opts into the CI-selected broad suites locally:
@@ -604,6 +627,10 @@ The selected work is split across parallel jobs:
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
   Non-PR runs and pull requests into `release` always run it. Pregate reports
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
+- **macOS native release-agent supervision** — runs the launchd-coalition
+  release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
+  pull request only when the `macos_native` output is true; see
+  "macOS native release-agent supervision" below.
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
   (`server/services/superColliderRender.live.test.js`) against real Docker on
@@ -743,6 +770,36 @@ still test shipping ownership/retirement behavior on the primary runner. Their
 broad real-Git histories/configuration fixtures are not native CLI contracts.
 Native Git child ownership and settlement remain independently exercised on
 Windows; a failure there must still be fixed, not hidden by this boundary.
+
+### macOS native release-agent supervision
+
+macOS is the primary interactive target, and release agents there run under
+the launchd-coalition supervisor (`server/lib/darwinAgentSupervisor.py`). Its
+real-process boundary suite, `server/lib/windowsAgentProcess.darwin.test.js`,
+and the macOS arm of `supervised native release recovery` in
+`server/services/releaseCandidateRecovery.test.js` skip on every other
+platform. The `macos-native` job (`macos-latest`) runs exactly those two files
+(`MACOS_NATIVE_TESTS` in `scripts/ci-test-plan.js`), so a change that breaks
+macOS release recovery cannot pass every required check.
+
+macOS runners are the scarcest hosted capacity, so the job is gated by an
+explicit path list (`MACOS_NATIVE_PATH_RE`), not an import closure: the
+recovery suite's closure reaches most of the server. On a pull request the
+`macos_native` output is true only when the diff touches
+`server/lib/windowsAgentProcess*.js`, `server/lib/darwinAgentSupervisor.py`,
+`server/services/releaseCandidateRecovery*.js`,
+`server/services/releaseCandidateSettlement.js`, the server Vitest harness
+(`server/vitest.config.js`, `server/vitest.setup.js`,
+`scripts/vitestTempRootSetup.js`), the install inputs
+(`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
+`scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
+`release` always run it. It is part of `CI Gate`; a skipped run passes.
+
+Before the suites, the job runs the supervisor's own `--probe`: a real
+single-use launchd job round trip. A runner whose user domain refuses
+`launchctl bootstrap` fails that named step rather than an assertion inside
+the suite. Pregate reports the job as CI-only; on a Mac, run
+`npm test --prefix server -- --run lib/windowsAgentProcess.darwin.test.js services/releaseCandidateRecovery.test.js`.
 
 ### Windows selection for mixed changes
 
@@ -1266,7 +1323,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`commit-messages`, `import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

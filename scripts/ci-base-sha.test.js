@@ -103,7 +103,7 @@ describe('ci.yml required checks', () => {
 describe('ci.yml server node_modules cache', () => {
   const jobs = workflowJobs(WORKFLOW);
 
-  /** Every job that installs the server workspace — the three this cache serves. */
+  /** Every job that installs the server workspace — each one this cache serves. */
   const installers = Object.entries(jobs)
     .filter(([, body]) => body.includes('npm ci --prefix server'));
 
@@ -116,7 +116,7 @@ describe('ci.yml server node_modules cache', () => {
 
   it('caches the installed tree on every job that installs it', () => {
     expect(installers.map(([id]) => id).sort())
-      .toEqual(['browser', 'database', 'server', 'windows-server']);
+      .toEqual(['browser', 'database', 'macos-native', 'server', 'windows-server']);
 
     for (const [, body] of installers) expect(cacheEntry(body)).toMatch(/id: server-modules\b/);
   });

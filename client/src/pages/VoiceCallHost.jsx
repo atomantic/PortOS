@@ -90,6 +90,8 @@ export default function VoiceCallHost() {
   const [level, setLevel] = useState(0);
   const [notice, setNotice] = useState(null);
   const audio = useRef({ context: null, stream: null, node: null, source: null, playing: new Set(), outputId: null, pending: [] });
+  const testTones = useRef(new Set());
+  const pendingStartCleanup = useRef(null);
   const lockRelease = useRef(null);
   const startGenRef = useRef(0);
   // True from the moment start() stores its devices until teardown(). The
@@ -109,6 +111,9 @@ export default function VoiceCallHost() {
 
   const teardown = useCallback(() => {
     const current = audio.current;
+    pendingStartCleanup.current?.();
+    pendingStartCleanup.current = null;
+    for (const release of testTones.current) release();
     for (const element of current.playing) releaseCallAudio(current.playing, element);
     current.node?.port?.close?.();
     current.node?.disconnect?.();
@@ -127,6 +132,7 @@ export default function VoiceCallHost() {
   // event (the server never emits one for a capture session), so this only
   // ever runs for a call.
   const playToCall = useCallback(async (wav) => {
+    if (!ownsSessionRef.current || modeRef.current !== 'call') return;
     const element = new Audio();
     const blob = new Blob([wav], { type: 'audio/wav' });
     element.src = URL.createObjectURL(blob);
@@ -165,18 +171,25 @@ export default function VoiceCallHost() {
     // lock means never settling — so awaiting the request itself would hang
     // here forever while holding the lock. The grant decision is surfaced out
     // of the callback instead, and the held promise is left open on purpose.
+    let releaseStartLock = () => {};
     const granted = await new Promise((resolve) => {
       navigator.locks.request(CALL_HOST_LOCK, { ifAvailable: true }, (held) => {
-        if (!held) {
+        if (!held || generation !== startGenRef.current) {
           resolve(false);
           return null;
         }
         resolve(true);
-        return new Promise((release) => { lockRelease.current = release; });
+        return new Promise((release) => {
+          releaseStartLock = () => {
+            release();
+            if (lockRelease.current === releaseStartLock) lockRelease.current = null;
+          };
+          lockRelease.current = releaseStartLock;
+        });
       }).catch(() => resolve(false));
     });
     if (generation !== startGenRef.current) {
-      if (granted) releaseLock();
+      if (granted) releaseStartLock();
       return;
     }
     if (!granted) {
@@ -187,7 +200,7 @@ export default function VoiceCallHost() {
     const currentMode = modeRef.current;
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
     if (generation !== startGenRef.current) {
-      releaseLock();
+      releaseStartLock();
       return;
     }
     const problem = describeDeviceProblem(devices, {
@@ -198,7 +211,7 @@ export default function VoiceCallHost() {
     });
     if (problem) {
       setBlocked(problem);
-      releaseLock();
+      releaseStartLock();
       return;
     }
     const input = devices.find((device) => device.label === DEFAULT_INPUT_LABEL && device.kind === 'audioinput');
@@ -222,19 +235,32 @@ export default function VoiceCallHost() {
       });
     } catch (error) {
       if (generation === startGenRef.current) setBlocked(`Could not open ${DEFAULT_INPUT_LABEL}: ${error.message}`);
-      releaseLock();
+      releaseStartLock();
       return;
     }
 
     if (generation !== startGenRef.current) {
       stream.getTracks().forEach((track) => track.stop());
-      releaseLock();
+      releaseStartLock();
       return;
     }
 
     let context;
     let node;
     let source;
+    let ready = false;
+    let released = false;
+    const releaseStartup = () => {
+      if (released) return;
+      released = true;
+      node?.port?.close?.();
+      node?.disconnect?.();
+      source?.disconnect?.();
+      stream.getTracks().forEach((track) => track.stop());
+      context?.close?.();
+      releaseStartLock();
+    };
+    pendingStartCleanup.current = releaseStartup;
     try {
       context = new AudioContext();
       const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
@@ -247,18 +273,13 @@ export default function VoiceCallHost() {
       source = context.createMediaStreamSource(stream);
       node = new AudioWorkletNode(context, 'portos-call-tap');
       source.connect(node);
+      ready = true;
     } catch (error) {
       if (generation === startGenRef.current) setBlocked(`Could not start call audio: ${error.message}`);
       return;
     } finally {
-      if (generation !== startGenRef.current || !node) {
-        node?.port?.close?.();
-        node?.disconnect?.();
-        source?.disconnect?.();
-        stream.getTracks().forEach((track) => track.stop());
-        context?.close?.();
-        releaseLock();
-      }
+      if (generation !== startGenRef.current || !ready) releaseStartup();
+      if (pendingStartCleanup.current === releaseStartup) pendingStartCleanup.current = null;
     }
     let carry = [];
     node.port.onmessage = (event) => {
@@ -292,7 +313,7 @@ export default function VoiceCallHost() {
     if (currentMode === 'call') socket.emit('voice:call:attach');
     else socket.emit('voice:capture:start');
     setBlocked(null);
-  }, [releaseLock]);
+  }, []);
 
   const stop = useCallback(() => {
     startGenRef.current += 1;
@@ -302,6 +323,22 @@ export default function VoiceCallHost() {
     releaseLock();
     setAttached(false);
   }, [releaseLock, teardown]);
+
+  // The URL can change while permission/routing is pending, or via navigation
+  // even when the mode tabs are disabled. Release the outgoing mode by its
+  // captured identity and invalidate startup before a late stream can attach.
+  useEffect(() => {
+    setAttached(false);
+    setBlocked(null);
+    setNotice(null);
+    return () => {
+      startGenRef.current += 1;
+      if (mode === 'call') socket.emit('voice:call:detach');
+      else socket.emit('voice:capture:stop');
+      teardown();
+      releaseLock();
+    };
+  }, [mode, releaseLock, teardown]);
 
   useEffect(() => {
     // The server refused (or never accepted) the attach this tab already
@@ -323,6 +360,7 @@ export default function VoiceCallHost() {
       return true;
     };
     const applySnapshot = (kind, snapshot, setState, refusals) => {
+      if (kind !== modeRef.current) return;
       const refusal = refusals[snapshot?.error];
       if (refusal) {
         if (!releaseRefused(kind, refusal)) setBlocked(refusal);
@@ -379,7 +417,6 @@ export default function VoiceCallHost() {
     socket.on('voice:call:tts', onTts);
     socket.on('voice:tts:cancel', onTtsCancel);
     return () => {
-      startGenRef.current += 1;
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('voice:call:state', onCallState);
@@ -387,15 +424,12 @@ export default function VoiceCallHost() {
       socket.off('voice:error', onVoiceError);
       socket.off('voice:call:tts', onTts);
       socket.off('voice:tts:cancel', onTtsCancel);
-      if (modeRef.current === 'call') socket.emit('voice:call:detach');
-      else socket.emit('voice:capture:stop');
-      teardown();
-      releaseLock();
     };
   }, [playToCall, releaseLock, teardown]);
 
   const playTestTone = async () => {
-    const context = audio.current.context || new AudioContext();
+    const context = audio.current.context;
+    if (!context || !ownsSessionRef.current) return;
     const tone = buildTestTone(context.sampleRate, 1);
     const buffer = context.createBuffer(1, tone.length, context.sampleRate);
     buffer.copyToChannel(tone, 0);
@@ -405,9 +439,32 @@ export default function VoiceCallHost() {
     source.connect(destination);
     const element = new Audio();
     element.srcObject = destination.stream;
-    if (audio.current.outputId) await element.setSinkId(audio.current.outputId).catch(() => {});
-    await element.play().catch((error) => setNotice(`Test tone failed: ${error.message}`));
-    source.start();
+    let started = false;
+    const release = () => {
+      if (!testTones.current.delete(release)) return;
+      source.onended = null;
+      if (started) source.stop();
+      source.disconnect();
+      destination.disconnect();
+      element.pause();
+      element.srcObject = null;
+      destination.stream.getTracks().forEach((track) => track.stop());
+    };
+    testTones.current.add(release);
+    source.onended = release;
+    try {
+      if (audio.current.outputId) await element.setSinkId(audio.current.outputId);
+      if (!testTones.current.has(release)) return;
+      await element.play();
+      if (!testTones.current.has(release)) return;
+      source.start();
+      started = true;
+    } catch (error) {
+      if (testTones.current.has(release)) {
+        setNotice(`Test tone failed: ${error.message}`);
+        release();
+      }
+    }
   };
 
   const isCall = mode === 'call';

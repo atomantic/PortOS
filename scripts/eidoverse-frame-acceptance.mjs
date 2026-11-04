@@ -173,7 +173,7 @@ async function main() {
   const refused = await fetch(`${bridgeOrigin}/embed-config`, { method: 'POST' });
   check('the embedding configuration is read-only', refused.status === 405, String(refused.status));
 
-  const browser = await chromium.launch({ executablePath: CHROME, args: ['--enable-unsafe-webgpu'] });
+  const browser = await chromium.launch({ executablePath: CHROME, chromiumSandbox: true, args: ['--enable-unsafe-webgpu'] });
   shutdown.push(() => browser.close());
   // Narrow and touch-capable: every action below has to be reachable by thumb.
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });

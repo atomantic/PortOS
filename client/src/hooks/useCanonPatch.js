@@ -1,50 +1,76 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
-import { updateUniverse } from '../services/apiUniverseBuilder';
+import { patchUniverseCanonEntry } from '../services/apiUniverseBuilder';
 
-// Shared optimistic canon-entry patch handler. `UniverseCanonSection` and
-// `NounsStage` had ~95%-identical inline handlers: rebuild the kind list with
-// one entry mutated, apply it to local state immediately so the edit feels
-// instant, PATCH the universe, then re-apply the server's authoritative copy.
-//
-// `apply` is the optimistic-state setter — `setUniverse` (when the caller owns
-// `universe` via `useUniverse`) or `onUniverseChange` (when a parent owns the
-// draft). It's called with the full next universe object.
-//
-// The PATCH targets and is staleness-guarded on the LOADED record's `id`
-// (`universe.id`), NOT a separately-passed prop. NounsStage drives `universe`
-// from `useUniverse(series.universeId)`, which can briefly expose the previous
-// universe while a series/universe switch is in flight — keying off the record
-// we actually built the list from means we never send one universe's canon to
-// another's id, and a re-apply that lands after the loaded universe swapped (or
-// cleared) is dropped instead of resurrecting stale state.
-//
-// Usage:
-//   const { patchEntry } = useCanonPatch({ universe, apply: setUniverse, mountedRef });
-//   <Card onPatchEntry={(entryId, patch) => patchEntry(kind, entryId, patch)} />
+// Optimistic field edits for UniverseCanonSection and NounsStage. Accepted
+// writes finish in click order, including after navigation; only their UI
+// acknowledgements are bound to the current visit. The server merges each
+// field patch inside its existing record write queue instead of replacing a
+// client snapshot of the whole canon array.
 export function useCanonPatch({ universe, apply, mountedRef }) {
-  // Live mirror of the loaded universe's id so a PATCH that resolves after the
-  // record swapped can compare against the current id and bow out.
-  const currentUniverseIdRef = useRef(universe?.id);
-  useEffect(() => { currentUniverseIdRef.current = universe?.id; }, [universe?.id]);
+  const current = useRef(universe);
+  current.current = universe;
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  const scopeRef = useRef({ id: universe?.id, fields: new Map() });
+  if (scopeRef.current.id !== universe?.id) {
+    scopeRef.current = { id: universe?.id, fields: new Map() };
+  }
 
-  const patchEntry = useCallback(async (kind, entryId, patch) => {
-    if (!universe || !patch || typeof patch !== 'object') return;
-    const capturedId = universe.id;
-    const kindKey = kind.key;
-    const list = (universe[kindKey] || []).map((e) =>
-      e.id === entryId ? { ...e, ...patch } : e
-    );
-    apply({ ...universe, [kindKey]: list });
-    // `{ silent: true }` because the .catch below owns the failure toast —
-    // without it the apiCore request() helper fires a second, duplicate one
-    // (AGENTS.md "Custom catch ⇒ silent: true").
-    const updated = await updateUniverse(capturedId, { [kindKey]: list }, { silent: true })
-      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) {
-      apply(updated);
-    }
-  }, [universe, apply, mountedRef]);
+  const patchEntry = useCallback((kind, entryId, patch) => {
+    const latest = current.current;
+    if (!latest || !patch || typeof patch !== 'object') return Promise.resolve();
+    const field = kind.key;
+    const target = latest[field]?.find(entry => entry.id === entryId);
+    if (!target) return Promise.resolve();
+    const scope = scopeRef.current;
+    const token = {};
+    const edits = Object.keys(patch).map(key => {
+      const path = JSON.stringify([field, entryId, key]);
+      const state = scope.fields.get(path) || { saved: target[key] };
+      state.latest = token;
+      scope.fields.set(path, state);
+      return { key, path, state };
+    });
+    const publish = value => { current.current = value; applyRef.current(value); };
+    publish({ ...latest, [field]: latest[field].map(entry => entry.id === entryId ? { ...entry, ...patch } : entry) });
+    const settle = result => {
+      if (!mountedRef.current || scopeRef.current !== scope) return;
+      const live = current.current;
+      const updatedAt = result?.universe?.updatedAt;
+      const olderSnapshot = updatedAt && live.updatedAt && updatedAt < live.updatedAt;
+      // Track field ownership separately from the displayed snapshot: a sibling
+      // operation may have replaced that snapshot while this edit was pending.
+      const owned = edits.filter(({ key, path, state }) => {
+        if (result) state.saved = result.entry[key];
+        if (state.latest !== token) return false;
+        scope.fields.delete(path);
+        return true;
+      });
+      publish({
+        ...live,
+        updatedAt: updatedAt && (!live.updatedAt || updatedAt > live.updatedAt) ? updatedAt : live.updatedAt,
+        [field]: live[field].map(entry => {
+          if (entry.id !== entryId) return entry;
+          const next = { ...entry };
+          for (const { key, state } of owned) {
+            const stillOptimistic = JSON.stringify(entry[key]) === JSON.stringify(patch[key]);
+            // Failed edits roll back to the last confirmed value. A newer server
+            // snapshot or a newer local edit keeps its own field value.
+            if ((result && !olderSnapshot) || stillOptimistic) next[key] = state.saved;
+          }
+          return next;
+        }),
+      });
+    };
+
+    return patchUniverseCanonEntry(
+      latest.id, kind.apiKind || kind.singular, entryId, patch, { silent: true },
+    ).then(result => { settle(result); }).catch(err => {
+      settle(null);
+      toast.error(`Save failed: ${err.message}`);
+    });
+  }, [mountedRef]);
 
   return { patchEntry };
 }

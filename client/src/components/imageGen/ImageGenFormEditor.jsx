@@ -168,7 +168,7 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             value={fields.stylePreset?.id || ''}
             onChange={fields.setStylePreset}
           />
-          <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+          {(!isLocalMode || derived.remoteTargetActive || derived.currentModel?.supportsNegativePrompt !== false || fields.negativePrompt) && <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <AutoSizeTextarea
               value={fields.negativePrompt}
               onChange={(event) => fields.setNegativePrompt(event.target.value)}
@@ -176,7 +176,10 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
               className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
               placeholder="What to avoid..."
             />
-          </FormField>
+            {isLocalMode && !derived.remoteTargetActive && derived.currentModel?.supportsNegativePrompt === false && (
+              <p className="mt-1 text-xs text-port-warning">This model has no negative prompt. Clear this field before rendering.</p>
+            )}
+          </FormField>}
 
           <PromptEnhancer
             kind="image"

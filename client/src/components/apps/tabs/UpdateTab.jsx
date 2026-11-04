@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Download, XCircle, Check, Loader, Loader2, AlertTriangle, Trash2, ExternalLink, Tag, GitFork, GitBranch } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -6,6 +6,7 @@ import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
 import AutoUpdatePanel from './AutoUpdatePanel';
 import NodeRuntimePanel from './NodeRuntimePanel';
+import ChromeUpdatePanel from './ChromeUpdatePanel';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
@@ -52,6 +53,8 @@ export default function UpdateTab() {
   const [updating, setUpdating] = useState(false);
   const [steps, setSteps] = useState([]);
   const [updateError, setUpdateError] = useState(null);
+  const [interruptionRequest, setInterruptionRequest] = useState(null);
+  const lastUpdateRequest = useRef(null);
   const [syncingFork, setSyncingFork] = useState(false);
   const [forkSyncError, setForkSyncError] = useState(null);
 
@@ -61,9 +64,11 @@ export default function UpdateTab() {
   const { polling, captureBaseline } = usePortosRestartWatch({
     active: updating,
     onRestart: () => setUpdating(false),
-    onFailure: ({ message }) => {
+    onFailure: ({ message, code }) => {
       setUpdating(false);
       if (message) setUpdateError(message);
+      if (code === 'UPDATE_INTERRUPTION_REQUIRED' && lastUpdateRequest.current)
+        setInterruptionRequest({ ...lastUpdateRequest.current, acknowledgment: 'acknowledgeInterruption' });
     },
   });
 
@@ -101,6 +106,7 @@ export default function UpdateTab() {
   // `launch` lets the Node runtime panel start its restart through the same
   // baseline, step list and restart watch as a release update.
   const runUpdate = useCallback(async (opts = {}, fromStatus = null, launch = api.executePortosUpdate) => {
+    lastUpdateRequest.current = launch === api.executePortosUpdate ? { opts, fromStatus, launch } : null;
     const s = fromStatus || status;
     // Record the version and uptime of the still-running server, so even an
     // instant restart (whose first post-restart poll already reports a small
@@ -109,8 +115,11 @@ export default function UpdateTab() {
     setUpdating(true);
     setSteps([]);
     setUpdateError(null);
+    setInterruptionRequest(null);
     const result = await launch(opts).catch(err => {
       setUpdateError(err.message);
+      const acknowledgments = { UPDATE_INTERRUPTION_REQUIRED: 'acknowledgeInterruption', FORK_SYNC_REQUIRED: 'acknowledgeFork', PERSISTENT_MIND_IMAGES_IN_FLIGHT: 'acknowledgePersistentMindImageBackup' };
+      if (acknowledgments[err.code]) setInterruptionRequest({ opts, fromStatus, launch, acknowledgment: acknowledgments[err.code] });
       setUpdating(false);
       return null;
     });
@@ -210,10 +219,7 @@ export default function UpdateTab() {
   const installState = status?.installState;
   const outOfSync = !!installState?.outOfSync;
 
-  // Live CoS agents make a restart destructive — updating/reconciling pm2-restarts
-  // PortOS and severs any in-flight agent. When agents are running we suppress the
-  // reconcile prompt and the update actions (the server also hard-rejects with 409
-  // AGENTS_ACTIVE) and show a notice instead.
+  // Manual actions remain available; the server names interruption risks.
   const activeCosAgents = status?.activeCosAgents || 0;
   const agentsActive = activeCosAgents > 0;
   const installIssues = [];
@@ -291,19 +297,17 @@ export default function UpdateTab() {
         </div>
       )}
 
-      {/* CoS agents live — updating/reconciling would restart PortOS and sever
-          them, so the reconcile prompt and update actions below are suppressed. */}
+      {/* Manual actions remain available; continuing requires acknowledgment of interruption. */}
       {agentsActive && (outOfSync || hasUpdate) && (
-        <Banner tone="warning" icon={AlertTriangle} size="md" title="Update paused — CoS agents running">
+        <Banner tone="warning" icon={AlertTriangle} size="md" title="Updating will interrupt active work">
           {activeCosAgents} CoS agent{activeCosAgents === 1 ? ' is' : 's are'} currently running.
           Updating or reconciling restarts PortOS, which would sever {activeCosAgents === 1 ? 'it' : 'them'} mid-task.
-          Pause or wait for the agent{activeCosAgents === 1 ? '' : 's'} to finish — this notice clears automatically,
-          then you can update.
+          Save your work before continuing. You can wait, or explicitly continue the manual update.
         </Banner>
       )}
 
       {/* Install out of sync (issue #1779) — distinct from "new release available" */}
-      {outOfSync && !agentsActive && (
+      {outOfSync && (
         <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
@@ -396,15 +400,12 @@ export default function UpdateTab() {
         </div>
       )}
 
-      {/* Update Actions. Only the restart-triggering buttons (Sync Fork & Update,
-          Update from Fork As-Is, Update Now — all call runUpdate → update.sh →
-          pm2 restart) are suppressed while CoS agents are live; the safe actions
-          (Sync Fork Only = gh repo sync only, Ignore = no restart) stay available. */}
+      {/* Manual actions share the server warning and explicit-continuation flow. */}
       {hasUpdate && (
         <div className="flex flex-wrap gap-2">
           {isFork ? (
             <>
-              {!agentsActive && (
+              {(
                 <button
                   onClick={handleSyncForkAndUpdate}
                   disabled={updating || polling || syncingFork}
@@ -424,7 +425,7 @@ export default function UpdateTab() {
                 <GitFork size={14} />
                 Sync Fork Only
               </button>
-              {!agentsActive && (
+              {(
                 <button
                   onClick={handleUpdateFromForkAsIs}
                   disabled={updating || polling || syncingFork}
@@ -437,7 +438,7 @@ export default function UpdateTab() {
               )}
             </>
           ) : (
-            !agentsActive && (
+            (
               <button
                 onClick={handleUpdate}
                 disabled={updating || polling}
@@ -473,6 +474,7 @@ export default function UpdateTab() {
         busy={updating || polling || syncingFork}
         onLaunch={(call) => runUpdate({}, null, call)}
       />
+      <ChromeUpdatePanel />
 
       {/* Update Progress */}
       {steps.length > 0 && (
@@ -493,6 +495,15 @@ export default function UpdateTab() {
       {/* Update Error */}
       {updateError && (
         <Banner tone="error" size="md" icon={AlertTriangle}>{updateError}</Banner>
+      )}
+      {interruptionRequest && (
+        <button
+          onClick={() => runUpdate({ ...interruptionRequest.opts, [interruptionRequest.acknowledgment]: true }, interruptionRequest.fromStatus, interruptionRequest.launch)}
+          disabled={updating || polling}
+          className="px-4 py-2 bg-port-warning text-black rounded-lg text-sm disabled:opacity-50"
+        >
+          {interruptionRequest.acknowledgment === 'acknowledgeInterruption' ? 'Update now and interrupt active work' : interruptionRequest.acknowledgment === 'acknowledgeFork' ? 'Update from fork as-is' : 'I backed up image work — continue update'}
+        </button>
       )}
 
       {/* Automatic updates — configuration plus what the scheduler is waiting on */}

@@ -8,8 +8,7 @@
  */
 
 export const STORYBOARD_GUIDANCE_ADDITION_ID = 'storyboard-guidance';
-// The panel plus this many references fit the image backends' reference caps
-// (MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES, Grok's image_edit array).
+// Storyboard-guided clips reserve their own reference budget for the video model.
 export const STORYBOARD_GUIDANCE_MAX_REFERENCES = 4;
 // The fal model a storyboard-guided clip uses when the request names none.
 export const FAL_STORYBOARD_GUIDANCE_MODEL = 'bytedance/seedance-2.5/reference-to-video';
@@ -43,6 +42,21 @@ export const storyboardGuidanceAddition = (text) => ({ id: STORYBOARD_GUIDANCE_A
 export function falReferenceImageName(model, index) {
   if (!model?.referenceImages) return null;
   return (model.referenceImages.promptName ?? 'Image 1').replace(/1$/, String(index + 1));
+}
+
+/** A clip's reference labels, in the same order as the provider's image list. */
+export function falClipReferenceAddition(model, references = [], { hasImage = true, prompt = '' } = {}) {
+  if (!model?.referenceImages) return null;
+  const looseStart = hasImage && !model.image;
+  const firstName = looseStart ? falReferenceImageName(model, 0) : null;
+  const lines = looseStart && !prompt.includes(`${firstName} is the opening frame`)
+    ? [`Use ${firstName} as the opening view.`] : [];
+  const offset = looseStart ? 1 : 0;
+  for (const [index, ref] of references.entries()) {
+    const label = String(ref.label || ref.role || 'visual reference').replace(/\s+/g, ' ').trim();
+    lines.push(`${falReferenceImageName(model, index + offset)} is the reference for ${label}.`);
+  }
+  return lines.length ? { id: 'clip-references', label: 'Clip references', text: lines.join(' ') } : null;
 }
 
 /** Why `model` cannot render from a storyboard panel, or null when it can. */

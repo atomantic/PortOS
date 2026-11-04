@@ -321,6 +321,17 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(prompt).toMatch(/^\s*\d+\.\s+`\/do:push/m);
   });
 
+  it('gives the complexity audit its report command and a fallback for other languages or repositories', async () => {
+    const prompt = renderPrompt(await generate('better-complexity'));
+    expect(prompt).toContain('If the target repository has server/scripts/complexity-report.js');
+    expect(prompt).toContain('npm run quality:complexity');
+    expect(prompt).toContain('record scan failures and separately analyze first-party languages the report does not cover');
+    expect(prompt).toContain('If the command is absent or fails, use another language-aware complexity analyzer');
+    expect(prompt).toContain('in the run narrative, not QUALITY_AUDIT_JSON');
+    expect(prompt).toContain('A high count alone is not a finding');
+    expect(renderPrompt(await generate('security'))).not.toContain('npm run quality:complexity');
+  });
+
   it('requires a persisted report for CLI audits that normally finish by exiting', async () => {
     const task = await generate('better-complexity');
     const prompt = buildLightContextPrompt(task, WORKSPACE, null, { isTui: false });

@@ -46,7 +46,7 @@ export default function ProductionReviewContext({ stage, project, shots: reviewe
           return <li key={shot.id || shot.sceneId || index} className="flex min-w-0 items-start gap-1 px-2 text-sm">
             {onSeek && timed
               ? <button type="button" onClick={() => onSeek(scene.startSec)} aria-label={`Play shot ${index + 1} in the preview`}
-                className="mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded text-port-accent hover:bg-port-border/40"><Play size={14} aria-hidden="true" /></button>
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 mt-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded text-port-accent hover:bg-port-border/40"><Play size={14} aria-hidden="true" /></button>
               : <span className="w-8 shrink-0" />}
             <details className="group min-w-0 flex-1">
               {/* A flex summary drops the native marker, so the row draws its own chevron. */}

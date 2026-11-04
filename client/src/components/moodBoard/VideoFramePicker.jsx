@@ -200,7 +200,7 @@ export default function VideoFramePicker({ src, poster, busy = false, onAdd, onC
             <button type="button" onClick={() => { pause(); seek(t); }} className="min-h-[36px] pl-3 pr-1 tabular-nums" aria-label={`Go to ${formatFrameTime(t)}`}>
               {formatFrameTime(t)}
             </button>
-            <button type="button" onClick={() => setPicked((prev) => prev.filter((p) => p !== t))} className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center text-gray-500 hover:text-port-error" aria-label={`Remove ${formatFrameTime(t)}`}>
+            <button type="button" onClick={() => setPicked((prev) => prev.filter((p) => p !== t))} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[36px] min-w-[36px] inline-flex items-center justify-center text-gray-500 hover:text-port-error" aria-label={`Remove ${formatFrameTime(t)}`}>
               <X className="w-3 h-3" aria-hidden="true" />
             </button>
           </span>

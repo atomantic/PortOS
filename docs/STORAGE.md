@@ -16,9 +16,11 @@ The schema is versioned; an absent file starts Normal, while corrupt/future stat
 an interrupted transaction fails closed. Replacement uses exclusive directory locking,
 file/directory fsync and atomic rename. No seed or DB migration is required.
 
-Ready means every admitted agent, persistent-mind turn, provider run, media render
-(including its browser/export preparation), and scheduled shell/script has released
-ownership after its final saving and cleanup. This includes federated jobs dispatched
+Normally readiness follows release of every admitted agent, persistent-mind turn,
+provider run, media render (including its browser/export preparation), and scheduled
+shell/script after final saving and cleanup. An inactive legacy reservation can also
+be dispositioned as described below; that records unknown output rather than a
+successful save. This includes federated jobs dispatched
 by this instance, through remote completion and verified local publication; a peer
 being unreachable is not completion. New peer dispatch stays held. A held restart
 retains unresolved remote ownership without replaying an unknown submission.
@@ -39,9 +41,10 @@ to one cannot resume a claimed hold. Old unclaimed v1 journals still read normal
 
 Operation age or a dead PID is not proof of saved output. On restart, the journal keeps
 unresolved ownership; runner survivors reconnect to their existing operation. A lost
-worker, failed save, or interrupted journal transaction needs recovery through its owning
-service and inspection of durable output before readiness can be certified. There is no
-force-Ready/expiry button. Resuming an unresolved hold permits new work but does not
+worker or failed save can be recovered through its owning service; inactive legacy
+admission can also receive an explicit unknown-output disposition. An interrupted
+journal transaction needs its own recovery. There is no age-based force-Ready/expiry
+button. Resuming an unresolved hold permits new work but does not
 certify the old work finished. Do not delete this journal to claim readiness; preserve it
 with the related run/job records for recovery. A backup restored on another installation
 therefore starts conservatively if it contains a hold or outstanding operations.
@@ -54,7 +57,10 @@ already has an end time, which is published before the reservation is finished. 
 dead-owner `mind-turn` is released only when the persisted mind record has no active
 turn, including after restart recovery of an orphaned turn. A dead-owner `provider`
 reservation names a caller label, not a run, so it is left in place. Other kinds are
-not inferred from a dead pid alone.
+not inferred from a dead pid alone. While an update is waiting, a separate idle
+reconciler checks current activity, runner ownership, known agent PIDs and the
+journal before recording an automatic unknown-output disposition for inactive
+ordinary reservations. It does not infer that the historical output was saved.
 
 Publication admission keeps a maintenance reservation while waiting for a backup
 cut. A boundary-owned callback-start check retires a refused admission without
@@ -115,6 +121,80 @@ deliberately. With no unresolved operations the status is Ready; otherwise it is
 Draining. Recovery archives stay in the same backed-up, machine-local subtree:
 snapshots retain them as evidence and restores preserve the current subtree
 byte-for-byte, including archives, rather than installing a snapshot's authority.
+
+### Inactive reservations while updating
+
+When an update is waiting, PortOS automatically checks current activity and
+recorded process identities. If ordinary reservations have inactive owners, it
+retains their exact records in a durable `automatically-abandoned` receipt with
+output completeness `unknown`, then lets the waiting updater try admission
+again. A journal revision check fences the activity snapshot; the updater takes
+its hold under the same lock as new admissions. A racing job therefore either
+becomes a blocker or is refused after the update takes the hold. Unknown activity,
+live owners, unsupported reservation kinds, and active maintenance owners wait.
+This does not retire release-candidate publication ownership, change job
+outcomes, or establish whether an untracked detached historical child exited.
+Agent and runner reservations require a positively identified ordinary task;
+release-related and unclassifiable owners remain. Workspace and process-table
+checks are best effort for legacy children, and any inspection limitations are
+recorded in the receipt.
+An older producer that does not use the admission journal cannot be fenced by
+that journal: the updater checks for observable legacy processes, but cannot
+atomically prevent such a producer from starting after the process snapshot.
+Automatic reservation disposition and remote status checks run in the server.
+If it is offline, stale journal reservations or a retained remote request can
+keep a direct update waiting until the service is available to reconcile them.
+Windows cannot scope a relative PowerShell updater by working directory with the
+built-in probes, so an observed relative updater is allowed to finish first.
+If a completed accelerator claim cannot be removed promptly, its adjacent
+`.completed.json` marker records the finished claim token and PID, not output
+success. A marker for another token cannot retire the current claim, and a
+handed-off child still blocks while it is live.
+Before another local accelerator job starts, existing trainer control files are
+checked against the live process table, including PID reuse and zombie state;
+the historical controls themselves are not removed by this check. An unavailable
+process inventory refuses the new job until the check can run.
+Accelerator claims require same-directory hard links in the data directory; a
+filesystem or permissions that do not support them cause
+`HEAVY_CLAIM_LINK_UNSUPPORTED`. Use a data filesystem that permits hard links
+to run local accelerator jobs.
+
+### Operator disposition of inactive reservations
+
+An operator can retire inactive admission bookkeeping when old work has no
+recoverable completion receipt. This records **operator-disposed**, with output
+completeness **unknown**; it does not change the job or agent outcome, delete
+outputs, or retire a release candidate. Release-candidate publication and
+ownership checks remain separate.
+
+First enter a normal operator maintenance hold in Settings → General → Graceful
+maintenance. This supersedes and cancels a direct update that is still waiting;
+queued work remains queued. Wait for running work to finish. From the install
+checkout, or a reviewed checkout with its own dependencies, run:
+
+```bash
+umask 077
+node scripts/reconcile-maintenance-reservations.mjs inspect --install-root /absolute/path/to/PortOS --reason "Reviewed inactive work" > /tmp/portos-reservation-request.json
+# Review the request; remove entries from operations to select a smaller set.
+node scripts/reconcile-maintenance-reservations.mjs reconcile /tmp/portos-reservation-request.json --install-root /absolute/path/to/PortOS --confirm-disposition
+```
+
+The inspection and disposition each query the running install's activity and
+runner, bind the response to that install's hold, and refuse running or
+unreadable work. They check the recorded owner PIDs, the exact reservation
+contents, and the journal revision again before removal. Keep the request file
+private: it contains resource identifiers. The default API origin is the local
+HTTP mirror at `127.0.0.1:5553`; use `--api-origin http://127.0.0.1:5555` when
+the API is HTTP without the mirror. If the install uses a custom local runner,
+pass its configured origin with `--runner-origin`. Credentials follow
+`scripts/portos-api.js`; they are sent only to the local API, not the runner.
+
+The journal retains a durable receipt containing each original reservation, the
+local operator and reason. This is an acknowledgement of uncertainty, not proof
+that a detached historical child or an output was complete. It does not clear
+agent, runner, update, harness, exclusive-maintenance or release ownership records.
+Unrecognized reservations stay in place. After reviewing the remaining blockers,
+resume the hold and retry the update; do not delete journal files by hand.
 
 ### Unsettled generic output publications
 
@@ -1354,3 +1434,27 @@ matching ownership and either a never-dispatched reservation or a persisted
 settlement. A durable deletion intent permits an interrupted collection to
 resume. Unreadable, mismatched or replaced records and files are preserved for
 operator recovery rather than adopted or removed.
+
+### Deferred local self-updates
+
+The existing machine-local `data/workflow-maintenance/state.json` journal also
+holds a `deferred-update` operation using the existing extensible operation shape.
+Its bounded resource JSON carries phase, child and hold identity, so older running
+servers can still admit release children while updated source waits. The latest
+terminal outcome lives beside it in `update-result.json`, published under the
+same journal transaction before retiring the operation and hold. The existing
+`data/update.json` keeps the last consumed outcome ID separately from the displayed
+result, so a retained outcome cannot replace newer update activity.
+Each service-launched attempt has a distinct control directory and a short-lived
+launch ticket. The supervisor must claim that ticket before it can begin; a
+timed-out or dead unclaimed launch is canceled atomically so a late supervisor
+cannot start another update. The control files stay protected while the server
+is consuming them.
+Waiting does not close workflow admission. The same journal transaction acquires
+an update hold only with no admitted operations, retaining it through restart
+and final command settlement. The record binds a supervisor PID, child process
+identity, hold identity and optional final script result. Absent operations mean no deferred update; no seed, migration or federation is added.
+The existing journal backup/restore protection applies. POSIX recovery requires
+owner and process-group absence; Windows additionally requires operation-bound
+terminal evidence. Unknown liveness remains held, never aged out. See
+[Self-Update](SELF_UPDATE.md) for the offline recovery command.

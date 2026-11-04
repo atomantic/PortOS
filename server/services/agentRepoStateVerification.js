@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { realpath } from 'node:fs/promises';
 import { outsideGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 import { retirementCheckoutIdentityFromPointer } from '../lib/retirementCheckoutObservation.js';
+import { canonicalizePath } from '../lib/pathContainment.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { isHumanClaimWorktree, worktreeAgentId } from '../lib/worktreeOwnership.js';
@@ -290,6 +292,7 @@ const MANUAL_COMPLETION_STAGES = ['sentinel', 'jira', 'notification', 'pipeline'
 // worktree receipt exists. Any other unfinished stage refuses the recheck.
 const REPOSITORY_HELD_STAGES = new Set(['pipeline', 'creative']);
 const REPOSITORY_HOLD_REASONS = new Set(['checkout-capture-pending', 'checkout-retirement-pending']);
+const canonicalRepository = path => typeof path === 'string' && path ? realpath(path).catch(() => resolve(path)) : Promise.resolve(null);
 
 /** 'ready' when every completion stage finished; 'repository-held' when only
  * pipeline/creative stages wait on this verification; otherwise null. */
@@ -371,10 +374,11 @@ async function readAbsentTaskSnapshot(agent) {
     : [meta.claimBranches, meta.claimReleasedBranches].flatMap(value => Array.isArray(value) ? value : []);
   if (!branches.length || branches.some(branch => typeof branch !== 'string' || !branch)) return null;
   const repository = meta.sourceWorkspace || meta.workspacePath;
+  const canonical = await canonicalRepository(repository);
   for (const branch of new Set(branches)) {
     const rows = meta.completedCheckouts?.filter(row => row.branch === branch);
     if (rows?.length !== 1 || !completedCheckoutReceiptValid(agent, rows[0])
-      || rows[0].repoPath !== repository || !rows[0].path || !/^[a-f0-9]{40,64}$/.test(rows[0].head || '')
+      || resolve(rows[0].repoPath || '') !== canonical || !rows[0].path || !/^[a-f0-9]{40,64}$/.test(rows[0].head || '')
       || !retirementCheckoutIdentityFromPointer(rows[0].incarnation?.pointer)) return null;
   }
   return snapshot;
@@ -616,7 +620,8 @@ export function resumeAgentCompletionRetirement(agentId, seedContext) {
 }
 
 async function verifyReleasedSynchronization(agent) {
-  if (agent?.status === 'completed' && agent.metadata?.taskAnalysisType === 'release-sync') {
+  if (agent?.status === 'completed' && (agent.metadata?.taskAnalysisType === 'release-sync'
+    || (agent.metadata?.taskAnalysisType === 'do-release' && agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2))) {
     const { verifyReleaseSynchronizationTask } = await import('./releaseSynchronization.js');
     await verifyReleaseSynchronizationTask(agent.taskId);
   }
@@ -853,8 +858,12 @@ async function resumeReleasedCompletion(agentId, seedContext) {
     return { verified: false, cleanupReplayed: Boolean(task), skipReason: 'original-result-preserved' };
   }
   const current = await getAgentRecord(agentId);
-  const result = await verifyAgentRepoState({ agentId, agentState: current, task: task || { id: agent.taskId },
-    success: current.result?.success === true, prExpected: isTruthyMeta(task?.metadata?.openPR) });
+  const snapshot = !task && current.result?.success === true ? await readAbsentTaskSnapshot(current) : null;
+  if (!task && current.result?.success === true && !snapshot) return skipped('cleanup-task-unavailable');
+  const originalTask = task || snapshot || { id: agent.taskId };
+  const result = await verifyAgentRepoState({ agentId, agentState: current, task: originalTask,
+    ...(snapshot && { originTaskAbsent: true }),
+    success: current.result?.success === true, prExpected: isTruthyMeta(originalTask?.metadata?.openPR) });
   const settled = await getAgentRecord(agentId);
   if (task) await replayAgentCompletionCleanup(settled);
   await verifyReleasedSynchronization(settled);
@@ -1271,7 +1280,7 @@ async function recordCompletionReplayAttempt(original) {
 // Definite absence may use the existing immutable-snapshot receipt proof. An
 // unreadable task is not absent, and neither case replays external stages.
 async function settleTasklessCompletionAudit(agent, { readable }, seedContext) {
-  const resumed = readable && agent.result?.cleanupPending === true
+  const resumed = readable && (agent.result?.cleanupPending === true || agent.result?.success === true)
     ? await resumeAgentCompletionRetirement(agentIdOf(agent), seedContext).catch(() => null) : null;
   if (resumed?.verified) return;
   const { recordRepoStateVerification } = await import('./cosAgentLifecycle.js');
@@ -1381,6 +1390,7 @@ async function verifyRunBranches(input) {
   const sourceWorkspace = meta.sourceWorkspace || meta.workspacePath;
   const trees = sourceWorkspace ? await listWorktrees(sourceWorkspace).catch(() => null) : null;
   if (!trees) return skipped(REPO_STATE_SKIPS.GATE_UNREADABLE);
+  const repository = await canonicalRepository(sourceWorkspace);
   const holdBranch = async (branch, reason, extra, path) => {
     // Per-branch swarm results carry no observation; a held branch was never probed.
     const { observed: _unprobed, ...held } = await branchLedger(input.agentId, { branch, ...(path && { path }) }, input.recordCleanup).blockWith(reason, { record: extra });
@@ -1393,9 +1403,21 @@ async function verifyRunBranches(input) {
       if (reason) { results.push(await holdBranch(branch, reason)); continue; }
     }
     const captures = (meta.completedCheckouts || []).filter(row => row?.branch === branch && completedCheckoutReceiptValid(input.agentState, row)
-      && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+      && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
       && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
     const original = meta.completedCheckouts?.find(row => row.branch === branch);
+    // A transient forge failure for one sibling must not undo an already
+    // verified removal of this run's exact captured checkout. A reused path or
+    // branch still goes through the normal incarnation and ownership checks.
+    const capture = captures.length === 1 ? captures[0] : null;
+    const previous = capture && meta.cleanupOutcomes?.[JSON.stringify([branch, capture.path])];
+    if (previous?.status === 'verified'
+      && !trees.some(tree => tree.branch?.replace(/^refs\/heads\//, '') === branch || canonicalizePath(tree.path) === canonicalizePath(capture.path))
+      && await readCheckoutPathPresence(capture.path).catch(() => null) === false
+      && await readLocalBranchPresence(sourceWorkspace, branch).catch(() => null) === false) {
+      results.push({ branch, verified: true, issues: [], skipReason: null });
+      continue;
+    }
     const { readClaimOwnershipAgents } = await import('./cosClaimOwnership.js');
     const { claimCheckoutOwner } = await import('../lib/claimContinuation.js');
     const agents = await readClaimOwnershipAgents().catch(() => null);
@@ -1419,7 +1441,7 @@ async function verifyRunBranches(input) {
       && !meta.checkoutSeeds?.some(row => row.branch === branch)
       && meta.completedCheckouts?.some(row => row.branch !== branch
         && completedCheckoutReceiptValid(input.agentState, row)
-        && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+        && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
         && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '')
         && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
     if (releasedSelection && await settleReleasedSelectionHistory(input.agentId, meta, branch, trees)) {
@@ -1549,7 +1571,7 @@ async function resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, 
   // Git porcelain uses forward slashes on Windows; registration spelling is
   // not an incarnation change. Resolve only native lexical path syntax here;
   // the persisted pointer/private-administration identity is still checked below.
-  const samePath = tree => !!worktreePath && resolve(tree.path) === resolve(worktreePath);
+  const samePath = tree => !!worktreePath && canonicalizePath(tree.path) === canonicalizePath(worktreePath);
   const pathHolder = inventory.find(samePath);
   if (holders.some(tree => !samePath(tree))
     || (pathHolder && pathHolder.branch?.replace(/^refs\/heads\//, '') !== branchName)) {
@@ -1583,12 +1605,13 @@ async function containedInDefaultBranch(sourceWorkspace, head) {
 /** Already removed checkouts need delivery proof, not a retroactive backup. */
 async function settleAbsentCheckout({ agentId, agentState, metadata, app, sourceWorkspace, branchName, worktreePath, originalPrUrl, observed, record, staysOpen, recheckCleanup }) {
   const { readRetirementForgeEvidence } = await import('./heldCheckoutReview.js');
+  const repository = await canonicalRepository(sourceWorkspace);
   // Opening a PR need not have been requested by the original task. A run
   // can nevertheless have delivered one itself. Its immutable capture permits
   // a read-only merge lookup; it never authorizes removal or a made-up receipt.
   const captures = agentState?.status === 'completed' ? (metadata.completedCheckouts || []).filter(row =>
     completedCheckoutReceiptValid(agentState, row) && row.branch === branchName
-    && typeof row.repoPath === 'string' && resolve(row.repoPath) === resolve(sourceWorkspace)
+    && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
     && typeof row.path === 'string' && worktreePath && resolve(row.path) === resolve(worktreePath)
     && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(row.head || '') && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer)) : [];
   const capturedHead = captures.length === 1 ? captures[0].head : null;
@@ -1616,14 +1639,20 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
       && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
       { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
   }
-  const integrated = forge && capturedCovered && (await execGit(['merge-base', '--is-ancestor', forge.mergeCommit, forge.targetHead ?? forge.defaultHead], sourceWorkspace,
-    { ignoreExitCode: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
+  // The forge owns merged delivery. Completion often precedes the next fetch,
+  // so merge/target objects can be absent locally even after successful cleanup.
+  const integrated = !!forge && capturedCovered;
   // A run that never published (a no-change audit) has no PR to prove. When the
   // forge affirmatively reports none, no remote branch holds other work, and the
   // captured final head is already in the fetched default branch, the removed
   // checkout held nothing undelivered.
   const unpublishedContained = !integrated && capturedHead && !proofUrl && delivery?.readable === true && !delivery.prState
     && observed.remoteBranchPresent === false && await containedInDefaultBranch(sourceWorkspace, capturedHead);
+  if (!staysOpen && integrated && observed.remoteBranchPresent !== false) {
+    const reason = observed.remoteBranchPresent === true ? 'remote-branch-present' : 'remote-branch-unverified';
+    await record('blocked', reason, { prUrl: proofUrl, committedIntegrationVerified: true });
+    return skipped(reason);
+  }
   if (!staysOpen && (integrated || unpublishedContained)) {
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {

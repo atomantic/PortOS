@@ -337,7 +337,7 @@ export default function AutobiographyTab({ onRefresh }) {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setShowConfig(!showConfig)}
-            className="p-2 rounded text-gray-400 hover:text-white hover:bg-port-card transition-colors"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-white hover:bg-port-card transition-colors"
             title="Settings" aria-label="Settings"
           >
             <Settings size={16} />

@@ -1,8 +1,6 @@
 import A2vLoraStageControls from '../components/videoGen/A2vLoraStageControls';
 import { isDefaultA2vLoraStages } from '../lib/videoLoraStages';
 import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
-import RunwayCatalogStatus from '../components/imageGen/RunwayCatalogStatus.jsx';
-import RunwayVideoInputPanel from '../components/videoGen/RunwayVideoInputPanel.jsx';
 import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../../server/lib/runwaySpecialVideoModels.js';
 /**
  * Video Generation page (LTX models via mlx_video on macOS, diffusers on
@@ -111,21 +109,23 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import {
-  FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, FAL_VIDEO_MODELS, getFalVideoModel, falVideoResolutions, estimateFalVideoCostUsd,
+  getFalVideoModel, falVideoResolutions,
 } from '../lib/falVideoModels.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import {
-  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, estimateRunwayVideoCostUsd, getRunwayVideoModel,
-  runwayVideoLengths, runwayVideoResolutions,
+  RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel,
+  runwayVideoResolutions,
 } from '../lib/runwayVideoModels.js';
 import { videoGenEnqueuePolicy } from '../lib/videoGenEnqueuePolicy.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
+import FalVideoSettings from '../components/videoGen/FalVideoSettings';
+import RunwayVideoSettings from '../components/videoGen/RunwayVideoSettings';
 import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
-import { formatCount, formatUsd, timeAgo } from '../utils/formatters';
+import { formatCount, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
-import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
+import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES, isModelAllowedForMode, videoModelModeOptions } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { refreshMediaUsages } from '../hooks/useMediaUsages';
@@ -289,7 +289,7 @@ export default function VideoGen() {
     mode, handleModeChange,
     prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
     selectedUniverse, setSelectedUniverse, remixModelFallback,
-    modelId, handleModelChange, currentModel, visibleModels,
+    modelId, handleModelChange, currentModel, visibleModels, otherModeModels,
     loraFamily, videoLoras, loraUnavailableHint,
     selectedLoras, setSelectedLoras,
     a2vLoraStageStrengths, setA2vLoraStageStrengths,
@@ -320,7 +320,7 @@ export default function VideoGen() {
     icReferenceFile, icReferenceVideoId, icReferenceNames, icReferenceImageFiles,
     pickIcReferenceFile, pickIcReferenceVideoId,
     addIcReferenceImage, updateIcReferenceImage, removeIcReferenceImage,
-    referenceImageFiles, addReferenceImage, updateReferenceImage, removeReferenceImage,
+    referenceImageFiles, unavailableReferenceImageNames, addReferenceImage, updateReferenceImage, removeReferenceImage,
     referenceVideoIds, maxReferenceVideos, addReferenceVideo, pickReferenceVideo, removeReferenceVideo,
     referenceAudioFiles, maxReferenceAudios, addReferenceAudio, removeReferenceAudio,
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
@@ -933,9 +933,9 @@ export default function VideoGen() {
       name: currentModel?.name || modelId, repairLabel: 'Repair model',
     },
     {
-      key: 'speed-profile', id: speedProfileAssetId, label: 'LightX2V adapter',
+      key: 'speed-profile', id: speedProfileAssetId, label: 'speed profile adapter',
       applies: !!speedProfileAssetId, status: speedProfileStatus, keyPrefix: speedProfileAssetId,
-      name: 'The LightX2V v1.3 adapter', repairLabel: 'Download adapter again',
+      name: selectedH3SpeedProfile?.name || 'The selected speed adapter', repairLabel: 'Download adapter again',
     },
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
@@ -1464,6 +1464,11 @@ export default function VideoGen() {
             {optionsHint && (
               <span className="basis-full text-xs text-port-warning" role="status">{optionsHint}</span>
             )}
+            {unavailableReferenceImageNames.length > 0 && (
+              <p role="status" className="basis-full text-xs text-port-warning">
+                The restored render used references that cannot be restored here: {unavailableReferenceImageNames.join(', ')}. Choose replacements or use the Music Video project.
+              </p>
+            )}
             {/* Said BEFORE the button is pressed, not after the screen is already
                 dark. A user who first learns about the sleep by watching their
                 display go black reads it as a crash and wakes it — which puts
@@ -1728,139 +1733,41 @@ export default function VideoGen() {
               </p>
             </div>
           ) : isFal ? (
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label="fal.ai model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                {/* Free text stays: any fal endpoint id renders (on the legacy
-                    body, cost unknown); the list suggests the curated ones
-                    whose request body and price PortOS knows. */}
-                <input
-                  type="text"
-                  list="fal-video-model-suggestions"
-                  value={falModelId}
-                  onChange={(e) => setFalModelId(e.target.value)}
-                  placeholder={mode === 'image' ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-                <datalist id="fal-video-model-suggestions">
-                  {FAL_VIDEO_MODELS.filter((m) => m.kind === (mode === 'image' ? 'i2v' : 't2v')).map((m) => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
-                </datalist>
-              </FormField>
-              <FormField label="Clip length (sec)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  value={falDuration}
-                  onChange={(e) => setFalDuration(e.target.value)}
-                  placeholder="model default"
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-              </FormField>
-              {falModel?.resolution && (
-                <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                  <select
-                    value={falResolution}
-                    onChange={(e) => setFalResolution(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                  >
-                    <option value="">Model default</option>
-                    {falResolutions.map((resolution) => (
-                      <option key={resolution} value={resolution}>{resolution}</option>
-                    ))}
-                  </select>
-                </FormField>
-              )}
-              {falModel?.audio && (
-                <label htmlFor="fal-provider-audio" className="flex items-center gap-2 text-sm text-gray-400">
-                  <input
-                    id="fal-provider-audio"
-                    type="checkbox"
-                    checked={falGenerateAudio}
-                    onChange={(e) => setFalGenerateAudio(e.target.checked)}
-                    className="accent-port-accent"
-                  />
-                  Provider audio
-                </label>
-              )}
-              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                Renders on fal.ai's queue API — leave the model blank to use PortOS's default (text-to-video, or image-to-video in Image mode). Counts against your fal.ai balance
-                {(() => {
-                  const estimate = estimateFalVideoCostUsd({
-                    modelId: falModelId?.trim() || (mode === 'image' ? FAL_DEFAULT_IMAGE_VIDEO_MODEL : FAL_DEFAULT_TEXT_VIDEO_MODEL),
-                    seconds: falDuration === '' ? null : Number(falDuration),
-                    width, height, resolution: falResolution, generateAudio: falGenerateAudio,
-                  });
-                  return estimate == null
-                    ? ' — cost unknown for this model.'
-                    : ` — about ${formatUsd(estimate)} at list price, at ${falResolution || "the model's default resolution"} with provider audio ${falGenerateAudio ? 'on' : 'off'}.`;
-                })()}
-              </p>
-            </div>
+            <FalVideoSettings
+              mode={mode}
+              falModelId={falModelId}
+              setFalModelId={setFalModelId}
+              falDuration={falDuration}
+              setFalDuration={setFalDuration}
+              falModel={falModel}
+              falResolution={falResolution}
+              setFalResolution={setFalResolution}
+              falResolutions={falResolutions}
+              falGenerateAudio={falGenerateAudio}
+              setFalGenerateAudio={setFalGenerateAudio}
+              width={width}
+              height={height}
+            />
           ) : isRunway ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2"><RunwayCatalogStatus catalog={runwayCatalog} /></div>
-              <FormField className="col-span-2" label="Runway model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <select
-                  id="runway-video-model"
-                  value={runwayModel?.id || runwayModelId}
-                  onChange={(e) => setRunwayModelId(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                >
-                  {!runwayCatalog.videoModels.some((m) => m.id === runwayModel?.id) && <option value={runwayModel?.id || runwayModelId}>{runwayModel?.label || runwayModelId} (unavailable)</option>}
-                  {runwayCatalog.videoModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {`${m.label} · ${describeRunwayVideoRate(m.id) || 'price varies'}${m.id === RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL ? ' (default)' : ''}`}
-                    </option>
-                  ))}
-                </select>
-              </FormField>
-              {runwaySpecial ? <RunwayVideoInputPanel key={mode} mode={mode} value={runwayInputs} onChange={setRunwayInputs} /> : <>
-              <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <select
-                  id="runway-video-length"
-                  value={runwayDuration}
-                  onChange={(e) => setRunwayDuration(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                >
-                  <option value="">{`${runwayModel?.duration.defaultSec}s (default)`}</option>
-                  {runwayVideoLengths(runwayModel).map((sec) => <option key={sec} value={String(sec)}>{sec} seconds</option>)}
-                </select>
-              </FormField>
-              <ResolutionField
-                presets={VIDEO_RESOLUTIONS}
-                width={width}
-                height={height}
-                onChange={handleResolutionChange}
-                {...VIDEO_EDGE_BOUNDS}
-                snapOnBlur
-                note="Sets the shape: Runway renders the closest aspect ratio it offers."
-              />
-              {runwayResolutions.length > 1 && (
-                <FormField label="Output size" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                  <select
-                    id="runway-video-resolution"
-                    value={runwayResolution}
-                    onChange={(e) => setRunwayResolution(e.target.value)}
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                  >
-                    <option value="">{`${runwaySizeModel.size.default} (default)`}</option>
-                    {runwayResolutions.map((res) => <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res) || 'price varies'}`}</option>)}
-                  </select>
-                </FormField>
-              )}
-              </>}
-              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
-                {runwaySpecial ? 'Uses your video inputs' : mode === 'image' ? 'Animates your start frame' : 'Renders from your prompt'} on the Runway API. Counts against your Runway credits
-                {(() => {
-                  const estimate = estimateRunwayVideoCostUsd({
-                    modelId: runwayModel?.id, seconds: runwayDuration === '' ? null : Number(runwayDuration), resolution: runwayResolution,
-                  });
-                  return estimate == null ? ' — cost unknown for this model.' : ` — about ${formatUsd(estimate)} at list price.`;
-                })()}
-              </p>
-            </div>
+            <RunwayVideoSettings
+              mode={mode}
+              runwayCatalog={runwayCatalog}
+              runwayModel={runwayModel}
+              runwayModelId={runwayModelId}
+              setRunwayModelId={setRunwayModelId}
+              runwaySpecial={runwaySpecial}
+              runwayInputs={runwayInputs}
+              setRunwayInputs={setRunwayInputs}
+              runwayDuration={runwayDuration}
+              setRunwayDuration={setRunwayDuration}
+              width={width}
+              height={height}
+              handleResolutionChange={handleResolutionChange}
+              runwayResolutions={runwayResolutions}
+              runwayResolution={runwayResolution}
+              setRunwayResolution={setRunwayResolution}
+              runwaySizeModel={runwaySizeModel}
+            />
           ) : isReactor ? (
             <ReactorPanel
               clipId={reactorClipId}
@@ -1884,6 +1791,10 @@ export default function VideoGen() {
               <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
                 <ModelSelect
                   models={visibleModels}
+                  optionGroups={[{ label: 'Other modes (select to switch)', models: otherModeModels }]}
+                  getLabel={(model) => isModelAllowedForMode(model, mode)
+                    ? model.name
+                    : `${model.name}${model.deprecated ? ' (Legacy)' : ''} — ${videoModelModeOptions(model).map((option) => option.label).join(' / ')} only`}
                   value={modelId}
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
@@ -2041,7 +1952,9 @@ export default function VideoGen() {
               {...localResolutionBounds}
               snapOnBlur
               note={isMiniMaxH3Runtime(currentModel?.runtime)
-                ? 'H3 quality presets follow its trained 768px short-edge, area-capped canvas. Smaller custom sizes are off-distribution but useful for faster wiring tests; each edge snaps to 32px.'
+                ? selectedH3SpeedProfile
+                  ? `The selected Speed profile supports ${selectedH3SpeedProfile.canvases.map(([w, h]) => `${w}×${h}`).join(', ')}. Set an exact size below; each edge snaps to 32px.`
+                  : 'H3 quality presets follow its trained 768px short-edge, area-capped canvas. Smaller custom sizes are off-distribution but useful for faster wiring tests; each edge snaps to 32px.'
                 : `Each edge 64–2048px; the server rounds each down to the nearest multiple of ${localResolutionBounds.step}px.`}
             />
 

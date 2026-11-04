@@ -11,6 +11,7 @@ import toast from '../ui/Toast';
 import { uuidv4 } from '../../lib/uuid';
 import useMounted from '../../hooks/useMounted';
 import CatalogForkSeedPicker from './CatalogForkSeedPicker';
+import Modal from '../ui/Modal';
 
 const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character': 'Character canon', 'canon-place': 'Environment canon',
   'canon-object': 'Object canon', cast: 'Cast', set: 'Set', prop: 'Prop', reference: 'Reference', mentioned: 'Mentioned' }[role] || role.replaceAll('-', ' '));
@@ -78,7 +79,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
       .catch((err) => { toast.error(err.message || 'Could not set owning universe'); return null; });
     if (!mounted.current) return;
     setBusy(false);
-    if (result) { applyContext(result); setTarget(''); setOpen(false); toast.success('Owning universe set'); }
+    if (result) { applyContext(result); setTarget(''); setOpen(false); redesign?.clear?.(); toast.success('Owning universe set'); }
   };
   const fork = async () => {
     if (forkBlocked || busy || unsaved || !target || !forkName.trim()) return;
@@ -130,17 +131,19 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
       {!owner && <p className="text-xs text-gray-400">Existing references are preserved. Select an owning universe explicitly to establish story and style context.</p>}
       {owner && !refs.some((ref) => ref.refKind === 'universe' && ref.refId === owner.refId) && !readOnly && <button type="button"
         onClick={addToCanon} disabled={busy || unsaved} className="min-h-11 rounded border border-port-border px-3 py-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-40">Add to owning universe</button>}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-gray-400">Used in</span>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-gray-400">Usage ({refs.length})</summary>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
         {refs.length === 0 && <span className="text-gray-500">{context?.usageComplete === false ? 'Detailed usage pending' : 'No linked containers'}</span>}
         {refs.map((ref, index) => <ThreadRefChip key={`${ref.refKind}:${ref.refId}:${ref.role}:${index}`} kind={ref.refKind} id={ref.refId}
           label={`${ref.refName || ref.refId} · ${roleLabel(ref.role)}`} resolved={ref.resolved} reason={ref.reason}
           url={ref.resolved === false ? null : threadRefUrl(ref.refKind, ref.refId)} showKind
           onRemove={!readOnly && !busy && !unsaved && !ref.derived && !ref.retained && ref.role !== 'retained-owner' ? () => removeUse(ref) : null} />)}
         {refs.some((ref) => ref.derived) && <span className="text-gray-500">Story mentions are inferred; FableLoom and voice links use exact canon IDs.</span>}
-      </div>
+        </div>
+      </details>
       {usageError && <p role="alert" className="text-xs text-port-error">Detailed usage could not be loaded. <button type="button" onClick={() => setUsageRetry((value) => value + 1)} className="underline">Retry usage</button></p>}
-      {open && <div className="border-t border-port-border pt-3 space-y-3">
+      {open && <ForkContainer compact={ingredient.type === 'character'} onClose={() => { if (!busy) { setOpen(false); redesign?.clear?.(); } }} busy={busy}>
         {forkBlocked && <p className="text-xs text-port-warning">Wait for the shared identity transition to complete before creating a fork.</p>}
         {unsaved && <p className="text-xs text-port-warning">Save your edits before changing ownership or creating a fork.</p>}
         {loadError ? <p role="alert" className="text-sm text-port-error">Could not load universes. Close and reopen to retry.</p> : universes === null ? <p className="text-xs text-gray-400">Loading universes…</p> : <>
@@ -169,7 +172,12 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
             </button>
           </div>
         </>}
-      </div>}
+      </ForkContainer>}
     </section>
   );
+}
+
+function ForkContainer({ compact, onClose, busy, children }) {
+  if (!compact) return <div className="border-t border-port-border pt-3 space-y-3">{children}</div>;
+  return <Modal open onClose={onClose} usePortal ariaLabel="Ownership and fork" size="lg"><div className="space-y-3 bg-port-card p-4">{children}<button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded border border-port-border px-3 text-sm text-gray-300 disabled:opacity-40">Cancel</button></div></Modal>;
 }

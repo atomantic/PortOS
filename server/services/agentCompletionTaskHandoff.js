@@ -84,13 +84,28 @@ export function matchesCompletionTaskDispatch(agent, task) {
 }
 
 /** Called by the trusted dispatcher after its task write, before provider launch. */
-export async function bindCompletionTaskDispatch(agentId, task) {
+export async function bindCompletionTaskDispatch(agentId, task, previousTask = null) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
     || spawnCount(task.metadata.totalSpawnCount) === null) return false;
   const { updateAgent } = await import('./cosAgentLifecycle.js');
   const proof = task.metadata.spawnBudgetProof;
+  const runtime = previousTask?.metadata?.runtimeVerification;
+  // Only the first dispatch directly released by the runtime sweep can carry
+  // this evidence. A later generic retry retains metadata but has a new count.
+  const runtimeContinuation = previousTask?.id === task.id && previousTask.status === 'pending'
+    && runtime?.version === 1 && runtime.status === 'resumed' && runtime.taskId === task.id
+    && previousTask.metadata.runtimeVerificationId === `${task.id}:${runtime.agentId}`
+    && previousTask.metadata.resumedFromAgentId === runtime.agentId
+    && previousTask.metadata.lastSpawnedAt === runtime.lastSpawnedAt
+    && spawnCount(runtime.totalSpawnCount) !== null
+    && spawnCount(previousTask.metadata.totalSpawnCount) === spawnCount(runtime.totalSpawnCount)
+    && spawnCount(task.metadata.totalSpawnCount) === spawnCount(runtime.totalSpawnCount) + 1;
   return !!await updateAgent(agentId, { metadata: { completionTaskDispatch: {
     taskId: task.id, taskType: task.taskType || 'user', expected: entries(task.metadata, DISPATCH_KEYS),
+    ...(task.metadata.repoRepairContract ? { repoRepairContract: structuredClone(task.metadata.repoRepairContract) } : {}),
+    ...(runtimeContinuation ? { runtimeContinuation: structuredClone({
+      prerequisite: runtime, description: task.description, priority: task.priority,
+    }) } : {}),
     ...(validSpawnBudgetEpisode(proof) && proof.dispatch?.agentId === agentId
       ? { spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } : {}),
   } } });

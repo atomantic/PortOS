@@ -71,6 +71,8 @@ import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
+import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
+import { startAutomaticUpdateReservationRecovery, stopAutomaticUpdateReservationRecovery } from './automaticUpdateReservationRecovery.js';
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
@@ -233,13 +235,16 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // and provider fallback are disabled.
       const isBudget = metadata.errorAnalysis?.category === ERROR_CATEGORIES.RUNTIME_BUDGET_EXHAUSTED;
       const isRefusal = metadata.errorAnalysis?.category === ERROR_CATEGORIES.CONTENT_REFUSAL;
+      const isImageUnsupported = metadata.errorAnalysis?.category === ERROR_CATEGORIES.IMAGE_UNSUPPORTED;
       errorEvents.emit('error', {
-        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : (isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED' : 'AI_PROVIDER_EXECUTION_FAILED'),
+        code: isBudget ? 'AI_RUNTIME_BUDGET_EXHAUSTED' : isRefusal ? 'AI_PROVIDER_CONTENT_REFUSED'
+          : isImageUnsupported ? 'AI_PROVIDER_IMAGE_UNSUPPORTED' : 'AI_PROVIDER_EXECUTION_FAILED',
         message: isBudget ? errorMessage : isRefusal
           ? `${metadata.providerName} declined this prompt on content/safety grounds — stopped without automatic retry or provider fallback.`
+          : isImageUnsupported ? errorMessage
           : `AI provider ${metadata.providerName} execution failed: ${errorMessage}`,
-        severity: isBudget || isRefusal ? 'warning' : 'error',
-        canAutoFix: !isBudget && !isRefusal,
+        severity: isBudget || isRefusal || isImageUnsupported ? 'warning' : 'error',
+        canAutoFix: !isBudget && !isRefusal && !isImageUnsupported,
         timestamp: Date.now(),
         context: {
           runId: metadata.id,
@@ -430,6 +435,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Stamp uncertain publications before later boot steps read the journal.
   // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
   reconcileDeadOwnerReservations();
+  startHarnessActionRecovery();
 
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
@@ -1006,7 +1012,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // no-op it: the reconcile needs a database the hermetic root does not have.
     initLoraTraining,
     initMediaJobDependentHooks,
-    resumeMediaJobCompletions,
+    resumeMediaJobCompletions: () => {
+      resumeMediaJobCompletions();
+      startAutomaticUpdateReservationRecovery();
+    },
 
     // Sharing: attach chokidar watchers to every registered share bucket so
     // incoming manifests from peers are picked up live. Backlog processing
@@ -1251,6 +1260,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // No teardown await may delay the hard deadline, recovery snapshot, or
     // disarming timers that could launch work while shutdown is suspended.
     stopIdleReaper();
+    stopHarnessActionRecovery();
+    stopAutomaticUpdateReservationRecovery();
     stopHostedSessionSweep();
     stopBeeperSocket();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())

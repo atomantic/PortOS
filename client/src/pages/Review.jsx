@@ -38,6 +38,8 @@ import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
 import AgentCard from '../components/cos/tabs/AgentCard';
+import HarnessUpdateControl from '../components/review/HarnessUpdateControl';
+import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GitHubNotificationCard from '../components/github/GitHubNotificationCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
@@ -46,6 +48,7 @@ import useEscapeKey from '../hooks/useEscapeKey';
 import useFocusTrap from '../hooks/useFocusTrap';
 import { timeAgo, formatDateTime, formatCount, formatDateShort, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -70,6 +73,11 @@ const QUEUE_SEVERITY_STYLE = {
   high: 'border-port-warning/40',
   normal: 'border-port-border'
 };
+
+const INLINE_RESOLUTION_OPERATIONS = new Set(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']);
+const HARNESS_WARNING_KEY = 'portos-harness-release-warning-days';
+const WARNING_DAYS = [0, 1, 3, 7];
+const isInlineResolution = (operation) => operation?.available !== false && INLINE_RESOLUTION_OPERATIONS.has(operation?.id);
 
 const safeExternalHttpUrl = (value) => {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -177,6 +185,16 @@ export default function Review() {
   // Rows with an inline accept/promote in flight — disables the button so a
   // double-tap can't double-resolve while the request is pending.
   const [resolvingQueueIds, setResolvingQueueIds] = useState(() => new Set());
+  const [pendingHarnessUpdate, setPendingHarnessUpdate] = useState(null);
+  const [harnessWarningDays, setHarnessWarningDays] = useState(() => {
+    const stored = Number(safeReadStorage(HARNESS_WARNING_KEY));
+    return WARNING_DAYS.includes(stored) ? stored : 0;
+  });
+  const saveHarnessWarningDays = (days) => {
+    if (!WARNING_DAYS.includes(days)) return;
+    setHarnessWarningDays(days);
+    safeWriteStorage(HARNESS_WARNING_KEY, String(days));
+  };
 
   const fetchItems = useCallback(() => {
     const requestId = ++itemsRequestId.current;
@@ -399,6 +417,9 @@ export default function Review() {
   const queueSourceErrors = useMemo(
     () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
     [queue]);
+  const queueSourceIncomplete = useMemo(
+    () => Object.entries(queue?.sources || {}).filter(([, s]) => s.incomplete),
+    [queue]);
   const selectedAction = useMemo(
     () => (queue?.items || []).find((item) => item.id === actionId) || null,
     [queue, actionId]);
@@ -541,6 +562,10 @@ export default function Review() {
                     onTriage={handleQueueTriage}
                     onFeedbackSaved={fetchQueue}
                     onGitHubUpdated={handleGitHubUpdated}
+                    onHarnessUpdate={setPendingHarnessUpdate}
+                    harnessUpdatePending={Boolean(pendingHarnessUpdate)}
+                    harnessWarningDays={harnessWarningDays}
+                    onHarnessWarningDays={saveHarnessWarningDays}
                     actionLink={`/review/${encodeURIComponent(item.id)}?view=${actionView}`}
                     detailOpen={item.id === actionId}
                     resolving={resolvingQueueIds.has(item.id)}
@@ -553,7 +578,12 @@ export default function Review() {
                 Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
               </p>
             )}
-            {queue?.partial && (
+            {queueSourceIncomplete.length > 0 && (
+              <p role="status" className="text-xs text-gray-500">
+                Some checks for {queueSourceIncomplete.map(([, s]) => s.label).join(', ')} are unverified; automatic checks will retry.
+              </p>
+            )}
+            {queue?.partial && (queueSourceIncomplete.length === 0 || Object.values(queue.sources || {}).some(source => source.truncation)) && (
               <p role="status" className="text-xs text-gray-500">
                 This bounded view may omit additional actions; open a source to see its complete list.
               </p>
@@ -729,6 +759,12 @@ export default function Review() {
         onGitHubUpdated={handleGitHubUpdated}
         onDrill={handleQueueDrill}
       />
+      <RuntimeInstallModal open={Boolean(pendingHarnessUpdate)} runtime={pendingHarnessUpdate?.id} label={pendingHarnessUpdate?.label}
+        title={`Updating ${pendingHarnessUpdate?.label || 'harness'}`} description="Running the harness updater."
+        doneText="The updater finished." installUrlBase="/api/harnesses/review-update"
+        params={pendingHarnessUpdate ? { expectedVersion: pendingHarnessUpdate.installedVersion,
+          candidateVersion: pendingHarnessUpdate.candidateVersion, ticket: pendingHarnessUpdate.ticket } : undefined}
+        streamMethod="POST" onClose={() => setPendingHarnessUpdate(null)} onComplete={() => { void fetchQueue(); }} />
     </div>
   );
 }
@@ -901,7 +937,7 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
           type="button"
           onClick={() => onTriage(item, 'dismiss')}
           disabled={disabled}
-          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
           title="Dismiss this recommendation"
           aria-label="Dismiss this recommendation"
         >
@@ -912,7 +948,8 @@ function QueueTriageControls({ item, onTriage, disabled = false }) {
   );
 }
 
-function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated, actionLink, detailOpen = false, resolving = false }) {
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, onFeedbackSaved, onGitHubUpdated,
+  onHarnessUpdate, harnessUpdatePending, harnessWarningDays, onHarnessWarningDays, actionLink, detailOpen = false, resolving = false }) {
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
   if (item.source === 'github' && item.githubNotification) {
     return (
@@ -947,7 +984,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
   const simpleTargets = promoteTargets.filter(t => t !== 'goal');
   const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
   const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
-    ? item.operations.filter(operation => operation && operation.available !== false)
+    ? item.operations.filter(isInlineResolution)
     : [];
   const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
   // Agent-run feedback renders the shared agent card right in the queue so the
@@ -1004,6 +1041,8 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
         </div>
       )}
       <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
+        {item.source === 'updates' && item.harnessUpdate?.updatable && !item.unverified && onHarnessUpdate && <HarnessUpdateControl
+          harness={item.harnessUpdate} warningDays={harnessWarningDays} onWarningDays={onHarnessWarningDays} onUpdate={onHarnessUpdate} disabled={resolving || harnessUpdatePending} />}
         <QueueInvestigation item={item} />
         {onResolve && rateOperation && !feedbackRun && (
           <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">
@@ -1057,14 +1096,15 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </label>
         )}
         <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
-        <button
-          type="button"
-          onClick={() => onDrill(item)}
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
-          title="Open" aria-label="Open"
-        >
-          <ArrowRight size={16} />
-        </button>
+        {item.drillTo && (
+          <button
+            type="button"
+            onClick={() => onDrill(item)}
+            className="min-h-[44px] inline-flex items-center gap-1 rounded-md border border-port-accent/30 px-2 py-1 text-xs font-medium text-port-accent hover:bg-port-accent/10 transition-colors"
+          >
+            <ArrowRight size={16} /> {item.drillLabel || 'Open source'}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1322,7 +1362,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
   if (!item) return null;
 
   const operations = Array.isArray(item.operations)
-    ? item.operations.filter((operation) => operation?.available !== false)
+    ? item.operations.filter(isInlineResolution)
     : [];
   const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
   const externalState = item.meta?.externalState;

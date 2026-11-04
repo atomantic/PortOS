@@ -155,7 +155,7 @@ export const textEncoderIdFromRecord = (value) => (
 // identically.
 export const DEFAULT_SPEED_PROFILE_ID = 'quality';
 export const isMiniMaxH3SpeedProfile = (profile) => (
-  profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v'
+  profile?.type === 'minimax-h3-lightx2v' || profile?.type === 'minimax-h3-mlx-lightx2v' || profile?.type === 'minimax-h3-mlx-flex'
 );
 
 // Absence, the empty string and the default id are one request — mirrors
@@ -461,3 +461,12 @@ export const isModelAllowedForMode = (model, mode) => {
   if (isIcLoraMode(mode)) return isLtx2FamilyRuntime(model.runtime);
   return Array.isArray(model.supportedModes) && model.supportedModes.includes(mode);
 };
+
+export const videoModelModeOptions = (model) => [
+  { value: 'text', label: 'Text → video' },
+  { value: 'image', label: 'Image → video' },
+  { value: 'fflf', label: 'First + last frame' },
+  { value: 'extend', label: 'Extend' },
+  { value: 'a2v', label: 'Audio → video' },
+  ...IC_LORA_MODES.map((spec) => ({ value: spec.mode, label: spec.label })),
+].filter(({ value }) => isModelAllowedForMode(model, value));

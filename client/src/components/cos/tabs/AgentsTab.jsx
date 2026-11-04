@@ -418,7 +418,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="px-3 py-2 min-h-[40px] min-w-[40px] flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-3 py-2 min-h-[40px] min-w-[40px] flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
                 aria-label="Clear search"
               >
                 <X size={16} aria-hidden="true" />

@@ -31,6 +31,7 @@ vi.mock('../../../services/api', () => ({
 
 vi.mock('./AutoUpdatePanel', () => ({ default: () => null }));
 vi.mock('./NodeRuntimePanel', () => ({ default: () => null }));
+vi.mock('./ChromeUpdatePanel', () => ({ default: () => null }));
 
 const UpdateTab = (await import('./UpdateTab')).default;
 
@@ -198,7 +199,33 @@ describe('UpdateTab reconcile flow', () => {
   });
 });
 
-describe('UpdateTab — active CoS agent suppression', () => {
+describe('UpdateTab — active CoS manual update availability', () => {
+  it('offers late asynchronous continuation and retains reconcile, fork and image-backup acknowledgments', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({ ...OUT_OF_SYNC_STATUS,
+      remoteInfo: { isFork: true, hasOrigin: true, fullName: 'example/PortOS' } });
+    mockExecutePortosUpdate.mockRejectedValueOnce(Object.assign(new Error('Back up image work first'), { code: 'PERSISTENT_MIND_IMAGES_IN_FLIGHT' }))
+      .mockResolvedValue({ started: true });
+    render(<UpdateTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile from Fork As-Is' }));
+    fireEvent.click(await screen.findByRole('button', { name: /I backed up image work/ }));
+    await waitFor(() => expect(mockExecutePortosUpdate).toHaveBeenCalledTimes(2));
+    act(() => handlers.get('portos:update:error')({ code: 'UPDATE_INTERRUPTION_REQUIRED', message: 'Active work may be interrupted. Save your work.' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Update now and interrupt active work' }));
+    await waitFor(() => expect(mockExecutePortosUpdate).toHaveBeenLastCalledWith({ reconcile: true, acknowledgeFork: true,
+      acknowledgePersistentMindImageBackup: true, acknowledgeInterruption: true }));
+  });
+  it('shows the risk and sends interruption acknowledgment only after explicit continuation', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({ ...OUT_OF_SYNC_STATUS, activeCosAgents: 1 });
+    mockExecutePortosUpdate.mockRejectedValueOnce(Object.assign(new Error('Active work may lose unsaved progress. Save your work before continuing.'), { code: 'UPDATE_INTERRUPTION_REQUIRED' }))
+      .mockResolvedValueOnce({ started: true });
+    render(<UpdateTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile Now' }));
+    const continueButton = await screen.findByRole('button', { name: 'Update now and interrupt active work' });
+    expect(mockExecutePortosUpdate).toHaveBeenCalledWith({ reconcile: true });
+    expect(screen.getByText(/Active work may lose unsaved progress/)).toBeTruthy();
+    fireEvent.click(continueButton);
+    await waitFor(() => expect(mockExecutePortosUpdate).toHaveBeenLastCalledWith({ reconcile: true, acknowledgeInterruption: true }));
+  });
   beforeEach(() => {
     handlers.clear();
     mockCheckHealth.mockReset().mockResolvedValue({ version: '2.24.0', uptime: 120 });
@@ -210,7 +237,7 @@ describe('UpdateTab — active CoS agent suppression', () => {
     vi.useRealTimers();
   });
 
-  it('suppresses the reconcile prompt and shows a paused notice while agents are live', async () => {
+  it('keeps reconcile available and shows interruption risks while agents are live', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({
       ...OUT_OF_SYNC_STATUS,
       activeCosAgents: 2,
@@ -218,10 +245,10 @@ describe('UpdateTab — active CoS agent suppression', () => {
     render(<UpdateTab />);
 
     // The paused notice appears in place of the reconcile action.
-    await screen.findByText(/Update paused — CoS agents running/i);
+    await screen.findByText(/Updating will interrupt active work/i);
     expect(screen.getByText(/2 CoS agents are currently running/i)).toBeTruthy();
     // The reconcile button must be gone — a restart would sever the agents.
-    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
   });
 
   it('shows the reconcile button again once no agents are running', async () => {
@@ -232,10 +259,10 @@ describe('UpdateTab — active CoS agent suppression', () => {
     render(<UpdateTab />);
 
     await screen.findByRole('button', { name: 'Reconcile Now' });
-    expect(screen.queryByText(/Update paused/i)).toBeNull();
+    expect(screen.queryByText(/Updating will interrupt/i)).toBeNull();
   });
 
-  it('keeps safe non-restart actions (Ignore) available while agents run, hides Update Now', async () => {
+  it('keeps safe non-restart actions (Ignore) available while agents run, keeps Update Now available', async () => {
     // P2: only restart-triggering buttons are suppressed. A non-fork install with
     // an available update and a live agent should hide "Update Now" (restarts)
     // but still offer "Ignore" (no restart).
@@ -248,13 +275,13 @@ describe('UpdateTab — active CoS agent suppression', () => {
     });
     render(<UpdateTab />);
 
-    await screen.findByText(/Update paused — CoS agents running/i);
-    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
+    await screen.findByText(/Updating will interrupt active work/i);
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeTruthy();
     // Ignore is safe (no restart) and must remain available.
     expect(screen.getByRole('button', { name: /Ignore v2\.25\.0/i })).toBeTruthy();
   });
 
-  it('keeps Sync Fork Only available while agents run (it does not restart), hides fork update buttons', async () => {
+  it('keeps Sync Fork Only available while agents run (it does not restart), keeps fork update buttons available', async () => {
     mockGetUpdateStatus.mockReset().mockResolvedValue({
       currentVersion: '2.24.0',
       updateAvailable: true,
@@ -265,15 +292,15 @@ describe('UpdateTab — active CoS agent suppression', () => {
     });
     render(<UpdateTab />);
 
-    await screen.findByText(/Update paused — CoS agents running/i);
+    await screen.findByText(/Updating will interrupt active work/i);
     // Restart-triggering fork actions hidden.
-    expect(screen.queryByRole('button', { name: 'Sync Fork & Update' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Update from Fork As-Is' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Sync Fork & Update' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Update from Fork As-Is' })).toBeTruthy();
     // Sync Fork Only only runs `gh repo sync` — no restart — so it stays.
     expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
   });
 
-  it('suppresses restart buttons when an agent starts while the update surface is showing (activity event)', async () => {
+  it('keeps restart buttons when an agent starts while the update surface is showing (activity event)', async () => {
     let agentCount = 0;
     mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
       currentVersion: '2.24.0',
@@ -287,17 +314,17 @@ describe('UpdateTab — active CoS agent suppression', () => {
 
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByRole('button', { name: 'Update Now' })).toBeTruthy();
-    expect(screen.queryByText(/Update paused/i)).toBeNull();
+    expect(screen.queryByText(/Updating will interrupt/i)).toBeNull();
 
     agentCount = 1;
     await act(async () => { handlers.get('system:activity')({}); });
     vi.useRealTimers();
 
-    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
-    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeTruthy();
+    expect(screen.getByText(/Updating will interrupt active work/i)).toBeTruthy();
   });
 
-  it('auto-clears the paused notice when the last agent finishes (activity event)', async () => {
+  it('clears the warning when the last agent finishes (activity event)', async () => {
     let agentCount = 1;
     mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
       ...OUT_OF_SYNC_STATUS,
@@ -307,14 +334,14 @@ describe('UpdateTab — active CoS agent suppression', () => {
     render(<UpdateTab />);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+    expect(screen.getByText(/Updating will interrupt active work/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
 
     agentCount = 0;
     await act(async () => { handlers.get('system:activity')({}); });
     vi.useRealTimers();
 
-    expect(screen.queryByText(/Update paused/i)).toBeNull();
+    expect(screen.queryByText(/Updating will interrupt/i)).toBeNull();
     expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
   });
 });

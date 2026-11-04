@@ -689,7 +689,7 @@ export default function DailyLogTab() {
           <span className="text-sm font-medium text-white">Daily Log</span>
           <button
             onClick={() => setShowSettings((s) => !s)}
-            className="ml-auto min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 ml-auto min-h-[40px] min-w-[40px] flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-port-card"
             title="Daily log settings" aria-label="Daily log settings"
           >
             <Settings size={14} />
@@ -951,7 +951,7 @@ export default function DailyLogTab() {
             <button
               onClick={() => loadEntry(date)}
               disabled={loading || saving || dirty}
-              className="hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 disabled:opacity-30"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 disabled:opacity-30"
               aria-label="Refresh entry"
             >
               <RefreshCw size={14} />
@@ -968,7 +968,7 @@ export default function DailyLogTab() {
             <button
               onClick={() => setConfirmDelete(true)}
               disabled={!readReady || !entry}
-              className="hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 hidden sm:flex shrink-0 min-h-[40px] min-w-[40px] items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-port-error disabled:opacity-30"
               title="Delete this entry"
               aria-label="Delete entry"
             >

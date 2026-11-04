@@ -27,7 +27,7 @@ import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { storyboardGuidanceMeta } from './storyboardGuidance.js';
 import { randomUUID } from 'crypto';
 import { readFile, writeFile, unlink } from 'fs/promises';
-import { join, relative, resolve, isAbsolute } from 'path';
+import { basename, join, relative, resolve, isAbsolute } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -55,7 +55,7 @@ import {
   readCompletedFalResult, resolveFalApiKey, submitFalRequest,
 } from '../falQueue.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
-import { falReferenceImageName, storyboardGuidanceAddition, storyboardGuidanceText } from '../../lib/storyboardGuidance.js';
+import { falClipReferenceAddition, falReferenceImageName, storyboardGuidanceAddition, storyboardGuidanceText } from '../../lib/storyboardGuidance.js';
 
 // The queue transport (submit / poll / retrieve / cancel) is shared with the
 // fal.ai image backend in `services/falQueue.js`. Re-exported so existing
@@ -158,14 +158,17 @@ function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, image
  * history records. Returns the plan with the record of the text fal receives
  * (#11317); the Video Gen form's preview calls it with the same inputs.
  */
-export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, promptAdditions = [], ...spec }) {
+export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasAudio = false, guidanceReferences = null, referenceCount = 0, clipReferenceLabels = null, promptAdditions = [], ...spec }) {
   const modelId = spec.modelId || (hasImage ? FAL_DEFAULT_IMAGE_MODEL : FAL_DEFAULT_TEXT_MODEL);
   const { negativePrompt } = spec;
   // A storyboard-guided render (`guidanceReferences`: how many reference images
   // join the panel) sends the panel as reference 1, never as a start frame, and
   // names each reference's role after the director's text.
   const guidance = guidanceReferences == null ? null : falStoryboardGuidance(getFalVideoModel(modelId), guidanceReferences);
-  const prompt = guidance ? [spec.prompt?.trim(), guidance.addition.text].filter(Boolean).join('\n') : (spec.prompt ?? '');
+  const clipReferences = clipReferenceLabels == null ? null
+    : falClipReferenceAddition(getFalVideoModel(modelId), clipReferenceLabels, { hasImage, prompt: spec.prompt || '' });
+  const prompt = guidance || clipReferences
+    ? [spec.prompt?.trim(), guidance?.addition.text, clipReferences?.text].filter(Boolean).join('\n') : (spec.prompt ?? '');
   // A reference model hears the audio as a prompt-named reference ("Audio 1").
   const audioAsReference = hasAudio && falHearsAudioReference(getFalVideoModel(modelId));
   let planned = null;
@@ -194,6 +197,7 @@ export function falVideoSentPrompt({ hasImage = false, hasEndImage = false, hasA
     carried: carriedPromptAdditions({ promptAdditions }),
     added: [
       guidance?.addition ?? null,
+      clipReferences,
       falPromptExpansionAddition(falPromptExpansionMode(planned?.model, spec.promptExpansion)),
       (!planned || planned.model.negativePrompt === 'fold') && planned?.model.prompt !== 'none'
       ? promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt) : null],
@@ -219,7 +223,7 @@ async function generateVideoPrepared({
   audioFilePath = null, lipSync = null, shotInstruction = null,
   uploadedTempPath = null, uploadedTempPaths = [],
   resolution = null, generateAudio = false, frameAspect = null, promptAdditions = [], musicVideo = null,
-  guidanceImagePath = null, referenceImagePaths = [],
+  guidanceImagePath = null, referenceImagePaths = [], clipReferenceLabels = null,
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
@@ -278,9 +282,10 @@ async function generateVideoPrepared({
     hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasAudio: !!audioFilePath,
     guidanceReferences: guidanceImagePath ? referenceImagePaths.length : null,
     referenceCount: guidanceImagePath ? 0 : referenceImagePaths.length,
+    clipReferenceLabels: guidanceImagePath ? null : clipReferenceLabels,
   });
   // The guided render sends the prompt with its role lines, exactly as the record shows.
-  if (guidanceImagePath) requestSpec.prompt = guidedPrompt;
+  if (guidanceImagePath || clipReferenceLabels != null) requestSpec.prompt = guidedPrompt;
 
   const meta = {
     id: jobId,
@@ -301,11 +306,14 @@ async function generateVideoPrepared({
     // What PortOS expected this render to cost at fal's list price, or null for
     // an uncurated model — recorded so spend can be audited per clip.
     estimatedCostUsd: planned?.estimatedCostUsd ?? null,
+    ...(modelId === 'minimax/h3-max/reference-to-video' && referenceImagePaths.length
+      ? { estimatedCostExcludesReferenceInputs: true } : {}),
     ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),
     mode: sourceImagePath ? 'image' : 'text',
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
+    ...(clipReferenceLabels != null && !guidanceImagePath ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
     // A lip-sync take syncs a mouth; an audio-to-video take moves the whole frame to the audio.
     ...(audioFilePath ? (catalogModel?.kind === 'a2v' || audioAsReference ? { audioDriven: true } : { lipSync: true }) : {}),
     ...(shotInstruction?.audioWindow ? { audioWindow: shotInstruction.audioWindow } : {}),

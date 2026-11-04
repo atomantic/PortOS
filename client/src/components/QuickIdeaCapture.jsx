@@ -148,7 +148,7 @@ export default function QuickIdeaCapture() {
           <button
             type="submit"
             disabled={!name.trim() || isSubmitting}
-            className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
             aria-label="Save to catalog"
           >
             <Send size={14} />

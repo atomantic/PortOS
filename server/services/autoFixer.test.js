@@ -37,6 +37,7 @@ const {
   classifyFixTier,
   buildFixDiagnostics,
   escalateProviderFailure,
+  handleErrorRecovery,
   FIX_TIERS,
 } = await import('./autoFixer.js');
 const { errorEvents } = await import('../lib/errorHandler.js');
@@ -67,6 +68,37 @@ function emitProviderFailure({ provider = 'Primary CLI', model = 'm-1', runId = 
   });
 }
 
+describe('autoFixer investigation outcome logs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    isRunning.mockReturnValue(true);
+    _resetAutoFixerForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    _resetAutoFixerForTests();
+  });
+
+  it.each([false, true])('reports created or reused tasks at each entry point (duplicate=%s)', async (duplicate) => {
+    const task = { id: 'outcome-task', duplicate };
+    addTask.mockResolvedValueOnce(task).mockResolvedValueOnce(task).mockResolvedValueOnce(task);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    emitProviderFailure();
+    await vi.advanceTimersByTimeAsync(5500);
+    emitCriticalError();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await handleErrorRecovery('MANUAL_ERROR')).toEqual(task);
+
+    const lines = log.mock.calls.map(([line]) => line);
+    expect(lines).toContain(`✅ AI provider investigation task ${duplicate ? 'reused' : 'filed'}: outcome-task [tier 4: escalate]`);
+    expect(lines).toContain(`✅ Auto-fix task ${duplicate ? 'reused' : 'created'}: outcome-task`);
+    expect(lines).toContain(`✅ Recovery task ${duplicate ? 'reused' : 'created'}: outcome-task`);
+  });
+});
+
 describe('autoFixer — defer + noteFallbackHandled', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -95,6 +127,30 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     expect(addTask.mock.calls[0][0]).toMatchObject({
       description: 'Investigate AI provider failure: Primary CLI (m-1)',
     });
+  });
+
+  it('does not dispatch an investigation for a known text-only model used with an image', async () => {
+    const source = readFileSync(new URL('./bootstrap.js', import.meta.url), 'utf8')
+      .replace('onRunFailed: (metadata, error) => {', 'function failureHook(metadata, error) {');
+    const hook = runInNewContext(`${extractDeclaration(source, 'failureHook')}; failureHook`, { errorEvents, ERROR_CATEGORIES, Date });
+    const observed = vi.fn();
+    errorEvents.on('error', observed);
+    try {
+      hook({ id: 'image-run', providerName: 'Ollama', providerId: 'ollama', model: 'text-model',
+        errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } }, 'The selected model does not support image inputs.');
+      expect(observed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        code: 'AI_PROVIDER_IMAGE_UNSUPPORTED', severity: 'warning', canAutoFix: false,
+      }));
+    } finally { errorEvents.off('error', observed); }
+    // Older emitters can still send the generic event; the autofixer must also
+    // recognize the structured category in that path.
+    errorEvents.emit('error', {
+      code: 'AI_PROVIDER_EXECUTION_FAILED', severity: 'error', canAutoFix: true,
+      context: { provider: 'Ollama', model: 'text-model', errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } },
+    });
+    await escalateProviderFailure({ context: { provider: 'Ollama', model: 'text-model', errorAnalysis: { category: ERROR_CATEGORIES.IMAGE_UNSUPPORTED } } });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(addTask).not.toHaveBeenCalled();
   });
 
   it('logs the actual failure reason + category + exit code inline (not just the provider)', async () => {
@@ -693,6 +749,7 @@ describe('autoFixer — diagnostics ride on the created task record (issue #2328
     // Diagnostics are also embedded in the agent-facing context markdown.
     expect(taskArg.context).toContain('## Fallback Tier');
     expect(taskArg.context).toContain('Tier:** 1 (config/env)');
+    expect(taskArg.context).toContain('does not establish that a fallback was attempted');
   });
 
   it('emits the tier inline on the "AI provider error detected" log line', async () => {
@@ -853,6 +910,20 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
   afterEach(() => {
     vi.useRealTimers();
     _resetAutoFixerForTests();
+  });
+
+  // The goal-fidelity gate judges a finished investigation against this text.
+  // Under the old wording a local reviewer held a merged root-cause fix (#14841)
+  // because the checklist read as the requirements and the fix as unrequested.
+  it('states the fix as the deliverable and frames the checks as non-deliverable', async () => {
+    emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    const { context } = filedTasks()[0];
+    expect(context).toContain('## Objective\nFind why this run failed and fix the cause.');
+    expect(context).toContain('## Starting Checks\nThese help locate the cause. They are not deliverables');
+    expect(context).not.toContain('## Investigation Steps');
+    expect(context.indexOf('## Objective')).toBeLessThan(context.indexOf('## Starting Checks'));
   });
 
   it('names the boot-vs-HEAD gap and leads the steps with ruling it out', async () => {

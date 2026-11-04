@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveTestPython } from '../../lib/testHelper.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MINIMAX_H3_LIGHTX2V_MLX_PROFILE as profile } from '../../lib/minimaxH3SpeedProfiles.js';
+import { MINIMAX_H3_LIGHTX2V_MLX_PROFILE as profile, MINIMAX_H3_FLEX_MLX_PROFILE as flex } from '../../lib/minimaxH3SpeedProfiles.js';
 import { resolveVideoSampler } from '../../lib/videoSpeedProfiles.js';
 import { prepareMiniMaxH3SpeedProfile } from './ensureWeights.js';
 import { prepareVideoGenParams, validateVideoRetryParams } from './prepareParams.js';
@@ -127,5 +128,39 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
     await expect(prepare()).rejects.toMatchObject({ code: 'VIDEO_MODEL_TERMS_ACCEPTANCE_REQUIRED' });
     expect(resolveMiniMaxH3MlxSpeedCapable).not.toHaveBeenCalled();
     expect(findCachedRepoFile).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Pika Flex request to runner boundary', () => {
+  it('admits three canvases with verified adapter and supporting files, emits the named schedule, and refuses missing notices', async () => {
+    const flexModel = { ...model, speedProfiles: [flex] };
+    listVideoModels.mockReturnValue([flexModel]);
+    stat.mockResolvedValue({ size: flex.adapter.sizeBytes, isFile: () => true });
+    findCachedRepoFile.mockImplementation(async (_repo, file) => `/example/cache/${file}`);
+    sha256File.mockImplementation(async (path) => path.endsWith(flex.adapter.file)
+      ? flex.adapter.sha256 : flex.adapter.supportFiles[path.replace('/example/cache/', '')]);
+    for (const [width, height] of flex.canvases) {
+      await expect(prepare({ speedProfileId: flex.id, width, height })).resolves.toMatchObject({ effectiveModelId: model.id });
+      const speedProfile = { ...flex, adapterPath: '/example/cache/fl2va/adapter.safetensors' };
+      const { args } = buildArgs({ ...request, width, height, model: flexModel,
+        ...resolveVideoSampler({ model: flexModel, speedProfile }), speedProfile, seed: 7, outputPath: '/example/flex.mp4' });
+      expect(args[args.indexOf('--speed-profile') + 1]).toBe(flex.id);
+      expect(args[args.indexOf('--steps') + 1]).toBe('7');
+      expect(args.filter((value) => value === '--speed-adapter')).toHaveLength(1);
+    }
+    expect(resolveMiniMaxH3MlxSpeedCapable).toHaveBeenCalledWith(flex.id);
+    expect(modelDownloadTargets(flexModel, { speedProfileId: flex.id })).toEqual([
+      { repo: flex.adapter.repo, revision: flex.adapter.revision, only: [flex.adapter.file, ...Object.keys(flex.adapter.supportFiles)] },
+    ]);
+    findCachedRepoFile.mockImplementation(async (_repo, file) => file === 'NOTICE' ? null : `/example/cache/${file}`);
+    await expect(validateVideoRetryParams({ ...request, speedProfileId: flex.id })).rejects.toMatchObject({ code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
+  });
+
+  it('refuses a renamed Flex adapter under stock or LightX2V schedules', async () => {
+    sha256File.mockResolvedValue(flex.adapter.sha256);
+    await expect(prepare({ speedProfileId: undefined, loraFilenames: ['renamed-flex.safetensors'] })).rejects.toMatchObject({ code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
+    const { validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');
+    await expect(validateMiniMaxH3MlxLoras([{ path: '/example/renamed-flex.safetensors' }], profile)).rejects.toMatchObject({ code: 'MINIMAX_H3_LORA_PROFILE_REQUIRED' });
   });
 });

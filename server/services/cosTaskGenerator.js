@@ -561,8 +561,10 @@ async function isDisabledAnalysisType(task, taskSchedule) {
   if (['release-sync', 'do-release'].includes(analysisType)) {
     const { releaseTaskDispatchDisposition } = await import('./releaseSynchronization.js');
     const disposition = await releaseTaskDispatchDisposition(task);
-    if (disposition === 'registered-continuation') return false;
+    if (['registered-continuation', 'registered-release-owner'].includes(disposition)) return false;
+    if (disposition === 'review-policy-unverified') return 'release synchronization review policy was not captured; recover from historical delivery evidence';
     if (disposition === 'retired-continuation') return 'the previous release synchronization was retired by an operator';
+    if (disposition === 'delivered-continuation') return 'the release was independently delivered; this continuation remains historical';
     if (disposition === 'wait-for-synchronization') return 'previous release is published; development synchronization and cleanup are unfinished';
   }
   // The shared drain contract always supplies a schedule. If that contract is
@@ -1326,6 +1328,8 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
   const cleanupOnlyIds = await (await import('./swarmCleanupDelivery.js')).verifiedCleanupSwarmTaskIds(existingTasks,
     { allowSourceAgentId: continuationSourceAgentId })
     .catch(() => new Set());
+  const deliveredReleaseIds = await import('./releaseSynchronization.js').then(service => service.deliveredReleaseTaskIds(existingTasks, { revalidate: false })).catch(() => new Set());
+  for (const id of deliveredReleaseIds) cleanupOnlyIds.add(id);
   const { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement } =
     buildImprovementDedupSets(existingTasks, { ignoreTaskId, cleanupOnlyIds });
 
@@ -1462,6 +1466,7 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       // metadata.prompt (#4153). On-demand path: emits unpersisted task on
       // task:ready, renders full description via getTaskPrompt.
       const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
+        ...(nextType === 'do-release' && deliveredReleaseIds.size > 0 && { deliveredReleaseTaskIds: [...deliveredReleaseIds] }),
         ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
       if (newTask?.duplicate) {
         if (continuationSourceAgentId && newTask.id === task.id) continuationSatisfied = true;

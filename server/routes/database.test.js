@@ -16,6 +16,11 @@ vi.mock('../lib/paths.js', async (importOriginal) => {
   });
 });
 
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, userInfo: vi.fn(actual.userInfo) };
+});
+
 // resolveBashBinary and the db.sh path are resolved at module load — mock
 // the dependencies before the route is imported.
 vi.mock('../lib/bashResolver.js', async (importOriginal) => ({
@@ -63,6 +68,7 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
 });
 
 import { POOL_CONFIG, query, checkHealth } from '../lib/db.js';
+import { userInfo } from 'os';
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
 import { PassThrough, Readable, Writable } from 'stream';
@@ -847,6 +853,25 @@ describe('POST /api/database/destroy', () => {
   });
 
   describe('native destroy path', () => {
+    it('uses the OS username for native PostgreSQL when USER is unset', async () => {
+      vi.stubEnv('USER', '');
+      vi.stubEnv('USERNAME', 'windows-admin');
+      userInfo.mockReturnValueOnce({ username: 'native-admin' });
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
+      mockExecFile([
+        { exitCode: 0, stdout: 'Current mode: docker' },
+        { exitCode: 0, stdout: 'DROP DATABASE' },
+      ]);
+
+      const res = await request(makeApp()).post('/api/database/destroy').send({ backend: 'native' });
+
+      expect(res.status).toBe(200);
+      const psqlCall = execFile.mock.calls.find(([command]) => command === 'psql');
+      expect(psqlCall[1].slice(psqlCall[1].indexOf('-U'), psqlCall[1].indexOf('-U') + 2))
+        .toEqual(['-U', 'native-admin']);
+    });
+
     it('reports a failed DROP DATABASE instead of success (#10889)', async () => {
       vi.stubEnv('PGHOST', 'localhost');
       vi.stubEnv('PGPORT', '5561');

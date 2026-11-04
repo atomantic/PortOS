@@ -48,6 +48,14 @@ describe('VocalStemControl', () => {
     await waitFor(() => expect(onUpdated).toHaveBeenCalledWith({ ...project, vocalStemFilename: null }));
   });
 
+  it('says when the stem was made from an earlier file of the song', () => {
+    const stemmed = { ...project, vocalStemFilename: 'vocals-1.wav', vocalStemMasterFilename: 'song.wav' };
+    const { rerender } = render(<VocalStemControl project={stemmed} masterFilename="song.wav" hasAudio onUpdated={vi.fn()} />);
+    expect(screen.getByText('Lip-sync uses vocals-1.wav')).toBeTruthy();
+    rerender(<VocalStemControl project={stemmed} masterFilename="song-take-2.wav" hasAudio onUpdated={vi.fn()} />);
+    expect(screen.getByText(/Made from an earlier version of the song/)).toBeTruthy();
+  });
+
   it('is unavailable until the project has a song to match a stem against', () => {
     render(<VocalStemControl project={{ id: 'mv-2' }} hasAudio={false} onUpdated={vi.fn()} />);
     expect(screen.getByLabelText(/Add vocal stem/).disabled).toBe(true);

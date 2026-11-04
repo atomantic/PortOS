@@ -46,6 +46,17 @@ describe('a shot\'s References row', () => {
     fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
     expect(screen.queryByRole('figure')).toBeNull();
   });
+
+  it('shows an approved overflow face sheet and lets the director remove it from the shot', () => {
+    const onSave = vi.fn();
+    const full = {
+      visualSpec: { references: [{ id: 'mvr-cs-character', imageId: 'lead.png', role: 'character', label: 'Lead' }] },
+      castAndSets: { status: 'approved', direction: { cast: [] }, overflowFaceReferences: [{ id: 'mvr-cs-expressions', imageId: 'face.png', role: 'character', label: 'Lead face sheet' }] },
+    };
+    render(<SceneFrameReferences project={full} scene={{ sceneId: 's1', framePrompt: 'Close up of Lead' }} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: "Don't send Lead face sheet" }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['mvr-cs-character'] });
+  });
 });
 
 describe('a shot that names a Casting cast member', () => {
@@ -83,5 +94,22 @@ describe('a shot whose Casting guides failed to load', () => {
     render(<SceneFrameReferences project={project} scene={scene} castMedia={{ 'cat-chr-x': null }} onEditLocal={vi.fn()} onSave={onSave} />);
     fireEvent.click(screen.getByRole('button', { name: /Don't send Lead/ }));
     expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r2', 'mvr-guide-child.png'] });
+  });
+
+  it('counts unresolved guides before allowing another pick', () => {
+    const references = Array.from({ length: 16 }, (_, i) => ({ id: `r${i}`, imageId: `${i}.png`, condition: false }));
+    const picked = references.slice(0, 15).map((ref) => ref.id);
+    render(<SceneFrameReferences project={{ visualSpec: { references } }} scene={{ sceneId: 's1', frameReferenceIds: [...picked, 'mvr-guide-missing.png'] }} castMedia={{}} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(true);
+  });
+
+  it('keeps all saved picks visible and editable when a greybox is also selected', () => {
+    const references = Array.from({ length: 16 }, (_, i) => ({ id: `r${i}`, imageId: `${i}.png`, label: `Reference ${i}`, condition: false }));
+    const onSave = vi.fn();
+    const greybox = { reference: { id: 'mvr-greybox-wide', imageId: 'layout.png', label: 'Layout', greybox: true } };
+    render(<SceneFrameReferences project={{ visualSpec: { references } }} scene={{ sceneId: 's1', frameReferenceIds: references.map((ref) => ref.id) }} greybox={greybox} onEditLocal={vi.fn()} onSave={onSave} />);
+    expect(screen.getByText('Reference 15')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: "Don't send Reference 0" }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: references.slice(1).map((ref) => ref.id) });
   });
 });

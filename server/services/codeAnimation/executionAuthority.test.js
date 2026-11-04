@@ -46,6 +46,8 @@ describe.skipIf(!['darwin', 'linux'].includes(process.platform))('machine-owned 
     const bound = await resolveBlenderExecution(renderer);
     expect(bound.provenance).toMatchObject({ executionMode: 'trusted-local', contained: false });
     await expect(resolveBlenderExecution({ ...renderer, version: '4.3.0' })).rejects.toMatchObject({ code: 'CODE_ANIMATION_BLENDER_RUNTIME_MISMATCH' });
+    // A patch update of the checked executable keeps projects on the same series renderable.
+    expect((await resolveBlenderExecution({ ...renderer, version: '4.2.5' })).provenance.version).toBe('4.2.0');
     await expect(resolveBlenderExecution(renderer, { binding: 'old-check' })).rejects.toMatchObject({ code: 'CODE_ANIMATION_BLENDER_READINESS_CHANGED' });
     await put({ executable, executionMode: 'trusted-local', acknowledgeHostAccess: true });
     await expect(resolveBlenderExecution(renderer, bound.provenance)).rejects.toMatchObject({ code: 'CODE_ANIMATION_BLENDER_NOT_READY' });

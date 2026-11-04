@@ -68,6 +68,10 @@ vi.mock('../services/fableLoom/visualConditioning.js', () => ({
     .then(actual => actual.fableLoomAdapterDigest(...args)),
 }));
 
+vi.mock('../services/imageGen/flux3Runtime.js', async original => ({ ...await original(),
+  installFlux3Runtime: vi.fn(emit => { emit({ type: 'complete', message: 'Fixture runtime ready' }); return { promise: Promise.resolve(), kill: vi.fn() }; }),
+}));
+
 vi.mock('../services/imageGen/index.js', () => ({
   checkConnection: vi.fn(),
   generateImage: vi.fn(),
@@ -291,9 +295,10 @@ describe('Image Gen Routes', () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
   });
 
-  it('sends further references after the edited image and refuses one replaced after review', async () => {
+  it('sends a catalog image-reference file after the edited image and refuses one replaced after review', async () => {
     await fileUtils.ensureDir(fileUtils.PATHS.images);
-    const extra = pathJoin(fileUtils.PATHS.images, 'quick-edit-place.png');
+    await fileUtils.ensureDir(fileUtils.PATHS.imageRefs);
+    const extra = pathJoin(fileUtils.PATHS.imageRefs, 'quick-edit-place.png');
     await writeFile(pathJoin(fileUtils.PATHS.images, 'quick-edit-subject.png'), 'subject bytes');
     await writeFile(extra, 'place bytes');
     const body = { prompt: 'Put her in the rink from image 2', quickEdit: true, referenceImageFiles: ['quick-edit-subject.png', 'quick-edit-place.png'] };
@@ -309,6 +314,7 @@ describe('Image Gen Routes', () => {
     const sent = await request(app).post('/api/image-gen/generate').send(reviewed);
     expect(sent.status).toBe(200);
     expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths.map(p => p.split(/[/\\]/).pop())).toEqual(['quick-edit-subject.png', 'quick-edit-place.png']);
+    expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths[1]).toBe(extra);
     await writeFile(extra, 'replacement bytes');
     const stale = await request(app).post('/api/image-gen/generate').send(reviewed);
     expect(stale.status).toBe(409);
@@ -990,6 +996,64 @@ describe('Image Gen Routes', () => {
       expect(JSON.stringify(recordUserAction.mock.calls[0][0])).not.toContain('a fox in a forest');
     });
 
+    // Preview and submission must refuse the same input loss before queue admission.
+    it.each([
+      { initImageFile: 'init.png', initImageStrength: 0.35 },
+      { loraFilenames: ['example.safetensors'] },
+      { loraPaths: ['example.safetensors'] },
+    ])('refuses FLUX.2 input loss in preview and submission: %j', async extra => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      const body = { prompt: 'a red cube', modelId: 'flux2-klein-9b', referenceImageFiles: ['reference.png'], ...extra };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.code]).toEqual([400, 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE']);
+      expect([submit.status, submit.body.code, submit.body.error]).toEqual([preview.status, preview.body.code, preview.body.error]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(mediaJobQueue.assertMediaQueueRoom).not.toHaveBeenCalled();
+    });
+
+    it('refuses an incompatible FLUX.2 reference upload before staging it', async () => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      const copy = vi.spyOn(fileUtils, 'copyFileGuarded');
+      const server = await startLoopbackServer(app);
+      try {
+        const form = new FormData();
+        form.set('modelId', 'flux2-klein-9b');
+        form.set('loraFilenames', JSON.stringify(['example.safetensors']));
+        form.set('referenceImage1', new Blob(['synthetic image'], { type: 'image/png' }), 'reference.png');
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
+        expect(response.status).toBe(400);
+        expect((await response.json()).code).toBe('IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE');
+        expect(copy).not.toHaveBeenCalled();
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      } finally {
+        copy.mockRestore();
+        await closeLoopbackServer(server);
+      }
+    });
+
+    it.each([
+      { initImageFile: 'init.png', initImageStrength: 0.35 },
+      { referenceImageFiles: ['reference.png'], referenceStrengths: [0.4] },
+      { loraFilenames: ['example.safetensors'], loraScales: [0.7] },
+      { modelId: 'flux2-klein-9b-bf16', loraFilenames: ['example.safetensors'], referenceImageFiles: ['reference.png'], referenceStrengths: [0.4] },
+    ])('preserves supported FLUX.2 neighbors in preview and queue: %j', async extra => {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+      await fileUtils.ensureDir(fileUtils.PATHS.images);
+      await fileUtils.ensureDir(fileUtils.PATHS.loras);
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'init.png'), 'synthetic init');
+      await writeFile(pathJoin(fileUtils.PATHS.images, 'reference.png'), 'synthetic reference');
+      await writeFile(pathJoin(fileUtils.PATHS.loras, 'example.safetensors'), 'synthetic adapter');
+      const body = { prompt: 'a red cube', modelId: 'flux2-klein-9b', ...extra };
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, submit.status]).toEqual([200, 200]);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      if (extra.initImageFile) expect(params).toMatchObject({ initImagePath: pathJoin(fileUtils.PATHS.images, 'init.png'), initImageStrength: 0.35 });
+      if (extra.referenceImageFiles) expect(params).toMatchObject({ referenceImagePaths: [pathJoin(fileUtils.PATHS.images, 'reference.png')], referenceImageStrengths: [0.4] });
+      if (extra.loraFilenames) expect(params).toMatchObject({ loraFilenames: ['example.safetensors'], ...(extra.loraScales ? { loraScales: extra.loraScales } : {}) });
+    });
+
     // #8326: a full media queue must answer with a retryable refusal before
     // any job id exists — and before the render's inputs are staged.
     it('answers a full media queue with a retryable 429 and no job id', async () => {
@@ -1292,6 +1356,16 @@ describe('Image Gen Routes', () => {
     // burst of writers-room storyboard renders queues against itself
     // instead of failing the second-and-onwards calls with 409
     // IMAGE_GEN_BUSY.
+    it('retains the storyboard clip audio choice through the image route', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'codex', codex: { enabled: true, model: 'example' } } });
+      const response = await request(app).post('/api/image-gen/generate').send({ prompt: 'a lighthouse',
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', thenClip: { backend: 'grok', songAudio: false } } });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+        musicVideo: expect.objectContaining({ thenClip: { backend: 'grok', songAudio: false } }),
+      }) }));
+    });
+
     it('codex mode enqueues through mediaJobQueue and returns queued status', async () => {
       getSettings.mockResolvedValueOnce({
         imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.4' } },
@@ -2137,6 +2211,48 @@ describe('Image Gen Routes', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+
+  describe('FLUX.3 HTTP generation', () => {
+    it('requires operator authority for runtime installation and accepts an authorized local install', async () => {
+      const { installFlux3Runtime } = await import('../services/imageGen/flux3Runtime.js');
+      const denied = express();
+      denied.use((req, _res, next) => { req.portosAuthContext = { enabled: true, authenticated: false }; next(); });
+      denied.use('/api/image-gen', imageGenRoutes);
+      denied.use(errorMiddleware);
+      const rejected = await request(denied).post('/api/image-gen/setup/flux3-install?runtime=flux3');
+      expect([rejected.status, rejected.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
+      expect(installFlux3Runtime).not.toHaveBeenCalled();
+      const accepted = await request(app).post('/api/image-gen/setup/flux3-install?runtime=flux3');
+      expect(accepted.status).toBe(200);
+      expect(accepted.text).toContain('Fixture runtime ready');
+      expect(installFlux3Runtime).toHaveBeenCalledOnce();
+    });
+
+    it('previews and queues ten reference edits without a legacy Python or HF token setting', async () => {
+      const refs = Array.from({ length: 10 }, (_, i) => `flux3-example-${i}.png`);
+      await Promise.all(refs.map(name => writeFile(pathJoin(fileUtils.PATHS.images, name), 'synthetic image fixture')));
+      const body = { mode: 'local', modelId: 'flux3-klein-q4', prompt: 'A detailed scene caption', referenceImageFiles: refs };
+      const settings = { imageGen: { mode: 'local', local: { modelId: body.modelId } } };
+      getSettings.mockResolvedValueOnce(settings);
+      const preview = await request(app).post('/api/image-gen/prompt-preview').send(body);
+      getSettings.mockResolvedValueOnce(settings);
+      const submit = await request(app).post('/api/image-gen/generate').send(body);
+      expect([preview.status, preview.body.error, submit.status, submit.body.error]).toEqual([200, undefined, 200, undefined]);
+      const params = mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params;
+      expect(params.referenceImagePaths.map(path => basename(path))).toEqual(refs);
+      expect(preview.body.sentPrompt).toBe(body.prompt);
+    });
+    it.each([
+      { negativePrompt: 'blur' }, { initImageFile: 'example.png' }, { loraFilenames: ['example.safetensors'] },
+      { referenceStrengths: [0.5] }, { referenceImageFiles: Array(11).fill('example.png') },
+    ])('refuses unsupported raw FLUX.3 inputs before staging/queueing: %j', async unsupported => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } });
+      const response = await request(app).post('/api/image-gen/generate').send({ mode: 'local', modelId: 'flux3-klein-q4', prompt: 'Example', ...unsupported });
+      expect([response.status, response.body.code]).toEqual([400, 'FLUX3_INPUT_UNSUPPORTED']);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 

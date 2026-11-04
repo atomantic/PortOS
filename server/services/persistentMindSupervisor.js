@@ -100,6 +100,7 @@ export const PERSISTENT_MIND_WATCHDOG_SUSPEND_GAP_MS = PERSISTENT_MIND_LIMITS.HE
 let turnAdapter = null;
 let activeRun = null;
 let activeAbortController = null;
+export const isPersistentMindTurnRunning = () => activeAbortController !== null;
 let runtimeGeneration = 0;
 let supervisorStopping = false;
 /** Zero-based attempt count for the in-flight usage-limit readiness probe. */

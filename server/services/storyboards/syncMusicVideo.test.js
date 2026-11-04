@@ -104,8 +104,6 @@ describe('sync a music video\'s shots to its storyboard', () => {
     await mkdir(PATHS.images, { recursive: true });
     await writeFile(`${PATHS.images}/preserved.png`, 'synthetic image');
     await projects.appendSceneTakes(project.id, first.sceneId, [{ kind: 'image', assetId: 'preserved.png', source: 'generated' }]);
-    const { setShotLocks } = await import('../musicVideo/productionReview.js');
-    await projects.mutateProjectRecord(project.id, current => ({ project: setShotLocks(current, { sceneIds: [first.sceneId], locked: true }) }));
 
     await request(app).delete(`/api/storyboards/${board.id}/panels/${board.beats[0].panels[0].id}`);
     const retained = await projects.getProject(project.id);

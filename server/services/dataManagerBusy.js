@@ -25,13 +25,15 @@
  * that redirects the data root would not be honored by them.
  */
 
-import { readdir } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isDetachedRunning } from '../lib/detachedSpawn.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { collectActiveCleanBasenames } from './imageCleanTmpGc.js';
 import { collectActiveFederatedAssetBasenames } from './federatedMedia/assetStore.js';
+import { isUpdateControlTracked } from './updateControlActivity.js';
 
 const IDLE = { busy: false, reason: null };
 
@@ -155,9 +157,31 @@ export async function trainingRunsBusy({ jobs = null, runsDir = null } = {}) {
  * @param {{ controlDir?: string }} [state] - injected control dir; defaults to the real one
  * @returns {Promise<{ busy: boolean, reason: string|null }>}
  */
-export async function updateDetachedBusy({ controlDir = null } = {}) {
+export async function updateDetachedBusy({ controlDir = null, admission = maintenance,
+  snapshot = async () => (await import('./maintenanceProcessInventory.js')).snapshotMaintenanceProcesses() } = {}) {
   const dir = controlDir || join(PATHS.data, 'update-detached');
-  const running = await isDetachedRunning(dir);
+  let running = isUpdateControlTracked(dir) || admission.status().state === 'unavailable' || admission.deferredUpdate.launch()
+    || admission.deferredUpdate.operation() || await isDetachedRunning(dir);
+  if (!running) {
+    const attempts = (await listDirEntries(dir)).filter(entry => entry.isDirectory()
+      && /^[a-f0-9-]{36}$/i.test(entry.name)).map(entry => join(dir, entry.name));
+    const pending = [];
+    for (const attempt of attempts) {
+      if (isUpdateControlTracked(attempt)) { running = true; break; }
+      const exit = await readFile(join(attempt, 'exit'), 'utf8').catch(error => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      if (!exit.trim()) pending.push(attempt);
+    }
+    if (!running) running = (await Promise.all(pending.map(path => isDetachedRunning(path)))).some(Boolean);
+    if (!running && pending.length) {
+      const normalize = value => value.replaceAll('\\', '/').toLowerCase();
+      const paths = pending.map(normalize);
+      running = (await snapshot()).some(proc => proc.pid !== process.pid && !String(proc.state ?? '').startsWith('Z')
+        && paths.some(path => normalize(String(proc.command ?? '')).includes(path)));
+    }
+  }
   if (!running) return IDLE;
   return {
     busy: true,

@@ -109,6 +109,7 @@ export default function FableLoomStory({ view = 'graph' }) {
 
   useEffect(() => {
     let canceled = false;
+    setLoom(null);
     setNotFound(false);
     setMediaJobs({});
     getLoom(loomId)
@@ -507,7 +508,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       </div>
     );
   }
-  if (!loom) {
+  if (!loom || loom.id !== loomId) {
     return <PageSkeleton label="Loading loom" fullHeight padded sidebar={false} />;
   }
 

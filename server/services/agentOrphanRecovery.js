@@ -19,7 +19,7 @@ export const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 const REFUSAL_CATEGORIES = ['content-refusal', 'content-filtered'];
 const TERMINAL_BLOCK_CATEGORIES = ['user-terminated', ...REFUSAL_CATEGORIES];
 // A prior orphan in the same sweep already routed the task through recovery.
-const ALREADY_HANDLED_CATEGORIES = ['max-retries', 'orphan-cooldown'];
+const ALREADY_HANDLED_CATEGORIES = ['max-retries', 'orphan-cooldown', 'release-candidate-recovery'];
 
 const isBlockedWith = (task, categories) =>
   task.status === 'blocked' && categories.includes(task.metadata?.blockedCategory);

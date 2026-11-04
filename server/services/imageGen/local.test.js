@@ -30,7 +30,7 @@ vi.mock('../localMemory.js', () => ({
     return { blockers: [], unloaded: [] };
   },
 }));
-vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
+vi.mock('../hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
 // Lets a test force the post-render degenerate-frame check to throw, without
@@ -232,30 +232,13 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--lora-paths') + 1]).toBe('/data/loras/example-style.safetensors');
   });
 
-  it('drops reference images when a LoRA forces the bf16 route (no kv pipeline)', () => {
-    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
-    const { args } = buildArgs({
-      ...baseInput,
-      loraPaths: ['/data/loras/x.safetensors'],
-      loraScales: [1.0],
-      referenceImagePaths: ['/data/images/ref1.png', '/data/images/ref2.png'],
-      referenceImageStrengths: [1.0, 0.8],
-      model: {
-        id: 'flux2-klein-4b',
-        runner: 'flux2',
-        quantization: 'sdnq',
-        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
-        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
-      },
-    });
-    // bf16 route taken, and the multi-ref args are dropped so the runner
-    // doesn't hard-fail on the missing kv pipeline.
-    expect(args[args.indexOf('--quantization') + 1]).toBe('none');
-    expect(args).not.toContain('--reference-images');
-    expect(args).not.toContain('--reference-strengths');
-    expect(args).not.toContain('--kv-repo');
-    // The LoRA itself still threads through.
-    expect(args).toContain('--lora-paths');
+  it.each([
+    { initImagePath: '/tmp/init.png', initImageStrength: 0.35 },
+    { loraPaths: ['/tmp/example.safetensors'] },
+  ])('refuses incompatible input combinations at runner construction: %j', inputs => {
+    expect(() => buildArgs({ ...baseInput, ...inputs, referenceImagePaths: ['/tmp/reference.png'],
+      model: { id: 'flux2-klein-9b', runner: 'flux2', repo: 'example/flux2' } }))
+      .toThrow(expect.objectContaining({ code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' }));
   });
 
   it('leaves a LoRA render on a bf16 model untouched (already unquantized)', () => {
@@ -1426,46 +1409,20 @@ describe('local render terminal dispatch — SSE/lifecycle decoupling (#8915)', 
 });
 
 
-it('persists omitted reference evidence when the LoRA runner drops inputs', async () => {
-  mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
-  mockIsFlux2VenvHealthy.mockResolvedValue(true);
-  const child = new EventEmitter();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  mockSpawn.mockReturnValue(child);
-  const priorLoras = PATHS.loras;
-  PATHS.loras = join(tmpRegistryDir, 'loras');
-  mkdirSync(PATHS.loras, { recursive: true });
-  writeFileSync(join(PATHS.loras, 'example.safetensors'), 'example');
-  writeFileSync(join(PATHS.images, 'reference.png'), 'example');
-  const { imageGenEvents } = await import('../imageGenEvents.js');
-  // Pin host memory, not the registry's hardware verdict: CI may have less
-  // than this model's 32 GiB floor, even though the render child is mocked.
-  const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(8 * 1024 ** 3);
+// Queued/peer execution can skip HTTP preparation; raw selections must fail
+// before path filtering hides a missing image or legacy LoRA path.
+it.each([
+  { initImagePath: 'init.png', initImageStrength: 0.35, referenceImagePaths: ['reference.png'] },
+  { loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] },
+  { loraPaths: ['example.safetensors'], referenceImagePaths: ['reference.png'] },
+])('refuses incompatible FLUX.2 execution without spawning: %j', async inputs => {
+  const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(128 * 1024 ** 3);
+  const spawnCount = mockSpawn.mock.calls.length;
   try {
-    const request = { modelId: 'flux2-klein-9b', prompt: '--reference-images',
-      loraFilenames: ['example.safetensors'], referenceImagePaths: ['reference.png'] };
-    const spawnCount = mockSpawn.mock.calls.length;
-    await expect(generateImage(request)).rejects.toMatchObject({ code: 'MODEL_HARDWARE_UNAVAILABLE' });
+    await expect(generateImage({ modelId: 'flux2-klein-9b', prompt: 'a red cube', ...inputs }))
+      .rejects.toMatchObject({ status: 400, code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
     expect(mockSpawn).toHaveBeenCalledTimes(spawnCount);
-    totalmem.mockReturnValue(64 * 1024 ** 3);
-    const job = await generateImage(request);
-    expect(mockSpawn.mock.calls.at(-1)[1]).toContain('--reference-images');
-    expect(mockSpawn.mock.calls.at(-1)[1]).not.toContain(join(PATHS.images, 'reference.png'));
-    writeFileSync(join(PATHS.images, job.filename), 'synthetic output');
-    const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
-    child.emit('close', 0);
-    await completed;
-    const meta = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
-    expect(meta.inputProvenance).toBe('provider-inputs');
-    expect(meta.referenceImageFilenames).toEqual([]);
-    expect(meta.referenceImageStrengths).toEqual([]);
-    expect(meta.requestedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png' }]);
-    expect(meta.omittedInputImages).toEqual([{ role: 'referenceImages', filename: 'reference.png', reason: 'unsupported-render-path' }]);
-  } finally {
-    totalmem.mockRestore();
-    PATHS.loras = priorLoras;
-  }
+  } finally { totalmem.mockRestore(); }
 });
 
 it('drains a snapshot through local upscale and the sidecar naming the delivered dimensions', async () => {
@@ -1624,5 +1581,61 @@ describe('local render launch unwind (#11862)', () => {
       expect(watcher.close).toHaveBeenCalled();
       expect(watcher.listenerCount('error')).toBeGreaterThan(0);
     } finally { claimSpy.mockRestore(); }
+  });
+});
+
+
+describe('FLUX.3 dispatch', () => {
+  const base = { model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
+    prompt: 'An illustrated puffin on a rocky cliff in soft morning light', width: 1024, height: 1024,
+    steps: 16, seed: 42, outputPath: '/tmp/example.png', quantize: '8', guidance: 3.5, pythonPath: '/legacy/python3' };
+
+  it('renders without legacy Python and records the actual checkpoint quantization while preserving the stored token', async () => {
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    const { hfChildEnv } = await import('../hfToken.js');
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const spy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true, cpuCount: 8, totalMemoryGb: 64,
+    });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+    mockSpawn.mockReset().mockReturnValue(child);
+    hfChildEnv.mockResolvedValueOnce({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: '/legacy-packages' });
+    const previousToken = process.env.HF_TOKEN;
+    process.env.HF_TOKEN = 'fixture-stale-environment-token';
+    try {
+      const job = await generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42, quantize: '8' });
+      writeFileSync(join(PATHS.images, job.filename), 'synthetic FLUX.3 output');
+      const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
+      child.emit('close', 0);
+      await completed;
+      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
+      expect(sidecar).toMatchObject({ modelId: 'flux3-klein-q4', quantization: 'q4', quantize: '4', guidance: 0,
+        sentPrompt: base.prompt, modelRepo: base.model.repo,
+        provenance: { sources: [expect.objectContaining({ license: 'flux-kommunity-license' })] } });
+    } finally {
+      spy.mockRestore();
+      if (previousToken === undefined) delete process.env.HF_TOKEN; else process.env.HF_TOKEN = previousToken;
+    }
+  });
+  it('uses the isolated FLUX.3 CLI and checkpoint quantization for text and all ten reference images', () => {
+    const text = buildArgs(base);
+    expect(text.bin).toMatch(/venv-flux3\/bin\/python3$/);
+    expect(text.bin).not.toBe(base.pythonPath);
+    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', base.model.repo,
+      '--base-model', 'flux3-image-klein', '--prompt', base.prompt, '--width', '1024', '--height', '1024',
+      '--steps', '16', '--seed', '42', '--output', base.outputPath, '--metadata', '--low-ram']);
+    const refs = Array.from({ length: 10 }, (_, i) => `/tmp/ref-${i}.png`);
+    const edit = buildArgs({ ...base, referenceImagePaths: refs });
+    expect(edit.args[2]).toBe('mflux.models.flux3.cli.flux3_edit_generate');
+    expect(edit.args.slice(-11)).toEqual(['--image-paths', ...refs]);
+    expect(edit.providerInputs).toEqual({ initImagePath: null, referenceImagePaths: refs });
+  });
+  it.each([
+    { negativePrompt: 'blur' }, { initImagePath: '/tmp/init.png' }, { referenceImagePaths: Array(11).fill('/tmp/ref.png') },
+    { loraPaths: ['/tmp/adapter.safetensors'] }, { referenceImageStrengths: [0.5] }, { width: 1536 },
+  ])('rejects unsupported inputs before they can be silently dropped: %j', input => {
+    expect(() => buildArgs({ ...base, ...input })).toThrow();
   });
 });

@@ -182,6 +182,8 @@ async function buildFinalizedScannerSet(recordId, {
   trackId = SCANNER_TRACK,
   selectionKind = 'reviewed-directional-scanner-selection',
   setKind = 'finalized-eight-direction-scanner-set',
+  framePng = null,
+  alignment = null,
 } = {}) {
   const manifest = await loadManifest(recordId);
   const dir = join(TEST_ROOT, 'sprites', recordId);
@@ -201,12 +203,18 @@ async function buildFinalizedScannerSet(recordId, {
     const generatedRel = `runs/${runId}/generated`;
     const frames = await Promise.all(labels.map(async (phase, i) => {
       const rel = `${generatedRel}/frames/${String(i).padStart(2, '0')}-${labels[i]}.png`;
-      await walkFramePng(join(dir, rel), 36 + i * 12, 2 + i * 2);
+      if (framePng) {
+        await mkdir(join(dir, rel, '..'), { recursive: true });
+        await writeFile(join(dir, rel), framePng);
+      } else {
+        await walkFramePng(join(dir, rel), 36 + i * 12, 2 + i * 2);
+      }
       return { outputIndex: i, phase, path: rel, sha256: sha256(await readFile(join(dir, rel))) };
     }));
     const runManifest = {
       schemaVersion: 1,
       kind: `deterministically-packaged-grok-${trackId}-video`,
+      ...(alignment ? { alignment } : {}),
       track: trackId,
       characterId: recordId,
       direction,
@@ -427,7 +435,66 @@ describe('compileAtlas', () => {
     expect(manifest.geometry.scannerFrameCount).toBe(4);
     expect(manifest.scannerSetSha256).toMatch(/^[0-9a-f]{64}$/);
     for (const row of manifest.directions) {
-      expect(row.cells.filter((cell) => cell.column.startsWith('scanner-'))).toHaveLength(4);
+      const scannerCells = row.cells.filter((cell) => cell.column.startsWith('scanner-'));
+      expect(scannerCells).toHaveLength(4);
+      expect(new Set(scannerCells.map(cell => cell.translation[0])).size).toBe(1);
+    }
+
+    // An existing pointer with the old compiler policy must create a new
+    // immutable version on explicit compile, then become idempotent again.
+    const pointerPath = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
+    const legacy = JSON.parse(await readFile(pointerPath, 'utf8'));
+    delete legacy.compilePolicy;
+    await writeFile(pointerPath, JSON.stringify(legacy));
+    const updated = await compileAtlas(id);
+    expect(updated.created).toBe(true);
+    expect(updated.version).toBeGreaterThan(result.version);
+    expect(updated.compilePolicy).toBe('reference-stance-v1');
+    expect(sha256(await readFile(join(TEST_ROOT, 'sprites', id, result.atlasPath)))).toBe(result.atlasSha256);
+    expect((await compileAtlas(id)).created).toBe(false);
+  });
+
+  // A shorter action must stay shorter at the public compiler boundary. The
+  // upper protrusion deliberately pulls the silhouette away from the stance.
+  it.each([1, 0.5])('keeps crouches proportional to idle and anchors their stance (packing scale %s)', async packingScale => {
+    const id = newId();
+    await lockAllAnchors(id);
+    await buildFinalizedWalkSet(id, {
+      frameCount: NARROW_WALK_FRAMES,
+      alignment: { cellSize: 40, fixedScale: 1, targetPivot: [20, 35] },
+    });
+    const pixels = Buffer.alloc(40 * 40 * 4);
+    for (let y = 20; y < 35; y++) {
+      for (let x = 10; x < 30; x++) pixels.set([23, 107, 101, 255], (y * 40 + x) * 4);
+    }
+    for (let y = 20; y < 24; y++) {
+      for (let x = 2; x < 10; x++) pixels.set([23, 107, 101, 255], (y * 40 + x) * 4);
+    }
+    const framePng = await sharp(pixels, { raw: { width: 40, height: 40, channels: 4 } })
+      .resize(Math.round(40 * packingScale), Math.round(40 * packingScale), { kernel: 'nearest' })
+      .png().toBuffer();
+    await buildFinalizedScannerSet(id, {
+      framePng,
+      alignment: { cellSize: 40 * packingScale, fixedScale: packingScale, targetPivot: [20 * packingScale, 35 * packingScale] },
+    });
+    const result = await compileAtlas(id);
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
+    const atlas = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).raw().toBuffer({ resolveWithObject: true });
+    const { rootX, alphaBbox, ROOT_BAND_STANCE } = await import('./walkPostprocess.js');
+    for (const row of manifest.directions) {
+      const idle = row.cells[0];
+      const action = row.cells.find(cell => cell.column === 'scanner-00');
+      expect(action.scale * packingScale).toBeCloseTo(row.trackScales.walk, 6);
+      expect(action.occupiedBounds.height / idle.occupiedBounds.height).toBeCloseTo(0.5, 1);
+      expect(action.occupiedBounds.top + action.occupiedBounds.height - 1).toBe(DEFAULT_ATLAS_GEOMETRY.pivot[1]);
+      const { cellSize } = DEFAULT_ATLAS_GEOMETRY;
+      const cell = {
+        data: await sharp(atlas.data, { raw: atlas.info })
+          .extract({ left: action.columnIndex * cellSize, top: SPRITE_DIRECTIONS.indexOf(row.direction) * cellSize, width: cellSize, height: cellSize })
+          .raw().toBuffer(),
+        width: cellSize, height: cellSize,
+      };
+      expect(Math.abs(rootX(cell, alphaBbox(cell), ROOT_BAND_STANCE) - DEFAULT_ATLAS_GEOMETRY.pivot[0])).toBeLessThanOrEqual(0.5);
     }
   });
 

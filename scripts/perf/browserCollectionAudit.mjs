@@ -238,7 +238,7 @@ try {
   fixture = await startCollectionFixture({ clientDist: process.env.COLLECTION_AUDIT_CLIENT_DIST });
   report.startup = fixture.startup;
   report.cardinalities = fixture.cardinalities;
-  browser = await chromium.launch({ headless: true, ...(process.env.COLLECTION_AUDIT_BROWSER
+  browser = await chromium.launch({ headless: true, chromiumSandbox: true, ...(process.env.COLLECTION_AUDIT_BROWSER
     ? { executablePath: process.env.COLLECTION_AUDIT_BROWSER } : { channel: 'chrome' }) });
   if (args.route) await routeScenario(args.route, args.sibling);
   else {

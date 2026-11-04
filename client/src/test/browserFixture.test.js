@@ -60,6 +60,17 @@ afterEach(() => {
 });
 
 describe('startBrowserFixture', () => {
+  it.each([{ chromiumSandbox: false }, { args: ['--no-sandbox'] }, { args: ['--disable-seccomp-filter-sandbox'] }])(
+    'rejects an attempt to disable the browser sandbox before starting resources', async launchOptions => {
+      const { createServer } = fakeVite();
+      const chromium = { launch: vi.fn() };
+      await expect(startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, launchOptions }))
+        .rejects.toThrow('Chromium sandbox cannot be disabled');
+      expect(createServer).not.toHaveBeenCalled();
+      expect(chromium.launch).not.toHaveBeenCalled();
+    }
+  );
+
   it('retries a stalled Chromium launch once, then names the phase, reports both attempts\' facts and closes every browser that arrives late', async () => {
     // Real deadlines, sampled 2ms before each one, would race a loaded runner.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -96,7 +107,7 @@ describe('startBrowserFixture', () => {
     expect(existsSync(temp)).toBe(false);
     // Each attempt is a fresh process whose own launch timeout kills it.
     expect(chromium.launch.mock.calls.map(([options]) => options.timeout)).toEqual([25, 25]);
-    expect(chromium.launch.mock.calls[1][0]).toMatchObject({ env: { TMPDIR: temp } });
+    expect(chromium.launch.mock.calls[1][0]).toMatchObject({ chromiumSandbox: true, env: { TMPDIR: temp } });
 
     arrive[1]();
     arrive[0]();
@@ -197,7 +208,7 @@ describe('startBrowserFixture', () => {
     const owned = ownedServer({ close: stalls });
     const chromium = ownedChromium(owned.server);
     const fixture = await startBrowserFixture({ name: 'example', createServer, viteConfig: () => SCOPED, chromium, phaseMs: PHASE_MS });
-    expect(chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({ env: expect.objectContaining({ TMPDIR: fixture.temp }) }));
+    expect(chromium.launchServer).toHaveBeenCalledWith(expect.objectContaining({ chromiumSandbox: true, env: expect.objectContaining({ TMPDIR: fixture.temp }) }));
 
     let settled = false;
     const closing = fixture.close().finally(() => { settled = true; });

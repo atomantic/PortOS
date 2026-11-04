@@ -16,6 +16,7 @@ import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poste
 import { basename } from 'path';
 import os from 'os';
 import { z } from 'zod';
+import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
@@ -69,7 +70,7 @@ import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
-import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS } from '../services/videoGen/requestFields.js';
+import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
@@ -181,9 +182,9 @@ export const isAudioMime = (mime, filename) => {
 // slots (REFERENCE_AUDIO_FIELDS). Files stream to disk without a file-size cap.
 // Per-fieldname mime filtering rejects mismatched parts
 // up-front so a stray .mp4 drag-drop can't get staged under these fields.
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'], {
   fileFilter: (_req, file, cb) => {
-    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
+    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage' || VIDEO_REFERENCE_IMAGE_FIELDS.includes(file.fieldname);
     const isAudioField = file.fieldname === 'audioFile' || REFERENCE_AUDIO_FIELDS.includes(file.fieldname);
     const isVideoField = ['icReference', 'runwayVideo', 'runwayCharacterVideo'].includes(file.fieldname);
     const okImage = isImageField && file.mimetype.startsWith('image/');
@@ -298,7 +299,13 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.CONTINUITY_STRATEGY]: z.enum(['frame', 'window']).optional(),
 });
 
+// Short caption for one `referenceImageN` upload (what the image shows).
+const referenceLabel = z.string().max(MAX_VIDEO_REFERENCE_LABEL_LENGTH).optional();
+
 const generateBodySchema = z.object({
+  referenceLabel1: referenceLabel,
+  referenceLabel2: referenceLabel,
+  referenceLabel3: referenceLabel,
   promptAdditions: promptAdditionsSchema,
   // Render backend: the local runtimes (default), the Grok Build CLI's
   // image-first image_to_video flow (#2859 phase 2), fal.ai's queue REST API
@@ -543,6 +550,9 @@ const generateBodySchema = z.object({
       // The shot card's Song audio toggle: hand a cutaway its song slice (true) or
       // render it silent (false), whatever the project's generation mode says.
       songAudio: z.boolean().optional(),
+      // Refuse if the saved shot no longer matches the mode the board priced.
+      expectedShot: z.enum(['cutaway', 'lipsync', 'music']).optional(),
+      expectedClipReferenceFiles: z.array(z.string().min(1).max(512)).max(MAX_REFERENCE_IMAGE_FILES).optional(),
       // The shot card's Whole sung line: a performance take's song slice covers
       // the full lyric line the shot sits in; its edit points still frame the shot.
       wholeLine: z.boolean().optional(),
@@ -1188,7 +1198,15 @@ const pickJobParams = (job) => {
     out.referenceVideoNames = params.referenceVideoPaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
   }
   if (Array.isArray(params.referenceImagePaths) && params.referenceImagePaths.length) {
-    out.referenceImageFiles = params.referenceImagePaths.filter((p) => typeof p === 'string' && p).map((p) => basename(p));
+    // Only gallery-backed paths can be submitted again by filename. Internal
+    // cast guides may live in another image-input root with the same basename.
+    const references = params.referenceImagePaths.filter((p) => typeof p === 'string' && p)
+      .map((path) => ({ path, name: basename(path) }))
+      .map(({ path, name }) => ({ name, gallery: resolveGalleryImage(name, { mustExist: false }) === path }));
+    const files = references.filter((ref) => ref.gallery).map((ref) => ref.name);
+    const unavailable = references.filter((ref) => !ref.gallery).map((ref) => ref.name);
+    if (files.length) out.referenceImageFiles = files;
+    if (unavailable.length) out.unavailableReferenceImageNames = unavailable;
   }
   // A federated render's prompt and model live only inside the versioned marker
   // — the top-level copies are blanked so a downgraded build fails closed

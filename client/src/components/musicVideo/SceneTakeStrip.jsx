@@ -1,12 +1,22 @@
-import { useState } from 'react';
+import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
+import { useRef, useState } from 'react';
 import { Ban, Check, RotateCcw, X, MessageSquare } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
+import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
+import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
 
 const VERDICT_TONE = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-warning/20 text-port-warning' };
 // The project's asset marks are keyed by media kind: an end frame is a still like any other.
 const takeMarkKey = (take) => `${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`;
 const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End frame takes' };
+
+async function videoTakeUrl(take) {
+  const record = await getVideoHistoryItem(take.assetId, { silent: true });
+  const filename = record?.filename;
+  if (record?.id !== take.assetId || typeof filename !== 'string' || !filename || /[/\\]/.test(filename) || filename === '.' || filename === '..') return null;
+  return `/data/videos/${encodeURIComponent(filename)}`;
+}
 
 /**
  * Side-by-side review of one scene slot's takes (#8965): every render or
@@ -20,9 +30,9 @@ const KIND_LABEL = { image: 'Frame takes', video: 'Clip takes', endImage: 'End f
  * assetMarks; `onMark(take, 'bad' | null)`) for files to clean up later; the
  * server also rejects a bad file's takes on the shots not using it.
  *
- * A legacy take (a pre-takes selection the server hasn't materialized yet) is
- * shown but has no actions — it has no take id to address. `grid` lays the
- * takes out in rows that fit the width instead of one scrolling row.
+ * A legacy take (a pre-takes selection the server hasn't materialized yet)
+ * has copy actions but no review actions, because it has no take id to address.
+ * `grid` lays the takes out in rows that fit the width instead of one scrolling row.
  */
 export default function SceneTakeStrip({
   scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null,
@@ -30,6 +40,7 @@ export default function SceneTakeStrip({
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [playingId, setPlayingId] = useState(null);
+  const copyPointer = useRef(false);
   const takes = sceneTakeList(scene, kind);
   const selected = scene[TAKE_SLOT[kind]] || null;
   if (takes.length === 0) return null;
@@ -56,15 +67,18 @@ export default function SceneTakeStrip({
           const playKey = take.takeId || take.assetId;
           const playing = kind === 'video' && playingId === playKey;
           return (
-            <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}>
+            <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}
+              onPointerDownCapture={(event) => { copyPointer.current = Boolean(event.target.closest('[data-asset-copy-trigger]')); }}
+              onPointerUpCapture={() => { if (copyPointer.current) setTimeout(() => { copyPointer.current = false; }, 0); }}
+              onPointerCancelCapture={() => { copyPointer.current = false; }}
+              onMouseLeave={() => setPlayingId(null)}
+              onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget) && !copyPointer.current) setPlayingId(null); }}>
               <button
                 type="button"
                 data-take-focus=""
                 onClick={() => onOpenPreview?.(takePreviewKey(take))}
                 onMouseEnter={() => setPlayingId(playKey)}
-                onMouseLeave={() => setPlayingId(null)}
                 onFocus={() => setPlayingId(playKey)}
-                onBlur={() => setPlayingId(null)}
                 aria-label={`View ${kind === 'video' ? 'clip' : 'frame'} take full size`}
                 className={`relative block w-full rounded overflow-hidden focus:outline-none focus:ring-2 focus:ring-port-accent ${isSelected ? 'border-2 border-port-accent ring-4 ring-port-accent/50' : 'border border-port-border'} ${rejected ? 'opacity-40' : ''}`}
               >
@@ -93,6 +107,9 @@ export default function SceneTakeStrip({
               {take.note && noteFor !== take.takeId && (
                 <p className="text-[10px] text-port-warning break-words">{take.note}</p>
               )}
+              <AssetReferenceActions assetId={take.assetId}
+                url={kind === 'video' ? null : takeThumbUrl(take)}
+                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
@@ -124,12 +141,23 @@ export default function SceneTakeStrip({
                   )}
                   <button type="button" disabled={busy} onClick={() => openNote(take)}
                     aria-label="Edit take note"
-                    className="inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
                     title="Note what to change on the next attempt">
                     <MessageSquare size={11} />
                   </button>
                 </div>
               )}
+              {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
+                <div key={check.id} className="space-y-1 text-xs text-port-warning">
+                  <p className="break-words">Rendering defect: {check.note}</p>
+                  {renderQualityAcknowledged(scene, take) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
+                    <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                      onClick={() => onReview(take, { acknowledgeRenderQuality: { basis: take.plateEvidence.basis, note: check.note } })}>
+                      Acknowledge rendering defect
+                    </button>
+                  )}
+                </div>
+              ))}
               {noteFor === take.takeId && (
                 <div>
                   <label htmlFor={noteInputId(take)} className="sr-only">Take note</label>

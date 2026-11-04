@@ -14,6 +14,12 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const usage = {
   totalSessions: 12, totalMessages: 120, totalTokens: { input: 12000, output: 4000 },
   last7Days: [], hourlyActivity: Array(24).fill(0), topProviders: [], topModels: [],
+  coverage: { instanceCount: 2, missingInstances: [], notSyncingInstances: ['Synthetic peer'], incompleteMonths: [],
+    classificationUnreported: [], transcriptUnreported: [] },
+  fleet: { instances: [
+    { instanceId: 'self', name: 'Local', self: true, usesSubscriptions: true, totals: { sessions: 4, messages: 4, tokensIn: 100, tokensOut: 200, estimatedCost: 1 } },
+    { instanceId: 'synthetic-peer', name: 'Synthetic peer', usesSubscriptions: true, totals: { sessions: 8, messages: 8, tokensIn: 200, tokensOut: 400, estimatedCost: 2 } },
+  ] },
   report: { providers: [{ id: 'example', name: 'Example provider', sessions: 12, tokensIn: 12000, tokensOut: 4000, estimatedCost: 0.12, source: 'measured', models: [{ model: 'example-long-model-name-for-card-layout-verification', sessions: 12, tokensIn: 12000, tokensOut: 4000, estimatedCost: 0.12 }] }], totals: { estimatedCost: 0, source: 'estimate' } },
 };
 const responses = {
@@ -40,10 +46,18 @@ const responses = {
   '/usage/backfill': { status: 'idle' },
   '/usage/rolling-cost': { windowDays: 30, instanceCount: 1, series: [], points: [] },
   '/usage/claude-code/models': { filesScanned: 0, models: [], totals: {} },
-  '/usage/providers': { providers: ['claude', 'agy', 'codex', 'grok'].map(family => ({
-    family, label: `Example ${family}`, supported: true,
+  '/usage/providers': { providers: [...['claude', 'agy', 'codex', 'grok'].map(family => ({
+    family, label: `Example ${family}`, supported: true, fetchedAt: '2026-01-01T00:00:00.000Z',
     limits: [{ key: 'week', label: 'Weekly usage', percentUsed: 40, percentRemaining: 60 }],
-  })) },
+  })), { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2026-01-02T00:00:00.000Z',
+    origin: { self: false, instanceId: 'synthetic-peer', name: 'syntheticpeername'.repeat(6) },
+    limits: [{ key: 'week', label: 'Weekly usage', percentUsed: 60, percentRemaining: 40 }] },
+  { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2026-01-01T12:00:00.000Z',
+    origin: { self: false, instanceId: 'synthetic-peer-two', name: 'anotherunbrokenpeername'.repeat(6) },
+    limits: [{ key: 'session', label: 'Session usage', percentUsed: 30, percentRemaining: 70 }] },
+  { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2025-12-20T00:00:00.000Z',
+    origin: { self: false, instanceId: 'synthetic-offline-peer', name: 'synthetic-offline-peer' }, quotaStatus: 'expired',
+    limits: [], error: 'Every window in this reading has since reset — refresh for a current one.' }] },
 };
 
 // Real route components and Tailwind, synthetic API only. Layout's classification
@@ -52,7 +66,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
   let fixture;
   beforeAll(async () => {
     fixture = await startBrowserFixture({ name: 'page-layout', createServer, chromium,
-      launchOptions: { executablePath: chrome, args: ['--mute-audio', '--no-sandbox'] },
+      launchOptions: { executablePath: chrome, args: ['--mute-audio'] },
       // Cold compilation belongs to the fixture's bounded warmup phase, not
       // a geometry assertion's interaction timeout.
       warmup: async (page, origin) => {
@@ -117,6 +131,8 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
 
   it.each([1440, 1024, 390, 320])('keeps chrome flush and card edges inside the scroll body at %i px', async width => {
     const page = await fixture.browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    let billed = false;
+    const quotaScopes = [];
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -125,6 +141,18 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       if (url.origin !== new URL(fixture.origin).origin) return route.abort();
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const key = url.pathname.slice(4);
+      if (key === '/usage/fleet-billing' && route.request().method() === 'PUT') {
+        const body = route.request().postDataJSON();
+        billed = !body.usesSubscriptions;
+        return route.fulfill({ json: { ...body, apiBilledInstanceIds: billed ? ['synthetic-peer'] : [] } });
+      }
+      if (key === '/usage/providers') {
+        const scope = url.searchParams.get('scope');
+        quotaScopes.push(scope);
+        const providers = responses[key].providers.filter(card => !(billed && card.origin?.instanceId === 'synthetic-peer'))
+          .filter(card => scope !== 'peers' || card.origin?.self === false);
+        return route.fulfill({ json: { providers, federationUnavailable: false, excludedInstanceIds: billed ? ['synthetic-peer'] : [] } });
+      }
       return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
     });
     try {
@@ -159,6 +187,13 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         expect(geometry.mainScrollWidth, path).toBeLessThanOrEqual(geometry.mainWidth + 1);
         expect(geometry.bodyScrollWidth, path).toBeLessThanOrEqual(geometry.bodyWidth + 1);
         if (path === '/devtools/usage') {
+          expect(await page.getByText('Usage sync is off for Synthetic peer. Their saved history remains included.').count()).toBe(1);
+          expect(await page.getByText(/Partial chart: some instance history/).count()).toBe(0);
+          expect(await page.getByRole('heading', { name: 'Example codex', exact: true }).count()).toBe(1);
+          expect(await page.getByText('60% used', { exact: true }).count()).toBe(1);
+          expect(await page.getByText(/readings from the same provider are assumed to share an account/i).count()).toBe(1);
+          expect(await page.getByText(/syntheticpeername|anotherunbrokenpeername/).count()).toBe(0);
+          expect(await page.getByText(/Every window in this reading has since reset/).count()).toBe(0);
           const edges = await page.evaluate(() => {
             const body = document.querySelector('main').firstElementChild.lastElementChild;
             const style = getComputedStyle(body);
@@ -181,8 +216,21 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           expect((await page.locator('h1').boundingBox()).y).toBe(before.y);
           expect(await body.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
           await body.evaluate(el => { el.scrollTop = 0; });
+          const readsBeforeToggle = quotaScopes.length;
+          await page.getByRole('switch', { name: 'Count Synthetic peer toward subscription totals' }).click();
+          const codexCard = page.getByRole('heading', { name: 'Example codex', exact: true }).locator('..').locator('..');
+          await codexCard.getByText('40% used', { exact: true }).waitFor();
+          expect(await codexCard.getByText('60% used', { exact: true }).count()).toBe(0);
+          await expect.poll(() => quotaScopes.length - readsBeforeToggle, { timeout: 10000 }).toBeGreaterThan(0);
+          expect(quotaScopes.slice(readsBeforeToggle).every(scope => scope === 'peers')).toBe(true);
+          if (process.env.PORTOS_LAYOUT_SCREENSHOTS) {
+            await mkdir(process.env.PORTOS_LAYOUT_SCREENSHOTS, { recursive: true });
+            await codexCard.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: join(process.env.PORTOS_LAYOUT_SCREENSHOTS, `_usage-quota-${width}.png`) });
+          }
         }
         if (process.env.PORTOS_LAYOUT_SCREENSHOTS) {
+          if (path === '/devtools/usage') await page.getByText('Usage sync is off for Synthetic peer. Their saved history remains included.').scrollIntoViewIfNeeded();
           await mkdir(process.env.PORTOS_LAYOUT_SCREENSHOTS, { recursive: true });
           await page.screenshot({ path: join(process.env.PORTOS_LAYOUT_SCREENSHOTS, `${path.replaceAll('/', '_')}-${width}.png`) });
         }

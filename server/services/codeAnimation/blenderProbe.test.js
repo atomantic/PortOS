@@ -37,12 +37,18 @@ describe('Blender render readiness (synthetic worker evidence, not real Blender 
     expect(result.detail).toContain('production-sequence acceptance remains separate');
   });
 
+  it('accepts a newer supported series and records its exact patch', async () => {
+    const result = await probeBlenderRender(tool, '/example/workspaces', { worker: await fixtureWorker({ metadata: { ...report, version: '5.2.3' } }) });
+    expect(result).toMatchObject({ passed: true, version: '5.2.3' });
+  });
+
   // These uniquely guard the native-renderer/API boundary: a successful exit
   // must never turn malformed artifacts into readiness.
   it.each([
     ['missing output', { missing: true }],
     ['invalid JSON', { metadata: '{' }],
-    ['unsupported version', { metadata: { ...report, version: '4.3.0' } }],
+    ['unsupported version', { metadata: { ...report, version: '4.1.0' } }],
+    ['version with a release label', { metadata: { ...report, version: '5.2.3 LTS' } }],
     ['wrong engine', { metadata: { ...report, engine: 'BLENDER_EEVEE_NEXT' } }],
     ['wrong device', { metadata: { ...report, device: 'GPU' } }],
     ['wrong dimensions', { width: 32 }],

@@ -7,22 +7,24 @@ const tokenColor = 'rgb(var(--port-text))';
 const monthLabel = (month) => formatMonthYear(`${month}-01T00:00:00`);
 const compactUsd = (value) => formatUsd(value, { compact: true });
 
-export default function MonthlyUsageCard({ history: points = [], series = [], instanceCount = 1 }) {
+export default function MonthlyUsageCard({ history: points = [], series = [], instanceCount = 1, rangeTooWide = false, coverage }) {
   const colors = seriesColors(series);
   return (
     <section className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3" aria-label="Monthly estimated API cost and tokens">
       <h3 className="text-sm font-medium text-gray-400">Monthly estimated API cost &amp; tokens</h3>
       <p className="text-xs text-gray-500">
-        Last 12 UTC calendar months across {instanceCount > 1 ? `${formatCount(instanceCount)} instances` : 'this machine'}, including Claude Code transcripts, with the same coverage as the rolling chart. Independent of the report filter.
-        {' '}Calendar months differ from a trailing 30-day window. The current and first recorded months may be partial; peer history reflects its last sync. The line includes input, output and cache tokens, including estimates.
+        Selected-period UTC calendar months across {instanceCount > 1 ? `${formatCount(instanceCount)} instances` : 'this machine'}, including Claude Code transcripts outside PortOS. The larger Claude transcript or ledger estimate is used for each day, or for the whole month when only a monthly rollup remains, to reduce overlap.
+        {' '}Calendar months differ from a trailing 30-day window. Months cut by the selected range and the current month may be partial; peer history reflects its last sync. Undated legacy tokens cannot be assigned to a month. The line includes input, output and cache tokens, including estimates.
       </p>
+      {(coverage?.pricingIncomplete || coverage?.missingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
+      {coverage?.pricingIncomplete && <p className="text-xs text-port-warning">Unclassified ledger usage may overlap transcript totals; its overlap cannot be determined.</p>}
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-400">
         {series.length > 0 ? series.map((provider, i) => (
           <span key={provider.key} style={{ color: colors[i] }}>■ {provider.label} (USD)</span>
         )) : <span style={{ color: costColor }}>■ Est. API cost (USD, left axis)</span>}
         <span style={{ color: tokenColor }}>━ Tokens (right axis)</span>
       </div>
-      {points.length === 0 ? <p className="text-sm text-gray-500">No monthly usage recorded yet.</p> : <>
+      {rangeTooWide ? <p className="text-sm text-gray-500">Monthly chart unavailable for ranges over 100 years.</p> : points.length === 0 ? <p className="text-sm text-gray-500">No monthly usage recorded yet.</p> : <>
         <div className="h-64 min-w-0" role="img" aria-label="Monthly estimated API cost stacked by provider with token trend; exact values in the table below">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={points} margin={{ top: 8, right: 0, bottom: 0, left: 0 }}>

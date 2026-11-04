@@ -63,7 +63,7 @@ function CopyField({ id, field, initial, onSave }) {
         <div className="flex items-center gap-2">
           {field.max && <span className={`text-[10px] font-mono ${over ? 'text-port-error' : 'text-port-text-muted'}`}>{value.length}/{field.max}</span>}
           <button type="button" onClick={() => copyToClipboard(value, `${field.label} copied`)} disabled={!value}
-            aria-label={`Copy ${field.label}`} className="text-port-text-muted disabled:opacity-40 min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
+            aria-label={`Copy ${field.label}`} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted disabled:opacity-40 min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
         </div>
       </div>
       <Input id={id} value={value} rows={field.multiline ? 4 : undefined}
@@ -217,7 +217,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
                 <div className="flex items-center justify-between">
                   <span className="text-port-text-muted flex items-center gap-1"><ListOrdered size={12} /> YouTube chapters (paste into the description)</span>
                   <button type="button" onClick={() => copyToClipboard(chaptersText(kit.chapters), 'Chapters copied')} aria-label="Copy chapters"
-                    className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-text-muted min-h-[44px] sm:min-h-0 px-1"><Copy size={12} /></button>
                 </div>
                 <pre className="bg-port-bg border border-port-border rounded p-2 whitespace-pre-wrap break-words font-mono text-[11px]">{chaptersText(kit.chapters)}</pre>
               </div>

@@ -19,6 +19,15 @@ const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionS
 });
 
 describe('review-enabled completion merge gate', () => {
+  it('gives unpinned pickers a selection transport before any claim mutation', () => {
+    const section = buildClaimFlowCompletionSection({ agentId: 'example-picker' });
+    expect(section).toContain('/api/cos/claim-selection');
+    expect(section).toContain('"agentId":"example-picker","issueNumber":123');
+    expect(section.indexOf('/api/cos/claim-selection')).toBeLessThan(section.indexOf('/api/cos/claim-ownership'));
+    expect(section).toContain('recorded:true');
+    expect(section).toContain('Bound child claims always take precedence');
+  });
+
   it('distinguishes an operator-parked claim attempt from resolving the open issue', () => {
     const section = render();
     expect(section).toContain('Use no-action-needed for this verified stand-down, not blocked');

@@ -30,7 +30,7 @@ import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { REFERENCE_AUDIO_FIELDS } from './requestFields.js';
+import { REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_IMAGES, videoReferenceImageSlots } from './requestFields.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded, assertFileNotMediaManifest } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -83,6 +83,33 @@ import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
+
+/** Hosted lanes cannot consume the generic reference inputs used by local models. */
+export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
+  if (backend === VIDEO_GEN_MODE.LOCAL
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
+      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
+  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models.',
+    { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+}
+
+/**
+ * Extra reference images (`referenceImage1..3` + `referenceLabel1..3`) condition
+ * a Grok image-to-video render beside its source frame. Any other lane or a
+ * request with no source frame would drop them silently, so each is refused with a 400 instead. The caller owns cleanup.
+ */
+export function referenceImageUploadsError({ backend, body, uploads = {} }) {
+  const slots = videoReferenceImageSlots(uploads, body);
+  const orphanLabel = VIDEO_REFERENCE_IMAGE_FIELDS.slice(0, MAX_VIDEO_REFERENCE_IMAGES)
+    .findIndex((field, i) => String(body[`referenceLabel${i + 1}`] ?? '').trim() && !uploads[field]);
+  if (!slots.length && orphanLabel < 0) return null;
+  const refuse = (message, code) => new ServerError(message, { status: 400, code });
+  if (orphanLabel >= 0) return refuse(`referenceLabel${orphanLabel + 1} needs a matching referenceImage${orphanLabel + 1} upload.`, 'VIDEO_REFERENCE_LABEL_ORPHANED');
+  if (slots.length > MAX_VIDEO_REFERENCE_IMAGES) return refuse(`At most ${MAX_VIDEO_REFERENCE_IMAGES} reference images are supported (referenceImage1..${MAX_VIDEO_REFERENCE_IMAGES}).`, 'VIDEO_REFERENCE_IMAGES_TOO_MANY');
+  if (backend !== VIDEO_GEN_MODE.GROK) return refuse('referenceImage uploads are only used by the Grok backend.', 'VIDEO_REFERENCE_IMAGES_GROK_ONLY');
+  if (!uploads.sourceImage && !body.sourceImageFile) return refuse('referenceImage uploads need a source image (sourceImage) to animate.', 'VIDEO_REFERENCE_IMAGES_NEED_SOURCE');
+  return null;
+}
 
 async function validateMiniMaxH3SpeedParams(model, params, settings) {
   const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
@@ -348,6 +375,11 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     await cleanupMultipartTemp(uploads);
     throw guidanceError;
   }
+  const referenceUploadsError = referenceImageUploadsError({ backend, body, uploads });
+  if (referenceUploadsError) {
+    await cleanupMultipartTemp(uploads);
+    throw referenceUploadsError;
+  }
   const runwaySpecial = backend === VIDEO_GEN_MODE.RUNWAY && RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode);
   if (!runwaySpecial && (RUNWAY_SPECIAL_VIDEO_MODES.includes(body.mode) || uploads.runwayVideo || uploads.runwayCharacterVideo)) {
     await cleanupMultipartTemp(uploads);
@@ -482,14 +514,10 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 
   // Reference inputs condition a local reference-to-video model only; a hosted
   // lane would enqueue an ordinary render that silently ignores them.
-  if (backend !== VIDEO_GEN_MODE.LOCAL
-    && ((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
-      || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) {
+  const hostedReferenceError = hostedReferenceInputsError({ backend, body, uploads });
+  if (hostedReferenceError) {
     await cleanupMultipartTemp(uploads);
-    throw new ServerError(
-      'Reference images, clips and voice clips are only used by local reference-to-video models.',
-      { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' },
-    );
+    throw hostedReferenceError;
   }
 
   // Track every durable file we've already copied into PATHS.uploads so a
@@ -518,7 +546,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
 // try/catch so a permission/disk failure here still cleans up the
 // multipart temp uploads instead of leaking them in the OS temp dir.
 async function ensureUploadsDir({ uploads, cleanupStaged }) {
-  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
+  if (!(uploads.sourceImage || uploads.lastImage || uploads.audioFile || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]) || VIDEO_REFERENCE_IMAGE_FIELDS.some((field) => uploads[field]) || uploads.icReference || uploads.runwayVideo || uploads.runwayCharacterVideo)) return;
   try {
     await ensureDir(PATHS.uploads);
   } catch (err) {
@@ -729,11 +757,25 @@ async function prepareVideoReferences({
   body, uploads, effectiveModel, sourceImagePath, getHistory, resolveHistoryVideoPath,
   stageUploadDurable, extraUploadedTempPaths, cleanupStaged,
 }) {
+  // The backend and capability-dependent model are already resolved here, and
+  // hosted/peer submissions have taken their own lanes. Add cast sheets only
+  // when they cannot displace caller-provided references or break a chain.
+  const hasRequestedReferences = body.referenceImageFiles?.length || body.referenceVideoIds?.length
+    || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
+  let referenceImagePaths = null;
+  if (body.musicVideo?.sceneId && !body.musicVideo.clipReferencesDisabled && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
+    const totalLimit = Number(effectiveModel?.maxReferenceTotal) || Infinity;
+    const limit = Math.min(extraReferenceImageLimit(effectiveModel), totalLimit - 1);
+    if (limit > 0) {
+      const { musicVideoLocalReferencePaths } = await import('../musicVideo/clipCastReferences.js');
+      const paths = await musicVideoLocalReferencePaths(body.musicVideo, limit, { excludePath: sourceImagePath });
+      if (paths.length) referenceImagePaths = paths;
+    }
+  }
   // Extra reference stills for a reference-to-video model. Rejected up-front on
   // a model that declares no `maxReferenceImages` (a silently dropped reference
   // would render a clip that ignores what the user supplied) and past the
-  // model's ceiling, which counts the first-frame input as the first image.
-  let referenceImagePaths = null;
+  // model's ceiling, which counts the source still as the first image.
   if (body.referenceImageFiles?.length) {
     const imageCountError = referenceCountError(effectiveModel, 'extra reference images', body.referenceImageFiles.length, extraReferenceImageLimit(effectiveModel), 'VIDEO_REFERENCE_IMAGES_UNSUPPORTED');
     if (imageCountError) {

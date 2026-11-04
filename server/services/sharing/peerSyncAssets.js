@@ -26,6 +26,7 @@ import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage, recordImageSupplier, heldImageAdoptsOrigin } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
+import { musicVideoCameoImageIds } from '../../lib/musicVideoCameos.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
 import { coverImageFilename } from '../albums/index.js';
@@ -660,6 +661,10 @@ export async function referenceMusicVideoAssetManifest(project, { linkedTrack } 
     ...scenes.flatMap((scene) => (scene.takes || []).flatMap((take) => [take.sourceImageId, ...(take.inputAssets || []).map((input) => input.assetId)]).filter(isStr)),
     ...specRefs.map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
     ...(Array.isArray(project?.styleReferences) ? project.styleReferences : []).map((r) => (isStr(r?.imageId) ? r.imageId : null)).filter(Boolean),
+    // The cameo roster's photos, stills and variants (#14821).
+    ...musicVideoCameoImageIds(project),
+    // A shot's Research and seed photos (#14822).
+    ...scenes.flatMap((s) => (Array.isArray(s?.researchReferences) ? s.researchReferences : []).map((r) => r?.imageId)).filter(isStr),
   ])];
   if (imageNames.length) {
     const entries = imageNames.map(imageAssetReference);

@@ -473,8 +473,8 @@ export async function requestSecurityScanViaRunner(agentId, { input, stop = fals
 /**
  * Get list of active agents from runner
  */
-export async function getActiveAgentsFromRunner() {
-  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents`, {}, 10000);
+export async function getActiveAgentsFromRunner({ timeoutMs = 10000 } = {}) {
+  const response = await fetchWithTimeout(`${COS_RUNNER_URL}/agents`, {}, timeoutMs);
   if (!response.ok) {
     throw new Error('Failed to get agents');
   }

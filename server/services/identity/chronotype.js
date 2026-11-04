@@ -155,15 +155,15 @@ export async function getChronotype() {
   return deriveChronotype();
 }
 
-export async function deriveChronotype() {
-  const genomeSummary = await getGenomeSummary();
+export async function deriveChronotype({ withoutGenetics = false } = {}) {
+  const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
   const savedMarkers = genomeSummary?.savedMarkers || {};
 
   const geneticMarkers = extractSleepMarkers(savedMarkers);
   const caffeineMarkers = extractCaffeineMarkers(savedMarkers);
 
   // Load existing behavioral data if present
-  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE);
+  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, { strict: true });
   const behavioralData = existing.behavioralData;
 
   const { type, confidence, scores } = computeChronotype(geneticMarkers, behavioralData);

@@ -92,6 +92,11 @@ describe('grokVideoBillableUnits', () => {
     expect(grokVideoBillableUnits({ requestedSeconds: 10, deliveredSeconds: null, hasSourceImage: true }))
       .toEqual({ videoSeconds: 10, images: 0, inputImages: 1 });
   });
+
+  it('bills each cast sheet a reference_to_video render sends as an input image', () => {
+    expect(grokVideoBillableUnits({ requestedSeconds: 6, deliveredSeconds: 6.04, hasSourceImage: true, referenceImages: 2 }))
+      .toEqual({ videoSeconds: 6.04, images: 0, inputImages: 3 });
+  });
 });
 
 describe('grokVideoClip client mirror', () => {

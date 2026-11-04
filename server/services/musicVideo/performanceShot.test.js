@@ -33,7 +33,7 @@ vi.mock('../videoGen/local.js', async () => {
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { findFfmpeg, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
 const { preparePerformanceShot, findStalePerformanceTakes, withDraftPerformanceFallbacks, assertCurrentPerformanceTakes } = await import('./performanceShot.js');
-const { setShotLocks } = await import('./productionReview.js');
+const { productionReviewBasis } = await import('./productionReview.js');
 const fal = await import('../videoGen/fal.js');
 const { videoGenEvents } = await import('../videoGen/events.js');
 const { buildMusicVideoFfmpegArgs, beatSnapClips, resolveSceneClips } = await import('./render.js');
@@ -141,7 +141,7 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
   it('slices the exact song window, submits it once, and trims the delivered take at its edit points', async () => {
     getProject.mockResolvedValue(project());
     const prepared = await preparePerformanceShot({
-      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image',
+      musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'lipsync' }, backend: 'fal', sourceImagePath: join(PATHS.images, 'frame.png'), mode: 'image',
     });
 
     // A 1.5s shot is padded to the 5s provider minimum (+ margin), centered:
@@ -307,6 +307,15 @@ describe.skipIf(!ffmpeg)('music-video performance shot through the fal lip-sync 
     await writeFile(join(PATHS.music, 'vocals.wav'), songWav({ seconds: SONG_SEC - 1 }));
     await rm(PATHS.uploads, { recursive: true, force: true });
     await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 400, code: 'MUSIC_VIDEO_VOCAL_STEM_TIMEBASE' });
+    // Split by demucs from this very master, it is on the song's timebase whatever the container durations say.
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav', vocalStemMasterFilename: 'song.wav', vocalStemDerived: true });
+    await expect(preparePerformanceShot(args)).resolves.toMatchObject({ shotInstruction: { audio: { conditioning: { source: 'vocal-stem' } } } });
+    // The song's file was replaced since (a new take on the same track): the stem belongs to the old song.
+    await writeFile(join(PATHS.music, 'vocals.wav'), stem);
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav', vocalStemMasterFilename: 'older-song.wav', vocalStemDerived: true });
+    await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 409, code: 'MUSIC_VIDEO_VOCAL_STEM_STALE' });
+    getProject.mockResolvedValue({ ...project(), vocalStemFilename: 'vocals.wav' });
+    await rm(PATHS.uploads, { recursive: true, force: true });
     // A stem the record names but the disk lacks is not silently replaced by the mix.
     await rm(join(PATHS.music, 'vocals.wav'));
     await expect(preparePerformanceShot(args)).rejects.toMatchObject({ status: 404, code: 'MUSIC_VIDEO_VOCAL_STEM_MISSING' });
@@ -661,8 +670,12 @@ describe('draft fallbacks for stale performance shots', () => {
 });
 
 describe('the final render lip-sync gate', () => {
+  // Legacy approval a project saved before lock removal still carries: the
+  // whole board approved plus a `clipApprovals` entry per clip the director locked.
+  const withLegacyClipLocks = (project, sceneIds) => ({ ...project, productionReview: { approvals: { storyboard: { basis: productionReviewBasis(project).storyboard } },
+    clipApprovals: Object.fromEntries(sceneIds.map((id) => [id, { videoHistoryId: `${id}-clip` }])) } });
   // Uniquely catches a refusal that does not name its shots, or a locked clip still blocking.
-  it('names the shots in song order with each reason, and lets a locked clip render as it plays', async () => {
+  it('names the shots in song order with each reason, and lets a legacy locked clip render as it plays', async () => {
     const shot = (sceneId, startSec) => ({ sceneId, startSec, endSec: startSec + 2, shotMode: 'performance', prompt: 'a singer',
       referenceImageId: `${sceneId}.png`, videoHistoryId: `${sceneId}-clip`,
       takes: [{ takeId: `${sceneId}-t`, kind: 'video', assetId: `${sceneId}-clip`, sourceImageId: `${sceneId}.png`, status: 'selected' }] });
@@ -672,10 +685,7 @@ describe('the final render lip-sync gate', () => {
       message: 'Shots 1 (no lip-sync record), 3 (no lip-sync record): the selected take may not sing in sync with the song. Regenerate them or switch them to Cutaway',
       context: { stale: [{ sceneId: 'late', reason: 'not-lip-synced', cutaway: true }, { sceneId: 'early', reason: 'not-lip-synced', cutaway: true }] },
     });
-    const stillLocked = setShotLocks(project, { sceneIds: ['late'], locked: true });
-    const clipLocked = setShotLocks(stillLocked, { sceneIds: ['late'], locked: true, stage: 'video' });
-    await expect(assertCurrentPerformanceTakes(clipLocked, 'unread.wav')).rejects.toThrow(/^Shot 1 \(no lip-sync record\): .* switch it to Cutaway$/);
-    const allLocked = setShotLocks(setShotLocks(clipLocked, { sceneIds: ['early'], locked: true }), { sceneIds: ['early'], locked: true, stage: 'video' });
-    await expect(assertCurrentPerformanceTakes(allLocked, 'unread.wav')).resolves.toBeUndefined();
+    await expect(assertCurrentPerformanceTakes(withLegacyClipLocks(project, ['late']), 'unread.wav')).rejects.toThrow(/^Shot 1 \(no lip-sync record\): .* switch it to Cutaway$/);
+    await expect(assertCurrentPerformanceTakes(withLegacyClipLocks(project, ['late', 'early']), 'unread.wav')).resolves.toBeUndefined();
   });
 });

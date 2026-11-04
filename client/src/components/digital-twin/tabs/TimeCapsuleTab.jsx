@@ -369,7 +369,7 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                         ) : (
                           <button
                             onClick={() => setConfirmDelete(snap.id)}
-                            className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 rounded-lg hover:bg-port-border transition-colors"
+                            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 rounded-lg hover:bg-port-border transition-colors"
                             title="Delete snapshot" aria-label="Delete snapshot"
                           >
                             <Trash2 size={16} />

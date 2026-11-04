@@ -12,6 +12,15 @@ vi.mock('../install/RuntimeInstallModal', () => ({ default: ({ open, installUrlB
 ) : null }));
 
 describe('MOSS runtime actions', () => {
+
+  it('opens the isolated FLUX.3 installer and refreshes readiness on completion', () => {
+    const onRefresh = vi.fn();
+    render(<LocalRuntimeStatus runtime={{ readiness: 'unavailable', reason: 'Missing', remedy: { kind: 'install-flux3', label: 'Install / repair FLUX.3 runtime' } }} onRefresh={onRefresh} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install / repair FLUX.3 runtime' }));
+    expect(screen.getByTestId('installer')).toHaveTextContent('/api/image-gen/setup/flux3-install');
+    fireEvent.click(screen.getByRole('button', { name: 'Finish fixture install' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
   it('keeps runtime completion from automatically starting the separate weight download', () => {
     const onRefresh = vi.fn();
     const runtime = { modelId: 'moss', readiness: 'unavailable', reason: 'Runtime missing', remedy: { kind: 'install-moss-swift', label: 'Install MOSS Swift runtime' } };

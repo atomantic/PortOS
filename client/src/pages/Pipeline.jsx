@@ -594,7 +594,7 @@ export default function Pipeline() {
                   <button
                     type="button"
                     onClick={() => requestDelete(s.id)}
-                    className="p-2 text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-500 hover:text-port-error"
                     aria-label={`Delete series ${s.name}`}
                     title="Delete series"
                   >

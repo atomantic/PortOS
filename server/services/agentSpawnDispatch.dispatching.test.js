@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({ registerGate: null, prep: null, publicationActive: false, refusePublication: false, updateResult: { ok: true }, provider: null, tui: false }));
 const releaseDisposition = vi.hoisted(() => vi.fn(async () => null));
-vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition }));
+const releaseObservations = vi.hoisted(() => vi.fn(async () => new Map()));
+vi.mock('./releaseSynchronization.js', () => ({ releaseTaskDispatchDisposition: releaseDisposition, observeReleaseDeliveries: releaseObservations }));
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: vi.fn(async (_repo, work) => {
   if (f.refusePublication) throw new Error('checkout-retirement-reserved');
   f.publicationActive = true;
@@ -66,7 +67,7 @@ import { execGh } from './github.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { updateTask } from './cosTaskStore.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { registerAgent, updateAgent } from './cosAgentLifecycle.js';
 import { withCheckoutPublication } from '../lib/checkoutRetirementAdmission.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
@@ -91,6 +92,22 @@ beforeEach(() => {
 });
 
 describe('dispatchAgentRun ownership window', () => {
+  it('binds the runtime sweep release to the persisted resuming dispatch before launch', async () => {
+    const context = newContext();
+    const prerequisite = { version: 1, status: 'resumed', taskId: task.id, agentId: 'agent-original',
+      lastSpawnedAt: '2026-01-01T00:00:00Z', totalSpawnCount: '3' };
+    context.task = { ...task, status: 'pending', metadata: { runtimeVerification: prerequisite,
+      runtimeVerificationId: `${task.id}:agent-original`, resumedFromAgentId: 'agent-original',
+      lastSpawnedAt: prerequisite.lastSpawnedAt, totalSpawnCount: '3' } };
+    updateTask.mockImplementationOnce(async (_id, update) => ({ ...context.task, ...update }));
+    await dispatchAgentRun(context);
+    expect(updateAgent).toHaveBeenCalledWith(context.agentId, { metadata: { completionTaskDispatch: expect.objectContaining({
+      taskId: task.id, runtimeContinuation: { prerequisite, description: task.description, priority: undefined },
+      expected: expect.arrayContaining([['totalSpawnCount', 4]]),
+    }) } });
+    expect(spawnDirectly).toHaveBeenCalled();
+    expect(updateAgent.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
+  });
   it('does not spawn a release continuation retired after queue admission', async () => {
     const context = newContext();
     context.task = { ...task, metadata: { analysisType: 'release-sync' } };
@@ -100,6 +117,32 @@ describe('dispatchAgentRun ownership window', () => {
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(getActiveAgentIds()).not.toContain('agent-x');
+  });
+  it('does not dispatch a continuation whose frozen review policy is unknown', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'release-sync' } };
+    releaseDisposition.mockResolvedValue('review-policy-unverified');
+    expect(await dispatchAgentRun(context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('review policy') }));
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+  it('passes delivery observations into the final ownership fence before spawning a release', async () => {
+    const context = newContext();
+    context.task = { ...task, metadata: { analysisType: 'do-release', app: 'example-app' } };
+    const observations = new Map([['prior-release', { number: 42 }]]);
+    releaseObservations.mockResolvedValueOnce(observations);
+    releaseDisposition.mockResolvedValueOnce(null);
+    await dispatchAgentRun(context);
+    expect(releaseObservations).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId });
+    expect(releaseDisposition).toHaveBeenCalledWith(context.task, { ignoreAgentId: context.agentId, deliveryObservations: observations });
+    expect(spawnDirectly).toHaveBeenCalled();
+
+    const blocked = newContext();
+    blocked.task = context.task;
+    releaseDisposition.mockResolvedValueOnce('wait-for-synchronization');
+    await dispatchAgentRun(blocked);
+    expect(blocked.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('unfinished') }));
   });
   it.each(['direct', 'tui', 'runner'])('uses the persisted dispatch for %s completion and its spawn limit', async mode => {
     const context = newContext();

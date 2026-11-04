@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeActivityBlockers, summarizeSystemActivity } from './systemIdle.js';
+import { describeActivityBlockers, manualUpdateBlockers, summarizeSystemActivity } from './systemIdle.js';
 
 const snapshot = (overrides = {}) => ({
   jobs: [],
@@ -14,6 +14,13 @@ const snapshot = (overrides = {}) => ({
 });
 
 describe('system idle verdict', () => {
+  it('retains fresh positive runner evidence without double-counting an observed snapshot', () => {
+    const runnerAgents = [{ id: 'running', processActive: true }, { id: 'stale', processActive: false }];
+    expect(manualUpdateBlockers({ observedWork: { agents: { active: 0 } } }, { legacy: true, runnerAgents }))
+      .toEqual([{ kind: 'agents-running', label: '1 CoS agent running', count: 1 }]);
+    expect(manualUpdateBlockers({ observedWork: { agents: { active: 1 } } }, { legacy: true, runnerAgents }))
+      .toEqual([{ kind: 'agents-running', label: '1 CoS agent running', count: 1 }]);
+  });
   it('reports idle only when nothing is running or queued anywhere', () => {
     expect(summarizeSystemActivity(snapshot())).toMatchObject({ idle: true, activeCount: 0, queuedCount: 0, blockers: [] });
   });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { anchorShotsToSungLyrics, dropStaleStoryboardRows, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, assertShotApproval, assertClipUnlocked, setShotLocks } from './productionReview.js';
+import { anchorShotsToSungLyrics, dropStaleStoryboardRows, productionReadiness, productionAlignmentBasis, approveProductionStage, carryProductionApprovals, carryShotLocks, clipLocks } from './productionReview.js';
 import { addScenes, applySceneUpdate, mergeNextScene, removeScene, replaceScenes, splitScene } from './projectsLogic.js';
 
 const WORD_PROBLEM = /bounded, positive-duration word timings/;
@@ -139,18 +139,6 @@ describe('locking shots one at a time', () => {
     return approveProductionStage(ready, { stage: 'art', basis: productionReadiness(ready).basis.art });
   }
 
-  // Uniquely catches a single shot's clip waiting on the whole storyboard approval.
-  it('lets a locked shot make its clip before the board is approved', () => {
-    const art = artApproved();
-    expect(() => assertShotApproval(art, 's2')).toThrow(/Lock this shot/);
-    const locked = setShotLocks(art, { sceneIds: ['s2'], locked: true });
-    expect(() => assertShotApproval(locked, 's2')).not.toThrow();
-    expect(() => assertShotApproval(locked, 's1')).toThrow(/Lock this shot/);
-    expect(productionReadiness(locked).storyboard).toMatchObject({ approved: false, unlocked: ['s1', 's3'] });
-    const all = setShotLocks(locked, { sceneIds: ['s1', 's3'], locked: true });
-    expect(productionReadiness(all).storyboard).toMatchObject({ approved: true, unlocked: [] });
-  });
-
   it('keeps the board approved while shot prompts and clip selections change', () => {
     const art = artApproved();
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
@@ -171,52 +159,27 @@ describe('locking shots one at a time', () => {
   });
 
   // Uniquely catches a board approved before per-shot locks shipped dropping to "N shots not locked"
-  // the moment one shot is locked or unlocked.
+  // once a change carries its locks onto the shots, or those locks not outliving the approval going stale.
   it('keeps an earlier whole-board approval as a lock on every shot it covers', () => {
     const art = artApproved();
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
     const { shotApprovals: _none, ...review } = approved.productionReview;
     const legacy = { ...approved, productionReview: review };
     expect(productionReadiness(legacy).storyboard).toMatchObject({ approved: true, unlocked: [] });
-    // The shape already saved by the first release: one shot locked on top of the old approval.
-    const s2 = setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals.s2;
-    expect(productionReadiness({ ...legacy, productionReview: { ...review, shotApprovals: { s2 } } }).storyboard)
-      .toMatchObject({ approved: true, unlocked: [] });
-    // Locking now carries the approval onto every shot, so it outlives the approval going stale.
-    expect(Object.keys(setShotLocks(legacy, { sceneIds: ['s2'], locked: true }).productionReview.shotApprovals)).toEqual(['s1', 's2', 's3']);
-    const unlocked = setShotLocks(legacy, { sceneIds: ['s2'], locked: false });
-    expect(productionReadiness(unlocked).storyboard).toMatchObject({ approved: false, unlocked: ['s2'] });
-    expect(() => assertShotApproval(unlocked, 's1')).not.toThrow();
+    const carried = carryShotLocks(legacy, legacy);
+    expect(Object.keys(carried.productionReview.shotApprovals)).toEqual(['s1', 's2', 's3']);
+    const { project: edited } = applySceneUpdate(carried, 's2', { prompt: 'Rewritten after the board was approved' });
+    expect(productionReadiness(edited).storyboard.shotLocks).toEqual({ s1: 'locked', s2: 'changed', s3: 'locked' });
   });
 
-  // Uniquely catches unlocking every shot falling back to the old whole-board approval.
-  it('leaves the board unapproved after every shot of an approved board is unlocked', () => {
+  // Uniquely catches a legacy clip lock no longer reading as locked, or surviving a swapped clip.
+  it('reads a legacy clip lock as locked until its clip or still changes', () => {
     const art = artApproved();
     const approved = approveProductionStage(art, { stage: 'storyboard', basis: productionReadiness(art).basis.storyboard });
-    const open = setShotLocks(approved, { sceneIds: ['s1', 's2', 's3'], locked: false });
-    expect(productionReadiness(open).storyboard.approved).toBe(false);
-    expect(() => assertShotApproval(open, 's1')).toThrow(/Lock this shot/);
-  });
-
-  // Uniquely catches a video shot locking in one step, or a still/card shot asking for a video lock.
-  it('locks a video shot still first, then its clip, and a card shot once', () => {
-    const art = artApproved();
-    const composed = { ...art, composition: { mode: 'composed' }, scenes: art.scenes.map(s => s.sceneId === 's3' ? { ...s, visualLayer: 'card' } : s) };
-    const still = setShotLocks(composed, { sceneIds: ['s2', 's3'], locked: true });
-    expect(productionReadiness(still).storyboard).toMatchObject({ clipLocks: { s1: 'open', s2: 'open', s3: null }, clipsUnlocked: ['s1', 's2'] });
-    expect(() => setShotLocks(still, { sceneIds: ['s2'], locked: true, stage: 'video' })).toThrow(/choose this shot's clip/);
-    expect(() => setShotLocks(still, { sceneIds: ['s3'], locked: true, stage: 'video' })).toThrow(/no video/);
-    expect(() => setShotLocks(composed, { sceneIds: ['s1'], locked: true, stage: 'video' })).toThrow(/still before its video/);
-    const { project: rendered } = applySceneUpdate(still, 's2', { videoHistoryId: 'clip-1' });
-    const video = setShotLocks(rendered, { sceneIds: ['s2'], locked: true, stage: 'video' });
-    expect(productionReadiness(video).storyboard).toMatchObject({ clipLocks: { s2: 'locked' }, clipsUnlocked: ['s1'] });
-    expect(() => assertClipUnlocked(video, 's2', { prompt: 'New motion' })).toThrow(/video is locked/);
-    expect(() => assertClipUnlocked(video, 's2', { photoSequence: { imageIds: ['photo.png'], intervalFrames: 6 } })).toThrow(/video is locked/);
-    expect(() => assertClipUnlocked(video, 's2', { textZone: 'upper' })).not.toThrow();
-    expect(() => assertClipUnlocked(video, 's1')).not.toThrow();
-    // Unlocking the still takes the clip lock with it.
-    const reopened = setShotLocks(video, { sceneIds: ['s2'], locked: false });
-    expect(productionReadiness(reopened).storyboard.clipLocks.s2).toBe('open');
+    const { project: rendered } = applySceneUpdate(approved, 's2', { videoHistoryId: 'clip-1' });
+    const legacy = { ...rendered, productionReview: { ...rendered.productionReview, clipApprovals: { s2: { videoHistoryId: 'clip-1' } } } };
+    expect(clipLocks(legacy).s2).toBe('locked');
+    expect(clipLocks(applySceneUpdate(legacy, 's2', { videoHistoryId: 'clip-2' }).project).s2).toBe('changed');
   });
 });
 

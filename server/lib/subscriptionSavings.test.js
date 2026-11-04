@@ -106,6 +106,14 @@ describe('attributeReportCostToFamilies', () => {
     expect(attributeReportCostToFamilies(null)).toEqual({ byFamily: new Map(), sources: new Map(), unmatched: 0 });
   });
 
+  it('combines sub-cent provider costs before rounding a family total', () => {
+    const { byFamily } = attributeReportCostToFamilies({ providers: [
+      { family: 'claude', estimatedCost: 0, rawEstimatedCost: 0.004 },
+      { family: 'claude', estimatedCost: 0, rawEstimatedCost: 0.004 },
+    ] });
+    expect(byFamily.get('claude')).toBeCloseTo(0.008);
+  });
+
   it('reports a family as estimated or mixed unless every row is measured', () => {
     const { sources } = attributeReportCostToFamilies({
       providers: [

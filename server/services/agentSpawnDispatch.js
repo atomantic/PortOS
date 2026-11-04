@@ -54,14 +54,17 @@ export async function dispatchAgentRun(context, opts) {
   try {
     const type = currentTaskTypeName(context.task.metadata?.analysisType || context.task.metadata?.selfImprovementType);
     if (type === 'do-release' || type === 'release-sync') {
-      const [{ withClaimOwnershipLock }, { releaseTaskDispatchDisposition }] = await Promise.all([
+      const [{ withClaimOwnershipLock }, { observeReleaseDeliveries, releaseTaskDispatchDisposition }] = await Promise.all([
         import('./cosClaimOwnershipState.js'), import('./releaseSynchronization.js'),
       ]);
-      const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task));
-      if (disposition === 'retired-continuation' || disposition === 'wait-for-synchronization') {
-        return context.blockAndBail({ reason: disposition === 'retired-continuation'
-          ? 'This release synchronization was retired by an operator.'
-          : 'The previous release synchronization is unfinished.', persist: false });
+      const deliveryObservations = await observeReleaseDeliveries(context.task, { ignoreAgentId: context.agentId }).catch(() => new Map());
+      const disposition = await withClaimOwnershipLock(() => releaseTaskDispatchDisposition(context.task, { ignoreAgentId: context.agentId, deliveryObservations }));
+      if (['retired-continuation', 'delivered-continuation', 'wait-for-synchronization', 'review-policy-unverified'].includes(disposition)) {
+        const reason = disposition === 'retired-continuation' ? 'This release synchronization was retired by an operator.'
+          : disposition === 'delivered-continuation' ? 'This release was independently delivered; the historical continuation is retained.'
+          : disposition === 'review-policy-unverified' ? 'Release synchronization review policy was not captured.'
+            : 'The previous release synchronization is unfinished.';
+        return context.blockAndBail({ reason, persist: false });
       }
     }
     return await runAgentDispatch(context, opts);
@@ -360,7 +363,8 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     // Unpersisted scheduled jobs retain their original task on the expected miss.
     const dispatchedTask = !updateResult.error && !updateResult.statusChanged && updateResult.id === task.id && updateResult.metadata
       ? { ...task, ...updateResult, taskType: task.taskType || 'user' } : task;
-    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask);
+    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask,
+      { ...task, status: expectedDispatchStatus, metadata: expectedDispatchMetadata });
 
     if (task.metadata?.autonomousJob && task.metadata?.jobId) {
       cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });

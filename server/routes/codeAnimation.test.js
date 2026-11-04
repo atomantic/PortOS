@@ -103,6 +103,7 @@ import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } fro
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { captureCodeAnimationPoster, settleCodeAnimationPoster } from '../services/codeAnimation/poster.js';
 import routes from './codeAnimation.js';
+import { LATEST_BLENDER_VERSION } from '../lib/blenderVersion.js';
 
 const makeApp = () => {
   const app = express();
@@ -337,7 +338,7 @@ describe('Code Animation portable packages', () => {
   it('serves the original Blender starter as an unchanged data-only package', async () => {
     const response = await request(makeApp()).get('/api/code-animation/packages/starter/blender');
     expect(response.status).toBe(200);
-    expect(response.body.manifest).toMatchObject({ renderer: { kind: 'blender', version: '4.2.0', engine: 'CYCLES' }, format: { width: 1920, height: 1080, fps: 24, durationSeconds: 10 } });
+    expect(response.body.manifest).toMatchObject({ renderer: { kind: 'blender', version: LATEST_BLENDER_VERSION, engine: 'CYCLES' }, format: { width: 1920, height: 1080, fps: 24, durationSeconds: 10 } });
     expect((await validate(response.body)).body.executed).toBe(false);
     expect(response.body.files[0].content).toContain('def build_scene(config):');
     expect(runPromptThroughProvider).not.toHaveBeenCalled();

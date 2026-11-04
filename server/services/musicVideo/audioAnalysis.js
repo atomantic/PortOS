@@ -25,6 +25,7 @@
  * thin ffmpeg-decode wrapper around it.
  */
 
+import { basename } from 'path';
 import {
   ANALYSIS_SAMPLE_RATE,
   MAX_ANALYSIS_SEC,
@@ -447,10 +448,14 @@ export async function analyzeAudioFile(audioPath, { signal } = {}) {
   if (!decoded) return null;
   // A short stereo probe, because the mono mix below cannot show cancellation.
   const probe = await decodeAudioToPcm(audioPath, { signal, maxDurationSec: PHASE_PROBE_SEC, channels: 2 });
-  return analyzePcm(decoded.samples, decoded.sampleRate, {
-    truncatedAtSec: truncatedAtSecFor(decoded),
-    phaseCancellation: probe ? stereoPhaseCancellation(probe.samples) : false,
-  });
+  return {
+    ...analyzePcm(decoded.samples, decoded.sampleRate, {
+      truncatedAtSec: truncatedAtSecFor(decoded),
+      phaseCancellation: probe ? stereoPhaseCancellation(probe.samples) : false,
+    }),
+    // Which file the beat grid came from, so a take replaced in place is noticed (#14793).
+    masterFilename: basename(audioPath),
+  };
 }
 
 // Manual-tempo fallback (see `estimateTempo`'s TEMPO_PEAK_MIN/MIN_BPM/MAX_BPM
@@ -478,9 +483,10 @@ const manualDownbeats = (beats) => beats.filter((_, i) => i % 4 === 0);
  * @param {{ sections: Array, durationSec: number }} cached prior audioAnalysis
  * @param {{ bpm: number, offsetSec?: number }} tempo
  */
-export function buildManualAnalysisFromCached({ sections, durationSec, waveform = [], features = null }, { bpm, offsetSec = 0 }) {
+export function buildManualAnalysisFromCached({ sections, durationSec, waveform = [], features = null, masterFilename = null }, { bpm, offsetSec = 0 }) {
   const beats = manualBeatTimes(bpm, offsetSec, durationSec);
   return {
+    ...(masterFilename ? { masterFilename } : {}),
     // A prior analysis without a feature track stays "not analyzed" (null).
     version: ANALYSIS_VERSION,
     features,
@@ -541,7 +547,7 @@ export function buildManualAnalysis(samples, sampleRate, { bpm, offsetSec = 0, h
 export async function analyzeAudioFileManual(audioPath, { bpm, offsetSec = 0 }, { signal } = {}) {
   const decoded = await decodeAudioToPcm(audioPath, { signal });
   if (!decoded) return null;
-  return buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec, truncatedAtSec: truncatedAtSecFor(decoded) });
+  return { ...buildManualAnalysis(decoded.samples, decoded.sampleRate, { bpm, offsetSec, truncatedAtSec: truncatedAtSecFor(decoded) }), masterFilename: basename(audioPath) };
 }
 
 // --- Section → beat-grid snapping (#4664) -----------------------------------

@@ -584,6 +584,51 @@ export function selectCycleIndices(signatures, frameCount = WALK_FRAME_COUNT) {
   };
 }
 
+/** Sample an action across equal cumulative RGB motion, including both endpoints. */
+function selectArclengthIndices(signatures, frameCount) {
+  const n = signatures.length;
+  if (!Number.isInteger(frameCount) || frameCount < 2) {
+    throw new Error('Action sampling needs an integer frame count of at least 2');
+  }
+  if (n < frameCount) {
+    throw new Error(`Need at least ${frameCount} extracted frames, got ${n}`);
+  }
+  const cumulative = [0];
+  for (let i = 1; i < n; i++) {
+    cumulative.push(cumulative[i - 1] + imageDistance(signatures[i - 1], signatures[i]));
+  }
+  const total = cumulative[n - 1];
+  const indices = [0];
+  let cursor = 1;
+  for (let i = 1; i < frameCount - 1; i++) {
+    const target = total * i / (frameCount - 1);
+    // Reserve a distinct source frame for each remaining output slot, even
+    // when a single abrupt transition spans several motion targets.
+    const last = n - (frameCount - i);
+    cursor = Math.max(cursor, indices[i - 1] + 1);
+    if (total === 0) {
+      cursor = Math.round(i * (n - 1) / (frameCount - 1));
+    } else {
+      while (cursor < last && Math.abs(cumulative[cursor + 1] - target) <= Math.abs(cumulative[cursor] - target)) cursor++;
+    }
+    indices.push(Math.min(cursor, last));
+  }
+  indices.push(n - 1);
+  return {
+    indices,
+    cycle: {
+      selection: 'action-arclength',
+      windowStart: 0,
+      windowLength: n - 1,
+      heldFrames: 0,
+      periodEstimate: null,
+      periodAgreement: 'unavailable',
+    },
+  };
+}
+
+export { selectArclengthIndices as _selectArclengthIndices };
+
 /**
  * Pick a non-directional ambient-loop window and resample it evenly.
  *
@@ -683,6 +728,10 @@ export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
  */
 export const ROOT_BAND_TORSO = [0.30, 0.58];
 export const ROOT_BAND_HIP = [0.42, 0.76];
+// Atlas track-to-track registration uses the stance, measured across the
+// whole track. Keep the per-frame walk packer's torso landmark unchanged:
+// following individual swinging feet there would introduce gait drift.
+export const ROOT_BAND_STANCE = [0.78, 1];
 
 /** The `alignment.operation` stamp written by the torso-pivot packer (#3049). */
 export const ALIGN_OP_TORSO_X = 'one-fixed-scale-per-frame-torso-x-and-baseline-y';
@@ -1071,9 +1120,11 @@ export async function runWalkPostprocess({
   const recovered = usable.map((d) => recoverAlphaFrame(d.frame, d.measured, split));
 
   const signatures = await Promise.all(recovered.map(signatureOf));
-  const { indices, cycle } = trackRow.directional
+  const { indices, cycle } = trackRow.id === WALK_TRACK
     ? selectCycleIndices(signatures, targetFrames)
-    : selectAmbientLoopIndices(signatures, targetFrames);
+    : trackRow.directional
+      ? selectArclengthIndices(signatures, targetFrames)
+      : selectAmbientLoopIndices(signatures, targetFrames);
   const selected = indices.map((i) => recovered[i]);
 
   const { frames: aligned, alignment } = await alignFrames(selected);

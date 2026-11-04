@@ -95,6 +95,74 @@ describe('StackerNews', () => {
     api.getStackerNewsActions.mockResolvedValue({ actions: [] });
   });
 
+  it('retries an account read without claiming the deep-linked account is missing', async () => {
+    const user = userEvent.setup();
+    api.getStackerNewsAccounts.mockRejectedValueOnce(new Error('Account read failed'));
+    renderPage('/stacker-news/a1/accounts');
+    expect(await screen.findByText(/Could not load accounts/)).toBeInTheDocument();
+    expect(screen.queryByText(/account was not found/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('No accounts configured.')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry accounts' }));
+    expect(await screen.findByRole('heading', { name: 'Settings and safety for @art_steward' })).toBeInTheDocument();
+  });
+
+  it('keeps independent read failures visible across an unrelated action and retries only the failed list', async () => {
+    const user = userEvent.setup();
+    api.getStackerNewsItems.mockRejectedValueOnce(new Error('Content read failed'));
+    api.getStackerNewsActions.mockRejectedValueOnce(new Error('Action read failed'));
+    api.getStackerNewsBrowserIdentity.mockResolvedValue({ username: 'art_steward', matchesConfigured: true });
+    renderPage('/stacker-news/a1/review');
+    expect(await screen.findByText(/Could not load stored content/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not load actions/)).toBeInTheDocument();
+    expect(screen.queryByText(/No stored content/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No actions are waiting/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('—')).toHaveLength(3);
+    await user.click(screen.getByRole('tab', { name: 'Automation & accounts' }));
+    await user.click(screen.getByRole('button', { name: 'Check browser identity' }));
+    expect(await screen.findByText(/Pinned browser identity/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Triage queue' }));
+    expect(screen.getByText(/Could not load stored content/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry stored content' }));
+    expect(await screen.findByText(/No stored content/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not load actions/)).toBeInTheDocument();
+    expect(api.getStackerNewsActions).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Retry actions' }));
+    expect(await screen.findByText(/No actions are waiting/)).toBeInTheDocument();
+    expect(api.syncStackerNewsAccount).not.toHaveBeenCalled();
+  });
+
+  it('gates failed community and item pickers until their local retries succeed', async () => {
+    const user = userEvent.setup();
+    api.getStackerNewsTerritories.mockRejectedValueOnce(new Error('Community read failed'));
+    api.getStackerNewsItems.mockRejectedValueOnce(new Error('Item read failed'));
+    renderPage('/stacker-news/a1/territory');
+    expect(await screen.findByText(/Could not load communities/)).toBeInTheDocument();
+    expect(screen.queryByText(/Add communities @art_steward/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add community' })).toBeDisabled();
+    await user.click(screen.getByRole('tab', { name: 'Compose' }));
+    expect(screen.getByLabelText('Source item')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send to approval queue' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Retry stored content' }));
+    await waitFor(() => expect(screen.getByLabelText('Source item')).toBeEnabled());
+    await user.selectOptions(screen.getByLabelText('Action', { selector: '#action-kind' }), 'draft_post');
+    expect(screen.getByLabelText('Territory')).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Retry communities' }));
+    await waitFor(() => expect(screen.getByLabelText('Territory')).toBeEnabled());
+  });
+
+  it('drops a retry response after the selected account changes', async () => {
+    const user = userEvent.setup();
+    const retry = deferred();
+    api.getStackerNewsTerritories.mockRejectedValueOnce(new Error('Community read failed')).mockReturnValueOnce(retry.promise);
+    renderPage('/stacker-news/a1/territory');
+    await user.click(await screen.findByRole('button', { name: 'Retry communities' }));
+    await user.selectOptions(accountSwitcher(), 'a2');
+    expect(await screen.findByText(/Add communities @personal_stacker/)).toBeInTheDocument();
+    await act(async () => retry.resolve({ territories: [{ id: 'old', label: 'Superseded community', rules: {} }] }));
+    expect(screen.queryByText('Superseded community')).not.toBeInTheDocument();
+    expect(screen.getByText(/Add communities @personal_stacker/)).toBeInTheDocument();
+  });
+
   it('deep-links to one account and shows its independent schedule and rules', async () => {
     const user = userEvent.setup();
     renderPage('/stacker-news/a1/accounts');

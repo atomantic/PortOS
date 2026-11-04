@@ -15,12 +15,15 @@ const SEPARATE_HELP = 'Split the vocal out of the song with demucs and attach it
  * refuses a stem whose length does not match the song, since its timing would
  * not line up; the error toast says why.
  */
-export default function VocalStemControl({ project, hasAudio, onUpdated, separation = null }) {
+export default function VocalStemControl({ project, masterFilename = null, hasAudio, onUpdated, separation = null }) {
   const [busy, setBusy] = useState(false);
   const inputId = `mv-vocal-stem-${project.id}`;
   const sourceId = `mv-conditioning-source-${project.id}`;
   const source = project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
   const stem = project.vocalStemFilename || null;
+  // The track's audio can be replaced in place; a stem of the old file no longer lines up.
+  const oldSong = Boolean(stem && masterFilename && project.vocalStemMasterFilename
+    && project.vocalStemMasterFilename !== masterFilename);
   const separating = Boolean(separation?.active && separation.context === project.id);
   const separationLabel = separating
     ? `${separation.stageLabel || 'Separating vocals…'}${separation.stage === 'separating' && separation.percent ? ` ${separation.percent}%` : ''}`
@@ -77,7 +80,11 @@ export default function VocalStemControl({ project, hasAudio, onUpdated, separat
       <span className="text-port-text-muted">Choose a clean singer bounce explicitly. Separation, source selection and duration parity do not verify voice isolation.</span>
       {stem ? (
         <>
-          <span className="text-port-text-muted break-all">{source === 'master' ? 'Lip-sync uses the full mix' : `Lip-sync uses ${stem}`}</span>
+          {oldSong ? (
+            <span className="text-port-warning">Made from an earlier version of the song. Separate vocals again or remove it.</span>
+          ) : (
+            <span className="text-port-text-muted break-all">{source === 'master' ? 'Lip-sync uses the full mix' : `Lip-sync uses ${stem}`}</span>
+          )}
           <button type="button" onClick={remove} disabled={busy || separating} aria-label="Remove vocal stem"
             className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
             <X size={13} /> Remove

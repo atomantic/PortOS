@@ -189,7 +189,7 @@ export default function NodeRuntimePanel({ onLaunch, busy = false }) {
             <button
               type="button"
               onClick={() => copyToClipboard(startup.command, 'Command copied')}
-              className="p-2 rounded-lg bg-port-border text-gray-300 hover:text-white shrink-0"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-lg bg-port-border text-gray-300 hover:text-white shrink-0"
               aria-label="Copy start-on-boot command"
             >
               <Copy size={14} />

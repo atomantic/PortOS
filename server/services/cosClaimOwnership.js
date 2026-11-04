@@ -207,6 +207,72 @@ export async function updateReleaseCandidateOwnership(agentId, action) {
   });
 }
 
+/** The publisher reserves and captures its own separate synchronization tree. */
+export async function updateReleaseSynchronizationOwnership(agentId, action) {
+  const done = action === 'sync-reserve' ? 'reserved' : 'captured';
+  if (!/^agent-[a-z0-9-]+$/.test(agentId) || !['sync-reserve', 'sync-capture'].includes(action)) {
+    return { [done]: false, reason: 'synchronization-owner-invalid' };
+  }
+  const { cosEvents } = await import('./cosEvents.js');
+  return ownershipTransaction(action, done, async (state, save) => {
+    const agent = state.agents?.[agentId];
+    const publication = agent?.metadata?.releasePublication;
+    if (!agent || agent.id !== agentId || agent.status !== 'running' || agent.metadata?.taskAnalysisType !== 'do-release'
+      || agent.metadata.isWorktree !== false || publication?.status !== 'verified'
+      || publication.synchronizationHandoffVersion !== 2 || !/^[a-f0-9]{64}$/.test(publication.identity || '')) {
+      return { [done]: false, reason: 'synchronization-owner-unverified' };
+    }
+    const { isInlineReleaseOwner, publisherCandidateSeed } = await import('../lib/releaseSynchronization.js');
+    if (!publisherCandidateSeed({ publication, owner: { agentId, taskId: agent.taskId, startedAt: agent.startedAt },
+      checkouts: agent.metadata.checkoutSeeds || [] })) return { [done]: false, reason: 'candidate-checkout-unverified' };
+    const { readReleaseSynchronizationOutbox } = await import('./releaseSynchronizationStore.js');
+    const entry = (await readReleaseSynchronizationOutbox().catch(() => null))?.publications?.[publication.identity];
+    if (!entry || !entry.registeredAt || !isInlineReleaseOwner(entry, agent)) {
+      return { [done]: false, reason: 'synchronization-registration-unverified' };
+    }
+    const branch = `codex/release-sync-${publication.identity}`;
+    const repoPath = agent.sourceWorkspace || agent.metadata.sourceWorkspace || agent.workspacePath || agent.metadata.workspacePath;
+    if (!repoPath) return { [done]: false, reason: 'ownership-unreadable' };
+    if (checkoutRetirementFenceReason({ repoPath, branch })) return { [done]: false, reason: 'checkout-retirement-reserved' };
+    const { withCheckoutPublication } = await import('../lib/checkoutRetirementAdmission.js');
+    return withCheckoutPublication(repoPath, async () => {
+      const prior = agent.metadata.releaseSynchronizationCheckout;
+      if (prior && (prior.version !== 1 || prior.branch !== branch || prior.identity !== publication.identity
+        || prior.startedAt !== agent.startedAt)) return { [done]: false, reason: 'synchronization-owner-conflict' };
+      const other = claimCheckoutOwnerReason({ branchName: branch, sourceWorkspace: repoPath,
+        agents: Object.values(state.agents), ignoreIds: [agentId] });
+      if (other) return { [done]: false, reason: other };
+      if (action === 'sync-reserve') {
+        if (prior) return { reserved: true, branch };
+        const [{ listWorktrees }, { execGit }] = await Promise.all([import('./worktreeManager.js'), import('../lib/execGit.js')]);
+        const [trees, ref] = await Promise.all([listWorktrees(repoPath), execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true })]);
+        if (!Array.isArray(trees) || ref.exitCode !== 1 || trees.some(tree => branchOf(tree) === branch)) {
+          return { reserved: false, reason: 'synchronization-branch-not-available' };
+        }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, releaseSynchronizationCheckout: {
+          version: 1, identity: publication.identity, branch, startedAt: agent.startedAt, reservedAt: new Date().toISOString(),
+        } } };
+      } else {
+        if (!prior) return { captured: false, reason: 'synchronization-reservation-missing' };
+        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
+        let seeds;
+        try { seeds = await captureCheckoutSeeds(agent, { allowUncreated: false }); }
+        catch { return { captured: false, reason: 'checkout-seed-unavailable' }; }
+        if (seeds.filter(seed => seed.branch === branch && seed.agentId === agentId && seed.startedAt === agent.startedAt).length !== 1) {
+          return { captured: false, reason: 'checkout-seed-unavailable' };
+        }
+        state.agents[agentId] = { ...agent, metadata: { ...agent.metadata, checkoutSeeds: seeds } };
+      }
+      await save();
+      cosEvents.emit('agent:updated', state.agents[agentId]);
+      return { [done]: true, branch };
+    }).catch(error => {
+      if (error.code === 'CHECKOUT_RETIREMENT_RESERVED') return { [done]: false, reason: 'checkout-retirement-reserved' };
+      throw error;
+    });
+  });
+}
+
 /**
  * Whether a branch-reconcile worker may mutate `branch` right now. Admits only
  * when the checkout it was dispatched at still holds the branch and no live

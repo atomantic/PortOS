@@ -41,6 +41,9 @@ function completedExport(bytes) {
   return {
     songIds: [SONG],
     connect: async () => ({ browser: { close: async () => {} }, context: { newPage: async () => page } }),
+    // The fake page emits the browser download event; do not scan the install's
+    // real download directory while testing decoder and import behavior.
+    listDownloads: async () => ({ files: [] }),
     importAudio: vi.fn(async (target, name) => {
       expect(await readFile(target)).toEqual(bytes);
       expect(name).toBe('song.m4a');

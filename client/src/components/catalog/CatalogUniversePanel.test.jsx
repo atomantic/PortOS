@@ -15,7 +15,8 @@ vi.mock('../../services/apiCatalog', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import CatalogUniversePanel from './CatalogUniversePanel';
 import socket from '../../services/socket';
-import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient } from '../../services/apiCatalog';
+import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient } from '../../services/apiCatalog';
+import toast from '../ui/Toast';
 
 const initial = { status: 'needs-review', owner: null, refs: [
   { refKind: 'universe', refId: 'first', role: 'canon-character', refName: 'First world', resolved: true },
@@ -28,6 +29,25 @@ function Harness(props) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('primitive ownership and fork controls', () => {
+  it('shows the new membership immediately and permits a retry after an assignment failure', async () => {
+    const owner = { refKind: 'universe', refId: 'second', role: 'owner', refName: 'Second world', resolved: true };
+    const member = { ...owner, role: 'canon-character' };
+    setCatalogUniverseOwner.mockRejectedValueOnce(new Error('Universe is full'))
+      .mockResolvedValueOnce({ ...initial, status: 'owned', owner, refs: [...initial.refs, owner, member] });
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve ownership / fork…' }));
+    await screen.findByRole('option', { name: 'Second world' });
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Universe is full'));
+    expect(screen.getByText('Ownership needs review')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Set owning universe' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await screen.findByText('Second world · Character canon');
+    expect(screen.queryByRole('button', { name: 'Add to owning universe' })).toBeNull();
+    expect(linkCatalogIngredient).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('allows an independent fork from a read-only source unless its identity is fenced (%s)', async (fenced) => {
     forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
     render(<MemoryRouter><Harness readOnly forkBlocked={fenced} /></MemoryRouter>);
@@ -70,6 +90,41 @@ describe('primitive ownership and fork controls', () => {
     const first = forkCatalogIngredient.mock.calls[0][1];
     expect(first).toEqual({ universeId: 'second', name: 'Example courier', operationKey: expect.any(String) });
     expect(forkCatalogIngredient.mock.calls[1][1].operationKey).toBe(first.operationKey);
+  });
+
+  it('discards a redesign proposal after assigning an owner', async () => {
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    setCatalogUniverseOwner.mockResolvedValue({ ...initial, status: 'owned', owner });
+    function HarnessWithProposal() {
+      const [context, setContext] = useState(initial);
+      const [fields, setFields] = useState({ physicalDescription: 'A red coat.' });
+      return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context}
+        onContextChange={setContext} redesign={fields ? { fields, clear: () => setFields(null) } : null} />;
+    }
+    render(<MemoryRouter><HarnessWithProposal /></MemoryRouter>);
+    await screen.findByLabelText('Destination universe');
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'first' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set owning universe' }));
+    await screen.findByRole('button', { name: /Fork \/ experiment/ });
+    fireEvent.click(screen.getByRole('button', { name: /Fork \/ experiment/ }));
+    await screen.findByLabelText('Destination universe');
+    expect(screen.queryByText(/The fork gets the redesigned physical description/)).not.toBeInTheDocument();
+  });
+
+  it('discards a redesign proposal when the fork dialog is cancelled', async () => {
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    function Harness() {
+      const [context, setContext] = useState({ status: 'owned', owner, refs: [owner] });
+      const [fields, setFields] = useState({ physicalDescription: 'A red coat.' });
+      return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context}
+        onContextChange={setContext} redesign={fields ? { fields, clear: () => setFields(null) } : null} />;
+    }
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    await screen.findByText(/The fork gets the redesigned physical description/);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: /Fork \/ experiment/ }));
+    await screen.findByLabelText('Destination universe');
+    expect(screen.queryByText(/The fork gets the redesigned physical description/)).not.toBeInTheDocument();
   });
 
   it('seeds the fork with only the tapped images, grouped by age, and saves a redesign onto the fork', async () => {

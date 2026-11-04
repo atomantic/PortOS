@@ -15,6 +15,7 @@ import {
 } from './dataManagerBusy.js';
 import { getEidoversePaths } from './eidoverse.js';
 import { getAllApps } from './apps.js';
+import { withUpdateControlLock } from './updateControlActivity.js';
 
 const execFileAsync = promisify(execFile);
 const DATA_DIR = PATHS.data;
@@ -92,6 +93,8 @@ export const CATEGORIES = {
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'photoreal-blends': { label: 'Photoreal Blender Scenes', description: 'The latest Blender scene built from each Environment greybox for download — rebuilt by the next Photoreal render, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'photoreal-workspaces': { label: 'Photoreal Render Workers', description: 'Per-run staged input, output and scratch for an in-flight Photoreal Blender render — removed when the run ends', archivable: false, deletable: false },
   'greybox-renders': { label: 'Greybox Render Scratch', description: 'Temporary viewer pages for in-flight greybox shot captures — removed when each render ends', archivable: false, deletable: false },
   // Development artifacts ("ingredients") of Music Video projects — every
   // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
@@ -640,7 +643,8 @@ async function archiveCategoryUncached(categoryKey, options) {
 
 export async function purgeCategory(categoryKey, options = {}) {
   try {
-    return await purgeCategoryUncached(categoryKey, options);
+    const purge = () => purgeCategoryUncached(categoryKey, options);
+    return await (categoryKey === 'update-detached' ? withUpdateControlLock(purge) : purge());
   } finally {
     invalidateOverviewScan();
   }

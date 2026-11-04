@@ -4,6 +4,61 @@ How PortOS notices a new release and updates itself. PortOS is distributed softw
 
 Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
 
+## Manual and automatic updates
+
+Manual Update and Reconcile actions stay available while work is running. When
+current execution is observed, PortOS explains that restarting PortOS and
+Chrome can interrupt agents, renders and provider calls. **Update now and interrupt
+active work** explicitly accepts that risk. Saved state and queued jobs remain;
+interrupted work is never reported as successful. Fork and image-backup
+acknowledgments remain separate and are preserved when retrying.
+
+For terminal updates, run `bash update.sh` or `./update.ps1`. If current running
+work is observed, an interactive terminal offers a warning;
+a noninteractive invocation exits with an actionable message. Use
+`bash update.sh --interrupt`, `./update.ps1 --interrupt`, or
+`npm run update -- --interrupt` to explicitly continue. Stale reservations,
+missing counters and unavailable activity APIs do not
+require this flag. Normal manual updates stop PortOS before source changes and
+settle old reservations after shutdown, without asking for a force phrase.
+
+An already-running older UI cannot render the new confirmation controls. When
+the fresh updater observes running work, it puts a
+confirmation URL in the waiting-step output. Open that URL on the same PortOS
+instance, sign in, and explicitly continue in the browser. The generic page
+uses the existing authenticated command endpoint and the normal detached
+updater. Its private attempt retains the previous image-backup acknowledgment
+and reconcile options, bound to the originating checkout. A newer pending or
+completed attempt, or a changed checkout, invalidates the confirmation.
+Command acceptance or a server disconnect does not claim update success.
+Installations without a served production client can use the terminal
+confirmation or `--interrupt`.
+If the old server refuses an existing updater before it can launch fresh
+scripts, open **DevTools → Runner**, choose **Command** and the PortOS workspace,
+and run `node scripts/manual-update-recovery.mjs --request`. This starts the
+normal detached manual path without granting interruption consent; follow its
+confirmation URL only when running work needs interruption consent.
+
+Automatic callers use `--automatic`. They wait for actual running work, while
+queued durable jobs remain queued across restart. The scheduler passes this
+policy explicitly; an automatic waiting owner does not prevent an acknowledged
+manual continuation. Missing activity instrumentation never counts as proof of
+idleness.
+
+Every manual update closes intake and gracefully stops PortOS before git or
+dependency changes. It rechecks executing work after acquiring the hold; only
+positive running work requires interruption consent. Stale ordinary
+reservations are removed after shutdown without requiring an audit receipt.
+Domain jobs and outputs are never marked successful by that cleanup, and
+positively identified detached workers retain their ownership evidence. Boot uses normal interrupted-media recovery:
+owned orphan videos are reaped and failed, remote jobs reconcile, and surviving
+trainers reattach. Unrelated desktop daemons are untouched.
+
+A live installer, database restore/cutover, or dirty/divergent source still
+prevents conflicting changes. A surviving directly launched PortOS runtime is
+named with its PID and must be stopped before retrying. Update failures after
+shutdown use the existing service-restart recovery and still report failure.
+
 ## Release polling always targets upstream
 
 The release-notification poll **always queries the upstream `atomantic/PortOS`** repo, so a user running from a fork still sees new upstream versions. The constants come from `server/lib/gitRemote.js` (`UPSTREAM_OWNER`, `UPSTREAM_REPO`, `UPSTREAM_FULL_NAME`) — do not re-hardcode the upstream slug anywhere else.
@@ -49,7 +104,7 @@ submodule, so those changes remain a visible update blocker.
 
 ### Submodules follow the pulled parent revision
 
-**An unsupported Node.js runtime refuses the update before anything changes.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero with HEAD, submodules, dependencies and PM2 apps untouched, so the running server never ends up as old code over a newer checkout. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
+**An unsupported Node.js runtime refuses the target before installation.** The target revision owns its Node support range, so after the dirty-tree and submodule checks and before the pull or ff-only merge, both scripts resolve the target (the fetched upstream, or `PORTOS_PEER_UPDATE_TARGET_SHA` on the peer path), extract its `scripts/checkNodeVersion.js` (plus `package.json` and `scripts/lib`) with `git archive` into a temporary directory, and run it with the installed Node. A rejection reports `runtime-preflight` as failed with the requirement and exits non-zero before pulling the target or changing dependencies. Automatic idle updates leave PM2 apps running. Manual updates have already stopped them and use failure recovery to restart them. The checkout therefore does not advance to an unsupported target. A target that predates the gate, or an unresolvable target, skips the pre-check; the post-pull gate stays as a second line of defence.
 
 Before pulling, both platform scripts repair any recursive submodule checkout
 that is not at the commit pinned by the current parent tree. After switching to
@@ -95,7 +150,7 @@ Two guards keep a launch that did nothing from being reported as an update:
 - A run that exits 0 having emitted **no `STEP:` line at all** is recorded as a failure, not a success — both scripts emit `git-pull:running` before touching anything, so silence means the script never ran.
 - When `data/update-complete.json` is missing (usually because the restarted server already consumed it), the recorded version comes from **package.json on disk**, never from the triggering tag: the tag is only what the update aimed at.
 
-**PortOS is also a managed app**, so an update started from **App Management**'s Git tab reaches `update.sh` through `appUpdater.js` rather than `routes/update.js`. Both entry points call the same `startPortosSelfUpdate()` (`server/services/portosSelfUpdate.js`), which owns the whole lifecycle: the preflight refusals, the atomic `setUpdateInProgress(true)` lock, the post-lock re-check, and the `launchUpdate()` launch. They differ only in `mode`:
+**PortOS is also a managed app**, so an update started from **App Management**'s Git tab reaches `update.sh` through `appUpdater.js` rather than `routes/update.js`. Both entry points call the same `startPortosSelfUpdate()` (`server/services/portosSelfUpdate.js`), which owns the whole lifecycle: the authenticated preflight refusals and the detached `launchUpdate()` launch. The script supervisor owns shared deferred admission. They differ only in `mode`:
 
 | Surface | Mode | Gate |
 |---|---|---|
@@ -105,15 +160,38 @@ Two guards keep a launch that did nothing from being reported as an update:
 
 `refresh` exists because App Management moves HEAD before handing off. Gating it on out-of-sync would only re-ask whether the pull it just did happened — and that same pull makes `update.sh`'s own `git pull` a no-op, so the script's commit-diff dependency detection sees nothing. The launcher therefore passes `installState`'s stale workspaces through as `forceCleanWorkspaces` for both non-release modes, which is what keeps deps from surviving the update (#1779).
 
-The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a refusal must land before the checkout moves, and its `code` is what the panel's acknowledge-and-retry buttons key on — then passes `preflightAlreadyRun` so the launcher reads a fresh `getUpdateStatus()` (post-pull, for the stale workspaces) without re-running guards that already answered. The post-lock re-check is authoritative for both callers either way.
+The socket path runs `checkPortosUpdatePreflight` itself before it pulls — a refusal must land before the checkout moves, and its `code` is what the panel's acknowledge-and-retry buttons key on — then passes `preflightAlreadyRun` so the launcher reads a fresh `getUpdateStatus()` (post-pull, for the stale workspaces) without re-running guards that already answered. The script checks image-state trust again after acquiring its shared hold.
 
-Because the lock is taken in one place, the two entry points cannot run `update.sh` concurrently — and because that flag is what `subAgentSpawner`, `agentLifecycle` and `persistentMindSupervisor` gate on, holding it also stops a CoS agent from being spawned into a process the script is about to `pm2 delete` (#4124).
+Direct `update.sh` / `update.ps1` and service launches enter `scripts/deferred-update.mjs` before changing logs, git or PM2. Its machine-local operation waits without holding admission, allowing an active release to launch and finish its children. The maintenance journal atomically takes the update hold only after admitted work has released its reservation; a render racing that transaction either becomes a blocker or is refused. While an update waits, both the server and the fresh updater can reconcile inactive legacy reservations after fresh activity and process checks, preserving them in an automatic receipt with output completeness unknown (see [Storage](STORAGE.md#inactive-reservations-while-updating)). Existing receiver-issued peer updates retain their exclusive capability hold. A manual/peer maintenance hold supersedes a still-waiting local update: the updater cancels its own pending row, leaves that hold untouched, and reports failure so the maintenance drain can finish. It does not silently requeue.
+
+A retry can replace an older supervisor only while it is still waiting with no
+child or hold. The transfer and acquisition share the journal lock, so a
+supervisor already starting or running cannot be replaced. The transfer preserves
+the original request time and writes `update-handoff-<successor-id>.json`; the
+replaced attempt is recorded as interrupted. The old supervisor's later cleanup
+cannot release its successor. The UI continues observing its current launch
+instead of starting another copy on repeated clicks.
+
+Fresh updater recovery works before an older server restarts. It authenticates
+local activity reads using the existing credential or a temporary local session,
+checks `COS_RUNNER_URL` from the environment or `.env`, and verifies the running
+service observes the same waiting owner. A missing local runner is allowed only
+when process inspection confirms direct mode; an unavailable configured runner
+remains a blocker. Only a confirmed self-update handoff is excluded from app
+activity. Exact empty legacy media rows are ignored during inspection without
+rewriting the saved inventory; real jobs and recovery uncertainty remain intact.
+
+The offline supervisor, shared journal transaction and image guard use only Node built-ins, so missing or replaced application dependencies cannot disable admission or terminal failure publication. Live reservation recovery loads service dependencies before acquiring admission; an offline install without outstanding work reservations can still update without them.
+
+The detached supervisor survives the server restart and releases only after proven command settlement. Success requires terminal script evidence and child completion. POSIX additionally waits for the whole process group; after an interrupted supervisor, proven owner/group absence records failure and releases automatically. Windows requires the exact operation's terminal script record, written after awaited update, restart and health commands; controlled failure exits publish failure after recovery finishes. A Windows interruption without that evidence leaves liveness unknown and admission held. Neither a timeout nor an old completion marker clears ownership. Legacy control files alone are history; an observed surviving updater or update child still makes the new update wait.
+
+Boot/status reads reconcile interrupted update operations. With the API offline, `node scripts/deferred-update.mjs --recover` performs the same update-owner reconciliation; running `update.sh` also reconciles before requesting another update. Automatic disposal of stale ordinary work reservations requires the server to be running. The updater never kills existing work to obtain admission. Unknown process liveness or damaged maintenance state remains held and is reported explicitly.
 
 `appUpdater` also **skips its own `restart` step** for that case: the script starts the production app set from `ecosystem.config.cjs` itself, excluding `portos-ui`, so restarting on top of it would be redundant and would race the script.
 
 ### Launch and completion are separate phases
 
-`launchUpdate(tag, emit, options)` resolves to `{ started: false, result }` when a previous script is still running, or `{ started: true, completion }` after the detached spawn succeeds and progress listeners are attached. Spawn failures reject. `completion` tracks the script lifetime and its persisted result; it is observed for socket reporting without delaying the launch response. A refusal retains the 409 `UPDATE_LAUNCH_FAILED` response, and a rejected launch releases the update lock.
+`launchUpdate(tag, emit, options)` resolves to `{ started: false, result }` when a previous script is still running, or `{ started: true, completion }` after the detached spawn succeeds and progress listeners are attached. Spawn failures reject. `completion` tracks the script lifetime and its persisted result; it is observed for socket reporting without delaying the launch response. A refusal retains the 409 `UPDATE_LAUNCH_FAILED` response, and a rejected launch does not claim or release another supervisor's hold.
 
 `executeUpdate()` remains a compatibility adapter: it returns the refusal result or awaits `completion`, preserving the existing result shape and calling `onLaunched` once after a successful spawn. New handoff callers use `launchUpdate()` directly so they need no callback flag or promise race.
 
@@ -289,6 +367,6 @@ was edited. The reinstall and rebuild above clear it.
 
 ## Image-bearing Persistent Mind work must drain before source transitions
 
-The managed update route refuses to restart into a different source revision while a queued Persistent Mind message or active turn carries image references. `GET /api/update/status` reports the privacy-safe `persistentMindImages` preflight (`safe`, queued count, and active-turn boolean), and `POST /api/update/execute` re-checks it before and after acquiring the update lock.
+The managed update route refuses to restart into a different source revision while a queued Persistent Mind message or active turn carries image references. `GET /api/update/status` reports the privacy-safe `persistentMindImages` preflight (`safe`, queued count, and active-turn boolean), and `POST /api/update/execute` checks it before launch, and the script rechecks persisted state after acquiring the shared update hold, including direct/offline invocation.
 
-To recover, drain the image-bearing messages, confirm the preflight is safe, create a normal PortOS backup, and retry the update. If a stopped or unavailable provider prevents the queue from draining, create a backup that includes `data/cos/state.json` and `data/screenshots/`, then explicitly retry the API request with `acknowledgePersistentMindImageBackup: true`; that acknowledgement is the recovery escape hatch and is never sent silently by the UI. Invalid or unreadable Persistent Mind state blocks the transition until it is restored from backup. Claimed historical images do not block updates once their message has completed. PortOS does not offer a managed rollback command; manually checking out an older source revision while image-bearing work is queued or active is unsupported because schema-v2 readers cannot preserve those references.
+To recover, drain the image-bearing messages, confirm the preflight is safe, create a normal PortOS backup, and retry the update. If a stopped or unavailable provider prevents the queue from draining, create a backup that includes `data/cos/state.json` and `data/screenshots/`, then explicitly retry the API request with `acknowledgePersistentMindImageBackup: true`; that acknowledgement is the recovery escape hatch and is never sent silently by the UI. Direct invocation can carry that same explicit backup acknowledgement as `PORTOS_UPDATE_IMAGE_BACKUP_ACKNOWLEDGED=1`. Invalid or unreadable Persistent Mind state blocks the transition until it is restored from backup. Claimed historical images do not block updates once their message has completed. PortOS does not offer a managed rollback command; manually checking out an older source revision while image-bearing work is queued or active is unsupported because schema-v2 readers cannot preserve those references.

@@ -1333,13 +1333,13 @@ function findOpenInvestigationIn(tasks, fingerprint) {
  */
 let investigationCreateTail = Promise.resolve();
 
-export function createInvestigationTask(agentId, originalTask, errorAnalysis) {
-  const run = investigationCreateTail.then(() => doCreateInvestigationTask(agentId, originalTask, errorAnalysis));
+export function createInvestigationTask(agentId, originalTask, errorAnalysis, options = {}) {
+  const run = investigationCreateTail.then(() => doCreateInvestigationTask(agentId, originalTask, errorAnalysis, options));
   investigationCreateTail = run.catch(() => {});
   return run;
 }
 
-async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
+async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis, options) {
   const analysis = errorAnalysis || {};
   const category = analysis.category || 'unknown';
   const rawMessage = analysis.message || 'Agent failed with an unrecognized error';
@@ -1359,10 +1359,11 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
     // of them, not just the first one mentioned in "What unblocks".
     const affected = Array.isArray(existing.metadata?.affectedTasks) ? existing.metadata.affectedTasks : [];
     if (originalTask.id && !affected.includes(originalTask.id)) {
-      await updateTask(existing.id, {
+      const updated = await updateTask(existing.id, {
         description: `${existing.description}\n- Also blocks task \`${originalTask.id}\` (same cause; agent \`${agentId}\`).`,
         metadata: { affectedTasks: [...affected, originalTask.id] }
-      }, 'internal');
+      }, 'internal', ...(options.expectedSourceTask ? [{ expectedSourceTask: options.expectedSourceTask }] : []));
+      if (updated?.error || updated?.statusChanged) return null;
     }
     return existing;
   }
@@ -1471,7 +1472,9 @@ ${unblocks}`;
     // unattended) — readable from the queue without re-deriving the verdict.
     approvalReason,
     affectedTasks: [originalTask.id] // later same-fingerprint failures union in
-  }, 'internal');
+  }, 'internal', ...(options.expectedSourceTask ? [{ expectedSourceTask: options.expectedSourceTask }] : []));
+
+  if (investigationTask?.error || !investigationTask?.id) return null;
 
   // Count only genuine creations against the circuit — addTask's own
   // description-level dedup returning an existing task is not a new creation.

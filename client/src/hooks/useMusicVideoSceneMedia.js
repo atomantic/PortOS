@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -20,13 +20,8 @@ import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
-  falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields,
+  falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot,
 } from '../lib/musicVideoShotTiming.js';
-
-// The image backends accept at most four reference images for most models
-// (server imageGen/prepareParams.js), mirrored by the server's
-// MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES.
-export const MAX_CONDITIONING_REFERENCES = MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES;
 
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
@@ -49,20 +44,15 @@ const REFERENCE_CAPABILITY_CODES = new Set([
 /** The project-wide palette and camera rules, shared with the server's composers. */
 export { visualDirection };
 
-/** Shared scene-aware frame conditioning, with the legacy capped fallback. */
+/** Shared scene-aware frame conditioning. */
 export const conditioningReferences = musicVideoConditioningReferences;
 /**
  * A render's reference files: the frame it reworks leads, then the shot's references, kept
- * within the backends' reference cap (a leading frame leaves room for the first 3).
+ * within the request limit. The server applies the chosen renderer's limit.
  */
 const frameReferenceFiles = musicVideoFrameReferenceFiles;
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
 export const isOutsideReference = isOutsideMusicVideoReference;
-
-// A scene's authored span on the song, or null while it is untimed.
-const sceneSpanSec = (scene) => (typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
-  ? scene.endSec - scene.startSec
-  : null);
 
 /**
  * Per-scene media generation for a music-video project: the reference-frame
@@ -242,7 +232,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // A planned shot with no text still renders from its look, frame clause and actions.
     if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const references = frameReferenceFiles(referenceImageId, conditioning);
+    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
     const projectId = project.id;
     frameLane.startScene(scene.sceneId);
@@ -315,7 +305,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const projectId = project.id;
     // The frame it renders from leads, then the shot's references (the card's References row).
     const conditioning = conditioningReferences(project, scene, castMedia, greybox);
-    const references = frameReferenceFiles(referenceImageId, conditioning);
+    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
     endFrameLane.startScene(scene.sceneId);
     return generateImage({
@@ -410,8 +400,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
       : null;
     if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
-    const spanSec = sceneSpanSec(scene);
-    const songAudio = typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    // Hosted performance shots use their own server-prepared song window, not
+    // the Local cutaway's supplied-audio route.
+    const hostedPerformance = performance && settings.backend === 'fal';
+    const songAudio = hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
     const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
@@ -430,7 +422,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
         // A scene card's Length pick wins.
-        ? { grokDuration: target?.grokDuration || (spanSec != null ? grokCoverage(spanSec).requestSec : settings.grokDuration) }
+        ? { grokDuration: grokSceneRequestDuration(scene, settings, target) }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
         // request is exactly the take the scene card prices (falSceneTake):
         // a cutaway names its model, the length covering the shot (or the
@@ -461,8 +453,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       } : {}),
       musicVideo: JSON.stringify({
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
-        compose: true, ...(audioReactiveSelected ? { audioReactive: true } : {}),
+        compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
+        ...(hostedPerformance ? { songAudio: false } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
+        ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })

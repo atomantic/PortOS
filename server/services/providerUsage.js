@@ -210,6 +210,9 @@ export function mapCodexQuota(rateLimits, timestamp, {
   routingOverridden = readCodexRoutingOverride()?.overridden === true,
 } = {}) {
   const limits = codexUsableWindows(rateLimits, now);
+  const expired = !rateLimits?.rate_limit_reached_type
+    && [rateLimits?.primary, rateLimits?.secondary].some((window) => codexWindowExpired(window, now));
+  const reachedScope = { weekly: 'week', week: 'week', session: 'session' }[String(rateLimits?.rate_limit_reached_type || '').toLowerCase()];
   return {
     family: 'codex',
     label: 'Codex',
@@ -218,6 +221,7 @@ export function mapCodexQuota(rateLimits, timestamp, {
     limits,
     activity: [],
     approximate: true,
+    ...(routingOverridden ? { routingOverridden: true } : {}),
     // Wording is "telemetry", not "session activity": the reading can come from
     // an older session than the newest one when that session reported no window.
     note: [
@@ -228,7 +232,8 @@ export function mapCodexQuota(rateLimits, timestamp, {
       // stops them being presented as if they described PortOS's own work.
       routingOverridden ? CODEX_ROUTING_CAVEAT : null,
     ].filter(Boolean).join(' '),
-    ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now) }),
+    ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now),
+      ...(rateLimits?.rate_limit_reached_type ? { quotaStatus: 'limit_reached', ...(reachedScope ? { quotaScope: reachedScope } : {}) } : expired ? { quotaStatus: 'expired' } : {}) }),
     // The TELEMETRY's own timestamp, not the clock we read it at: Codex emits
     // `rate_limits` only while a turn runs, so this reading can be days old and
     // `fetchedAt` is the card contract every consumer ranks by (see the card
@@ -365,7 +370,8 @@ const pruneExpiredWindows = (card, now) => {
   return {
     ...card,
     limits,
-    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE }),
+    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE,
+      ...(!card.error ? { quotaStatus: 'expired' } : {}) }),
   };
 };
 
@@ -414,7 +420,7 @@ async function fetchCurrentCodexQuota({ wait = WAIT.CACHED } = {}) {
     const live = await codexLiveFlight.run('codex:account', readLiveCodexQuota).catch(() => null);
     if (live) return live;
     const quota = await fetchCodexQuota();
-    return { ...quota, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
+    return { ...quota, refreshUnavailable: true, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
   }
   const now = Date.now();
   const quota = await fetchCodexQuota({ now });
@@ -804,10 +810,9 @@ async function fetchClaudeQuota({ wait = WAIT.CACHED } = {}) {
     limits: data.limits,
     activity: data.activity,
     approximate: data.approximate,
-    // The CLI's own caption is about ONE machine's sessions. It stands only
-    // until a federated peer contributes its reading — `mergeFleetQuotaCards`
-    // replaces it with what was actually combined.
-    note: data.approximate ? 'This machine only — other federated instances have not reported a reading yet.' : null,
+    // Activity is an approximation for the machine that took this reading;
+    // the peer merge can replace this note with its own combined caption.
+    note: data.approximate ? 'Activity is approximate and observed on this instance.' : null,
     fetchedAt: data.fetchedAt
   };
 }
@@ -890,26 +895,58 @@ const fetchFamilyQuota = (family, { wait, providers }) =>
  * therefore unified with what peers published for the same family before it is
  * returned — see `lib/fleetQuotas.js` for the two merge rules.
  */
-export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period } = {}) {
-  const cards = await readProviderQuotas({ wait, family, period });
+async function readPeerQuotaEntries({ includeEmpty = false } = {}) {
+  const excludedInstanceIds = await getApiBilledInstanceIds({ requireReadable: true }).catch((err) => {
+    console.error(`❌ Could not read quota billing selection: ${err?.message || err}`);
+    return null;
+  });
+  if (!excludedInstanceIds) return { entries: null, excludedInstanceIds: null };
+  const entries = await getFleetQuotaEntries({ excludeInstanceIds: excludedInstanceIds, ...(includeEmpty ? { includeEmpty: true } : {}) }).catch((err) => {
+    console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
+    return null;
+  });
+  return { entries, excludedInstanceIds };
+}
+
+function instancePeerQuotas({ entries, excludedInstanceIds }, family) {
+  return {
+    providers: (entries || []).flatMap((peer) => peer.quotas.filter((card) => !family || card.family === family).map((card) => ({
+      ...stampReadAt(pruneExpiredWindows(card, Date.now()), Date.now()), supported: card.supported !== false,
+      origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
+    }))),
+    unreportedInstances: (entries || []).filter((peer) => peer.usageExpected !== false && !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
+    federationUnavailable: entries === null,
+    excludedInstanceIds,
+  };
+}
+
+export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
+  // Billing changes only need the already-published peer readings. Do not
+  // start a local CLI scrape or rewrite the shared quota store for that read.
+  if (scope === 'peers') return instancePeerQuotas(await readPeerQuotaEntries({ includeEmpty: true }), family);
+  const { cards, families, complete, imageQuotaComplete } = await readProviderQuotas({ wait, family, period });
   // Publish this machine's reading to the fleet and fold in every peer's. The
   // two are independent — the peer read excludes our own slot — so they
   // overlap. Recording is awaited rather than fired off so a caller that
   // immediately re-reads (the page's per-card Refresh) sees its own reading.
   const [, peerEntries] = await Promise.all([
-    recordLocalQuotaCards(cards).catch((err) => {
+    recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
       console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
     }),
-    getApiBilledInstanceIds()
-      .then((excludeInstanceIds) => getFleetQuotaEntries({ excludeInstanceIds }))
-      .catch((err) => {
-        // A federation read that fails must not take the cards down with it — a
-        // this-machine-only card is a smaller loss than an empty usage page.
-        console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
-        return [];
-      }),
+    readPeerQuotaEntries({ includeEmpty: scope === 'instances' }),
   ]);
-  return mergeFleetQuotaCards(cards, peerEntries);
+  if (scope === 'instances') {
+    const peers = instancePeerQuotas(peerEntries, family);
+    return {
+      ...peers,
+      providers: [
+        ...cards.map((card) => ({ ...card, origin: { self: true, name: 'This instance' } })),
+        ...peers.providers,
+      ],
+      imageQuotaComplete,
+    };
+  }
+  return mergeFleetQuotaCards(cards, peerEntries.entries || []);
 }
 
 /** The local readings, before any federated merge. */
@@ -930,9 +967,15 @@ async function readProviderQuotas({ wait, family, period }) {
   // install rendering a spent meter its federated twin drops.
   const now = Date.now();
   const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
-  if (family && family !== IMAGE_GEN_FAMILY) return prune(familyCards);
-  const imageCard = await fetchImageGenQuota({ period });
-  return prune(imageCard ? [...familyCards, imageCard] : familyCards);
+  if (family && family !== IMAGE_GEN_FAMILY) return { cards: prune(familyCards), families: null, complete: null, imageQuotaComplete: null };
+  const image = await fetchImageGenQuota({ period });
+  const cards = prune(image.card ? [...familyCards, image.card] : familyCards);
+  if (family) return { cards, families: null, complete: null, imageQuotaComplete: image.complete };
+  const ids = familyCards.map((card) => card.family);
+  if (image.card || !image.complete) ids.push(IMAGE_GEN_FAMILY);
+  const complete = image.complete && cards.filter((card) => card.family !== IMAGE_GEN_FAMILY)
+    .every((card) => !card.pending && !card.error && (card.supported === false || card.limits?.length || card.activity?.length || card.metrics?.length));
+  return { cards, families: ids, complete: Boolean(complete), imageQuotaComplete: image.complete };
 }
 
 /**
@@ -954,10 +997,11 @@ const fetchImageGenQuota = async ({ period } = {}) => {
     return null;
   });
   // Only quota-window backends — a fal.ai-only install has no quota to show.
+  if (!settings) return { card: null, complete: false };
   const enabledModes = enabledCloudImageModes(settings).filter(isQuotaTrackedImageMode);
-  if (!enabledModes.length) return null; // no quota-tracked cloud image backend → no card
-  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).catch((err) => {
+  if (!enabledModes.length) return { card: null, complete: true };
+  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).then((card) => ({ card, complete: !card?.error })).catch((err) => {
     console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
-    return null;
+    return { card: null, complete: false };
   });
 };

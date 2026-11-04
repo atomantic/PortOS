@@ -47,13 +47,14 @@ import {
   performanceBlockedReason,
   performanceCapability,
   planPerformanceWindow,
+  sceneRenderShot,
   selectedPerformanceInstruction,
   SOURCE_AUDIO_MUSIC,
 } from '../../lib/musicVideoShotTiming.js';
-import { clipOffsetSec, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
-import { assertVocalStemTimebase, resolveVocalStemPath } from './vocalStem.js';
+import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';
 
 export const SHOT_INSTRUCTION_VERSION = 2;
 
@@ -267,6 +268,7 @@ export async function assertCurrentPerformanceTakes(project, masterPath, options
   const rehashed = reviewed.filter((r) => r.reason === 'audio-rehashed').length;
   // An unchecked window (decode: false) proves nothing, so it logs nothing.
   if (rehashed > 0 && options?.decode !== false) console.log(`🎵 Music Video: ${rehashed} lip-sync take${rehashed === 1 ? '' : 's'} still match${rehashed === 1 ? 'es' : ''} the re-mastered song in ${rehashed === 1 ? 'its' : 'their'} sung window`);
+  // Legacy approval compatibility: clips locked before lock removal stay exempt.
   const locks = clipLocks(project);
   const stale = reviewed.filter((r) => r.stale && locks?.[r.sceneId] !== 'locked')
     .map(({ sceneId, reason }) => ({ sceneId, reason, cutaway: reason === 'not-lip-synced' }));
@@ -303,6 +305,13 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   if (!musicVideo?.projectId || !musicVideo?.sceneId) return null;
   const project = await getProject(musicVideo.projectId);
   const scene = project?.scenes?.find((s) => s.sceneId === musicVideo.sceneId);
+  if (musicVideo.expectedShot && sceneRenderShot(scene) !== musicVideo.expectedShot) {
+    throw refuse('The shot type changed or has not saved yet — save it and submit again', 'MUSIC_VIDEO_SHOT_TYPE_CHANGED', 409);
+  }
+  if (musicVideo.storyboardStill && (scene?.referenceImageId !== musicVideo.storyboardStill
+    || sceneVisualLayer(scene, { layered: isLayeredComposition(project) }) !== 'footage')) {
+    throw refuse('The storyboard still or shot layer changed — submit the clip again', 'MUSIC_VIDEO_STORYBOARD_STALE', 409);
+  }
   // An unknown project/scene is not a performance shot; the render proceeds as
   // before and the completion hook refuses to attach it to a deleted scene.
   assertShotActionContract(scene);
@@ -358,7 +367,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     : project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
   const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
   if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
-  if (stemPath) assertVocalStemTimebase(await probeVideoDuration(stemPath), songDurationSec);
+  if (stemPath) await assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
 
   const audioSha256 = await hashFile(masterPath);
   // #9266: the MASTER's loudness over this window, so a later re-master that

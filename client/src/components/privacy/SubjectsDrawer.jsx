@@ -254,7 +254,7 @@ export default function SubjectsDrawer({ open, subjects, onClose, onCreated, onD
                     onClick={() => requestDelete(s.id)}
                     title={`Remove ${s.displayName}`}
                     aria-label={`Remove ${s.displayName}`}
-                    className="p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 shrink-0"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 shrink-0"
                   >
                     <Trash2 size={16} />
                   </button>

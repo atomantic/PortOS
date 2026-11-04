@@ -126,8 +126,9 @@ const VISION_CLI_COMMANDS = new Set(['codex', 'claude']);
  * @returns {boolean}
  */
 export function isVisionCapableCliProvider(provider) {
-  if (!provider || provider.type !== 'cli') return false;
-  return VISION_CLI_COMMANDS.has(provider.command);
+  if (!provider || provider.type !== 'cli' || typeof provider.command !== 'string') return false;
+  // Basename, as the client does, so a path-configured `/usr/local/bin/codex` qualifies.
+  return VISION_CLI_COMMANDS.has(provider.command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, ''));
 }
 
 /**
@@ -154,8 +155,9 @@ export function isVisionModel(model) {
   // (Ollama's /api/tags), so a name-only guess never overrides a known type.
   const type = model.type ? String(model.type).toLowerCase() : null;
   if (type === 'vlm') return true;
-  if (Array.isArray(model.capabilities)
-    && model.capabilities.some((c) => String(c).toLowerCase() === 'vision')) return true;
+  if (Array.isArray(model.capabilities) && model.capabilities.length > 0) {
+    return model.capabilities.some((c) => String(c).toLowerCase() === 'vision');
+  }
   if (type) return false; // explicit non-vision type — don't regex-guess past it
   const id = model.id || model.name || '';
   return typeof id === 'string' && VISION_RE.test(id);
@@ -189,7 +191,7 @@ const TOOL_USE_RE = new RegExp([
   'gpt-oss',
   'nemotron',
   'olmo-?3',
-  'lfm2', 'ornith', 'muse-glimmer', 'nex-n2',
+  'lfm[23]', 'ornith', 'muse-glimmer', 'nex-n2',
   'smollm2',
   'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',

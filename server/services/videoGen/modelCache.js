@@ -49,7 +49,7 @@ export const speedProfileDownloadTarget = (model, profileId) => {
     throw new ServerError('This model does not offer that downloadable speed profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
   }
   const adapter = profile.adapter;
-  return { repo: adapter.repo, revision: adapter.revision, only: [adapter.file] };
+  return { repo: adapter.repo, revision: adapter.revision, only: [adapter.file, ...Object.keys(adapter.supportFiles || {})] };
 };
 
 export const modelDownloadTargets = (model, { speedProfileId } = {}) => {
@@ -161,12 +161,12 @@ export const modelCacheStatus = async (model, cache = null) => {
     return cache.get(key);
   };
   const verifies = await Promise.all(targets.map(readTarget));
-  const h3Profile = model?.speedProfiles?.find((profile) => isPinnedMiniMaxH3SpeedProfile(model, profile));
-  const profileVerify = h3Profile ? await verifyDownloadTarget(speedProfileDownloadTarget(model, h3Profile.id)) : null;
-  const speedProfiles = profileVerify ? [{ id: h3Profile.id, repo: h3Profile.adapter.repo,
-    cached: profileVerify.status === 'ok', sizeBytes: profileVerify.sizeBytes,
-    integrity: summarizeVerify(profileVerify),
-  }] : null;
+  const h3Profiles = model?.speedProfiles?.filter((profile) => isPinnedMiniMaxH3SpeedProfile(model, profile)) || [];
+  const speedProfiles = await Promise.all(h3Profiles.map(async (profile) => {
+    const verified = await verifyDownloadTarget(speedProfileDownloadTarget(model, profile.id));
+    return { id: profile.id, repo: profile.adapter.repo,
+      cached: verified.status === 'ok', sizeBytes: verified.sizeBytes, integrity: summarizeVerify(verified) };
+  }));
   return {
     repo: targets[0].repo,
     requiredRepos: [...new Set(targets.map((target) => target.repo))],

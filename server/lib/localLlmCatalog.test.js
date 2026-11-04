@@ -221,6 +221,9 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'ministral-3-3b')?.id).toBe('ministral-3:3b');
       expect(ollama.find((m) => m.key === 'gemma4-e2b')?.id).toBe('gemma4:e2b');
       expect(ollama.find((m) => m.key === 'qwen3-32b')?.id).toBe('qwen3:32b');
+      expect(ollama.find((m) => m.key === 'gpt-oss-120b')?.id).toBe('gpt-oss:120b');
+      expect(ollama.find((m) => m.key === 'lfm3-1.7b')?.id).toBe('lfm3:1.7b');
+      expect(ollama.find((m) => m.key === 'lfm3-vl-2b')?.id).toBe('lfm3-vl:2b');
     });
   });
 
@@ -261,6 +264,12 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/gemma-4-E2B-it-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'qwen3:32b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/Qwen3-32B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'gpt-oss:120b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/gpt-oss-120b-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'lfm3:1.7b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/LFM3-1.7B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'lfm3-vl:2b', 'lmstudio'))
+        .toEqual({ targetId: 'lmstudio-community/LFM3-VL-2B-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {

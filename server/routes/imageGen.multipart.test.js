@@ -358,15 +358,16 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 
-  it('rejects more than four named and uploaded references before staging uploads', async () => {
+  it('rejects more named and uploaded references than Codex takes (five) before staging uploads', async () => {
     mockedSettings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
-    await Promise.all(['prior-a.png', 'prior-b.png']
+    await Promise.all(['prior-a.png', 'prior-b.png', 'prior-c.png']
       .map((filename) => writeFile(join(imagesSandbox, filename), PNG_FIXTURE)));
 
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'the same scout from a new camera angle' },
       { name: 'referenceImageFiles', value: 'prior-a.png' },
       { name: 'referenceImageFiles', value: 'prior-b.png' },
+      { name: 'referenceImageFiles', value: 'prior-c.png' },
       { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
       { name: 'referenceImage2', filename: 'b.png', contentType: 'image/png', value: PNG_FIXTURE },
       { name: 'referenceImage3', filename: 'c.png', contentType: 'image/png', value: PNG_FIXTURE },

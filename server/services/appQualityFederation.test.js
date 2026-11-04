@@ -16,6 +16,15 @@ const row = (category, score, assessed_at = '2026-09-10T10:00:00Z', extra = {}) 
 const deps = rows => ({ now, getOriginInfo, readFile: async () => null, getPeers: async () => [peer], query: vi.fn(async () => ({ rows })) });
 const response = payload => new Response(JSON.stringify(payload), { status: 200 });
 
+it('includes older and retired local measurements for publication without expanding peer exports', async () => {
+  const source = deps([row('retired-audit', 55, '2025-01-01T10:00:00Z'), row('security', 80)]);
+  const all = await buildQualitySnapshot({ id: 'portos-default' }, null, source);
+  expect(source.query.mock.calls[0][1][1]).toBeNull();
+  expect(all.measurements.map(m => m.report.category)).toEqual(['retired-audit', 'security']);
+  const peerPayload = await exportPortosQuality(peer.instanceId, 30, source, undefined, ['retired-audit', 'security']);
+  expect(peerPayload.measurements.map(m => m.report.category)).toEqual(['security']);
+});
+
 // Uniquely pins numeric-only privacy, peer consent and cross-install score convergence.
 it('exports only validated local numeric evidence to approved sync peers', async () => {
   const local = deps([row('security', 40)]);
@@ -181,13 +190,16 @@ const newerInstallSnapshot = (repository, assessedAt) => JSON.stringify({
   measurements: [[assessedAt, 0, 76, 3, 0, 2, 10, 10], [assessedAt, 1, 50, 3, 0, 2, 10, 10]],
 });
 
-it('reads the known rows of a snapshot a newer install wrote with categories this one lacks', async () => {
+it('reads historical rows of categories this install cannot run', async () => {
   const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
   const managed = { id: 'local-id', repoPath: '/repo/example-app' };
   const { repository } = await buildQualitySnapshot(managed, 30, { ...deps([row('security', 76)]), getOriginInfo });
   const body = newerInstallSnapshot(repository, '2026-09-10T10:00:00.000Z');
   const records = await readReleaseQuality({ ...deps([]), getOriginInfo, getPeers: async () => [], readFile: async () => body }, managed);
-  expect(records.map(record => record.category)).toEqual(['security']);
+  expect(records.map(record => record.category)).toEqual(['security', 'example-future-lens']);
+  const history = await getAppQualityHistory(managed, 30, { ...deps([]), getOriginInfo, getPeers: async () => [], readFile: async () => body });
+  expect(history.additionalCategories).toEqual([{ id: 'example-future-lens', label: 'Other / previous: example-future-lens' }]);
+  expect(history.points.at(-1)).toMatchObject({ score: 76, ratedCategories: 1, categories: { 'example-future-lens': { score: 50 } } });
 });
 
 it('reads a managed app\'s committed .quality.json as release evidence and rejects a foreign or broken one', async () => {

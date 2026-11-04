@@ -467,6 +467,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   }, []);
 
   const currentModel = models.find((model) => model.id === modelId);
+  const isFlux3Model = currentModel?.runner === 'flux3';
   const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   const sharesFlux2Venv = isFlux2Model || usesDiffusersRunner(currentModel);
   const isEditOnlyModel = currentModel?.editOnly === true;
@@ -482,9 +483,9 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     hasInitImage: initImage.source != null,
     // fal.ai's edit models take 9–14 references (a mood board is the point),
     // so it gets every form slot; the per-model cap below still bounds it.
-    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT : (isLocalMode && isQwen21Model) || isFalMode ? 10 : 4,
-    localSupportsReferences: isFlux2Model || isQwen21Model,
-    localInputCap: isQwen21Model ? 10 : null,
+    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT : (isLocalMode && (isQwen21Model || isFlux3Model)) || isFalMode ? 10 : 4,
+    localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model,
+    localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
     cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [

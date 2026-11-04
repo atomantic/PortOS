@@ -251,6 +251,17 @@ describe('usage.js — summary', () => {
   });
 
   describe('time-dimensioned capture', () => {
+    it('advances the usage revision for two writes at the same clock time', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-01T00:00:00Z'));
+      try {
+        await recordSession('codex', 'Codex', 'example');
+        const first = getUsage().lastUpdated;
+        await recordSession('codex', 'Codex', 'example');
+        expect(Date.parse(getUsage().lastUpdated)).toBeGreaterThan(Date.parse(first));
+      } finally { clock.mockRestore(); }
+    });
     it('recordSession creates per-provider/per-model day buckets', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
@@ -258,6 +269,7 @@ describe('usage.js — summary', () => {
 
       const day = getUsage().dailyActivity[daysAgo(0)];
       expect(day.sessions).toBe(1);
+      expect(day.hourlyActivity.reduce((sum, count) => sum + count, 0)).toBe(1);
       expect(day.byProvider['claude-code']).toMatchObject({ name: 'Claude Code', sessions: 1 });
       expect(day.byProvider['claude-code'].byModel.opus.sessions).toBe(1);
     });

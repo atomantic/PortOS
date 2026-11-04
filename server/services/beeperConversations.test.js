@@ -28,7 +28,7 @@ vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 // touchpoint/roster logic, unrelated to the parity test below — stubbed so
 // importing it here doesn't drag in tribe.js's own real (and much heavier)
 // dependency chain.
-vi.mock('./tribe.js', () => ({ listPeople: vi.fn(async () => []) }));
+vi.mock('./tribe.js', () => ({ listPeople: vi.fn(async () => []), deleteAutoTouchpoints: vi.fn(async () => ({})) }));
 
 import { query, withTransaction } from '../lib/db.js';
 import { markRead, updateChat } from './beeperClient.js';

@@ -395,7 +395,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
                       <button
                         type="button"
                         onClick={() => removePanel(pi, ni)}
-                        className="text-gray-500 hover:text-port-error p-2"
+                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-port-error p-2"
                         aria-label="Remove panel"
                       >
                         <Trash2 size={14} />

@@ -5,7 +5,7 @@ import { join } from 'path';
 import { createInterface } from 'readline';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { isPlainObject } from '../lib/objects.js';
+import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 
 /**
@@ -71,7 +71,7 @@ async function collectFile(path, from, seen) {
     try { row = JSON.parse(line); } catch { continue; }
     const message = row.message;
     const usage = message?.usage;
-    if (row.type !== 'assistant' || !usage || !message.model || message.model === SYNTHETIC_MODEL) continue;
+    if (row.type !== 'assistant' || !usage || !message.model || message.model === SYNTHETIC_MODEL || POLLUTING_KEYS.has(message.model)) continue;
     const day = String(row.timestamp).slice(0, 10);
     if (!DAY_RE.test(day) || (from && day < from)) continue;
     const key = message.id ? `${message.id}:${row.requestId || ''}` : row.uuid;
@@ -103,7 +103,11 @@ async function scanTranscriptDays({ from = null, root = projectsRoot() } = {}) {
   }
   const days = {};
   for (const entry of seen.values()) {
-    const row = ((days[entry.day] ||= {})[entry.model] ||= zeroCounts());
+    if (POLLUTING_KEYS.has(entry.model)) continue;
+    const dayBucket = bucketFor(days, entry.day, () => ({}));
+    if (!dayBucket) continue;
+    const row = bucketFor(dayBucket, entry.model, zeroCounts);
+    if (!row) continue;
     row.messages += 1;
     for (const f of FIELDS) if (f !== 'messages') row[f] += entry[f];
   }
@@ -120,10 +124,14 @@ export function sanitizeTranscriptDays(raw) {
   if (!isPlainObject(raw)) return out;
   const dayKeys = Object.keys(raw).filter((d) => DAY_RE.test(d)).sort().slice(-MAX_DAYS);
   for (const day of dayKeys) {
-    if (!isPlainObject(raw[day])) continue;
+    if (POLLUTING_KEYS.has(day) || !isPlainObject(raw[day])) continue;
     for (const [model, counts] of Object.entries(raw[day]).slice(0, MAX_MODELS_PER_DAY)) {
-      if (!isNonBlankStr(model)) continue;
-      (out[day] ||= {})[model.slice(0, 200)] = Object.fromEntries(FIELDS.map((f) => [f, num(counts?.[f])]));
+      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model)) continue;
+      const trimmedModel = model.slice(0, 200);
+      if (POLLUTING_KEYS.has(trimmedModel)) continue;
+      const dayBucket = bucketFor(out, day, () => ({}));
+      if (!dayBucket) continue;
+      dayBucket[trimmedModel] = Object.fromEntries(FIELDS.map((f) => [f, num(counts?.[f])]));
     }
   }
   return out;
@@ -134,10 +142,12 @@ export function sanitizeTranscriptDays(raw) {
 function mergeDays(stored, scanned) {
   const merged = { ...stored };
   for (const [day, models] of Object.entries(scanned)) {
-    const target = { ...(merged[day] || {}) };
+    if (POLLUTING_KEYS.has(day) || !isPlainObject(models)) continue;
+    const target = { ...(isPlainObject(merged[day]) ? merged[day] : {}) };
     for (const [model, row] of Object.entries(models)) {
-      const prev = target[model] || zeroCounts();
-      target[model] = Object.fromEntries(FIELDS.map((f) => [f, Math.max(prev[f], row[f])]));
+      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model) || !isPlainObject(row)) continue;
+      const prev = Object.hasOwn(target, model) && isPlainObject(target[model]) ? target[model] : zeroCounts();
+      target[model] = Object.fromEntries(FIELDS.map((f) => [f, Math.max(prev[f] || 0, row[f] || 0)]));
     }
     merged[day] = target;
   }

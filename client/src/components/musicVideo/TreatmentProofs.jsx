@@ -82,7 +82,7 @@ function ProofRow({ project, proof, onReview }) {
         </button>
         {proof.status !== 'proposed' && (
           <button type="button" onClick={() => submit('proposed')} aria-label="Reset proof to proposed" title="Reset to proposed"
-            className="flex items-center gap-1 bg-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 bg-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
             <RotateCcw size={12} />
           </button>
         )}

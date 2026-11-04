@@ -1706,12 +1706,15 @@ export const usageRollingCostQuerySchema = z.object({
 
 /** Query for GET /api/usage/providers. `family` narrows the read to a single
  * quota card (the per-card Refresh on the usage page) so one slow TUI scrape
- * isn't paid for every provider at once. */
+ * isn't paid for every provider at once. The peers scope reads only saved
+ * peer observations and never starts a local provider read. */
 export const providerUsageQuerySchema = z.object({
   refresh: z.enum(['0', '1', 'true', 'false']).optional(),
   family: z.string().regex(/^[a-z0-9-]{1,32}$/, 'family must be a provider family id').optional(),
   period: z.enum(['24h', '7d', '30d', 'week', 'month', 'reset']).optional(),
-});
+  scope: z.enum(['instances', 'peers']).optional(),
+}).refine((q) => q.scope !== 'peers' || !['1', 'true'].includes(q.refresh),
+  { message: 'peers scope only reads saved quota observations' });
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
  * reject non-integer/negative garbage instead of coercing it into counters. */
@@ -3047,6 +3050,8 @@ export const releaseSynchronizationResetBodySchema = z.object({ identity: z.stri
   reason: z.string().trim().min(1).max(1000),
   checkouts: z.array(releaseSynchronizationResetCheckoutSchema).max(10).default([]),
 }).strict();
+export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.string().regex(/^[a-f0-9]{64}$/),
+  prNumber: z.number().int().positive().safe() }).strict();
 
 // A scoped release names the exact inventory row the operator saw (#12002).
 export const heldCheckoutRetireBodySchema = z.object({

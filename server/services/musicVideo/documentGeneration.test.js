@@ -7,6 +7,7 @@ import { createContext, runInContext } from 'node:vm';
 import { bindAuthoredPreviewPlayback } from './authoredPreviewPlayback.js';
 import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
+import { withCreativeLatitude } from '../../lib/creativeLatitude.js';
 
 // Fail-fast cancellation stops Vitest waiting, not an authoring body's I/O: drain
 // owned bodies before the lazy data root is removed (#12254).
@@ -31,7 +32,8 @@ vi.mock('../promptRunner.js', () => ({
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { importDocumentTemplate } = await import('./compositionDocument.js');
+const { importDocumentTemplate, upgradeDocumentEngine } = await import('./compositionDocument.js');
+const { generatedCanvasPlaybackEngine } = await import('./generatedCanvasPlayback.js');
 const { generateMixedMediaDocument, regenerateMixedMediaSection, reviseMixedMediaEvents, readMixedMediaCandidate, acceptMixedMediaDocument } = await import('./documentGeneration.js');
 
 const source = (color) => `function render(ctx, env) { ctx.fillStyle = '${color}'; ctx.fillRect(0, 0, env.width, env.height); }`;
@@ -420,7 +422,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     const id = await fixture();
     h.provider = { id: 'stub-provider', type: 'api' };
     await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-    const whole = h.prompt.length;
+    const whole = withCreativeLatitude(h.prompt).length;
     expect(h.calls).toBe(1);
 
     // A hosted provider keeps the single whole-song request, whatever its size.
@@ -431,7 +433,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     h.provider = { id: 'ollama', type: 'api' };
     h.calls = 0;
     const sizes = [];
-    h.onSubmit = async () => { sizes.push(h.prompt.length); };
+    h.onSubmit = async () => { sizes.push(withCreativeLatitude(h.prompt).length); };
     const { document } = await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole - 1 });
     expect(h.calls).toBeGreaterThan(1);
     expect(Math.max(...sizes)).toBeLessThan(whole);
@@ -445,6 +447,23 @@ describe('treatment-driven mixed-media document authoring', () => {
 
     await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: 1 }))
       .rejects.toMatchObject({ code: 'COMPOSITION_PROMPT_TOO_LARGE', message: expect.stringMatching(/\d+ characters/) });
+  });
+
+  it('batches an oversized CLI document and preserves every section and its approved shots', async () => {
+    const id = await fixture();
+    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, productionReview: { draft: {
+      storyboard: ['s-intro', 's-still', 's-clip'].map((sceneId) => ({ sceneId, action: `${sceneId} ${'direction '.repeat(6000)}` })),
+    } } } }));
+    h.provider = { id: 'stub-provider', type: 'cli', command: 'claude' };
+    const prompts = [];
+    h.onSubmit = async () => { prompts.push(h.prompt); };
+    const { document } = await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    expect(prompts.length).toBeGreaterThan(1);
+    expect(Math.max(...prompts.map((prompt) => withCreativeLatitude(prompt).length))).toBeLessThanOrEqual(120_000);
+    for (const sceneId of ['s-intro', 's-still', 's-clip']) {
+      expect(prompts.some((prompt) => prompt.includes(`${sceneId} direction`))).toBe(true);
+    }
+    expect((await manifestAt(document)).sections.map((section) => section.id)).toEqual(['intro', 'still', 'clip']);
   });
 
   it('scopes each local batch to the scenes and storyboard shots its sections cover', async () => {
@@ -462,7 +481,7 @@ describe('treatment-driven mixed-media document authoring', () => {
 
     prompts.length = 0;
     // A budget that only fits one section per request.
-    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: whole.length - 200 });
+    await generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: withCreativeLatitude(whole).length - 200 });
     const intro = prompts.find((prompt) => prompt.includes('"id":"intro"'));
     expect(intro).toContain('choreography for s-intro');
     expect(intro).not.toContain('choreography for s-clip');
@@ -473,7 +492,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     const id = await fixture();
     h.provider = { id: 'ollama', type: 'api' };
     await generateMixedMediaDocument(id, { providerId: 'ollama' });
-    const budget = h.prompt.length - 1;
+    const budget = withCreativeLatitude(h.prompt).length - 1;
     const all = response({ intro: '#112233', still: '#445566', clip: '#778899' });
     const sectionsAsked = (prompt) => ['intro', 'still', 'clip'].filter((s) => prompt.includes(`"id":"${s}"`));
     // A multi-section batch comes back without its last section; a single-section ask succeeds.
@@ -523,6 +542,25 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(manifest.sections.find((s) => s.id === 'intro').source).toContain('#123456');
   });
 
+  it('names an over-long section as too long, not non-deterministic, and states the limit up front', async () => {
+    const id = await fixture();
+    const long = `function render(ctx, env) { ctx.fillStyle = '#000000';${' '.repeat(20001)}}`;
+    const retries = [];
+    h.onSubmit = async () => {
+      if (h.prompt.includes('was rejected')) {
+        retries.push(h.prompt);
+        h.response = response({ intro: '#123456' });
+      } else {
+        expect(h.prompt).toContain('at most 20000 characters');
+        h.response = JSON.stringify({ sections: [{ id: 'intro', source: long }, { id: 'still', source: source('#445566') }, { id: 'clip', source: source('#778899') }] });
+      }
+    };
+    await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
+    expect(retries).toHaveLength(1);
+    expect(retries[0]).toMatch(/section "intro" was rejected: A section function is \d+ characters, over the 20000-character limit/);
+    expect(retries[0]).not.toMatch(/was rejected: .*non-deterministic/i);
+  });
+
   it('retries an answer with no usable section once as a whole, then fails without a call per section', async () => {
     const id = await fixture();
     h.calls = 0;
@@ -532,18 +570,21 @@ describe('treatment-driven mixed-media document authoring', () => {
     expect(h.prompt).toContain('contained no usable section functions. Files and tool calls are not read');
   });
 
-  it('resumes a failed later local batch from durable sections after a module restart (#10528)', async () => {
+  for (const [transport, provider] of [
+    ['local', { id: 'ollama', type: 'api' }],
+    ['CLI', { id: 'stub-provider', type: 'cli', command: 'claude' }],
+  ]) it(`resumes a failed later ${transport} batch from durable sections after a module restart (#10528)`, async () => {
     const id = await fixture();
     await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-    const budget = h.prompt.length - 200;
-    h.provider = { id: 'ollama', type: 'api' };
+    const budget = withCreativeLatitude(h.prompt).length - 200;
+    h.provider = provider;
     const asked = [];
     h.onSubmit = async () => {
       asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
       if (asked.length === 2) throw new Error('Later batch failed');
       h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#010203'])));
     };
-    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
+    await expect(generateMixedMediaDocument(id, { providerId: provider.id, promptBudgetChars: budget })).rejects.toThrow('Later batch failed');
     const finished = asked[0];
     const checkpoint = JSON.parse(await readFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), 'utf8'));
     expect(checkpoint.sections.map((section) => section.id)).toEqual(finished);
@@ -552,7 +593,7 @@ describe('treatment-driven mixed-media document authoring', () => {
       sections: [{ ...checkpoint.sections[0], source: 'function render(ctx, env) { ctx.fillRect(Math.random(), 0, 1, 1); }' }],
     }));
     const callsBeforeCorruption = h.calls;
-    await expect(generateMixedMediaDocument(id, { providerId: 'ollama', promptBudgetChars: budget })).rejects.toMatchObject({ code: 'NONDETERMINISTIC_SECTION' });
+    await expect(generateMixedMediaDocument(id, { providerId: provider.id, promptBudgetChars: budget })).rejects.toMatchObject({ code: 'NONDETERMINISTIC_SECTION' });
     expect(h.calls).toBe(callsBeforeCorruption);
     await writeFile(join(PATHS.data, 'cache', 'music-video-authoring', `${id}.json`), JSON.stringify(checkpoint));
     vi.resetModules();
@@ -562,7 +603,7 @@ describe('treatment-driven mixed-media document authoring', () => {
       asked.push(['intro', 'still', 'clip'].filter((section) => h.prompt.includes(`"id":"${section}"`)));
       h.response = response(Object.fromEntries(asked.at(-1).map((section) => [section, '#aabbcc'])));
     };
-    const { document } = await resumedAuthor(id, { providerId: 'ollama', promptBudgetChars: budget });
+    const { document } = await resumedAuthor(id, { providerId: provider.id, promptBudgetChars: budget });
     expect(asked.flat()).toEqual(['intro', 'still', 'clip'].filter((section) => !finished.includes(section)));
     const manifest = await manifestAt(document);
     expect(manifest.sections.filter((section) => finished.includes(section.id)).map((section) => section.source))
@@ -574,7 +615,7 @@ describe('treatment-driven mixed-media document authoring', () => {
     it(`discards staged local sections after a ${change} basis edit (#10528)`, async () => {
       const id = await fixture();
       await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-      const budget = h.prompt.length - 200;
+      const budget = withCreativeLatitude(h.prompt).length - 200;
       h.provider = { id: 'ollama', type: 'api' };
       let calls = 0;
       h.onSubmit = async () => {
@@ -602,7 +643,7 @@ describe('treatment-driven mixed-media document authoring', () => {
   it('rechecks the production reservation when all local sections were staged before publication failed', async () => {
     const id = await fixture();
     await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-    const budget = h.prompt.length - 200;
+    const budget = withCreativeLatitude(h.prompt).length - 200;
     h.provider = { id: 'ollama', type: 'api' };
     let active = true;
     h.onSubmit = async () => { if (h.prompt.includes('"id":"clip"')) active = false; };
@@ -742,6 +783,15 @@ describe('treatment-driven mixed-media document authoring', () => {
     await expect(acceptMixedMediaDocument(id, current.composition.documentDraft.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
   });
 
+  it('sends all review findings when regenerating a section', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const feedback = `${'A detailed finding. '.repeat(500)}Final finding must be retained.`;
+    h.response = response({ still: '#00ff00' });
+    await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory, feedback });
+    expect(h.prompt).toContain(feedback);
+  });
+
   it('revises one section, preserves the other functions, and refuses a stale acceptance', async () => {
     const id = await fixture();
     const motionLanguage = 'Energy: playful. 0–10s unfold on downbeats; 20–30s expand the chorus gesture.';
@@ -773,6 +823,100 @@ describe('treatment-driven mixed-media document authoring', () => {
     } }));
     await expect(acceptMixedMediaDocument(id, second.directory)).rejects.toMatchObject({ code: 'COMPOSITION_DRAFT_STALE' });
     expect((await projects.getProject(id)).composition.documentDraft.directory).toBe(second.directory);
+  });
+
+  it('revises an older generated candidate with selected effects without replacing its other sections', async () => {
+    const id = await fixture();
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current,
+      scenes: current.scenes.map(scene => scene.sceneId === 's-still' ? { ...scene, glitches: [{ atSec: 1, style: 'light-leak' }] } : scene),
+    } }));
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
+    const before = await manifestAt(first);
+    h.response = response({ still: '#00ff00' });
+    const revised = (await regenerateMixedMediaSection(id, 'still', { expectedDraft: first.directory })).document;
+    const after = await manifestAt(revised);
+    expect(after.sections.map(section => section.source)).toEqual([before.sections[0].source, source('#00ff00'), before.sections[2].source]);
+    expect((await readFile(join(PATHS.data, revised.directory, 'engine.js'), 'utf8'))).toContain('portos-selected-effects: 2');
+  });
+
+  it('upgrades an unchanged generated layered engine without changing authored sections', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), generatedCanvasPlaybackEngine(legacy));
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
+  });
+
+  it('upgrades the original shipped generated Canvas wrapper without changing authored sections', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    // Captured from the original shipping serializer, not the current serializer.
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngine11406.txt', import.meta.url));
+    const wrapper = await readFile(new URL('../../routes/fixtures/musicVideoGeneratedEngineLegacy.txt', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), wrapper);
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine-reference.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
+  });
+
+  it('refuses to replace a customized generated layered engine', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    const customized = Buffer.concat([generatedCanvasPlaybackEngine(legacy), Buffer.from('\n// authored customization')]);
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
+    await acceptMixedMediaDocument(id, first.directory);
+    await expect(upgradeDocumentEngine(id, first.directory)).rejects.toMatchObject({ code: 'COMPOSITION_ENGINE_CUSTOM' });
+    expect(await readFile(join(PATHS.data, first.directory, 'engine.js'))).toEqual(customized);
+  });
+
+  it('refuses a customized original generated Canvas wrapper', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngine11406.txt', import.meta.url));
+    const original = await readFile(new URL('../../routes/fixtures/musicVideoGeneratedEngineLegacy.txt', import.meta.url));
+    const customized = Buffer.concat([original, Buffer.from('\n// authored customization')]);
+    await writeFile(join(PATHS.data, first.directory, 'engine-reference.js'), legacy);
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), customized);
+    await acceptMixedMediaDocument(id, first.directory);
+    await expect(upgradeDocumentEngine(id, first.directory)).rejects.toMatchObject({ code: 'COMPOSITION_ENGINE_CUSTOM' });
+    expect(await readFile(join(PATHS.data, first.directory, 'engine.js'))).toEqual(customized);
+  });
+
+  it('upgrades an older generated document with a plain layered engine and no reference file', async () => {
+    const id = await fixture();
+    const first = (await generateMixedMediaDocument(id)).document;
+    const legacy = await readFile(new URL('../../routes/fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
+    await writeFile(join(PATHS.data, first.directory, 'engine.js'), legacy);
+    await unlink(join(PATHS.data, first.directory, 'engine-reference.js'));
+    await unlink(join(PATHS.data, first.directory, 'preview-playback.json'));
+    const authored = await readFile(join(PATHS.data, first.directory, 'generated.js'));
+    await acceptMixedMediaDocument(id, first.directory);
+    const result = await upgradeDocumentEngine(id, first.directory);
+    expect(result.changed).toBe(true);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'generated.js'))).toEqual(authored);
+    expect(await readFile(join(PATHS.data, result.document.directory, 'engine.js')))
+      .toEqual(await readFile(new URL('./documentTemplates/layered/engine.js', import.meta.url)));
+    await expect(readFile(join(PATHS.data, result.document.directory, 'engine-reference.js'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await upgradeDocumentEngine(id, result.document.directory)).changed).toBe(false);
   });
 
   it('refuses a candidate after the uploaded master song changes without changing its analysis shape', async () => {
@@ -870,7 +1014,7 @@ describe('revision and checkpoint admission', () => {
   // Leaves a checkpoint whose basis matches the next identical local run.
   async function failedLocalRun(id) {
     await generateMixedMediaDocument(id, { providerId: 'stub-provider' });
-    const budget = h.prompt.length - 200;
+    const budget = withCreativeLatitude(h.prompt).length - 200;
     h.provider = { id: 'ollama', type: 'api' };
     let calls = 0;
     h.onSubmit = async () => {

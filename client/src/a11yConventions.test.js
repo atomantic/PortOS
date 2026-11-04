@@ -2139,7 +2139,6 @@ const JUSTIFIED_SILENT_ERROR_RENDERS = new Map([
   // Wraps <AppOperationBanner>, which declares role="status" itself. A one-file
   // walk cannot see across the import, and a second role here would nest two
   // live regions around the same text.
-  ['src/components/apps/tabs/RepositorySourcePanel.jsx', new Set(['(isOperating || restarting || operationError || operationCompleted)'])],
   // Not a status message: `expandedSections.errors` is a disclosure toggle over
   // a static list of historical error CATEGORIES. It appears because the user
   // opened it, so announcing it would duplicate the button they just pressed.
@@ -3583,7 +3582,65 @@ describe('a11y conventions', () => {
     // dense desktop row stays compact with `pointer-coarse:min-h-11
     // pointer-coarse:min-w-11`; bare <summary> rows get their touch height from
     // the base rule in src/index.css.
-    const SIZED = /(?:^|\s)(?:[a-z0-9-]+:)*(?:min-[hw]-|size-|[hw]-(?:[89]|\d\d|\[|full|screen)|p-(?:[2-9]|\d\d|\[))/;
+    // Each axis estimates the hit area from unprefixed size and padding tokens
+    // (an `sm:` size does not apply on a phone) and must reach 44px. A
+    // `pointer-coarse:` min size of 44px+ satisfies its axis.
+    const MIN_TOUCH_PX = 44;
+    const toPx = (v) => (v == null ? null : /^\d+(?:\.\d+)?$/.test(v) ? parseFloat(v) * 4 : null);
+    const arbPx = (v) => {
+      const m = /^\[(\d+(?:\.\d+)?)(px|rem)\]$/.exec(v);
+      return m ? parseFloat(m[1]) * (m[2] === 'rem' ? 16 : 1) : null;
+    };
+    const sizeOf = (v) => toPx(v) ?? arbPx(v);
+    const iconPx = (src, node) => {
+      const body = findButtonBody(src, node.contentStart) ?? '';
+      const m = /\bsize=\{(\d+)\}/.exec(body);
+      return m ? Number(m[1]) : 16;
+    };
+    const axisPx = (tokens, axis, icon) => {
+      const dim = axis === 'h' ? 'h' : 'w';
+      const pads = axis === 'h' ? ['py', 'pt', 'pb'] : ['px', 'pl', 'pr'];
+      let minimum = 0;
+      let fixed = null;
+      let all = 0;
+      let axial = null;
+      const side = { a: null, b: null };
+      for (const t of tokens) {
+        const coarse = /^pointer-coarse:(?:min-)?(?:size|[hw])-(.+)$/.exec(t);
+        if (coarse && (sizeOf(coarse[1]) ?? 0) >= MIN_TOUCH_PX) {
+          const kind = /^pointer-coarse:(?:min-)?(size|[hw])-/.exec(t)[1];
+          if (kind === 'size' || kind === dim) return Infinity;
+        }
+        let m = new RegExp(`^(min-)?(?:${dim}|size)-(.+)$`).exec(t);
+        if (m) {
+          const size = sizeOf(m[2]);
+          if (m[1]) minimum = Math.max(minimum, size ?? 0);
+          // Relative dimensions can shrink below the glyph inside a small parent.
+          // Only a known size or independent minimum proves a touch-size box.
+          else fixed = fixed === null ? (size ?? 0) : Math.min(fixed, size ?? 0);
+        }
+        m = /^p-(.+)$/.exec(t);
+        if (m) all = sizeOf(m[1]) ?? 0;
+        m = new RegExp(`^(?:${pads[0]})-(.+)$`).exec(t);
+        if (m) axial = sizeOf(m[1]) ?? 0;
+        m = new RegExp(`^(?:${pads[1]})-(.+)$`).exec(t);
+        if (m) side.a = sizeOf(m[1]) ?? 0;
+        m = new RegExp(`^(?:${pads[2]})-(.+)$`).exec(t);
+        if (m) side.b = sizeOf(m[1]) ?? 0;
+      }
+      // Tailwind emits side-specific utilities after axis utilities regardless
+      // of their order in className.
+      const fallback = axial ?? all;
+      const padding = (side.a ?? fallback) + (side.b ?? fallback);
+      // With border-box sizing, a fixed size does not grow to fit its icon;
+      // the box can only expand enough to contain its own padding.
+      const box = fixed === null ? icon + padding : Math.max(fixed, padding);
+      return Math.max(minimum, box);
+    };
+    const reachesTouchSize = (cls, icon) => {
+      const tokens = cls.split(/\s+/).filter(Boolean);
+      return axisPx(tokens, 'h', icon) >= MIN_TOUCH_PX && axisPx(tokens, 'w', icon) >= MIN_TOUCH_PX;
+    };
     const literalClass = (tag) => {
       const quoted = /\bclassName=(["'])([^"']*)\1/.exec(tag);
       if (quoted) return quoted[2];
@@ -3597,7 +3654,7 @@ describe('a11y conventions', () => {
       for (const node of forEachOpeningTag(src, 'button')) {
         if (!isIconOnlyButton(src, node)) continue;
         const cls = literalClass(node.tag);
-        if (cls == null || SIZED.test(` ${cls} `)) continue;
+        if (cls == null || reachesTouchSize(cls, iconPx(src, node))) continue;
         out.push(`${file}:${lineOf(src, node.index)}`);
       }
       return out;
@@ -3606,7 +3663,29 @@ describe('a11y conventions', () => {
     expect(probe('<button aria-label="Remove" className="text-gray-500"><X size={14} /></button>')).toBe(1);
     expect(probe('<button aria-label="Toggle" className={`p-1 ${on ? "a" : "b"}`}>{on ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>')).toBe(1);
     expect(probe('<button aria-label="Remove" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-1"><X size={14} /></button>')).toBe(0);
-    expect(probe('<button aria-label="Remove" className="p-2"><X size={14} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="pointer-coarse:min-h-11 p-1"><X size={14} /></button>')).toBe(1);
+    // 14px icon + p-2 is a ~30px square, under the 44px minimum.
+    expect(probe('<button aria-label="Remove" className="p-2"><X size={14} /></button>')).toBe(1);
+    // One dimension is not enough: 44px tall but ~30px wide.
+    expect(probe('<button aria-label="Remove" className="min-h-[44px] px-2"><X size={14} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="min-h-10 min-w-10"><X size={14} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="min-h-[44px] min-w-[44px]"><X size={14} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="h-11 w-11"><X size={14} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="p-3"><X size={20} /></button>')).toBe(0);
+    expect(probe('<button aria-label="Remove" className="p-3 px-0"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="p-3 pt-0 py-3"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="p-3 py-3 pt-0"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="h-2 w-2 p-3"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="h-2 w-2 min-h-11 min-w-11 p-3"><X size={20} /></button>')).toBe(0);
+    // Relative sizes do not establish an unconditional 44px floor.
+    for (const relative of ['full', '1/2', '[50%]', 'screen', 'dvh']) {
+      const button = (minimum = '') => `<div className="h-4 w-4"><button aria-label="Remove" className="h-${relative} w-${relative} ${minimum}"><X size={14} /></button></div>`;
+      expect(probe(button())).toBe(1);
+      expect(probe(button('min-h-[44px] min-w-[44px]'))).toBe(0);
+    }
+    expect(probe('<button aria-label="Remove" className="h-full w-full p-3"><X size={20} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="flex-1"><X size={14} /></button>')).toBe(1);
+    expect(probe('<button aria-label="Remove" className="sm:min-h-[44px] sm:min-w-[44px]"><X size={14} /></button>')).toBe(1);
 
     const offenders = trackedJsxFiles().flatMap((file) => offendersIn(file, rawSourceOf(file)));
     expect(offenders, `Icon-only <button> with a glyph-sized tap target — add pointer-coarse:min-h-11 pointer-coarse:min-w-11 (or min-h-[44px] min-w-[44px]):\n${offenders.join('\n')}`).toEqual([]);

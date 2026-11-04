@@ -227,7 +227,7 @@ function SystemHealthOverview() {
                       type="button"
                       onClick={() => handleDismissWarning(w)}
                       disabled={dismissingType === w.type}
-                      className="inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
                       title="Dismiss as resolved"
                       aria-label={`Dismiss warning: ${w.message}`}
                     >

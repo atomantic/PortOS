@@ -163,7 +163,7 @@ export async function runLiveAudit({ args, env = process.env, chromium, catalog,
   };
   let browser;
   try {
-    browser = await chromium.launch({ headless: true, ...(env.LIVE_AUDIT_BROWSER
+    browser = await chromium.launch({ headless: true, chromiumSandbox: true, ...(env.LIVE_AUDIT_BROWSER
       ? { executablePath: env.LIVE_AUDIT_BROWSER } : { channel: 'chrome' }) });
   } catch { return unverified('browser-unavailable'); }
   try {

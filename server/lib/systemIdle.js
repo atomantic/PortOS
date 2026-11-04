@@ -151,3 +151,22 @@ export function describeActivityBlockers(blockers) {
   if (!Array.isArray(blockers) || blockers.length === 0) return 'system idle';
   return blockers.map((blocker) => blocker.label).join(', ');
 }
+
+/** Missing telemetry and saved job states are not manual-update blockers. */
+export function manualUpdateBlockers(snapshot, { legacy = false, runnerAgents = [], ignoreAppId } = {}) {
+  const freshAgents = (Array.isArray(runnerAgents) ? runnerAgents : []).filter(agent => agent?.processActive === true).length;
+  const observed = snapshot?.observedWork ?? (legacy ? {
+    renders: snapshot?.renders,
+    llm: snapshot?.llm?.trusted === true ? snapshot.llm : null,
+    agents: { active: freshAgents },
+  } : snapshot) ?? {};
+  return summarizeSystemActivity({ ...observed,
+    jobs: Array.isArray(observed.jobs) ? observed.jobs.filter(job => job?.status === 'running') : [],
+    agents: { ...observed.agents, active: Math.max(Number(observed.agents?.active) || 0, freshAgents), trusted: true, queued: 0 },
+    mind: { ...observed.mind, trusted: true, queued: 0 },
+    llm: { ...observed.llm, trusted: true },
+    extras: { imageTo3d: observed.extras?.imageTo3d ?? [] },
+    appOperations: Array.isArray(observed.appOperations) ? observed.appOperations.filter(op => op.appId !== ignoreAppId) : [],
+    update: { inProgress: false },
+  }).blockers;
+}

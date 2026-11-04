@@ -433,7 +433,7 @@ export default function CharacterSheet() {
         </div>
         <button
           onClick={() => { setLoading(true); load(); }}
-          className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded-lg text-gray-400 hover:text-white hover:bg-port-border/50"
           title="Refresh" aria-label="Refresh"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />

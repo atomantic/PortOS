@@ -50,6 +50,8 @@ describe('remapSongTimeline', () => {
     const times = [[12, 16], [16, 20], [20, 24], [24, 28], [34, 38], [38, 42]];
     const project = {
       audioAnalysis: { durationSec: 46 },
+      // A ceiling above the 8 s insert keeps it one new shot (the default would split it).
+      pacing: { maxShotSec: 10 },
       lyricCues: diff.cues.map((c, i) => ({ ...c, startSec: times[i][0], endSec: times[i][1] })),
       scenes: oldProject.scenes,
     };

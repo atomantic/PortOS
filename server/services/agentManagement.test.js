@@ -2369,6 +2369,65 @@ describe('orphan retries resume what the dead run left behind', () => {
     expect(updateTask).toHaveBeenCalledWith('task-1', { status: 'completed' }, 'user', expect.objectContaining({ expectedStatus: 'in_progress', expectedTask: expect.any(Object) }));
   });
 
+  it('does not treat a shared-checkout commit as proof an orphaned release finished', async () => {
+    const task = { id: 'task-1', taskType: 'internal', status: 'in_progress',
+      metadata: { analysisType: 'do-release', orphanRetryCount: 0, totalSpawnCount: 1 } };
+    committedDuringRun.mockResolvedValue(true);
+    resolveTaskResumePatch.mockResolvedValueOnce({ resumedFromAgentId: 'agent-dead' });
+    try {
+      await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
+        agentMetadata: { taskAnalysisType: 'do-release', workspacePath: '/example-app',
+          releasePublication: { synchronizationHandoffVersion: 2 } },
+        agentStartedAt: '2026-08-09T00:00:00.000Z',
+      });
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending',
+        metadata: expect.objectContaining({ resumedFromAgentId: 'agent-dead' }) }), 'internal', expect.any(Object));
+      expect(addTask).not.toHaveBeenCalled();
+    } finally {
+      committedDuringRun.mockResolvedValue(false);
+    }
+  });
+
+  it('holds an orphaned release durably when candidate lineage is unavailable', async () => {
+    const task = { id: 'task-1', taskType: 'internal', status: 'in_progress',
+      metadata: { analysisType: 'do-release', orphanRetryCount: 1, totalSpawnCount: 2 } };
+    resolveTaskResumePatch.mockRejectedValueOnce(new Error('candidate-terminal-receipt-unverified'));
+    await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
+      agentMetadata: { taskAnalysisType: 'do-release', isWorktree: false }, interrupted: true,
+    });
+    const held = updateTask.mock.calls.find(([id]) => id === task.id)[1];
+    expect(held).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'release-candidate-recovery',
+      blockedReason: expect.stringContaining('Do not reserve another candidate'), orphanRetryCount: 1, totalSpawnCount: 1 } });
+    updateTask.mockClear();
+    await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue({ ...task, ...held }));
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('retains the captured predecessor on an unpublished orphan requeue without resetting retry budget', async () => {
+    const task = { id: 'task-1', taskType: 'internal', status: 'in_progress',
+      metadata: { analysisType: 'do-release', orphanRetryCount: 0, totalSpawnCount: 2 } };
+    resolveTaskResumePatch.mockResolvedValueOnce({ resumedFromAgentId: 'agent-dead' });
+    await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
+      agentMetadata: { taskAnalysisType: 'do-release', isWorktree: false },
+    });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending',
+      metadata: expect.objectContaining({ resumedFromAgentId: 'agent-dead', orphanRetryCount: 1, totalSpawnCount: 2 }) }),
+    'internal', expect.objectContaining({ recoveryOwner: expect.objectContaining({ id: 'agent-dead' }) }));
+  });
+
+  it('keeps an unpublished release with exhausted orphan budget blocked before lineage lookup', async () => {
+    const task = { id: 'task-1', taskType: 'internal', status: 'in_progress', description: 'Release fixture',
+      metadata: { analysisType: 'do-release', orphanRetryCount: 2, totalSpawnCount: 3 } };
+    await handleProvenOrphan(task.id, 'agent-dead', vi.fn().mockResolvedValue(task), {
+      agentMetadata: { taskAnalysisType: 'do-release', isWorktree: false },
+    });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'max-retries', orphanRetryCount: 3, totalSpawnCount: 3 }) }),
+    'internal', expect.any(Object));
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
   // `Date.parse(1754696324000)` stringifies its argument and returns NaN, which
   // would silently skip the probe for any caller holding an epoch-ms start time.
   it('accepts a raw epoch-ms start time, not just the persisted ISO string', async () => {

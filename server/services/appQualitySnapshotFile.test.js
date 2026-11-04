@@ -91,14 +91,14 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
   expect(path).toBe(join(worktreePath, '.quality.json'));
   expect(body).toBe(canonical());
   expect(JSON.parse(body)).toMatchObject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     reportVersion: 1,
     categories: ['security'],
-    measurements: [['2026-09-10', 0, 82, 5, 0, 2, 12, 12]],
+    measurements: [['2026-09-10T10:00:00.000Z', 0, 82, 5, 0, 2, 12, 12]],
   });
   expect(body.endsWith('\n')).toBe(true);
   expect(body).not.toMatch(/measurementId|Users|summary|app_id|agent-|github/);
-  expect(deps.buildQualitySnapshot).toHaveBeenCalledWith(app, 30, deps);
+  expect(deps.buildQualitySnapshot).toHaveBeenCalledWith(app, null, deps);
   expect(deps.addWorktree).toHaveBeenCalledWith(
     ['worktree', 'add', '--detach', worktreePath, 'origin/main'],
     '/repo/example-app',
@@ -153,9 +153,10 @@ it('merges an already-open snapshot PR whose branch already has the same bytes w
   const body = canonical();
   const deps = testDeps({
     git: gitDouble({
-      execGit: vi.fn(async (args) => args[0] === 'ls-tree' ? { exitCode: 0, stdout: '' } : args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH)
-        ? { exitCode: 0, stdout: body, stderr: '' }
-        : missingShow),
+      execGit: vi.fn(async (args) => args[0] === 'rev-parse' ? { exitCode: 0, stdout: 'a'.repeat(40) }
+        : args[0] === 'ls-tree' || args[0] === 'diff' ? { exitCode: 0, stdout: '' }
+          : args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH) && String(args[1]).endsWith(':.quality.json')
+            ? { exitCode: 0, stdout: body, stderr: '' } : missingShow),
     }),
     probePrForBranch: vi.fn(async () => ({
       prState: 'OPEN', prUrl, prNumber: 42, cli: 'gh', readable: true,
@@ -422,6 +423,7 @@ it('falls back to GitLab auto-merge when the immediate merge is refused', async 
 });
 
 const showFiles = files => vi.fn(async (args) => {
+  if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '' };
   if (args[0] !== 'show') return missingShow;
   const spec = String(args[1]);
   const name = spec.slice(spec.lastIndexOf(':') + 1);
@@ -430,7 +432,7 @@ const showFiles = files => vi.fn(async (args) => {
     : missingShow;
 });
 
-it('rewrites a v1 snapshot to canonical v2 and leaves a semantically identical v2 untouched', async () => {
+it('rewrites a v1 snapshot to canonical v3 and leaves a semantically identical v3 untouched', async () => {
   const upgrade = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': serialized(snapshot()) }) }) });
   expect(await publishAppQualitySnapshot(app, upgrade)).toMatchObject({ published: true, prUrl });
   expect(upgrade.writeFile.mock.calls[0][1]).toBe(canonical());
@@ -447,7 +449,7 @@ it('rewrites a v1 snapshot to canonical v2 and leaves a semantically identical v
 });
 
 it('does not replace a future snapshot already on the publish branch', async () => {
-  const future = JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) });
+  const future = JSON.stringify({ schemaVersion: 4, repository: 'a'.repeat(64) });
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async (args) => {
@@ -467,7 +469,7 @@ it('does not replace a future snapshot already on the publish branch', async () 
 
 it('leaves a future, unrecognized, or unreadable snapshot in place', async () => {
   const future = testDeps({
-    git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) }) }) }),
+    git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({ schemaVersion: 4, repository: 'a'.repeat(64) }) }) }),
   });
   expect(await publishAppQualitySnapshot(app, future)).toEqual({
     published: false, reason: 'unsupported-format', path: '.quality.json',
@@ -490,7 +492,7 @@ it('leaves a future, unrecognized, or unreadable snapshot in place', async () =>
   expect(unreadable.writeFile).not.toHaveBeenCalled();
   expect(log).toHaveBeenCalledWith('📊 Quality snapshot left untouched for app example-id: future');
 
-  // Readable, but rewriting it canonically would drop the newer install's rows.
+  // A valid newer category is retained even if this install cannot run it.
   const newer = testDeps({
     git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({
       schemaVersion: 2, repository: 'a'.repeat(64), reportVersion: 1,
@@ -499,11 +501,11 @@ it('leaves a future, unrecognized, or unreadable snapshot in place', async () =>
       measurements: [['2026-09-20T00:00:00.000Z', 1, 50, 3, 0, 2, 10, 10]],
     }) }) }),
   });
-  expect((await publishAppQualitySnapshot(app, newer)).reason).toBe('unsupported-format');
-  expect(newer.writeFile).not.toHaveBeenCalled();
+  expect((await publishAppQualitySnapshot(app, newer)).published).toBe(true);
+  expect(JSON.parse(newer.writeFile.mock.calls[0][1]).categories).toEqual(['example-future-lens', 'security']);
 });
 
-it('migrates a legacy file to v2 without inventing measurements or writing the live checkout', async () => {
+it('migrates a legacy file to v3 without inventing measurements or writing the live checkout', async () => {
   const legacyBody = serialized(snapshot());
   const deps = testDeps({
     git: gitDouble({ execGit: showFiles({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: legacyBody }) }),
@@ -514,11 +516,11 @@ it('migrates a legacy file to v2 without inventing measurements or writing the l
   const [path, body] = deps.writeFile.mock.calls[0];
   expect(path).toBe(join(worktreePath, '.quality.json'));
   expect(path.startsWith(app.repoPath)).toBe(false);
-  expect(JSON.parse(body).measurements).toEqual([['2026-09-10', 0, 82, 5, 0, 2, 12, 12]]);
+  expect(JSON.parse(body).measurements).toEqual([['2026-09-10T10:00:00.000Z', 0, 82, 5, 0, 2, 12, 12]]);
   expect(deps.git.execGit).toHaveBeenCalledWith(
     ['rm', '-f', '--', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME], worktreePath);
   expect(deps.git.commit).toHaveBeenCalledWith(worktreePath,
-    'chore: migrate quality snapshot to schema v2 (1 measurements)',
+    'chore: migrate quality snapshot to schema v3 (1 measurements)',
     { paths: ['.quality.json', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME] });
 
   __resetQualitySnapshotPublishState();
@@ -533,9 +535,10 @@ it('migrates a legacy file to v2 without inventing measurements or writing the l
   expect(again.addWorktree).not.toHaveBeenCalled();
 });
 
-it('reads v1, v2, and the legacy filename without falling past a canonical file', async () => {
+it('reads v1, v2, v3, and the legacy filename without falling past a canonical file', async () => {
   const v1 = serialized(snapshot());
-  const v2 = canonical();
+  const v3 = canonical();
+  const v2 = JSON.stringify({ ...JSON.parse(v3), schemaVersion: 2 });
   const read = files => readStoredQualitySnapshot('/repo/example-app', {
     readFile: async path => {
       const name = basename(path);
@@ -546,6 +549,7 @@ it('reads v1, v2, and the legacy filename without falling past a canonical file'
   expect(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME).toBe('quality-snapshot.json');
   expect((await read({ '.quality.json': v1 })).status).toBe('v1');
   expect((await read({ '.quality.json': v2 })).status).toBe('v2');
+  expect((await read({ '.quality.json': v3 })).status).toBe('v3');
   expect((await read({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).filename).toBe(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME);
   const both = await read({ '.quality.json': v2, [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 });
   expect(both.filename).toBe('.quality.json');
@@ -615,7 +619,7 @@ it('serializes worktree cleanup, retries a failed Git removal, and reports stale
 it('keeps rows already on the default branch when fresh evidence covers less', async () => {
   const existing = snapshot();
   existing.measurements[0].report.category = 'privacy';
-  existing.measurements[0].assessedAt = '2026-09-20T10:00:00Z';
+  existing.measurements[0].assessedAt = '2026-06-20T10:00:00Z';
   const body = qualityFileFromWireSnapshot(existing);
   const git = gitDouble({
     execGit: vi.fn(async (args) => (args[0] === 'show' && String(args[1]).startsWith('origin/main:')
@@ -628,6 +632,83 @@ it('keeps rows already on the default branch when fresh evidence covers less', a
   const written = JSON.parse(writeFile.mock.calls[0][1]);
   expect(written.categories).toEqual(['privacy', 'security']);
   expect(written.measurements).toHaveLength(2);
+});
+
+it('imports both canonical and legacy history during ordinary publication', async () => {
+  const primary = snapshot();
+  primary.measurements[0].report.category = 'privacy';
+  const legacy = snapshot();
+  legacy.measurements[0].assessedAt = '2025-01-01T10:00:00Z';
+  legacy.measurements[0].report.category = 'cost-efficiency';
+  const git = gitDouble({ execGit: showFiles({
+    '.quality.json': qualityFileFromWireSnapshot(primary),
+    [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: serialized(legacy),
+  }) });
+  const deps = testDeps({ git });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+  const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
+  expect(written.categories).toEqual(['cost-efficiency', 'privacy', 'security']);
+  expect(written.measurements).toHaveLength(3);
+  expect(written.measurements[0][0]).toBe('2025-01-01T10:00:00.000Z');
+});
+
+it('refuses a foreign snapshot or an unreadable Git blob instead of replacing history', async () => {
+  const foreign = JSON.stringify({ ...JSON.parse(canonical()), repository: 'c'.repeat(64) });
+  const foreignDeps = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': foreign }) }) });
+  expect((await publishAppQualitySnapshot(app, foreignDeps)).reason).toBe('repository-mismatch');
+  expect(foreignDeps.writeFile).not.toHaveBeenCalled();
+  __resetQualitySnapshotPublishState();
+  const unreadable = testDeps({ git: gitDouble({ execGit: vi.fn(async args => {
+    if (args[0] === 'show') return { exitCode: 128, stdout: '', stderr: 'object unavailable' };
+    if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '100644 blob abc\t.quality.json\0' };
+    return { exitCode: 0, stdout: '', stderr: '' };
+  }) }) });
+  expect((await publishAppQualitySnapshot(app, unreadable)).reason).toBe('unsupported-format');
+  expect(unreadable.writeFile).not.toHaveBeenCalled();
+  __resetQualitySnapshotPublishState();
+  const foreignBranch = testDeps({ git: gitDouble({ execGit: vi.fn(async args => {
+    if (args[0] === 'show' && String(args[1]) === `origin/${QUALITY_SNAPSHOT_BRANCH}:.quality.json`) {
+      return { exitCode: 0, stdout: foreign, stderr: '' };
+    }
+    if (args[0] === 'show') return missingShow;
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+    return { exitCode: 0, stdout: '', stderr: '' };
+  }) }) });
+  expect((await publishAppQualitySnapshot(app, foreignBranch)).reason).toBe('repository-mismatch');
+  expect(foreignBranch.writeFile).not.toHaveBeenCalled();
+});
+
+it('unions default and open-branch history without replacing a later peer run with an older local run', async () => {
+  const published = snapshot(2);
+  published.measurements[0].assessedAt = '2026-09-10T15:00:00Z';
+  published.measurements[0].report.score = 91;
+  published.measurements[1].assessedAt = '2026-01-01T12:00:00Z';
+  published.measurements[1].report.category = 'cost-efficiency';
+  const branch = snapshot();
+  branch.measurements[0].assessedAt = '2026-06-01T12:00:00Z';
+  branch.measurements[0].report.category = 'privacy';
+  const bodies = {
+    'origin/main:.quality.json': qualityFileFromWireSnapshot(published),
+    [`origin/${QUALITY_SNAPSHOT_BRANCH}:.quality.json`]: qualityFileFromWireSnapshot(branch),
+  };
+  const git = gitDouble({ execGit: vi.fn(async args => {
+    if (args[0] === 'show' && bodies[args[1]]) return { exitCode: 0, stdout: bodies[args[1]], stderr: '' };
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+    return args[0] === 'show' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
+  }) });
+  const fresh = snapshot(2);
+  fresh.measurements[1].assessedAt = '2026-11-01T12:00:00Z';
+  fresh.measurements[1].report.category = 'documentation';
+  const deps = testDeps({ git, now: Date.parse('2026-11-02T00:00:00Z'), buildQualitySnapshot: async () => fresh });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({ published: true });
+  const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
+  const rows = written.measurements.map(row => [row[0], written.categories[row[1]], row[2]]);
+  expect(rows).toEqual([
+    ['2026-01-01T12:00:00.000Z', 'cost-efficiency', 82],
+    ['2026-06-01T12:00:00.000Z', 'privacy', 82],
+    ['2026-09-10T15:00:00.000Z', 'security', 91],
+    ['2026-11-01T12:00:00.000Z', 'documentation', 82],
+  ]);
 });
 
 it.each(['open-branch', 'lease-branch', 'lease-default'])('preserves another install’s rows during %s publication', async location => {
@@ -657,23 +738,25 @@ it.each(['open-branch', 'lease-branch', 'lease-default'])('preserves another ins
   expect(written.measurements).toHaveLength(2);
 });
 
-it('keeps the publication window and fresh same-day evidence when coalescing an open branch', async () => {
+it('keeps older history and the latest timestamped evidence when coalescing an open branch', async () => {
   const peer = snapshot(3);
   peer.measurements[0].report.score = 99;
+  peer.measurements[0].assessedAt = '2026-09-10T09:00:00Z';
   peer.measurements[1].report.category = 'privacy';
   peer.measurements[2].report.category = 'documentation';
   peer.measurements[2].assessedAt = '2026-08-01T10:00:00Z';
   const git = gitDouble({ execGit: vi.fn(async args => {
-    if (args[0] === 'show' && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)) {
+    if (args[0] === 'show' && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`) && String(args[1]).endsWith(':.quality.json')) {
       return { exitCode: 0, stdout: qualityFileFromWireSnapshot(peer), stderr: '' };
     }
-    return args[0] === 'show' || args[0] === 'rev-parse' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+    return args[0] === 'show' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
   }) });
   const deps = testDeps({ git, now: Date.parse('2026-09-20T00:00:00Z') });
   await publishAppQualitySnapshot(app, deps);
   const written = JSON.parse(deps.writeFile.mock.calls[0][1]);
-  expect(written.categories).toEqual(['privacy', 'security']);
-  expect(written.measurements.find(row => row[1] === 1)[2]).toBe(82);
+  expect(written.categories).toEqual(['documentation', 'privacy', 'security']);
+  expect(written.measurements.find(row => row[1] === 2)[2]).toBe(82);
 });
 
 it('preserves open-branch history during explicit format migration without applying the publication window', async () => {
@@ -681,9 +764,11 @@ it('preserves open-branch history during explicit format migration without apply
   peer.measurements[0].report.category = 'privacy';
   peer.measurements[0].assessedAt = '2025-01-01T10:00:00Z';
   const git = gitDouble({ execGit: vi.fn(async args => {
-    if (args[0] === 'show') return { exitCode: 0, stderr: '', stdout: String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)
-      ? qualityFileFromWireSnapshot(peer) : serialized(snapshot()) };
-    return args[0] === 'rev-parse' ? missingShow : { exitCode: 0, stdout: '', stderr: '' };
+    if (args[0] === 'show') return String(args[1]).endsWith(':.quality.json')
+      ? { exitCode: 0, stderr: '', stdout: String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)
+        ? qualityFileFromWireSnapshot(peer) : serialized(snapshot()) } : missingShow;
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+    return { exitCode: 0, stdout: '', stderr: '' };
   }) });
   const deps = testDeps({ git });
   await migrateAppQualitySnapshot(app, deps);
@@ -896,7 +981,7 @@ const advertisedGuardPublication = (reused = false) => {
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async args => {
-        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: 'package.json\n' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: args.at(-1) === 'package.json' ? 'package.json\n' : '' };
         if (args[0] === 'show') {
           if (args[1].endsWith(':package.json')) {
             return { exitCode: 0, stdout: JSON.stringify({ scripts: { 'pregate:merged': 'node scripts/pregate.js --guards-only' } }) };

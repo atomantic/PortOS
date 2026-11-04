@@ -13,6 +13,7 @@ import { databaseRestoreRecovery, ensureSchema, query, withDatabaseMaintenance }
 import { syncFeedTables, syncFeedSequenceName } from '../lib/db/schema/syncFeed.js';
 import { restoreReceiptsDdl } from '../lib/db/schema/core.js';
 import { acquireBackupSnapshotCut } from '../lib/backupSnapshotBoundary.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { bumpChangeToken, CHANGE_TOKEN_DOMAINS } from './changeToken.js';
 
 // Ties the replay's psql session to its operation, so recovery can prove no
@@ -260,18 +261,57 @@ export async function settleReplayOutcome(record) {
  *   { status: 'failed', reason, error, recovery }  (still pending)
  * @param {string} [id] - operation to resume; omitted = whichever is pending
  */
+let activeRestoreRecovery = null;
 export async function resumeDatabaseRestore(id) {
   const record = databaseRestoreRecovery.read();
   if (!record) return { status: 'ok', outcome: 'none' };
   if (id && record.id !== id) {
     throw Object.assign(new Error('A different database restore operation is pending.'), { status: 409, code: 'RESTORE_RECOVERY_MISMATCH' });
   }
+  if (activeRestoreRecovery?.id === record.id) return activeRestoreRecovery.promise;
+  const promise = withDatabaseRestoreAdmission(`restore-recovery:${record.id}`, () => resumeDatabaseRestoreAdmitted(record),
+    { related: [`restore-db:${String(record.snapshotId).slice(0, 240)}`] });
+  activeRestoreRecovery = { id: record.id, promise };
+  try { return await promise; }
+  finally { if (activeRestoreRecovery?.promise === promise) activeRestoreRecovery = null; }
+}
+
+export async function withDatabaseRestoreAdmission(resource, work, { related = [] } = {}) {
+  const permit = maintenance.admit('backup', resource, { reconnectFinished: true });
+  let started = true;
+  try {
+    return await permit.run(async () => {
+      const result = await work();
+      if (!databaseRestoreRecovery.isFenced()) {
+        for (const previous of related) {
+          const older = maintenance.admit('backup', previous, { continuation: true, reconnectFinished: true });
+          older.completeRecovery?.();
+          await older.finish();
+        }
+        permit.completeRecovery?.();
+      }
+      return result;
+    });
+  }
+  catch (err) {
+    if (err?.restoreWorkNotStarted === true) started = false;
+    throw err;
+  }
+  finally {
+    if (started && databaseRestoreRecovery.isFenced()) permit.markUnsettled();
+    await permit.finish();
+  }
+}
+
+async function resumeDatabaseRestoreAdmitted(record) {
   // Initial replay holds this boundary, but a failed repair releases it while
   // retaining the same-operation DB fence. Reacquire before DB maintenance:
   // draining publications may still need the DB to finish their settlement.
   // Keep file-backed authorities stable through the media rebuild on retries
   // and restart, and release only this recovery attempt's cut on every outcome.
-  const releaseSnapshotCut = await acquireBackupSnapshotCut();
+  let releaseSnapshotCut;
+  try { releaseSnapshotCut = await acquireBackupSnapshotCut(); }
+  catch (err) { err.restoreWorkNotStarted = true; throw err; }
   try {
     return await withDatabaseMaintenance(async () => {
       // Re-read inside maintenance: another resume may have finished meanwhile.

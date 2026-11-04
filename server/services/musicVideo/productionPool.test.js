@@ -66,9 +66,26 @@ describe('local image pool eligibility', () => {
     await expect(assertPoolEligible([route], env)).rejects.toThrow(/example-image.*cannot run/);
     await expect(assertPoolEligible([route], imageEnv([]))).rejects.toThrow(/not installed/);
   });
+
+  it('allows a capable route to use its first references when a shot selects more than it can take', async () => {
+    const { chooseProductionRoute } = await import('./productionPool.js');
+    const agy = { kind: 'image', mode: 'agy' };
+    const env = { ...envFor(() => {}), settings: { imageGen: { agy: { enabled: true } } } };
+    await expect(chooseProductionRoute({ pool: [agy] }, { kind: 'image', conditioning: 5 }, env)).resolves.toMatchObject({ route: agy });
+    const flux3 = imageEnv([{ id: 'example-flux3', runner: 'flux3' }], 'example-flux3');
+    await expect(chooseProductionRoute({ pool: [route] }, { kind: 'image', conditioning: 5 }, flux3)).resolves.toMatchObject({ route });
+  });
 });
 
 describe('fal step pricing names the model it priced', () => {
+  it('does not treat an output-only H3 quote as a bounded reference-input price', () => {
+    const project = { videoSettings: {}, visualSpec: { references: [{ id: 'rider', imageId: 'rider.png', role: 'character', condition: true }] } };
+    const route = { kind: 'video', mode: 'fal', model: 'minimax/h3-max/reference-to-video' };
+    const scene = { sceneId: 's', startSec: 0, endSec: 3, referenceImageId: 'frame.png' };
+    expect(stepPriceUsd({ route, project, scene, stepKind: 'clip' })).toBeNull();
+    expect(stepPriceUsd({ route, project, scene: { ...scene, clipReferenceIds: [] }, stepKind: 'clip' })).toBe(0.4);
+  });
+
   it('records the end-frame upgrade on an end-frame clip and the default elsewhere', () => {
     const KLING = 'fal-ai/kling-video/v3/pro/image-to-video';
     const project = { videoSettings: { falEndFrameModelId: KLING } };

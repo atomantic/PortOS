@@ -72,11 +72,27 @@ export const executePortosUpdate = (opts) => {
 // Node.js runtime: version, newer stable/security releases, nvm, pm2 and the
 // boot script; the two actions restart PortOS through the update lifecycle.
 export const getNodeRuntimeStatus = (options) => request('/update/node-runtime', options);
-export const updateNodeRuntime = (version) => request('/update/node-runtime', {
+export const getBrowserUpdateStatus = (options) => request('/update/browser', options);
+// Settings › Software: every additional component PortOS manages, one row each.
+export const getSoftwareInventory = ({ fresh = false, ...options } = {}) =>
+  request(`/update/software${fresh ? '?fresh=1' : ''}`, options);
+// `acknowledgeBusy` proceeds although PortOS is busy (the owner override).
+export const updateNodeRuntime = (version, { acknowledgeBusy = false, ...options } = {}) => request('/update/node-runtime', {
   method: 'POST',
-  body: JSON.stringify({ version })
+  body: JSON.stringify({ version, ...(acknowledgeBusy ? { acknowledgeBusy } : {}) }),
+  ...options,
 });
-export const updatePm2Runtime = () => request('/update/pm2', { method: 'POST' });
+export const updatePm2Runtime = ({ acknowledgeBusy = false, ...options } = {}) => request('/update/pm2', {
+  method: 'POST',
+  ...(acknowledgeBusy ? { body: JSON.stringify({ acknowledgeBusy }) } : {}),
+  ...options,
+});
+// Managed Blender (macOS): download, verify, select for Code Animation, re-check.
+export const installManagedBlender = ({ acknowledgeBusy = false, ...options } = {}) => request('/update/software/blender', {
+  method: 'POST',
+  body: JSON.stringify(acknowledgeBusy ? { acknowledgeBusy } : {}),
+  ...options,
+});
 export const repairNodeStartup = () => request('/update/node-runtime/startup', { method: 'POST' });
 export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/sync-fork', {
   method: 'POST',
@@ -289,12 +305,14 @@ export const startUsageBackfill = (options = {}) => request('/usage/backfill', {
 // Subscription-quota status for every enabled provider family (claude, codex,
 // agy, grok). Callers own their inline error UI — silent by default. `family`
 // narrows the read to a single card (the usage page's per-card Refresh) so one
-// provider's multi-second scrape isn't paid for all of them.
-export const getProviderUsage = ({ refresh = false, family = null, period = null, ...options } = {}) => {
+// provider's multi-second scrape isn't paid for all of them. `scope: 'peers'`
+// reads only saved eligible peer observations, without a local provider scrape.
+export const getProviderUsage = ({ refresh = false, family = null, period = null, scope = null, ...options } = {}) => {
   const qs = new URLSearchParams();
   if (refresh) qs.set('refresh', '1');
   if (family) qs.set('family', family);
   if (period) qs.set('period', period);
+  if (scope) qs.set('scope', scope);
   const query = qs.toString();
   return request(`/usage/providers${query ? `?${query}` : ''}`, { silent: true, ...options });
 };
@@ -430,7 +448,10 @@ export const updateBrowserConfig = (config, options = {}) => request('/browser/c
 });
 export const launchBrowser = (options = {}) => request('/browser/launch', { method: 'POST', ...options });
 export const stopBrowser = (options = {}) => request('/browser/stop', { method: 'POST', ...options });
-export const restartBrowser = (options = {}) => request('/browser/restart', { method: 'POST', ...options });
+export const getBrowserUpdatePreflight = (options) => request('/browser/update-preflight', options);
+export const restartBrowser = ({ ticket, ...options } = {}) => request('/browser/restart', {
+  method: 'POST', ...options, ...(ticket ? { body: JSON.stringify({ ticket }) } : {}),
+});
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
 export const deleteBrowserDownload = (name, options = {}) =>
   request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE', ...options });

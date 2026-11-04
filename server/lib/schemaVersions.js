@@ -33,7 +33,7 @@ import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
-  // Checked-in `.quality.json` is file schema v2 and must not bump this number.
+  // Checked-in `.quality.json` is file schema v3 and must not bump this number.
   appQuality: 1,
   // Memory pull negotiates this capability explicitly. Version numbers describe
   // the sender's local history; receivers retain their own monotonic history.
@@ -845,7 +845,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // which a v37 scene schema strips on save). Optional, no backfill: absent plays as before.
   // v39 = overlapping photo-sequence layers (`photoSequence.overlapFrames`/`layouts`),
   // which a v38 strict photo-sequence schema rejects. Optional, no backfill: absent is a plain sequence.
-  musicVideoProjects: 39,
+  // v40 = shot reference picks can exceed four and take cast-input snapshots can
+  // exceed eight. Older peers reject or truncate those expanded arrays.
+  // v41 = pacing re-cut pieces carry beatNeedsReview/pacingCut; older scene writers drop them.
+  // Optional, no backfill: absent means no pending beat review or pacing-owned timing.
+  // v42 = shots cut on sung words (`scene.lyricAnchor`, `wordCutBoard`) and the
+  // project's `lyricAnchorSync` note; a v41 strict scene schema rejects them and its
+  // writers drop them. Optional, no backfill: absent is an ordinary hand-timed shot.
+  // v43 = image-to-image wipes on a shot's cuts (`scene.wipeIn`/`wipeOut`: style, length,
+  // edge color), which a v42 strict scene schema strips on save and a v42 re-plan drops.
+  // Optional, no backfill: absent plays the cut as before.
+  musicVideoProjects: 43,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

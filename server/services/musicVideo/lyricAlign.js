@@ -11,6 +11,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideoValidation.js';
 import { getProject, updateProject } from './projects.js';
+import { vocalStemMasterChanged } from './vocalStem.js';
 import {
   alignDirectorWords,
   lyricAlignFfmpegArgs,
@@ -85,10 +86,16 @@ export async function alignProjectLyrics(projectId, options = {}) {
     getProject,
     updateProject,
     resolveAudio: pickAlignmentPath,
+    masterFilename: async (record) => (await import('./songAudio.js')).currentMasterFilename(record),
     decodeAudio: decodeSourceToWav,
     resolveTranscriber,
     forceAlign: async (...args) => (await import('./lyricForcedAlign.js')).forceAlignLyrics(...args),
     separateVocals: async (...args) => (await import('./vocalSeparation.js')).separateProjectVocals(...args),
+    stemOfOldSong: async (record) => {
+      if (!record.vocalStemFilename || !record.vocalStemMasterFilename) return false;
+      const { resolveMasterAudioPath } = await import('./render.js');
+      return vocalStemMasterChanged(record, await resolveMasterAudioPath(record));
+    },
     ...options.deps,
   };
   const cueId = options.cueId || null;
@@ -102,12 +109,15 @@ export async function alignProjectLyrics(projectId, options = {}) {
   if (cueId && !cue) throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
 
   const expectedTextKey = textKey(cues);
-  if (!project.vocalStemFilename && options.separateVocals === true) {
+  // A stem of the song's previous file is re-separated from the current one.
+  if (options.separateVocals === true && (!project.vocalStemFilename || await deps.stemOfOldSong(project))) {
     onProgress({ stage: 'separating' });
     project = await deps.separateVocals(projectId, { onProgress, isCancelled: options.isCancelled });
     checkCancel();
   }
   const expectedAudioKey = audioKey(project);
+  // A take replaced in place keeps the same track link, so audioKey cannot see it (#14793).
+  const expectedMaster = await deps.masterFilename(project);
   onProgress({ stage: 'decoding' });
   const { path: audioPath, source } = await deps.resolveAudio(project);
   const wav = await deps.decodeAudio(audioPath);
@@ -177,7 +187,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
   checkCancel();
 
   const fresh = await deps.getProject(projectId);
-  if (!fresh || audioKey(fresh) !== expectedAudioKey) {
+  if (!fresh || audioKey(fresh) !== expectedAudioKey || (await deps.masterFilename(fresh)) !== expectedMaster) {
     throw new ServerError('The song changed while lyrics were aligning. Run Align words again.', { status: 409, code: 'MUSIC_VIDEO_AUDIO_CHANGED' });
   }
   const freshCues = Array.isArray(fresh.lyricCues) ? fresh.lyricCues : [];
@@ -217,7 +227,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
   console.log(`🎤 Aligned lyric words from the ${source} via ${kind} (${matched} words matched)`);
   // Provenance is project-wide, so only a whole-song pass may change it; one
   // re-aligned line leaves the other lines' timings as stale as they were.
-  const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source }) };
+  const patch = { lyricCues: nextCues, ...(cueId ? {} : { lyricAlignSource: source, ...(expectedMaster ? { lyricTimingMasterFilename: expectedMaster } : {}) }) };
   if (stemPcm) patch.lyricAlignSilentWords = silentWords.length;
   if (!cueId) {
     const analysis = relabeledAnalysis(fresh, nextCues);

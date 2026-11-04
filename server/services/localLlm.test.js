@@ -126,6 +126,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 const mocks = vi.hoisted(() => ({
   settings: { getSettings: vi.fn(async () => ({})) },
   ollama: {
+    getBaseUrl: vi.fn(() => 'http://localhost:11434'),
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
@@ -146,6 +147,7 @@ const mocks = vi.hoisted(() => ({
     importModelFromGguf: vi.fn(async ({ name, mode }) => ({ success: true, modelId: name, linked: mode === 'link' }))
   },
   lmstudio: {
+    getBaseUrl: vi.fn(() => 'http://localhost:1234'),
     getAvailableModels: vi.fn(async () => []),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
@@ -1196,13 +1198,30 @@ describe('localLlm', () => {
   });
 
   describe('listVisionModels', () => {
+    beforeEach(() => {
+      mocks.providers.getProviderById.mockImplementation(async (id) => ({
+        id, type: 'api', endpoint: id === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'http://localhost:1234/v1',
+      }));
+    });
+
+    it.each([null, [], 'unavailable'])('retains name compatibility when metadata is %j', async (metadata) => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([{ id: 'gemma3:4b' }]);
+      if (metadata === 'unavailable') mocks.ollama.getModelCapabilities.mockRejectedValueOnce(new Error('offline'));
+      else mocks.ollama.getModelCapabilities.mockResolvedValueOnce(metadata);
+      expect((await svc.listVisionModels()).map((m) => m.id)).toEqual(['gemma3:4b']);
+    });
+
+    it('does not offer one daemon inventory for a separately configured endpoint', async () => {
+      mocks.providers.getProviderById.mockResolvedValue({ id: 'ollama', type: 'api', endpoint: 'http://example.invalid:11434/v1' });
+      expect(await svc.listVisionModels()).toEqual([]);
+      expect(mocks.ollama.getInstalledModels).not.toHaveBeenCalled();
+      expect(mocks.ollama.getModelCapabilities).not.toHaveBeenCalled();
+    });
+
     it('detects a vision-capable Ollama model whose id lacks a vl/vision token via /api/show capabilities', async () => {
       mocks.ollama.getInstalledModels.mockResolvedValueOnce([
         { id: 'qwen3.6:35b', name: 'qwen3.6:35b', family: 'qwen35moe' },
-        // Text-only, and its id carries no vision marker — so it has to be
-        // resolved through /api/show rather than the id heuristic. (Gemma 4 no
-        // longer works as this fixture: every published build is multimodal, so
-        // the id heuristic short-circuits before /api/show is consulted.)
+        // A non-vision family also stays excluded after probing /api/show.
         { id: 'granite4.1:8b', name: 'granite4.1:8b', family: 'granite' },
       ]);
       mocks.ollama.getModelCapabilities.mockImplementation(async (id) =>
@@ -1216,14 +1235,13 @@ describe('localLlm', () => {
       expect(mocks.ollama.getModelCapabilities).toHaveBeenCalledWith('granite4.1:8b');
     });
 
-    it('skips the /api/show round-trip when the id already matches the vision heuristic', async () => {
+    it('rejects a heuristic match when /api/show reports text-only capabilities', async () => {
       mocks.ollama.getInstalledModels.mockResolvedValueOnce([
-        { id: 'qwen2.5-vl:7b', name: 'qwen2.5-vl:7b', family: 'qwen2vl' },
+        { id: 'gemma3:1b', name: 'gemma3:1b', family: 'gemma3' },
       ]);
-
-      const models = await svc.listVisionModels();
-      expect(models.map((m) => m.id)).toEqual(['qwen2.5-vl:7b']);
-      expect(mocks.ollama.getModelCapabilities).not.toHaveBeenCalled();
+      mocks.ollama.getModelCapabilities.mockResolvedValueOnce(['completion']);
+      expect(await svc.listVisionModels()).toEqual([]);
+      expect(mocks.ollama.getModelCapabilities).toHaveBeenCalledWith('gemma3:1b');
     });
 
     it('appends vision-capable CLI providers (codex / claude), one entry per model', async () => {

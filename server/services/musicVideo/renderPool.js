@@ -91,7 +91,7 @@ export async function applyProjectRenderPool(body) {
   candidates.sort((a, b) => a.load - b.load); // stable ties follow the saved order
   const selected = candidates[0];
   if (!selected) refuse('No selected render node is eligible; no job was submitted', reasons);
-  return { ...body, backend: 'local', modelId: selected.modelId,
+  return { ...body, musicVideo: { ...body.musicVideo, clipReferencesDisabled: true }, backend: 'local', modelId: selected.modelId,
     ...(selected.peerId ? { mediaProviderPeerId: selected.peerId } : {}),
     mode: suppliedAudio ? 'a2v' : 'image',
     _suppliedAudio: suppliedAudio,

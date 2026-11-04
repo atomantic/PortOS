@@ -70,7 +70,7 @@ export default function LocalRuntimeStatus({
   const remedy = runtime.remedy;
   // A remedy this component can perform itself, vs. one whose form lives in
   // Settings. Anything else renders as a reason with no button.
-  const selfServe = [IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV, IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT, IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS].includes(remedy?.kind);
+  const selfServe = [IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV, IMAGE_RUNTIME_REMEDY.INSTALL_FLUX3, IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT, IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS].includes(remedy?.kind);
   const mossWeights = installKind === IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS;
   const RemedyIcon = REMEDY_ICON[remedy?.kind] || SettingsIcon;
 
@@ -127,6 +127,13 @@ export default function LocalRuntimeStatus({
           </span>
         )}
       </Banner>
+      <RuntimeInstallModal
+        open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_FLUX3}
+        runtime="flux3" label="FLUX.3 Klein runtime"
+        installUrlBase="/api/image-gen/setup/flux3-install"
+        description="Installing isolated mflux 0.23.0 and its MLX dependencies. Requires uv and Apple Silicon macOS 14+. Model weights download separately (Q4 5.3 GB, Q6 7.6 GB, Q8 9.9 GB)."
+        onClose={closeInstall} onComplete={handleInstallComplete}
+      />
       <Flux2InstallModal open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV} onClose={closeInstall} onComplete={handleInstallComplete} modelId={runtime.modelId} />
       <RuntimeInstallModal
         open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT || mossWeights}

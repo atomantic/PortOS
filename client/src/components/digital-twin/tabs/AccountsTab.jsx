@@ -257,7 +257,7 @@ export default function AccountsTab() {
         <div className="flex items-center gap-2">
           <button
             onClick={reloadAll}
-            className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-card transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-card transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
             title="Refresh" aria-label="Refresh"
           >
             <RefreshCw className="w-4 h-4" />

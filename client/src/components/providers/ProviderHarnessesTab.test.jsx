@@ -225,6 +225,7 @@ describe('ProviderHarnessesTab', () => {
     fireEvent.click(await within(claude).findByRole('button', { name: /Remove/ }));
     expect(screen.queryByTestId('install-modal')).not.toBeInTheDocument();
     expect(within(claude).getByText(/1 provider use `claude`/)).toBeInTheDocument();
+    expect(within(claude).getByText(/cannot tell how it was installed/)).toBeInTheDocument();
 
     const [, confirm] = within(claude).getAllByRole('button', { name: 'Remove' });
     fireEvent.click(confirm);

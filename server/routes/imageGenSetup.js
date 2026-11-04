@@ -29,16 +29,17 @@ import { isPathInsideDir } from '../lib/pathSafety.js';
 import { requestHasHostControl, HOST_CONTROL_FORBIDDEN_MESSAGE } from '../services/authGate.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { getSetupCheck, invalidateSetupCheck, REQUIRED_PIP_NAMES } from '../services/imageGen/setup.js';
+import { installFlux3Runtime } from '../services/imageGen/flux3Runtime.js';
 import { installMossRuntime } from '../services/imageGen/mossInstall.js';
 import { diagnoseMossRuntime } from '../services/imageGen/mossRuntime.js';
 import { downloadMossWeights, mossModelCacheStatus } from '../services/imageGen/mossWeights.js';
 
 const router = Router();
 
-export async function streamMossAction(req, res, start) {
+export async function streamMossAction(req, res, start, installer = 'MOSS Swift') {
   if (!requestHasHostControl(req)) forbidWithoutHostControl();
   const { send, safeEnd } = openSseStream(res);
-  const log = createInstallLogger({ installer: 'MOSS Swift' });
+  const log = createInstallLogger({ installer });
   const emit = event => { log.onEvent(event); send(event); };
   let handle;
   let disconnected = false;
@@ -52,6 +53,11 @@ export async function streamMossAction(req, res, start) {
     emit({ type: 'error', message: error.message });
   } finally { safeEnd(); }
 }
+
+router.post('/flux3-install', asyncHandler(async (req, res) => {
+  validateRequest(z.object({ runtime: z.literal('flux3') }).strict(), req.query);
+  await streamMossAction(req, res, installFlux3Runtime, 'FLUX.3 Klein');
+}));
 
 router.get('/moss-install', asyncHandler(async (_req, res) => res.json(await diagnoseMossRuntime())));
 router.post('/moss-install', asyncHandler(async (req, res) => {

@@ -18,16 +18,22 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
-vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
+vi.mock('../settings.js', async () => ({ getSettings: vi.fn(async () => ({})), settingsEvents: new (await import('node:events')).EventEmitter() }));
 
 const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
+const { castSetsInspectionInputs } = await import('../../lib/musicVideoCastSetsInspection.js');
 const { musicVideoEvents } = await import('./events.js');
 
 const app = express();
 app.use(express.json());
+app.use((req, _res, next) => {
+  const method = req.headers['x-test-auth-method'];
+  req.portosAuthContext = method ? { enabled: true, authenticated: true, method } : { enabled: false, authenticated: false, method: null };
+  next();
+});
 app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 
@@ -187,6 +193,8 @@ beforeEach(() => {
 });
 
 const testDeps = (overrides = {}) => ({
+  resolveReviewer: async () => ({ provider: { id: 'vision-example', type: 'api' }, model: 'vision-example', costUsd: 0 }),
+  reviewImage: async ({ beforeExecute }) => { await beforeExecute(); return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' }; },
   resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
   runPrompt,
   getSettings: async () => ({}),
@@ -206,8 +214,8 @@ afterEach(async () => {
 });
 afterAll(cleanupTempDataRoots);
 
-async function productionCheckin(limits, price = 0.25) {
-  const project = await seed();
+async function productionCheckin(limits, price = 0.25, overrides = {}) {
+  const project = await seed(overrides);
   const { run } = await projects.mutateProjectRecord(project.id, (current) => production.startProductionOnProject(current, {
     pool: [{ kind: 'image', mode: 'codex', model: null }],
     processId: 'example-process', limits: { maxReviewAttempts: 2, ...limits }, pricing: { 'image:codex:': price },
@@ -237,7 +245,9 @@ describe('Cast & Sets production accounting', () => {
     const count = Object.keys(saved.castAndSets.plan).length;
     expect(jobs).toHaveLength(count);
     expect(saved.productionRuns[0].usage).toEqual({ generations: count, spentUsd: count * 0.25 });
-    expect(saved.productionRuns[0].steps).toHaveLength(count);
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin')).toHaveLength(count);
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'review')).toHaveLength(2);
+    expect(Object.values(saved.castAndSets.images).filter((image) => image.inspection.verdict === 'unreviewed')).toHaveLength(count - 2);
     for (const job of jobs) {
       expect(job.params.musicVideo.productionRunId).toBe(run.id);
       expect(saved.productionRuns[0].steps.find((s) => s.key === job.params.musicVideo.productionStepKey))
@@ -251,20 +261,77 @@ describe('Cast & Sets production accounting', () => {
     expect((await current(project.id)).productionRuns[0].usage).toEqual(saved.productionRuns[0].usage);
   });
 
-  it('refunds a refused submission and charges a new attempt when resumed', async () => {
+  it('refunds a refused submission and charges the automatically queued retry', async () => {
     enqueue.mockRejectedValueOnce(new Error('Example queue refusal'));
     const { project } = await productionCheckin({ maxGenerations: 20 });
-    await until(async () => jobs.length === 3, 'the other initial images');
+    await until(async () => (await current(project.id)).productionRuns[0].steps
+      .some((step) => step.sceneId === 'character' && step.status === 'queued'), 'the automatically queued retry');
     const before = await current(project.id);
     const count = Object.keys(before.castAndSets.plan).length;
-    expect(before.productionRuns[0].usage.generations).toBe(count - 1);
-    expect(before.productionRuns[0].steps.find((s) => s.sceneId === 'character')).toMatchObject({ status: 'refused' });
+    expect(before.productionRuns[0].usage.generations).toBe(count);
+    expect(before.productionRuns[0].steps.filter((s) => s.sceneId === 'character').map((s) => s.status)).toEqual(['refused', 'queued']);
     await land(project.id);
     await runTo(project.id, 'review');
     const after = await current(project.id);
     expect(after.productionRuns[0].usage.generations).toBe(count);
     expect(after.productionRuns[0].steps.filter((s) => s.sceneId === 'character').map((s) => s.status))
       .toEqual(['refused', 'completed']);
+  });
+
+  it('refunds an ineligible face-sheet submission and releases the remaining reservations', async () => {
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await runTo(project.id, 'review');
+    const before = await current(project.id);
+    const previousJobs = jobs.length;
+    service.__setCastAndSetsDepsForTests(testDeps({
+      imageParams: async (_settings, route, common) => ({ ...common, mode: route.mode,
+        ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(0, 1) } : {}) }),
+    }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions', 'looks'] })).status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('failed');
+    expect(saved.productionRuns[0].usage).toEqual(before.productionRuns[0].usage);
+    expect(saved.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions').map((step) => step.status)).toEqual(['completed', 'refused']);
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin' && step.revisionId === '2')
+      .map((step) => [step.sceneId, step.status])).toEqual([
+      ['expressions', 'refused'], ['looks', 'refused'], ['test:1', 'refused'], ['test:2', 'refused'],
+    ]);
+    expect(saved.productionRuns[0].steps.filter((step) => step.status === 'reserved')).toHaveLength(0);
+    expect(jobs).toHaveLength(previousJobs);
+  });
+
+  it.each([1, 2])('settles the final pending image after %i transient queue refusal(s)', async (refusals) => {
+    const { project } = await productionCheckin({ maxGenerations: 20 });
+    await runTo(project.id, 'review');
+    const before = await current(project.id);
+    const previousJobs = jobs.length;
+    enqueue.mockClear();
+    for (let i = 0; i < refusals; i += 1) enqueue.mockRejectedValueOnce(new Error('Temporary queue refusal'));
+
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions'] })).status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    const steps = saved.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions' && step.revisionId === '2');
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(saved.productionRuns[0].steps.filter((step) => step.status === 'reserved')).toHaveLength(0);
+    if (refusals === 1) {
+      expect(saved.castAndSets).toMatchObject({ status: 'imaging', images: { expressions: { status: 'queued', failures: 1 } } });
+      expect(steps.map((step) => step.status)).toEqual(['refused', 'queued']);
+      expect(saved.productionRuns[0].usage.generations).toBe(before.productionRuns[0].usage.generations + 1);
+      expect(saved.productionRuns[0].usage.spentUsd).toBe(before.productionRuns[0].usage.spentUsd + 0.25);
+      expect(jobs).toHaveLength(previousJobs + 1);
+      await runTo(project.id, 'review');
+      const completed = await current(project.id);
+      expect(completed.productionRuns[0].steps.filter((step) => step.sceneId === 'expressions' && step.revisionId === '2')
+        .map((step) => step.status)).toEqual(['refused', 'completed']);
+    } else {
+      expect(saved.castAndSets).toMatchObject({ status: 'failed', images: { expressions: { status: 'failed', failures: 2 } } });
+      expect(saved.castAndSets.stopReason).toMatch(/failed twice: Temporary queue refusal/);
+      expect(steps.map((step) => step.status)).toEqual(['refused', 'refused']);
+      expect(saved.productionRuns[0].usage).toEqual(before.productionRuns[0].usage);
+      expect(jobs).toHaveLength(previousJobs);
+    }
   });
 
   it('charges failed queued jobs and their retry, and refunds images skipped before submission', async () => {
@@ -334,10 +401,16 @@ describe('Cast & Sets check-in', () => {
     for (const job of jobs) expect(job.params.referenceImagePaths).toBeUndefined();
     expect(character.params).toMatchObject({ width: 1536, height: 1024, mode: 'codex', musicVideo: { projectId: project.id } });
     expect(character.params.prompt).toMatch(/FRONT, 3\/4, PROFILE, BACK/);
+    expect(character.params.prompt).toContain('Hands empty and relaxed');
+    expect(character.params.prompt).toContain('signature: a brass lantern');
+    expect(character.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
 
     await land(project.id, ['character']);
     await until(async () => jobs.some((j) => keyOf(j) === 'looks'), 'the looks sheet');
     const looks = jobs.find((j) => keyOf(j) === 'looks');
+    expect(looks.params.prompt).toContain('Hands empty and relaxed');
+    expect(looks.params.prompt).toContain('signature: a brass lantern');
+    expect(looks.params.prompt).toContain('never put a carried object from the description or reference images in their hands');
     expect(looks.params.referenceImagePaths.map((p) => p.split(/[\\/]/).pop())).toEqual([`${character.id}.png`]);
     expect(jobs.some((j) => keyOf(j).startsWith('test:'))).toBe(false);
 
@@ -370,9 +443,9 @@ describe('Cast & Sets check-in', () => {
     const refs = done.visualSpec.references;
     expect(refs[0]).toMatchObject({ imageId: 'user-ref.png', condition: true });
     expect(refs.find((r) => r.id === 'mvr-cs-character')).toMatchObject({ role: 'character', condition: true });
-    // Four conditioning slots: the director's own, the character sheet, then plates by song coverage.
-    expect(refs.filter((r) => r.condition).map((r) => r.id)).toEqual([refs[0].id, 'mvr-cs-character', 'mvr-cs-set-lab', 'mvr-cs-set-roof']);
-    expect(refs.find((r) => r.id === 'mvr-cs-set-harbor')).toMatchObject({ role: 'set', condition: false });
+    // Every set remains an ordered candidate; each renderer limits its actual inputs.
+    expect(refs.filter((r) => r.condition).map((r) => r.id)).toEqual([refs[0].id, 'mvr-cs-character', 'mvr-cs-set-lab', 'mvr-cs-set-roof', 'mvr-cs-set-harbor']);
+    expect(refs.find((r) => r.id === 'mvr-cs-set-harbor')).toMatchObject({ role: 'set', condition: true });
     expect(refs.find((r) => r.id === 'mvr-cs-looks')).toMatchObject({ role: 'wardrobe', condition: false });
     expect(done.concept.subjects.map((s) => [s.id, s.kind])).toEqual([
       ['s-band', 'character'], ['cs-protagonist', 'character'], ['cs-set-lab', 'place'], ['cs-set-harbor', 'place'], ['cs-set-roof', 'place'],
@@ -498,7 +571,8 @@ describe('Cast & Sets check-in', () => {
     const project = await seed();
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
     await runTo(project.id, 'review');
-    const artifactId = (await current(project.id)).castAndSets.artifactId;
+    const originalStage = (await current(project.id)).castAndSets;
+    const artifactId = originalStage.artifactId;
     await request(app).post(`/api/music-video/${project.id}/dev-artifacts/${artifactId}/notes`).send({ text: 'Make the braid shorter', target: 'character' });
     const before = jobs.length;
 
@@ -517,6 +591,8 @@ describe('Cast & Sets check-in', () => {
     expect(after.devArtifacts[0]).toMatchObject({ version: 2, status: 'pending' });
     expect(after.devArtifacts[0].notes[0].resolvedAt).toBeTruthy();
     expect(after.castAndSets.images.character.history).toHaveLength(1);
+    expect(after.castAndSets.images.character.inspection.id).not.toBe(originalStage.images.character.inspection.id);
+    expect(after.castAndSets.images['set:lab'].inspection).toEqual(originalStage.images['set:lab'].inspection);
   });
 
   it('applies sheet feedback by rewriting the direction and look, re-renders what changed, and keeps honoring it on a rebuild', async () => {
@@ -678,6 +754,10 @@ it('bounds submitted diagnostics and records only references served from approve
     referenceImagePaths: [join(ROOT(), 'private', 'unserved.png'), join(PATHS.imageRefs, 'uploaded.png'),
       ...Array.from({ length: 17 }, (_, i) => join(IMAGES(), `example-${i}.png`))],
   };
+  service.__setCastAndSetsDepsForTests(testDeps({
+    imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common,
+      ...(common.musicVideo.castAndSets.key === 'character' ? imageParamsOverrides : {}) }),
+  }));
   const project = await seed({ visualSpec: null });
   await service.startCastAndSets(project.id);
   await runTo(project.id, 'review');
@@ -800,7 +880,9 @@ describe('Cast & Sets procedural check-in', () => {
   it('directs a code-only project without any image backend and still waits for the director', async () => {
     const resolveRoute = vi.fn(async () => null);
     service.__setCastAndSetsDepsForTests({
-      resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
+      resolveReviewer: async () => ({ provider: { id: 'vision-example', type: 'api' }, model: 'vision-example', costUsd: 0 }),
+  reviewImage: async ({ beforeExecute }) => { await beforeExecute(); return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' }; },
+  resolveProvider: async () => ({ provider: { id: 'example-provider', enabled: true }, selectedModel: 'example-model' }),
       runPrompt, getSettings: async () => ({}), enqueue, resolveRoute,
       loadBoard: async () => null, loadTrack: async () => null,
     });
@@ -1084,7 +1166,8 @@ describe('Cast & Sets per-item actions', () => {
     expect(saved.castAndSets.direction.tests).toHaveLength(1);
     expect(saved.castAndSets.plan['set:roof']).toBeUndefined();
     expect(saved.castAndSets.plan['test:2']).toBeUndefined();
-    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad']);
+    // The face sheet is drawn on the cast sheet, so it re-renders with it.
+    expect(jobs.slice(edited).map(keyOf)).toEqual(['cast:dad', 'face:dad']);
     expect(saved.castAndSets.notesApplied[0].text).toMatch(/cast Dad, Cliff removed, tests/);
 
     // Start over throws the sheet away; the next build starts fresh.
@@ -1093,6 +1176,15 @@ describe('Cast & Sets per-item actions', () => {
   });
 });
 
+
+it('makes the shipped angle guide viewable as soon as the face plan is published', async () => {
+  rmSync(join(ROOT(), 'templates', 'music-video-face-angles.png'), { force: true });
+  const project = await seed();
+  await service.startCastAndSets(project.id);
+  await until(async () => (await current(project.id)).castAndSets?.plan?.expressions, 'planned face sheet');
+  expect(jobs.some((j) => keyOf(j) === 'expressions')).toBe(false);
+  expect(readFileSync(join(ROOT(), 'templates', 'music-video-face-angles.png')).subarray(1, 4).toString()).toBe('PNG');
+});
 
 it('conditions the character, expressions and looks sheets on the director\'s own character references only', async () => {
   onDisk('upload-face.png', 'rendered-face.png', 'board-face.png', 'pinterest-0123456789abcdef.jpg', 'old-sheet.png', 'spare-face.png');
@@ -1110,7 +1202,11 @@ it('conditions the character, expressions and looks sheets on the director\'s ow
   const character = jobs.find((j) => keyOf(j) === 'character');
   expect(refs('character')).toEqual(['upload-face.png', 'rendered-face.png']);
   expect(character.params.prompt).toContain('SAME person as the identity reference images');
-  expect(refs('expressions')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  expect(refs('expressions')).toEqual(['music-video-face-angles.png', `${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
+  const face = jobs.findLast((j) => keyOf(j) === 'expressions');
+  const submitted = (await current(project.id)).castAndSets.images.expressions;
+  expect(submitted.submittedReferences[0]).toEqual({ kind: 'template', filename: 'music-video-face-angles.png' });
+  expect(readFileSync(face.params.referenceImagePaths[0]).subarray(1, 4).toString()).toBe('PNG');
   expect(refs('looks')).toEqual([`${character.id}.png`, 'upload-face.png', 'rendered-face.png']);
   expect(refs('set:lab')).toBeUndefined();
 });
@@ -1143,6 +1239,7 @@ it('keeps catalog-linked cast and places as fixed casting, conditioned on their 
   const refs = (key) => job(key).params.referenceImagePaths?.map((p) => p.split(/[\\/]/).pop());
   expect(refs('character')).toEqual(['keeper.png']);
   expect(refs('cast:mate')).toEqual(['mate.png']);
+  expect(refs('face:mate')).toEqual(['music-video-face-angles.png', `${job('cast:mate').id}.png`]);
   expect(job('cast:mate').params.prompt).toContain('SAME person as the reference image');
   expect(refs('set:harbor')).toEqual(['harbor.png']);
   expect(job('set:harbor').params.prompt).toContain('The same location as the reference image');
@@ -1184,6 +1281,77 @@ const fixedCastAnswer = () => JSON.stringify({ ...DIRECTION, cast: [
   ...FIXED_SUPPORTING.slice(0, 4).map((name) => ({ name, role: '', description: `${name}, as written`, face: 'calm' })),
   ...['Gusta', 'Halden', 'Ivory', 'Jolie', 'Kitto'].map((name) => ({ name, role: '', description: 'invented', face: 'plain' })),
 ] });
+
+// Uniquely catches pre-selection or queue preparation cutting a capable renderer back to four.
+it.each([
+  { mode: 'codex', model: null, capacity: 5, localModel: null },
+  { mode: 'local', model: 'example-flux2', capacity: 4, localModel: { id: 'example-flux2', runner: 'flux2' } },
+  { mode: 'local', model: 'example-qwen', capacity: 10, localModel: { id: 'example-qwen', pipelineClass: 'QwenImage21Pipeline' } },
+])('saves every conditioning candidate and sends the $mode/$model allowance to a sheet (#14630)', async ({ mode, model, capacity, localModel }) => {
+  const guides = Array.from({ length: 12 }, (_, i) => `guide-${i}.png`);
+  onDisk(...guides);
+  const preparation = await import('../imageGen/prepareParams.js');
+  const local = vi.spyOn(preparation, 'resolveLocalImageModel').mockReturnValue({ pythonPath: 'python3', selectedModel: localModel });
+  try {
+    service.__setCastAndSetsDepsForTests(testDeps({
+      getSettings: async () => ({ imageGen: { codex: { enabled: true } } }),
+      resolveRoute: async () => ({ mode, model }),
+      imageParams: service.imageJobParams,
+      catalog: {
+        getIngredient: async () => ({ id: 'cat-lead', type: 'character', payload: {} }),
+        listMediaForIngredient: async () => guides.map((mediaKey) => ({ mediaKey, kind: 'reference' })),
+      },
+    }));
+    const project = await seed({ concept: { prompt: 'a vigil', subjects: [{ id: 'lead', kind: 'character', name: 'Keeper', role: 'protagonist', ingredientId: 'cat-lead' }] } });
+    const references = guides.map((imageId, i) => ({ id: `identity-${i}`, imageId, role: 'character', label: 'Keeper', condition: true }));
+    const saved = await request(app).patch(`/api/music-video/${project.id}`).send({ visualSpec: { references } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.visualSpec.references).toHaveLength(12);
+    await service.startCastAndSets(project.id);
+    await until(async () => jobs.some((job) => keyOf(job) === 'character'), 'the character sheet');
+    const sheet = jobs.find((job) => keyOf(job) === 'character');
+    expect(sheet.params.referenceImagePaths.map((path) => path.split(/[\\/]/).pop())).toEqual(guides.slice(0, capacity));
+    expect(sheet.params.referenceImageStrengths).toEqual(Array(capacity).fill(1));
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.plan.character.refImages).toEqual(guides);
+    expect(stage.images.character.submittedReferences.map((ref) => ref.filename)).toEqual(guides.slice(0, capacity));
+  } finally {
+    await service.__settleCastAndSetsForTests();
+    local.mockRestore();
+  }
+});
+
+it.each([
+  ['only its angle guide', 0],
+  ['only its identity reference', 1],
+])('stops when a last pending face sheet can send %s and resumes after repair', async (_description, selected) => {
+  const project = await seed();
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({})).status).toBe(202);
+  await runTo(project.id, 'review');
+  const previousJobs = jobs.length;
+  service.__setCastAndSetsDepsForTests(testDeps({
+    imageParams: async (_settings, route, common) => ({
+      mode: route.mode,
+      ...common,
+      ...(common.referenceImagePaths ? { referenceImagePaths: common.referenceImagePaths.slice(selected, selected + 1) } : {}),
+    }),
+  }));
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['expressions'] })).status).toBe(202);
+  await service.__settleCastAndSetsForTests();
+  const stage = (await request(app).get(`/api/music-video/${project.id}/cast-and-sets`)).body.stage;
+  expect(stage.status).toBe('failed');
+  expect(stage.images.expressions).toMatchObject({ status: 'failed', failures: 1,
+    error: expect.stringMatching(/both the angle guide and the character reference/) });
+  expect(stage.stopReason).toMatch(/both the angle guide and the character reference/);
+  expect(Object.entries(stage.images).filter(([key]) => key !== 'expressions').every(([, image]) => image.status === 'done')).toBe(true);
+  expect(jobs).toHaveLength(previousJobs);
+
+  service.__setCastAndSetsDepsForTests(testDeps());
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.slice(previousJobs).map(keyOf)).toEqual(['expressions']);
+  expect(jobs.at(-1).params.referenceImagePaths).toHaveLength(2);
+});
 
 it('keeps a catalog-conditioned sheet for every fixed supporting character through regeneration and approval, with invented cast still bounded (#14069)', async () => {
   runPrompt.mockResolvedValue({ text: fixedCastAnswer() });
@@ -1240,10 +1408,13 @@ it('keeps a catalog-conditioned sheet for every fixed supporting character throu
   const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
   const context = musicVideoDirectionContext(done.castAndSets.direction);
   for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
-  const { musicVideoConditioningReferences, MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES } = await import('../../lib/musicVideoConditioning.js');
-  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
-  expect(shot).toHaveLength(MUSIC_VIDEO_MAX_CONDITIONING_REFERENCES);
+  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideoConditioning.js');
+  const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: musicVideoReferenceCapacity('codex') });
+  expect(shot).toHaveLength(5);
   expect(shot[2].id).toBe('mvr-cs-cast-anika');
+  // Uncapped, every named cast sheet is listed in order for a renderer that takes more.
+  const all = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' });
+  expect(all.filter((ref) => ref.id.startsWith('mvr-cs-cast-')).map((ref) => ref.id).slice(0, 5)).toEqual(['mvr-cs-cast-anika', 'mvr-cs-cast-boris', 'mvr-cs-cast-cyrus', 'mvr-cs-cast-delia', 'mvr-cs-cast-elio']);
 });
 
 it('holds reference room for fixed cast sheets and refuses an approval that cannot fit them (#14069)', async () => {
@@ -1263,8 +1434,18 @@ it('holds reference room for fixed cast sheets and refuses an approval that cann
   // Exactly that much room: the character and the fixed cast sheets take it, ahead of plates and invented cast.
   await withOwn(12);
   expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
-  const ours = (await current(project.id)).visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
+  const approved = await current(project.id);
+  const ours = approved.visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
   expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
+  // A full list must not make the face images already rendered at approval unusable on a close-up.
+  const { musicVideoConditioningReferences } = await import('../../lib/musicVideoConditioning.js');
+  const scene = { prompt: 'Close up of Anika' };
+  expect(musicVideoConditioningReferences(approved, scene).map((ref) => ref.id))
+    .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika', 'mvr-pull-Anika']);
+  expect(musicVideoConditioningReferences(approved, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }).map((ref) => ref.id))
+    .toEqual(['mvr-cs-face-anika']);
+  expect(musicVideoConditioningReferences({ ...approved, mediaMode: 'code-only' }, { ...scene, frameReferenceIds: ['mvr-cs-face-anika'] }))
+    .toEqual([]);
 });
 
 it('refuses a budget that cannot cover the fixed cast sheets before queueing anything, naming them (#14069)', async () => {
@@ -1630,8 +1811,8 @@ it('waits for held image embedding and the persisted sheet before assembly settl
   expect(readFileSync(join(ROOT(), artifact.file), 'utf8')).toContain(`data:image/png;base64,${PNG.toString('base64')}`);
 });
 
-// A picker must not spend a provider call, and the old sheet must not approve the newly selected conditioning.
-it('saves a greybox plate choice without rendering and holds approval until regeneration', async () => {
+// A picker must not spend a provider call, and only a changed camera makes the sheet stale.
+it('holds approval for a changed greybox camera and releases it when the change is undone', async () => {
   const project = await seed();
   await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
     status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
@@ -1642,11 +1823,92 @@ it('saves a greybox plate choice without rendering and holds approval until rege
   expect(result.stage.greyboxPending).toBe(true);
   expect(jobs.length).toBe(beforeJobs);
   await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
-  await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
-  await service.regenerateCastAndSets(project.id);
-  await runTo(project.id, 'review');
-  expect((await current(project.id)).castAndSets.greyboxPending).toBe(false);
+  const other = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other' } }] });
+  expect(other.stage.greyboxPending).toBe(true);
+  const undone = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
+  expect(undone.stage.greyboxPending).toBe(false);
   await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
+});
+
+it('allows an environment without a camera and repairs an older false pending flag at approval', async () => {
+  const project = await seed();
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1, direction: DIRECTION, plan: {}, images: {},
+  } } }));
+  const partial = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: { subjectId: 'place-example' } }] });
+  expect(partial.stage.greyboxPending).toBe(false);
+  await projects.mutateProjectRecord(project.id, (p) => {
+    const { greyboxPendingSetIds: _ids, ...legacy } = p.castAndSets;
+    return { project: { ...p, castAndSets: { ...legacy, greyboxPending: true } } };
+  });
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved', greyboxPending: false } });
+});
+
+it('reconciles legacy pending flags in mixed environments against the capture used by the plate', async () => {
+  const project = await seed({ concept: { subjects: [{ id: 'place-example', kind: 'place', name: 'Example place', ingredientId: 'cat-place' }] } });
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  onDisk('previous-capture.png', 'new-capture.png');
+  let capture = 'new-capture.png';
+  const catalog = {
+    getIngredient: async () => ({ type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } }),
+    listMediaForIngredient: async () => capture ? [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: capture }] : [],
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog }));
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1, greyboxPending: true,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set.id === 'harbor' ? { ...set, setReference: { subjectId: 'place-other' } } : set) },
+    plan: { 'set:lab': { key: 'set:lab', prompt: 'Empty lamp room', setReference, refImages: ['previous-capture.png'] } },
+    images: { 'set:lab': { status: 'done', imageId: 'previous-capture.png', submittedRevision: 1,
+      inspection: { verdict: 'pass', inputs: { key: 'set:lab', imageId: 'previous-capture.png', imageRevision: 1, jobId: null,
+        planPrompt: 'Empty lamp room', submittedPrompt: null } } } },
+  } } }));
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
+  capture = null;
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING', message: expect.stringContaining('could not be checked') });
+  const edited = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other-again' } }] });
+  expect(edited.stage.greyboxPendingSetIds).toEqual([]);
+  expect(edited.stage.greyboxLegacyPendingSetIds).toEqual(['lab']);
+  capture = 'previous-capture.png';
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved', greyboxPending: false } });
+});
+
+it('does not mark another set with an unchanged rendered camera pending', async () => {
+  const project = await seed();
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set) },
+    plan: { 'set:lab': { key: 'set:lab', prompt: 'Empty lamp room', setReference, refImages: ['capture.png'] } },
+    images: { 'set:lab': { status: 'done', imageId: 'capture.png', submittedRevision: 1,
+      inspection: { verdict: 'pass', inputs: { key: 'set:lab', imageId: 'capture.png', imageRevision: 1, jobId: null,
+        planPrompt: 'Empty lamp room', submittedPrompt: null } } } },
+  } } }));
+  const partial = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other' } }] });
+  expect(partial.stage.greyboxPending).toBe(false);
+  const selected = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: { subjectId: 'place-other', greyboxShotId: 'wide' } }] });
+  expect(selected.stage.greyboxPendingSetIds).toEqual(['harbor']);
+  const cleared = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'harbor', setReference: null }] });
+  expect(cleared.stage.greyboxPending).toBe(false);
+  await expect(service.approveCastAndSets(project.id)).resolves.toMatchObject({ stage: { status: 'approved' } });
+});
+
+it('requires regeneration when removing or reselecting a rendered camera whose capture may have changed', async () => {
+  const project = await seed();
+  const setReference = { subjectId: 'place-example', greyboxShotId: 'wide' };
+  await projects.mutateProjectRecord(project.id, (p) => ({ project: { ...p, castAndSets: {
+    status: 'review', revision: 1,
+    direction: { ...DIRECTION, sets: DIRECTION.sets.map((set) => set.id === 'lab' ? { ...set, setReference } : set) },
+    plan: { 'set:lab': { key: 'set:lab', prompt: 'Empty lamp room', setReference, refImages: ['previous-capture.png'] } },
+    images: { 'set:lab': { status: 'done', imageId: 'previous-capture.png', submittedRevision: 1,
+      inspection: { verdict: 'pass', inputs: { key: 'set:lab', imageId: 'previous-capture.png', imageRevision: 1, jobId: null,
+        planPrompt: 'Empty lamp room', submittedPrompt: null } } } },
+  } } }));
+  const removed = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference: null }] });
+  expect(removed.stage.greyboxPending).toBe(true);
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
+  const restored = await service.editCastAndSetsDirection(project.id, { sets: [{ id: 'lab', setReference }] });
+  expect(restored.stage.greyboxPending).toBe(true);
+  await expect(service.approveCastAndSets(project.id)).rejects.toMatchObject({ code: 'CAST_SETS_GREYBOX_PENDING' });
 });
 
 it('names the Casting changes since the sheet was built, and an image update clears them', async () => {
@@ -1690,4 +1952,555 @@ it('names the Casting changes since the sheet was built, and an image update cle
   expect(saved.castAndSets.direction.cast.map((c) => c.name)).toContain('Zora');
   expect(saved.castAndSets.feedback.map((f) => f.id)).toEqual(['fb-keep']);
   expect(await changes()).toBeNull();
+});
+
+// These regressions uniquely pin image-content review at the generation/approval boundary.
+describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
+  it('inspects standalone images with a verified local vision model instead of a text-only default', async () => {
+    const api = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true, defaultModel: 'qwen3-coder:30b' };
+    const providers = await import('../providers.js');
+    const ollama = await import('../ollamaManager.js');
+    const runner = await import('../promptRunner.js');
+    const { resolvePlateReviewer } = await import('./plateReview.js');
+    const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');
+    const spies = [
+      vi.spyOn(providers, 'getAllProviders').mockResolvedValue({ activeProvider: 'ollama', providers: [api] }),
+      vi.spyOn(ollama, 'getBaseUrl').mockReturnValue('http://localhost:11434'),
+      vi.spyOn(ollama, 'getInstalledModels').mockResolvedValue([{ id: 'qwen3-coder:30b' }, { id: 'gemma3:27b' }]),
+      vi.spyOn(ollama, 'getModelCapabilities').mockImplementation(async (id) => id === 'gemma3:27b' ? ['completion', 'vision'] : ['completion', 'tools']),
+      vi.spyOn(runner, 'runPromptThroughProvider').mockImplementation(async (args) => {
+        await args.beforeExecute({ provider: args.provider, model: args.model });
+        return { provider: api, model: args.model, runId: 'vision-run', text: JSON.stringify({ checks:
+          ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id, status: 'pass', note: 'Visible in the image.' })) }) };
+      }),
+    ];
+    onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: resolvePlateReviewer, reviewImage: reviewCastSetsImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'pass' && image.inspection.model === 'gemma3:27b')).toBe(true);
+    expect(runner.runPromptThroughProvider).toHaveBeenCalled();
+    expect(runner.runPromptThroughProvider.mock.calls.every(([args]) => args.model === 'gemma3:27b' && args.allowFallback === false)).toBe(true);
+  });
+
+  it('inspects a re-render without a production run using the API default even when a CLI is active (#14653)', async () => {
+    const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
+    const providers = await import('../providers.js');
+    const runner = await import('../promptRunner.js');
+    const { resolvePlateReviewer } = await import('./plateReview.js');
+    const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');
+    const configured = vi.spyOn(providers, 'getAllProviders').mockResolvedValue({ activeProvider: 'cli', providers: [{ id: 'cli', type: 'cli' }, api] });
+    const vision = vi.spyOn(runner, 'runPromptThroughProvider').mockImplementation(async (args) => {
+      await args.beforeExecute({ provider: args.provider, model: args.model });
+      return { provider: api, model: api.defaultModel, runId: 'vision-run', text: JSON.stringify({ checks:
+        ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'A stool is fused into the bench.' : 'Matches the saved prompt.' })) }) };
+    });
+    onTestFinished(() => { configured.mockRestore(); vision.mockRestore(); });
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: resolvePlateReviewer, reviewImage: reviewCastSetsImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const original = (await current(project.id)).castAndSets.images['set:lab'].imageId;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({ keys: ['set:lab'] })).status).toBe(202);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.productionRunId).toBeFalsy();
+    expect(stage.images['set:lab'].imageId).not.toBe(original);
+    expect(stage.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', providerId: api.id, model: api.defaultModel,
+      discrepancy: 'Rendering defect: A stool is fused into the bench.' });
+    expect(vision).toHaveBeenLastCalledWith(expect.objectContaining({ provider: { ...api, thinking: false }, model: api.defaultModel, toolFree: true, allowFallback: false }));
+  });
+
+  it('flags the wrong location and populated empty plate, then accepts only an explicit exact-image acknowledgement', async () => {
+    const reviewed = [];
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
+      await beforeExecute();
+      reviewed.push(inputs);
+      return inputs.key === 'set:lab' ? { verdict: 'mismatch', discrepancy: 'Exterior quay with people; saved prompt requires an empty interior lamp room.' }
+        : { verdict: 'pass', discrepancy: '' };
+    } }));
+    const project = await seed({ automation: { checkins: { castAndSets: 'auto' } } });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    const evidence = stage.images['set:lab'].inspection;
+    expect(evidence).toMatchObject({ verdict: 'mismatch', attempts: 1, stageRevision: 1,
+      inputs: { key: 'set:lab', imageId: stage.images['set:lab'].imageId, planPrompt: stage.plan['set:lab'].prompt,
+        submittedPrompt: stage.images['set:lab'].submittedPrompt, imageRevision: 1 } });
+    expect(reviewed).toHaveLength(Object.keys(stage.plan).length);
+    const html = readFileSync(join(ROOT(), (await current(project.id)).devArtifacts[0].file), 'utf8');
+    expect(html).toContain('Vision inspection');
+    expect(html).toContain('Exterior quay with people; saved prompt requires an empty interior lamp room.');
+    const rejected = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.code).toBe('CAST_SETS_INSPECTION_REQUIRED');
+    const stale = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: { ...evidence.inputs, imageId: 'older.png' }, inspectionId: evidence.id });
+    expect(stale.status).toBe(409);
+    const acknowledged = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: evidence.inputs, inspectionId: evidence.id });
+    expect(acknowledged.status).toBe(200);
+    expect(acknowledged.body.project.castAndSets.images['set:lab'].inspectionAcknowledgement).toMatchObject({ inspectionId: evidence.id, reviewer: { kind: 'local' } });
+    const peer = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).set('x-test-auth-method', 'peer').send({ inputs: evidence.inputs, inspectionId: evidence.id });
+    expect(peer.status).toBe(403);
+    const auth = await import('../auth.js');
+    const { settingsEvents } = await import('../settings.js');
+    const session = await auth.createSession({ label: 'agent' });
+    settingsEvents.emit('settings:updated', { secrets: { auth: { enabled: true, passwordHash: 'synthetic-hash', salt: 'synthetic-salt' } } });
+    const delegated = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`)
+      .set('x-test-auth-method', 'session').set('Authorization', `Bearer ${session.token}`).send({ inputs: evidence.inputs, inspectionId: evidence.id });
+    settingsEvents.emit('settings:updated', {});
+    expect(delegated.status).toBe(200);
+    expect(delegated.body.project.castAndSets.images['set:lab'].inspectionAcknowledgement.reviewer).toMatchObject({ kind: 'session', label: 'agent' });
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+  });
+
+  it('re-checks a stale Vision-unavailable verdict on an approved stage without re-rendering or changing approval', async () => {
+    let outage = true;
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ beforeExecute }) => {
+      await beforeExecute();
+      if (outage) throw new Error('Provider example is unavailable');
+      return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' };
+    } }));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const project = await seed({ automation: { checkins: { castAndSets: 'auto' } } });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const before = (await current(project.id)).castAndSets;
+    const key = Object.keys(before.plan)[0];
+    expect(before.images[key].inspection.discrepancy).toMatch(/Vision unavailable/);
+    const ack = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: before.images[key].inspection.inputs, inspectionId: before.images[key].inspection.id });
+    expect(ack.status).toBe(200);
+    for (const k of Object.keys(before.plan)) {
+      const ev = (await current(project.id)).castAndSets.images[k].inspection;
+      await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: ev.inputs, inspectionId: ev.id });
+    }
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(200);
+    const approved = (await current(project.id)).castAndSets;
+    expect(approved.status).toBe('approved');
+    outage = false;
+    const res = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: [key] });
+    expect(res.status).toBe(200);
+    const after = (await current(project.id)).castAndSets;
+    expect(after.images[key].inspection).toMatchObject({ verdict: 'pass' });
+    expect(after.status).toBe('approved');
+    expect(after.revision).toBe(approved.revision);
+    expect(after.images[key].imageId).toBe(approved.images[key].imageId);
+    const bad = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: ['nope'] });
+    expect(bad.status).toBe(404);
+  });
+
+  it('records unavailable vision distinctly after one retry, with no silent pass or unbounded provider work', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const reviewImage = vi.fn(async ({ beforeExecute }) => { await beforeExecute(); throw new Error('Example vision timeout'); });
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage }));
+    const project = await seed({ automation: { checkins: { castAndSets: 'auto' } } });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(reviewImage).toHaveBeenCalledTimes(Object.keys(stage.plan).length * 2);
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'unreviewed' && image.inspection.attempts === 2
+      && image.inspection.discrepancy === 'Vision unavailable: Example vision timeout'
+      && image.inspection.providerId === 'vision-example' && image.inspection.model === 'vision-example')).toBe(true);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('provider: vision-example, model: vision-example): Example vision timeout'));
+    const html = readFileSync(join(ROOT(), (await current(project.id)).devArtifacts[0].file), 'utf8');
+    expect(html).toContain('Vision unavailable: Example vision timeout');
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
+    const before = reviewImage.mock.calls.length;
+    await service.getCastAndSets(project.id);
+    await service.getCastAndSets(project.id);
+    expect(reviewImage).toHaveBeenCalledTimes(before);
+  });
+
+  it('shows a missing reviewer configuration on every unreviewed image (#14653)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    const reviewImage = vi.fn();
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: async () => { throw new Error('No enabled vision API reviewer is configured'); }, reviewImage }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const stage = (await current(project.id)).castAndSets;
+    expect(Object.values(stage.images).every((image) => image.inspection.verdict === 'unreviewed'
+      && image.inspection.discrepancy === 'Vision unavailable: No enabled vision API reviewer is configured')).toBe(true);
+    expect(reviewImage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('provider: unresolved, model: default): No enabled vision API reviewer is configured'));
+  });
+
+  // Uniquely catches accepting an image while its vision re-check could still come back a mismatch.
+  it('refuses to accept an image while its vision re-check is still running', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onTestFinished(() => log.mockRestore());
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveReviewer: async () => { throw new Error('Example vision outage'); } }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    const key = 'set:lab';
+    let release;
+    let started;
+    const answered = new Promise((resolve) => { release = resolve; });
+    const reviewing = new Promise((resolve) => { started = resolve; });
+    heldWorkReleases.add(() => release());
+    const reviewImage = vi.fn(async () => { started(); await answered; return { verdict: 'pass', discrepancy: '', providerId: 'vision-example', model: 'vision-example' }; });
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage }));
+    const retry = request(app).post(`/api/music-video/${project.id}/cast-and-sets/inspect`).send({ keys: [key] }).then((res) => res);
+    await reviewing;
+    const pending = (await current(project.id)).castAndSets;
+    expect(pending.images[key].inspection.verdict).toBe('pending');
+    const early = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`)
+      .send({ inputs: castSetsInspectionInputs(pending, key), inspectionId: pending.images[key].inspection.id });
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('CAST_SETS_INSPECTION_PENDING');
+    release();
+    expect((await retry).status).toBe(200);
+    const stage = (await current(project.id)).castAndSets;
+    expect(reviewImage).toHaveBeenCalledTimes(1);
+    expect(stage.images[key].inspection.verdict).toBe('pass');
+    expect(stage.status).toBe('review');
+  });
+
+  it('rejects an in-flight result after the saved prompt changes and preserves unrelated image evidence', async () => {
+    let release;
+    let captured;
+    const waiting = new Promise((resolve) => { release = resolve; });
+    heldWorkReleases.add(() => release({ verdict: 'pass', discrepancy: '' }));
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
+      await beforeExecute();
+      if (inputs.key === 'set:lab') { captured = inputs; return waiting; }
+      return { verdict: 'pass', discrepancy: '' };
+    } }));
+    const project = await seed();
+    await service.startCastAndSets(project.id);
+    await until(async () => {
+      await land(project.id);
+      return !!captured;
+    }, 'held image inspection');
+    const before = (await current(project.id)).castAndSets;
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, castAndSets: {
+      ...current.castAndSets, plan: { ...current.castAndSets.plan, 'set:lab': { ...current.castAndSets.plan['set:lab'], prompt: 'New interior, no people' } },
+    } } }));
+    release({ verdict: 'pass', discrepancy: '' });
+    await service.__settleCastAndSetsForTests();
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.images['set:lab'].inspection.verdict).toBe('pending');
+    expect(stage.images.character.inspection).toEqual(before.images.character.inspection);
+    // Even a pass written against the old inputs cannot admit the edited image.
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, castAndSets: {
+      ...current.castAndSets, status: 'review', images: { ...current.castAndSets.images, 'set:lab': {
+        ...current.castAndSets.images['set:lab'], inspection: { ...current.castAndSets.images['set:lab'].inspection, verdict: 'pass' },
+      } },
+    } } }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
+    const stale = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/acknowledge-image`).send({ inputs: captured, inspectionId: stage.images['set:lab'].inspection.id });
+    expect(stale.status).toBe(409);
+  });
+});
+
+
+describe('editing a saved Cast & Sets image', () => {
+  beforeEach(() => service.__setCastAndSetsDepsForTests(testDeps({ getSettings: async () => ({ imageGen: { codex: { enabled: true } } }) })));
+  const editUrl = (id, action = 'edit-image') => `/api/music-video/${id}/cast-and-sets/${action}`;
+  async function ready() {
+    onDisk('extra-style.png');
+    const project = await seed({ styleReferences: [{ imageId: 'extra-style.png' }] });
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    await service.__settleCastAndSetsForTests();
+    return current(project.id);
+  }
+  async function requestEdit(project, instruction = 'Remove the lantern only') {
+    return request(app).post(editUrl(project.id)).send({ key: 'character', revision: project.castAndSets.revision,
+      imageId: project.castAndSets.images.character.imageId, instruction });
+  }
+  async function landEdit(project, job, filename = 'example-image-edit.png') {
+    writeFileSync(join(IMAGES(), filename), PNG);
+    return service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', jobId: job.id,
+      editRequestId: job.params.musicVideo.castAndSets.editRequestId, filename,
+      revision: job.params.musicVideo.castAndSets.revision,
+      productionRunId: job.params.musicVideo.productionRunId, productionStepKey: job.params.musicVideo.productionStepKey });
+  }
+
+  it('adopts gallery and history takes through the route, syncing only the chosen reference and retaining it on re-approval', async () => {
+    let project = await ready();
+    await service.approveCastAndSets(project.id);
+    project = await current(project.id);
+    const old = project.castAndSets.images.character.imageId;
+    const count = jobs.length;
+    onDisk('chosen-gallery.png');
+    for (const imageId of ['chosen-gallery.png', old]) {
+      const before = await current(project.id);
+      const selected = await request(app).post(editUrl(project.id, 'use-image')).send({ key: 'character', imageId });
+      expect(selected.status).toBe(202);
+      expect(selected.body.project.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe(imageId);
+      expect(selected.body.project.visualSpec.references.filter((ref) => ref.id !== 'mvr-cs-character'))
+        .toEqual(before.visualSpec.references.filter((ref) => ref.id !== 'mvr-cs-character'));
+      expect(selected.body.project.castAndSets.images.character).toMatchObject({ imageId, inspection: null, inspectionAcknowledgement: null, submittedPrompt: null });
+      await service.__settleCastAndSetsForTests();
+      const saved = await current(project.id);
+      expect(saved.castAndSets.status).toBe('review');
+      expect(saved.castAndSets.images.character.history).toContain(before.castAndSets.images.character.imageId);
+      expect(saved.castAndSets.images.character.history).not.toContain(imageId);
+      expect(saved.castAndSets.images.character.inspection.inputs.imageId).toBe(imageId);
+      const approved = await request(app).post(editUrl(project.id, 'approve')).send({});
+      expect(approved.status).toBe(200);
+      expect(approved.body.project.visualSpec.references).toEqual(saved.visualSpec.references);
+    }
+    expect(jobs).toHaveLength(count);
+  });
+
+  it('keeps a chosen image reviewable when catalog synchronization is unavailable', async () => {
+    const project = await ready();
+    const syncCatalogImage = vi.fn(async () => { throw new Error('Example catalog outage'); });
+    service.__setCastAndSetsDepsForTests(testDeps({ syncCatalogImage }));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    onDisk('chosen-gallery.png');
+    const selected = await request(app).post(editUrl(project.id, 'use-image')).send({ key: 'character', imageId: 'chosen-gallery.png' });
+    expect(selected.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('review');
+    expect(saved.castAndSets.images.character.imageId).toBe('chosen-gallery.png');
+    expect(saved.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe('chosen-gallery.png');
+    expect(syncCatalogImage).toHaveBeenCalledWith(project.id, 'character');
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('approval will retry'));
+    logged.mockRestore();
+  });
+
+  it('refuses invalid, missing and unauthorized selections without mutating the stage', async () => {
+    const project = await ready();
+    onDisk('chosen-gallery.png');
+    const url = editUrl(project.id, 'use-image');
+    expect((await request(app).post(url).send({ key: 'character', imageId: 42 })).status).toBe(400);
+    expect((await request(app).post(url).send({ key: 'missing-slot', imageId: 'chosen-gallery.png' })).status).toBe(404);
+    expect((await request(app).post(url).send({ key: 'character', imageId: 'missing.png' })).status).toBe(404);
+    expect((await request(app).post(url).set('x-test-auth-method', 'peer-credential').send({ key: 'character', imageId: 'chosen-gallery.png' })).status).toBe(403);
+    expect((await current(project.id)).castAndSets).toEqual(project.castAndSets);
+  });
+
+  it('edits only the displayed image, previews without replacing it, and publishes only after acceptance and approval', async () => {
+    let project = await ready();
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      automation: { ...current.automation, checkins: { castAndSets: 'auto' } } } }));
+    await service.approveCastAndSets(project.id);
+    project = await current(project.id);
+    const before = project.castAndSets;
+    const count = jobs.length;
+    const instruction = '  Remove the lantern only.\nKeep the face exactly as it is.  ';
+    const preview = await request(app).post(editUrl(project.id, 'edit-image-preview')).send({ key: 'character', revision: before.revision, imageId: before.images.character.imageId, instruction });
+    expect(preview.status).toBe(200);
+    expect(preview.body.sentPrompt).toContain(instruction);
+    expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'cast-sets-image-edit' }));
+    expect(jobs).toHaveLength(count);
+    const rendered = await requestEdit(project, instruction);
+    expect(rendered.status).toBe(202);
+    expect(jobs).toHaveLength(count + 1);
+    const job = jobs.at(-1);
+    expect(job.params.initImagePath).toBe(join(IMAGES(), before.images.character.imageId));
+    expect(job.params.referenceImagePaths).toBeUndefined();
+    expect(job.params.prompt.endsWith(instruction)).toBe(true);
+    expect(job.params.promptAdditions).toEqual([expect.objectContaining({ id: 'cast-sets-image-edit' })]);
+    expect(rendered.body.project.castAndSets.status).toBe('approved');
+    expect(rendered.body.project.castAndSets.images.character.imageId).toBe(before.images.character.imageId);
+    expect(await landEdit(project, job)).toBe(true);
+    expect(await landEdit(project, job)).toBe(false);
+    let saved = await current(project.id);
+    expect(saved.castAndSets.images.character).toMatchObject({ imageId: before.images.character.imageId,
+      edit: { status: 'done', imageId: 'example-image-edit.png', instruction } });
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    const accepted = await request(app).post(editUrl(project.id, 'accept-image-edit')).send(decision);
+    expect(accepted.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    saved = await current(project.id);
+    expect(saved.castAndSets.status).toBe('review');
+    expect(saved.castAndSets.revision).toBe(before.revision + 1);
+    expect(jobs).toHaveLength(count + 1);
+    expect(saved.castAndSets.images.character).toMatchObject({ imageId: 'example-image-edit.png',
+      submittedPrompt: preview.body.sentPrompt, submittedRevision: before.revision + 1,
+      submittedReferences: [{ kind: 'image', filename: before.images.character.imageId }], inspectionAcknowledgement: null });
+    expect(saved.castAndSets.images.character.history).toContain(before.images.character.imageId);
+    expect(saved.castAndSets.images.character.inspection.inputs.planPrompt).toContain(instruction);
+    expect(saved.castAndSets.images.character.inspection.inputs.imageId).toBe('example-image-edit.png');
+    for (const key of Object.keys(before.images).filter((key) => key !== 'character')) {
+      expect(saved.castAndSets.images[key]).toEqual(before.images[key]);
+    }
+    expect(saved.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe(before.images.character.imageId);
+    const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    expect(approved.status).toBe(200);
+    expect(approved.body.project.visualSpec.references.find((ref) => ref.id === 'mvr-cs-character').imageId).toBe('example-image-edit.png');
+    expect(approved.body.project.concept.subjects.find((subject) => subject.role === 'protagonist')).toMatchObject({ name: 'Keeper' });
+  });
+
+  it('validates instructions, refuses remote host control and stale sources, and ignores discarded or superseded completions', async () => {
+    const project = await ready();
+    const input = { key: 'character', revision: project.castAndSets.revision,
+      imageId: project.castAndSets.images.character.imageId, instruction: 'Change the sleeve' };
+    for (const instruction of ['  ', 'x'.repeat(2001)]) {
+      expect((await request(app).post(editUrl(project.id)).send({ ...input, instruction })).status).toBe(400);
+    }
+    expect((await request(app).post(editUrl(project.id)).set('x-test-auth-method', 'basic').send(input)).status).toBe(403);
+    expect((await request(app).post(editUrl(project.id)).send({ ...input, imageId: 'unrelated.png' })).status).toBe(409);
+    const rendered = await requestEdit(project);
+    expect(rendered.status).toBe(202);
+    const job = jobs.at(-1);
+    expect((await requestEdit(project)).status).toBe(409);
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    expect((await request(app).post(editUrl(project.id, 'discard-image-edit')).send(decision)).status).toBe(200);
+    expect(await landEdit(project, job)).toBe(false);
+    expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
+    expect((await request(app).post(editUrl(project.id)).set('x-test-auth-method', 'session').send(input)).status).toBe(202);
+    const newer = jobs.at(-1);
+    await landEdit(project, newer);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, revision: current.castAndSets.revision + 1 } } }));
+    expect((await request(app).post(editUrl(project.id, 'accept-image-edit')).send({ key: 'character', requestId: newer.params.musicVideo.castAndSets.editRequestId })).status).toBe(409);
+    expect((await current(project.id)).castAndSets.images.character.imageId).toBe(input.imageId);
+  });
+
+  it('charges an active run before queueing and settles a discarded edit without stranding its budget step', async () => {
+    const { project, run } = await productionCheckin({ maxGenerations: 30, spendCapUsd: 10 });
+    await runTo(project.id, 'review');
+    await service.__settleCastAndSetsForTests();
+    let saved = await current(project.id);
+    const generations = saved.productionRuns[0].usage.generations;
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((record) => ({ ...record, limits: { ...record.limits, maxGenerations: generations } })) } }));
+    const before = jobs.length;
+    expect((await requestEdit(await current(project.id))).status).toBe(409);
+    expect(jobs).toHaveLength(before);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((record) => ({ ...record, limits: { ...record.limits, maxGenerations: 30 } })) } }));
+    saved = await current(project.id);
+    expect((await requestEdit(saved)).status).toBe(202);
+    const job = jobs.at(-1);
+    expect(job.params.musicVideo.productionRunId).toBe(run.id);
+    const charged = (await current(project.id)).productionRuns[0];
+    expect(charged.usage.generations).toBe(generations + 1);
+    const decision = { key: 'character', requestId: job.params.musicVideo.castAndSets.editRequestId };
+    await request(app).post(editUrl(project.id, 'discard-image-edit')).send(decision);
+    expect(await landEdit(project, job)).toBe(true);
+    const completed = (await current(project.id)).productionRuns[0];
+    expect(completed.steps.find((step) => step.key === job.params.musicVideo.productionStepKey)).toMatchObject({ status: 'completed', jobId: job.id });
+    expect(completed.usage.generations).toBe(generations + 1);
+    expect((await requestEdit(await current(project.id))).status).toBe(202);
+    const missing = jobs.at(-1);
+    await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', jobId: missing.id,
+      editRequestId: missing.params.musicVideo.castAndSets.editRequestId, filename: 'missing-edit-result.png',
+      productionRunId: run.id, productionStepKey: missing.params.musicVideo.productionStepKey });
+    const rejected = await current(project.id);
+    expect(rejected.castAndSets.images.character.edit).toMatchObject({ status: 'failed', imageId: null });
+    expect(rejected.productionRuns[0].steps.find((step) => step.key === missing.params.musicVideo.productionStepKey).status).toBe('failed');
+  });
+});
+
+
+describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
+  const defect = 'The stool is fused into the bench.';
+  function inspectWithDefect({ persistent = false, promptMismatch = false, advisory = false } = {}) {
+    const calls = new Map();
+    service.__setCastAndSetsDepsForTests(testDeps({ reviewImage: async ({ inputs, beforeExecute }) => {
+      await beforeExecute();
+      const n = (calls.get(inputs.key) || 0) + 1;
+      calls.set(inputs.key, n);
+      const failed = inputs.key === 'set:lab' && (persistent || n === 1);
+      return { verdict: failed ? 'mismatch' : 'pass', advisory, discrepancy: failed ? `Rendering defect: ${defect}` : '',
+        checks: ['subject', 'setting', 'empty-set', 'render-quality'].map((id) => ({ id,
+          status: failed && (id === 'render-quality' || (promptMismatch && id === 'setting')) ? 'fail' : 'pass', note: defect })) };
+    } }));
+    return calls;
+  }
+  const auto = { automation: { checkins: { castAndSets: 'auto' } } };
+
+  it('retakes only the defective image, charges it, and approves after re-inspection without changing revision', async () => {
+    const calls = inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'approved');
+    const saved = await current(project.id);
+    const stage = saved.castAndSets;
+    const count = Object.keys(stage.plan).length;
+    expect(stage.revision).toBe(1);
+    expect(jobs).toHaveLength(count + 1);
+    expect([...calls.entries()].filter(([, n]) => n > 1)).toEqual([['set:lab', 2]]);
+    const takes = jobs.filter((job) => keyOf(job) === 'set:lab');
+    expect(takes).toHaveLength(2);
+    expect(takes[1].params.prompt).toContain(`avoid: ${defect}`);
+    expect(stage.keyNotes['set:lab']).toContain(`avoid: ${defect}`);
+    expect(stage.images['set:lab'].inspection.inputs.imageId).toBe(`${takes[1].id}.png`);
+    expect(stage.images['set:lab'].history).toContain(`${takes[0].id}.png`);
+    expect(saved.productionRuns[0].usage).toEqual({ generations: count + 1, spentUsd: (count + 1) * 0.25 });
+    expect(saved.productionRuns[0].steps.filter((step) => step.kind === 'checkin' && step.sceneId === 'set:lab').map((step) => step.status)).toEqual(['completed', 'completed']);
+  });
+
+  // Uniquely catches an auto-retake (and its generation charge) driven by an advisory local reviewer (#14795).
+  it('never retakes on a defect reported by an advisory reviewer, and keeps the verdict for the director', async () => {
+    inspectWithDefect({ persistent: true, advisory: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    const saved = await current(project.id);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(1);
+    expect(saved.castAndSets.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', advisory: true, discrepancy: `Rendering defect: ${defect}` });
+  });
+
+  it('parks a second defect with its evidence, and a new manual revision gets one fresh automatic retake', async () => {
+    inspectWithDefect({ persistent: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    const first = await current(project.id);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(2);
+    expect(first.castAndSets.images['set:lab'].inspection).toMatchObject({ verdict: 'mismatch', discrepancy: `Rendering defect: ${defect}` });
+    expect(readFileSync(join(ROOT(), first.devArtifacts[0].file), 'utf8')).toContain(defect);
+    await service.regenerateCastAndSets(project.id, { keys: ['set:lab'] });
+    await runTo(project.id, 'review');
+    expect((await current(project.id)).castAndSets.revision).toBe(2);
+    expect(jobs.filter((job) => keyOf(job) === 'set:lab')).toHaveLength(4);
+  });
+
+  it('never retakes a manual check-in or a prompt mismatch even when rendering also fails', async () => {
+    inspectWithDefect();
+    const manual = await seed(auto);
+    await service.startCastAndSets(manual.id);
+    await runTo(manual.id, 'review');
+    expect(jobs).toHaveLength(Object.keys((await current(manual.id)).castAndSets.plan).length);
+    inspectWithDefect({ promptMismatch: true });
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await runTo(project.id, 'review');
+    expect(jobs.filter((job) => job.params.musicVideo.projectId === project.id)).toHaveLength(Object.keys((await current(project.id)).castAndSets.plan).length);
+  });
+
+  it('halts at the budget limit before submitting a retake', async () => {
+    inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    await until(async () => jobs.length > 0, 'the initial images');
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      productionRuns: current.productionRuns.map((run) => ({ ...run, limits: { ...run.limits, maxGenerations: Object.keys(current.castAndSets.plan).length } })),
+    } }));
+    await runTo(project.id, 'failed');
+    const saved = await current(project.id);
+    expect(saved.productionRuns[0].status).toBe('limit-reached');
+    expect(jobs).toHaveLength(Object.keys(saved.castAndSets.plan).length);
+    expect(saved.castAndSets.images['set:lab'].inspection.discrepancy).toContain(defect);
+  });
+
+  it('ignores a duplicate completion from the rejected take while its replacement is being submitted', async () => {
+    inspectWithDefect();
+    const { project } = await productionCheckin({ maxGenerations: 30, maxReviewAttempts: 10 }, 0.25, auto);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    heldWorkReleases.add(() => release());
+    enqueue.mockImplementation(async (job) => {
+      if (job.params.prompt.includes(`avoid: ${defect}`)) await held;
+      return queueJob(job);
+    });
+    await until(async () => {
+      await land(project.id);
+      const stage = (await current(project.id)).castAndSets;
+      return stage.images['set:lab']?.status === 'queued' && !!stage.images['set:lab'].renderQualityRetry;
+    }, 'the held retake');
+    const oldTake = jobs.find((job) => keyOf(job) === 'set:lab');
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'set:lab', revision: 1,
+      jobId: oldTake.id, filename: `${oldTake.id}.png` })).toBe(false);
+    release();
+    await runTo(project.id, 'approved');
+  });
 });

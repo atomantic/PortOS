@@ -152,6 +152,18 @@ describe('managed app repository sources', () => {
     expect(screen.getByRole('button', { name: 'Updating...' })).toBeDisabled();
   });
 
+  it('keeps explicit manual continuation available while the automatic PortOS update waits', async () => {
+    const startUpdate = vi.fn();
+    useAppOperation.mockReturnValue({ steps: [{ step: 'waiting', status: 'running', message: 'Waiting for work' }],
+      isOperating: true, operationType: 'update', startUpdate, error: null, completed: false, restarting: false });
+    render(<RepositorySourcePanel appId="portos-default" appName="PortOS" />);
+    const button = await screen.findByRole('button', { name: 'Update now and interrupt active work' });
+    expect(button).toBeEnabled();
+    expect(screen.getByText(/Active work may fail or lose unsaved progress/)).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(startUpdate).toHaveBeenCalledWith('portos-default', 'PortOS', { acknowledgeInterruption: true });
+  });
+
   it('shows local, fork, and upstream as separate version hops and can sync only the fork', async () => {
     const status = canonicalStatus();
     status.sources[0] = source({

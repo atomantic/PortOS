@@ -46,8 +46,9 @@ let plaintext;
 // An empty SQLite page has no cells to relocate: changing its reserve and empty
 // content-area pointer before creating tables makes SQLite allocate all later
 // pages with the correct usable size. No external SQLCipher/Python dependency.
-function createFixture() {
+function createFixture(type = 'incoming', conversationId = 'fixture-chat') {
   const path = join(mocks.root, 'fixture.sqlite');
+  rmSync(path, { force: true });
   let db = new DatabaseSync(path);
   db.exec('PRAGMA page_size=4096; VACUUM');
   db.close();
@@ -62,7 +63,7 @@ function createFixture() {
     INSERT INTO conversations VALUES ('fixture-chat', '+15550000000', 'private', 'Example Contact', '');
   `);
   db.prepare('INSERT INTO messages(rowid, id, conversationId, type, sent_at, body) VALUES (?,?,?,?,?,?)')
-    .run(8, 'fixture-message', 'fixture-chat', 'incoming', Date.UTC(2024, 5, 1, 12), BODY);
+    .run(8, 'fixture-message', conversationId, type, Date.UTC(2024, 5, 1, 12), BODY);
   expect(db.prepare('PRAGMA integrity_check').get().integrity_check).toBe('ok');
   db.close();
   return readFileSync(path);
@@ -133,6 +134,25 @@ describe('Signal authenticated snapshot ingestion', () => {
     expect(mocks.snapshots).toEqual([]);
     expect(mocks.recordEvents).not.toHaveBeenCalled();
     expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['outgoing', 'fixture-chat', { handles: ['+1 (555) 000-0000'], conversationIds: [] }],
+    ['incoming', 'opaque:%_:group', { handles: [], conversationIds: ['opaque:%_:group'] }],
+  ])('filters %s blocked messages before activity and touchpoint persistence', async (type, conversationId, blocklist) => {
+    writeFileSync(process.env.SIGNAL_DB_PATH, encrypt(createFixture(type, conversationId)));
+    writeFileSync(join(mocks.root, 'signal-blocklist.json'), JSON.stringify(blocklist));
+    expect(await runSync()).toMatchObject({ ok: true, recorded: 0, cursorRowid: 8 });
+    expect(mocks.recordEvents).toHaveBeenCalledWith([]);
+    expect(mocks.autoLogTouchpoints).toHaveBeenCalledWith([]);
+  });
+
+  it.each(['{invalid', 'null', '{"handles":42}'])('fails closed on an invalid exclusion store (%s) without advancing the cursor', async (content) => {
+    writeFileSync(join(mocks.root, 'signal-blocklist.json'), content);
+    await expect(runSync()).rejects.toThrow();
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
+    expect((await readSyncState()).cursorRowid).toBe(0);
   });
 
   it('accepts a multipage database and does not reingest messages on replay', async () => {

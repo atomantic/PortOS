@@ -63,7 +63,7 @@ export default function ReferenceImagePicker({
                       type="button"
                       onClick={() => onClear(i)}
                       disabled={disabled}
-                      className="absolute -top-1.5 -right-1.5 w-5 h-5 max-sm:w-8 max-sm:h-8 max-sm:-top-2.5 max-sm:-right-2.5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-1.5 -right-1.5 w-5 h-5 max-sm:w-8 max-sm:h-8 max-sm:-top-2.5 max-sm:-right-2.5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
                       aria-label={`Remove reference ${i + 1}`}
                       title={`Remove reference ${i + 1}`}
                     >

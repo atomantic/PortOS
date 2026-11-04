@@ -32,7 +32,7 @@ export function StatTile({ label, value, detail }) {
   );
 }
 
-export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true }) {
+export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true, showSource = true }) {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
 
   const hasPeriods = Boolean(
@@ -63,7 +63,8 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
 
   // Whether this card has anything to put on screen — the pending branch and the
   // empty state ask the same question from opposite sides, so they ask it once.
-  const hasReadings = Boolean(quota.limits?.length || quota.metrics?.length);
+  const hasQuotaReading = Boolean(quota.limits?.length || quota.metrics?.length);
+  const hasReadings = hasQuotaReading || Boolean(showActivity && quota.activity?.length);
   if (!quota.supported) {
     return (
       <p className="text-xs sm:text-sm text-gray-500">
@@ -112,19 +113,19 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
       {quota.pending && (
         <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-gray-400">
           <BrailleSpinner />
-          <span>Reading this machine&apos;s usage…</span>
+          <span>{showSource ? "Reading this machine's usage…" : 'Reading quota…'}</span>
         </div>
       )}
 
       {quota.limits?.length > 0 && (
         <div>
           {quota.limits.map((limit) => (
-            <UsageMeter key={limit.key} limit={limit} />
+            <UsageMeter key={limit.key} limit={limit} showSource={showSource} />
           ))}
         </div>
       )}
 
-      {!hasReadings && (
+      {!hasQuotaReading && (
         <div className="text-xs sm:text-sm text-gray-500">No rate-limit data reported</div>
       )}
 
@@ -169,7 +170,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
       )}
 
       {showActivity && quota.activity?.length > 0 && (
-        <div className="hidden sm:grid sm:grid-cols-2 gap-2 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           {quota.activity.map((a) => (
             <StatTile
               key={a.period}

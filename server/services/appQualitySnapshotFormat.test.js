@@ -5,7 +5,7 @@ import { APP_QUALITY_SNAPSHOT_MAX_BYTES } from './appQualitySnapshotFile.js';
 import {
   APP_QUALITY_FILE_SCHEMA_VERSION, QUALITY_COVERAGE_VALUES, QUALITY_CONFIDENCE_VALUES,
   classifyQualitySnapshot, qualityFileFromWireSnapshot, releaseTieId, serializeQualitySnapshot,
-  snapshotTieKey,
+  snapshotTieKey, serializeQualitySnapshotResult,
 } from './appQualitySnapshotFormat.js';
 
 const repository = 'a'.repeat(64);
@@ -53,25 +53,25 @@ function v1Document(measurements) {
   };
 }
 
-it('serializes canonical v2 rows with stable indexes and no provenance', () => {
+it('serializes canonical v3 rows with timestamps and stable indexes', () => {
   const text = serializeQualitySnapshot(repository, [{ ...typing }, { ...security, measurementId }]);
   const parsed = JSON.parse(text);
-  expect(APP_QUALITY_FILE_SCHEMA_VERSION).toBe(2);
+  expect(APP_QUALITY_FILE_SCHEMA_VERSION).toBe(3);
   expect(parsed).toEqual({
-    schemaVersion: 2,
+    schemaVersion: 3,
     repository,
     reportVersion: 1,
     categories: ['security', 'typing'],
     coverage: [...QUALITY_COVERAGE_VALUES],
     confidence: [...QUALITY_CONFIDENCE_VALUES],
     measurements: [
-      ['2026-09-20', 0, 82, 5, 0, 2, 120, 120],
-      ['2026-09-21', 1, null, 0, 3, 0, 0, 4],
+      ['2026-09-20T00:00:00.000Z', 0, 82, 5, 0, 2, 120, 120],
+      ['2026-09-21T00:00:00.000Z', 1, null, 0, 3, 0, 0, 4],
     ],
   });
   expect(text).toBe([
     '{',
-    '  "schemaVersion": 2,',
+    '  "schemaVersion": 3,',
     `  "repository": "${repository}",`,
     '  "reportVersion": 1,',
     '  "categories": [',
@@ -90,8 +90,8 @@ it('serializes canonical v2 rows with stable indexes and no provenance', () => {
     '    "high"',
     '  ],',
     '  "measurements": [',
-    '    ["2026-09-20",0,82,5,0,2,120,120],',
-    '    ["2026-09-21",1,null,0,3,0,0,4]',
+    '    ["2026-09-20T00:00:00.000Z",0,82,5,0,2,120,120],',
+    '    ["2026-09-21T00:00:00.000Z",1,null,0,3,0,0,4]',
     '  ]',
     '}',
     '',
@@ -103,7 +103,7 @@ it('serializes canonical v2 rows with stable indexes and no provenance', () => {
   expect(reversed).toBe(text);
 });
 
-it('normalizes v1 JSON idempotently and keeps its measurement id off the v2 bytes', () => {
+it('normalizes v1 JSON idempotently and keeps its measurement id off the v3 bytes', () => {
   const wire = v1Document([security, typing]);
   const first = classifyQualitySnapshot(JSON.stringify(wire));
   expect(first.status).toBe('v1');
@@ -111,7 +111,7 @@ it('normalizes v1 JSON idempotently and keeps its measurement id off the v2 byte
   expect(first.records.map(record => record.score)).toEqual([82, null]);
   expect(JSON.stringify(first.records)).not.toMatch(/example-user|agent-example/);
   const second = classifyQualitySnapshot(first.canonical);
-  expect(second.status).toBe('v2');
+  expect(second.status).toBe('v3');
   expect(second.canonical).toBe(first.canonical);
   expect(second.records.map(record => record.measurementId)).toEqual([null, null]);
   expect(qualityFileFromWireSnapshot(wire)).toBe(first.canonical);
@@ -139,7 +139,7 @@ it('reads retired task categories and emits them under their current audit name'
 it('rejects future, unrecognized, malformed, and invalid-index documents; collapses duplicate days', () => {
   expect(classifyQualitySnapshot('category\tscore\n').status).toBe('unrecognized');
   expect(classifyQualitySnapshot('{"quality":true}').status).toBe('unrecognized');
-  expect(classifyQualitySnapshot(JSON.stringify({ schemaVersion: 3, repository })).status).toBe('future');
+  expect(classifyQualitySnapshot(JSON.stringify({ schemaVersion: 4, repository })).status).toBe('future');
   expect(classifyQualitySnapshot(JSON.stringify({ ...v1Document([security]), schemaVersion: 2 })).status).toBe('malformed');
   expect(classifyQualitySnapshot(JSON.stringify({ ...v1Document([security]), note: true })).status).toBe('malformed');
 
@@ -151,7 +151,7 @@ it('rejects future, unrecognized, malformed, and invalid-index documents; collap
   expect(collapsed.status).toBe('v1');
   expect(collapsed.records).toHaveLength(1);
   expect(collapsed.records[0].score).toBe(10);
-  expect(JSON.parse(collapsed.canonical).measurements).toEqual([['2026-09-20', 0, 10, 5, 0, 2, 120, 120]]);
+  expect(JSON.parse(collapsed.canonical).measurements).toEqual([['2026-09-20T02:30:00.000Z', 0, 10, 5, 0, 2, 120, 120]]);
   const nextDay = v1Document([
     security,
     { ...security, assessedAt: '2026-09-20T20:30:00-04:00', score: 70 },
@@ -170,13 +170,27 @@ it('rejects future, unrecognized, malformed, and invalid-index documents; collap
     { ...security, assessedAt: '2026-09-20T18:00:00.000Z', score: 2 },
     { ...security, assessedAt: '2026-09-20T03:00:00.000Z', score: 3 },
   ]);
-  expect(JSON.parse(replaced).measurements).toEqual([['2026-09-20', 0, 2, 5, 0, 2, 120, 120]]);
-  // An exact-timestamp tie resolves the same way whatever the input order.
+  expect(JSON.parse(replaced).measurements).toEqual([['2026-09-20T18:00:00.000Z', 0, 2, 5, 0, 2, 120, 120]]);
+  // Conflicting exact-timestamp ties select a stable value.
   const a = { ...security, score: 11 };
   const b = { ...security, score: 12 };
   expect(serializeQualitySnapshot(repository, [a, b])).toBe(serializeQualitySnapshot(repository, [b, a]));
-  // A date-only file (the canonical form) round-trips byte-for-byte.
+  expect(JSON.parse(serializeQualitySnapshot(repository, [a, b])).measurements).toHaveLength(1);
   expect(classifyQualitySnapshot(replaced).canonical).toBe(replaced);
+});
+
+it('resolves legacy dates deterministically and picks the latest known same-day timestamp across publishers', () => {
+  const unknown = { ...security, assessedAt: '2026-09-20', score: 41 };
+  const unknownOther = { ...unknown, score: 42 };
+  const older = { ...security, assessedAt: '2026-09-20T08:00:00Z', score: 60 };
+  const later = { ...security, assessedAt: '2026-09-20T19:00:00Z', score: 90 };
+  const records = [later, unknown, older, unknownOther, unknown];
+  const text = serializeQualitySnapshot(repository, records);
+  const rows = classifyQualitySnapshot(text).records;
+  expect(rows.map(row => [row.assessedAt, row.score])).toEqual([['2026-09-20T19:00:00.000Z', 90]]);
+  expect(serializeQualitySnapshot(repository, records.toReversed())).toBe(text);
+  expect(serializeQualitySnapshot(repository, [unknown, unknownOther]))
+    .toBe(serializeQualitySnapshot(repository, [unknownOther, unknown]));
 });
 
 it('keeps v1 tie ids and orders v2 rows with a transient digest', () => {
@@ -217,10 +231,17 @@ it('keeps a full 30-day category window under the cap and materially smaller tha
   expect(JSON.parse(classifyQualitySnapshot(v2).canonical).measurements).toHaveLength(rows.length);
 });
 
-// A snapshot committed by an upgraded peer names categories this install's
-// catalog does not have yet. Before, that marked the whole file malformed, so
-// the older install lost every release score it COULD read.
-it('reads the known rows of a newer install’s snapshot and refuses to rewrite it', () => {
+it('preserves history beyond the former 10,000-row cap', () => {
+  const start = Date.parse('1990-01-01T12:00:00Z');
+  const records = Array.from({ length: 10001 }, (_, day) => ({
+    ...security, assessedAt: new Date(start + day * 86400000).toISOString(),
+  }));
+  const text = serializeQualitySnapshot(repository, records);
+  expect(text).not.toBeNull();
+  expect(classifyQualitySnapshot(text).records).toHaveLength(records.length);
+});
+
+it('preserves numeric history for categories this install cannot run', () => {
   const stored = classifyQualitySnapshot(JSON.stringify({
     schemaVersion: 2, repository, reportVersion: 1,
     categories: ['security', 'example-future-lens'], coverage: [...QUALITY_COVERAGE_VALUES], confidence: [...QUALITY_CONFIDENCE_VALUES],
@@ -229,14 +250,18 @@ it('reads the known rows of a newer install’s snapshot and refuses to rewrite 
       ['2026-09-20T00:00:00.000Z', 1, 64, 3, 0, 2, 40, 40],
     ],
   }));
-  expect(stored.status).toBe('future-categories');
-  expect(stored.records.map(record => record.category)).toEqual(['security']);
-  // No canonical form: rewriting would drop the newer install's rows.
-  expect(stored.canonical).toBeNull();
+  expect(stored.status).toBe('v2');
+  expect(stored.records.map(record => record.category)).toEqual(['security', 'example-future-lens']);
+  expect(JSON.parse(stored.canonical).categories).toEqual(['example-future-lens', 'security']);
   const malformedName = classifyQualitySnapshot(JSON.stringify({
     schemaVersion: 2, repository, reportVersion: 1,
     categories: ['Not A Category!'], coverage: [...QUALITY_COVERAGE_VALUES], confidence: [...QUALITY_CONFIDENCE_VALUES],
     measurements: [],
   }));
   expect(malformedName.status).toBe('malformed');
+});
+
+it('reports category capacity before writing an unreadable file', () => {
+  const records = Array.from({ length: 257 }, (_, i) => ({ ...security, category: `example-${i}` }));
+  expect(serializeQualitySnapshotResult(repository, records)).toEqual({ reason: 'snapshot-too-large' });
 });

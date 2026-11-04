@@ -2,12 +2,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { createMaintenanceJournal, maintenanceError as error, syncMaintenanceDirectory } from './maintenanceJournal.js';
+import { createDeferredUpdateAdmission } from './maintenanceDeferredUpdate.js';
+import { createHarnessActionAdmission } from './maintenanceHarnessAction.js';
 import { createMaintenanceExclusive, maintenanceExclusiveSchema, maintenanceExclusiveReceiptSchema } from './maintenanceExclusive.js';
+
+export { syncMaintenanceDirectory } from './maintenanceJournal.js';
 
 const operationSchema = z.object({
   id: z.string().uuid(), kind: z.string().min(1), resource: z.string().max(256),
@@ -26,69 +31,31 @@ export const maintenanceJournalSchema = z.object({
   && state.hold?.revision === state.exclusive.holdRevision));
 export const maintenanceBeginSchema = z.object({ reason: z.string().trim().min(1).max(500) }).strict();
 export const maintenanceResumeSchema = z.object({ id: z.string().uuid(), revision: z.number().int().positive() }).strict();
-const empty = () => ({ version: 1, revision: 0, hold: null, operations: [] });
-const error = (code = 'MAINTENANCE_HELD', message = 'Maintenance is holding new work. Existing work can finish.') =>
-  Object.assign(new Error(message), { status: code === 'MAINTENANCE_STALE' ? 409 : 503, code });
 export const isMaintenanceHold = err => ['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(err?.code);
-
-export function syncMaintenanceDirectory(path, io = fs) {
-  if (process.platform === 'win32') return;
-  const fd = io.openSync(path, 'r');
-  try { io.fsyncSync(fd); } finally { io.closeSync(fd); }
-}
+export const isOperatorDisposableReservation = op => ['media', 'runner', 'api-run', 'cli-run', 'tui-run', 'manual-run', 'heavy-job',
+  'script-job', 'shell-job', 'provider', 'music-video', 'app-operation', 'backup'].includes(op.kind)
+  || (op.kind === 'settlement' && op.resource === 'Output publication');
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
-  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false } = {}) {
-  const directory = join(dataDir, 'workflow-maintenance');
-  const file = join(directory, 'state.json');
-  const lock = join(directory, 'transaction');
+  makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid } = {}) {
   const context = new AsyncLocalStorage();
   const events = new EventEmitter();
-  // A failed publication must not reopen admission in this process, even if
-  // an operator removes an interrupted transaction before restarting it.
-  let uncertain = false;
-  let failureReported = false;
-  const reportFailure = err => {
-    if (failureReported) return;
-    failureReported = true;
-    while (err.cause instanceof Error) err = err.cause;
-    console.error(`❌ Maintenance transaction failed (${err.code ?? 'UNKNOWN'}): ${String(err.message).replace(/\s+/g, ' ')}`);
-  };
-  const unavailable = cause => Object.assign(error('MAINTENANCE_UNAVAILABLE', 'Maintenance state needs recovery; new work remains held.'), cause ? { cause } : {});
-  const exists = path => {
-    try { io.lstatSync(path); return true; } catch (err) { if (err.code === 'ENOENT') return false; throw err; }
-  };
-  const read = () => {
-    if (uncertain) throw unavailable();
-    try {
-      if (!exists(file)) return empty();
-      if (!io.lstatSync(file).isFile()) throw unavailable();
-      return maintenanceJournalSchema.parse(JSON.parse(io.readFileSync(file, 'utf8')));
-    } catch (err) { throw unavailable(err); }
-  };
-  // status()/held() are polled several times a second (media drain loop, spawn
-  // gates); re-parsing a journal that carries every settled operation allocated
-  // ~400 KB per call. Writers publish by renaming a new file into place, so any
-  // change gives it a new identity; the stat is taken before the read, so a
-  // racing publish can only cost a re-parse. Read-only: transactions mutate the
-  // state they read and must keep calling read() for a private copy.
-  let statusCache = null;
-  const readForStatus = () => {
-    if (uncertain) throw unavailable();
-    let stats;
-    try { stats = io.lstatSync(file); }
-    catch (err) { if (err.code === 'ENOENT') return empty(); throw unavailable(err); }
-    if (!stats.isFile()) throw unavailable();
-    const key = `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
-    if (statusCache?.key !== key) statusCache = { key, state: read() };
-    return statusCache.state;
-  };
+  const localOwners = new Map();
+  const locallyFinished = new Map();
+  const { directory, lock, read, readForStatus, transaction, exists, unavailable, isUncertain, markUncertain } = createMaintenanceJournal(dataDir, {
+    io, assertWrite, makeId, validate: value => maintenanceJournalSchema.parse(value),
+    // Listener errors must not turn a committed reservation into failed admission.
+    changed: () => queueMicrotask(() => { for (const listener of events.listeners('changed')) {
+      try { listener(status()); } catch (err) { console.error(`❌ Maintenance notification failed: ${err.message}`); }
+    } }),
+  });
   const project = state => ({
     state: state.hold ? (state.operations.length || state.exclusive ? 'draining' : 'ready') : 'normal',
     revision: state.revision, hold: state.hold && { ...state.hold },
     blockers: [...state.operations.map(({ kind, resource, startedAt, pid, unsettled }) => ({ kind, resource, startedAt, pid, unsettled })),
       ...(state.exclusive ? [{ kind: 'exclusive-maintenance', resource: state.exclusive.operation.operationId,
         startedAt: state.exclusive.claimedAt, unsettled: state.exclusive.phase === 'uncertain' }] : [])],
+    deferredUpdate: deferredUpdate.inspect(state),
     scope: 'PortOS agents, mind turns, provider runs, media renders and scheduled shell/script work, through cleanup and saving. Unrelated host applications are outside this scope.',
   });
   const status = () => {
@@ -100,7 +67,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         since = io.lstatSync(lock).mtime.toISOString();
         throw unavailable();
       }
-      if (uncertain) { cause = 'process-uncertain'; throw unavailable(); }
+      if (isUncertain()) { cause = 'process-uncertain'; throw unavailable(); }
       return project(readForStatus());
     } catch {
       return { state: 'unavailable', revision: null, hold: null, blockers: [],
@@ -108,88 +75,62 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
         error: 'Maintenance state needs recovery. New work is held; readiness is unknown.' };
     }
   };
-  // Synchronous mkdir + read/replace is the shared linearization point. Never
-  // steal this lock by age/PID: a crash or failed fsync stays fail-closed.
-  const transaction = change => {
-    assertWrite(directory, 'workflow maintenance transaction');
-    if (uncertain) throw unavailable();
-    try {
-      io.mkdirSync(directory, { recursive: true, mode: 0o700 });
-      // Writers do no async work while holding this lock. Same-process calls
-      // cannot contend; briefly yield the CPU to a competing server/runner.
-      // A crashed writer remains closed, rather than stealing its lock.
-      for (let attempt = 0; ; attempt++) {
-        try { io.mkdirSync(lock, { mode: 0o700 }); break; }
-        catch (err) {
-          if (err.code !== 'EEXIST' || attempt === 99) throw err;
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-        }
-      }
-    } catch (err) { reportFailure(err); throw unavailable(); }
-    let published = false;
-    let result;
-    try {
-      const state = read();
-      result = change(state);
-      state.revision++;
-      maintenanceJournalSchema.parse(state);
-      const pending = join(directory, `pending-${makeId()}.json`);
-      const fd = io.openSync(pending, 'wx', 0o600);
-      try { io.writeFileSync(fd, JSON.stringify(state) + '\n'); io.fsyncSync(fd); } finally { io.closeSync(fd); }
-      io.renameSync(pending, file);
-      syncMaintenanceDirectory(directory, io);
-      published = true;
-    } catch (err) {
-      // Refused admission/stale requests didn't attempt a publication.
-      if (['MAINTENANCE_HELD', 'MAINTENANCE_STALE'].includes(err.code)) published = true;
-      else { uncertain = true; reportFailure(err); }
-      throw err.code?.startsWith('MAINTENANCE_') ? err : unavailable();
-    } finally {
-      if (published) {
-        try { io.rmdirSync(lock); syncMaintenanceDirectory(directory, io); }
-        catch (err) { uncertain = true; reportFailure(err); }
-      }
-    }
-    if (uncertain) throw unavailable();
-    // Listener errors must never turn a committed reservation into a failed
-    // admission whose caller cannot own/release it.
-    queueMicrotask(() => { for (const listener of events.listeners('changed')) {
-      try { listener(status()); } catch (err) { console.error(`❌ Maintenance notification failed: ${err.message}`); }
-    } });
-    return result;
-  };
   const exclusive = createMaintenanceExclusive({ transaction, read, lockExists: () => exists(lock), makeId, error, now,
     verifyReceipt: verifyExclusiveReceipt });
+  const deferredUpdate = createDeferredUpdateAdmission({ transaction, read: readForStatus, makeId, error, now, directory, io,
+    syncDirectory: syncMaintenanceDirectory, lockExists: () => exists(lock) });
+  const harnessActions = createHarnessActionAdmission({ transaction, read: readForStatus, makeId, error, now,
+    absent: harnessAbsent, ownerPresent: harnessOwnerPresent, parentPid: harnessParentPid });
   const held = () => status().state !== 'normal';
   const assertOpen = () => { if (held()) throw error(status().state === 'unavailable' ? 'MAINTENANCE_UNAVAILABLE' : 'MAINTENANCE_HELD'); };
-  const currentId = () => context.getStore() ?? null;
-  const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false } = {}) => {
+  const currentId = () => context.getStore()?.id ?? null;
+  const ownerFor = op => ({ pid: op.pid, startedAt: op.startedAt, generation: op.uncertaintyStamp });
+  const sameOwner = (op, owner) => Boolean(op && owner) && op.pid === owner.pid && op.startedAt === owner.startedAt;
+  const adopt = op => {
+    op.pid = process.pid;
+    op.startedAt = new Date(Math.max(Date.now(), Date.parse(op.startedAt) + 1)).toISOString();
+    if (op.unsettled && op.uncertaintyStamp) op.uncertaintyStamp = randomUUID();
+    return ownerFor(op);
+  };
+  const admit = (kind, resource = '', { continuation = false, parentId = null, parentKinds = null, reconnect = false, reconnectFinished = false } = {}) => {
     const inheritedId = parentId ?? (continuation ? currentId() : null);
+    const inheritedOwner = !parentId && continuation ? context.getStore()?.owner : null;
     let id = makeId();
     let recovery;
+    let owner;
     transaction(state => {
-      const inherited = inheritedId && state.operations.some(op => op.id === inheritedId && (!op.unsettled || kind === 'settlement') && (!parentKinds || parentKinds.includes(op.kind)));
+      if (inheritedOwner && !state.operations.some(op => op.id === inheritedId && sameOwner(op, inheritedOwner)))
+        throw error('MAINTENANCE_HELD', 'The admitted parent operation has already settled.');
+      const inherited = inheritedId && state.operations.some(op => op.id === inheritedId && (!op.unsettled || kind === 'settlement')
+        && (!parentKinds || parentKinds.includes(op.kind)) && (!inheritedOwner || sameOwner(op, inheritedOwner)));
       if (state.hold && !inherited) throw error();
       // An explicitly supplied expired parent must never become new work.
       if (parentId && !inherited) throw error('MAINTENANCE_HELD', 'The admitted parent operation has already settled.');
       // Reconciliation may submit an idempotent replay, so it still obeys the
       // admission fence above; reuse ownership only after that fence passes.
-      const existing = reconnect && state.operations.find(op => op.kind === kind && op.resource === resource);
-      if (existing) { id = existing.id; recovery = recoverySnapshot(existing); return; }
-      state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
+      const existing = (reconnect || reconnectFinished) && state.operations.find(op => op.kind === kind && op.resource === resource
+        && (!reconnectFinished || isLocallyFinished(op)));
+      if (existing) {
+        id = existing.id; owner = adopt(existing); recovery = recoverySnapshot(existing); return;
+      }
+      const operation = { id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() };
+      state.operations.push(operation); owner = ownerFor(operation);
     });
-    return permitFor(id, recovery);
+    localOwners.set(id, owner);
+    locallyFinished.delete(id);
+    return permitFor(id, recovery, owner);
   };
   // A capability binds one previously observed operation, including every
   // uncertainty mark made before reconciliation. A legacy unsettled record
   // has no stamp to compare and cannot be completed through this capability.
-  const recoverySnapshot = op => Object.freeze({ id: op.id, kind: op.kind, resource: op.resource,
+  const recoverySnapshot = op => Object.freeze({ id: op.id, kind: op.kind, resource: op.resource, pid: op.pid, startedAt: op.startedAt,
     unsettled: op.unsettled === true, uncertaintyStamp: op.uncertaintyStamp });
   const completeRecovery = expected => {
     if (expected.unsettled && !expected.uncertaintyStamp) return false;
     return transaction(state => {
       const index = state.operations.findIndex(op => op.id === expected.id && op.kind === expected.kind
-        && op.resource === expected.resource && (op.unsettled === true) === expected.unsettled
+        && op.resource === expected.resource && op.pid === expected.pid && op.startedAt === expected.startedAt
+        && (op.unsettled === true) === expected.unsettled
         && op.uncertaintyStamp === expected.uncertaintyStamp);
       if (index < 0) return false;
       state.operations.splice(index, 1);
@@ -213,69 +154,122 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     state.operations.splice(index, 1);
     return receipt;
   });
-  const permitFor = (id, recovery) => ({
+  const permitFor = (id, recovery, owner) => ({
     id,
-    run: fn => context.run(id, fn),
-    finish: () => finish(id),
-    markUnsettled: () => markUnsettled(op => op.id === id),
-    identify: resource => transaction(state => { const op = state.operations.find(op => op.id === id); if (op) op.resource = resource; }),
-    ...(recovery ? { completeRecovery: () => completeRecovery(recovery) } : {}),
+    run: fn => context.run({ id, owner }, fn),
+    finish: () => finish(id, owner),
+    isCurrent: () => localOwners.get(id) === owner && read().operations.some(op => op.id === id && sameOwner(op, owner)),
+    markUnsettled: () => {
+      if (localOwners.get(id) === owner) markUnsettled(op => op.id === id && sameOwner(op, owner));
+    },
+    identify: resource => transaction(state => {
+      const op = state.operations.find(op => op.id === id);
+      if (op && localOwners.get(id) === owner && sameOwner(op, owner)) op.resource = resource;
+    }),
+    ...(recovery ? { completeRecovery: () => localOwners.get(id) === owner && completeRecovery(recovery) } : {}),
   });
   // Trusted recovery only: this records observed existing work, never starts it.
-  const recoverOwned = (kind, resource) => {
+  const recoverOwned = (kind, resource, { observeIfOwned = false } = {}) => {
     let recovery;
+    let owner;
     const id = transaction(state => {
       const existing = state.operations.find(op => op.kind === kind && op.resource === resource);
-      if (existing) { recovery = recoverySnapshot(existing); return existing.id; }
+      if (existing) {
+        const current = localOwners.get(existing.id);
+        owner = observeIfOwned && current && !locallyFinished.has(existing.id) && sameOwner(existing, current) ? current : adopt(existing);
+        recovery = recoverySnapshot(existing); return existing.id;
+      }
       const id = makeId();
       exclusive.observeExistingWork(state);
-      state.operations.push({ id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() });
+      harnessActions.observeExistingWork(state);
+      const operation = { id, kind, resource, pid: process.pid, startedAt: new Date().toISOString() };
+      state.operations.push(operation); owner = ownerFor(operation);
       return id;
     });
-    return permitFor(id, recovery);
+    localOwners.set(id, owner);
+    locallyFinished.delete(id);
+    return permitFor(id, recovery, owner);
   };
   const tryAdmit = (...args) => { try { return admit(...args); } catch (err) { if (isMaintenanceHold(err)) return null; throw err; } };
   const finishing = new Map();
-  const finish = id => {
-    if (finishing.has(id)) return finishing.get(id);
+  const finish = (id, owner = localOwners.get(id), { observed = false } = {}) => {
+    const existing = finishing.get(id);
+    if (existing?.owner === owner) return existing.pending;
     // A runner and server can finish in the same millisecond. Contention is
     // retried; never lose a completion solely because another writer owns mkdir.
     const settle = async () => {
       for (let attempt = 0; attempt < 10; attempt++) {
         try {
-          transaction(state => { state.operations = state.operations.filter(op => op.id !== id || op.unsettled); });
+          if (owner && !observed && localOwners.get(id) !== owner) return false;
+          const result = transaction(state => {
+            const operation = state.operations.find(op => op.id === id);
+            if (owner && operation && !sameOwner(operation, owner)) return { stale: true };
+            state.operations = state.operations.filter(op => op.id !== id || op.unsettled);
+            return { retained: operation?.pid === process.pid && operation.unsettled === true, generation: operation?.uncertaintyStamp };
+          });
+          if (result.stale) return false;
+          if (owner && localOwners.get(id) === owner) {
+            if (result.retained) locallyFinished.set(id, { owner, generation: result.generation });
+            else { locallyFinished.delete(id); localOwners.delete(id); }
+          }
           return true;
         } catch {
-          if (uncertain || !exists(lock)) break;
+          if (isUncertain() || !exists(lock)) break;
           await new Promise(resolve => { const timer = setTimeout(resolve, 50); timer.unref?.(); });
         }
       }
       console.error('❌ Maintenance settlement needs recovery; preserving its blocker.');
+      if (owner && localOwners.get(id) === owner) locallyFinished.set(id, { owner, generation: owner.generation });
       return false;
     };
-    const pending = settle().finally(() => finishing.delete(id));
-    finishing.set(id, pending);
+    const pending = settle().finally(() => { if (finishing.get(id)?.pending === pending) finishing.delete(id); });
+    finishing.set(id, { owner, pending });
     return pending;
   };
   // Only trusted lifecycle code calls this after terminal persistence/cleanup.
   // A server restarted during a runner job can finish the old owner's record.
   const resourceOperations = (kind, resource) => read().operations.filter(op => op.kind === kind && op.resource === resource);
-  const finishResource = (kind, resource) => Promise.all(resourceOperations(kind, resource).map(op => finish(op.id)));
+  const finishResource = (kind, resource) => {
+    const active = context.getStore();
+    return Promise.all(resourceOperations(kind, resource).map(op => {
+      const local = localOwners.get(op.id);
+      const owner = active?.id === op.id ? active.owner : local && sameOwner(op, local) ? local : ownerFor(op);
+      return finish(op.id, owner, { observed: true });
+    }));
+  };
   const withResource = (kind, resource, fn) => {
     const operation = resourceOperations(kind, resource).find(op => !op.unsettled);
-    return operation ? context.run(operation.id, fn) : fn();
+    const local = operation && localOwners.get(operation.id);
+    const owner = operation && local && sameOwner(operation, local) ? local : operation && ownerFor(operation);
+    return operation ? context.run({ id: operation.id, owner }, fn) : fn();
   };
   const markUnsettled = matches => {
-    try { transaction(state => { for (const op of state.operations) if (matches(op)) {
-      op.unsettled = true;
-      op.uncertaintyStamp = randomUUID();
-    } }); }
-    catch { uncertain = true; console.error('❌ Maintenance recovery record could not be saved; readiness remains unknown.'); }
+    try {
+      const updates = transaction(state => {
+        const changed = [];
+        for (const op of state.operations) if (matches(op)) {
+          op.unsettled = true;
+          op.uncertaintyStamp = randomUUID();
+          changed.push({ id: op.id, pid: op.pid, startedAt: op.startedAt, generation: op.uncertaintyStamp });
+        }
+        return changed;
+      });
+      for (const update of updates) {
+        const owner = localOwners.get(update.id);
+        if (owner && owner.pid === update.pid && owner.startedAt === update.startedAt)
+          owner.generation = update.generation;
+        const active = context.getStore();
+        if (active?.id === update.id && active.owner?.pid === update.pid && active.owner.startedAt === update.startedAt)
+          active.owner.generation = update.generation;
+        locallyFinished.delete(update.id);
+      }
+    }
+    catch { markUncertain(); console.error('❌ Maintenance recovery record could not be saved; readiness remains unknown.'); }
   };
   const markResourceUnsettled = (kind, resource) => markUnsettled(op => op.kind === kind && op.resource === resource);
   const markCurrentUnsettled = () => {
-    const id = currentId();
-    if (id) markUnsettled(op => op.id === id);
+    const { id, owner } = context.getStore() ?? {};
+    if (id && owner) markUnsettled(op => op.id === id && sameOwner(op, owner));
   };
   // A publication boundary may prove its callback never started. Keep the
   // reservation while it waits, but do not mistake refused admission for an
@@ -309,6 +303,10 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     transaction(state => {
       if (state.hold?.id !== expected.id || state.hold?.revision !== expected.revision)
         throw error('MAINTENANCE_STALE', 'This maintenance hold changed. Refresh before resuming.');
+      if (deferredUpdate.inspect(state)?.holdId === expected.id)
+        throw error('MAINTENANCE_STALE', 'The update owns this hold until its processes settle.');
+      if (harnessActions.inspect(state)?.holdId === expected.id)
+        throw error('MAINTENANCE_STALE', 'The harness action owns this hold until its processes settle.');
       if (state.exclusive)
         throw error('MAINTENANCE_STALE', 'An exclusive maintenance operation owns this hold until verified reconciliation.');
       state.hold = null;
@@ -356,9 +354,50 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     state.operations = state.operations.filter(op => op.id !== operation.id);
     return receipt;
   });
+  // The operator's receipt preserves the exact reservations and explicitly
+  // records unknown output. It does not settle a release-candidate obligation.
+  const reconcileInactiveReservations = ({ hold, update, revision, expected, ordinaryAgentIds = [], validate, publish, replay }) => {
+    const result = transaction(state => {
+    if (update) {
+      const owner = deferredUpdate.inspect(state);
+      if (state.hold || state.exclusive || !owner || owner.id !== update.id || owner.ownerPid !== update.ownerPid
+        || owner.requestedAt !== update.requestedAt || owner.phase !== 'waiting' || owner.childPid || owner.holdId)
+        throw error('MAINTENANCE_STALE', 'The waiting update changed.');
+    } else if (!hold || state.hold?.id !== hold.id || state.hold?.revision !== hold.revision || state.exclusive
+      || !['Operator session', 'Local operator'].includes(state.hold.owner))
+      throw error('MAINTENANCE_STALE', 'The maintenance hold changed or is exclusively owned.');
+    if (state.revision !== revision)
+      throw error('MAINTENANCE_STALE', 'Work changed during the activity check. Inspect it again.');
+    if (!expected.length || new Set(expected.map(op => op.id)).size !== expected.length || expected.some(op =>
+      !isOperatorDisposableReservation(op) && !(update && op.kind === 'agent' && ordinaryAgentIds.includes(op.id))))
+      throw error('MAINTENANCE_STALE', 'Select only supported, distinct reservations.');
+    const current = expected.map(op => state.operations.find(row => row.id === op.id));
+    if (current.every(op => !op)) return replay();
+    if (current.some((op, index) => !op || !isDeepStrictEqual(op, expected[index])))
+      throw error('MAINTENANCE_STALE', 'The reservation inventory changed. Inspect it again.');
+    validate(state.operations);
+    const receipt = publish();
+    const ids = new Set(expected.map(op => op.id));
+    state.operations = state.operations.filter(op => !ids.has(op.id));
+    return receipt;
+    });
+    for (const op of expected) { locallyFinished.delete(op.id); localOwners.delete(op.id); }
+    return result;
+  };
+  const isLocallyFinished = op => {
+    const finished = locallyFinished.get(op?.id);
+    return Boolean(finished) && op?.pid === process.pid && finished.owner === localOwners.get(op.id)
+      && sameOwner(op, finished.owner) && finished?.generation === op.uncertaintyStamp;
+  };
+  const assertCurrent = () => {
+    const { id, owner } = context.getStore() ?? {};
+    if (!id || !owner || localOwners.get(id) !== owner || !read().operations.some(op => op.id === id && sameOwner(op, owner)
+      && !isLocallyFinished(op)))
+      throw error('MAINTENANCE_HELD', 'Existing work ownership is no longer current.');
+  };
   const { observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability } = exclusive;
-  return { directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
-    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent };
+  return { deferredUpdate, harnessActions, directory, status, held, assertOpen, admit, tryAdmit, recoverOwned, reconcilePublicationRefusal, operations, releaseOperations, markOperationsUncertain, run, currentId, finish, finishResource, withResource, markResourceUnsettled, markCurrentUnsettled, continueSettlement, begin, resume, events,
+    observeIdle, claimReady, getExclusive, transitionExclusive, settleExclusive, issueExecutionCapability, reconcileAbandonedAgent, reconcileInactiveReservations, isLocallyFinished, assertCurrent };
 }
 
 // Resolve the configured data root on first use, after host/test setup.

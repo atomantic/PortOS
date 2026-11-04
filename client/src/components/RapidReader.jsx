@@ -218,7 +218,7 @@ export default function RapidReader({
           <button
             type="button"
             onClick={back}
-            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
             title="Back 5 words"
             aria-label="Back 5 words"
           >
@@ -227,7 +227,7 @@ export default function RapidReader({
           <button
             type="button"
             onClick={togglePlay}
-            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg bg-port-accent/15 border border-port-accent/40 text-port-accent hover:bg-port-accent/25"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 min-w-10 flex items-center justify-center rounded-lg bg-port-accent/15 border border-port-accent/40 text-port-accent hover:bg-port-accent/25"
             title={playing ? 'Pause' : 'Play'}
             aria-label={playing ? 'Pause' : 'Play'}
           >
@@ -236,7 +236,7 @@ export default function RapidReader({
           <button
             type="button"
             onClick={fwd}
-            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
             title="Forward 5 words"
             aria-label="Forward 5 words"
           >
@@ -245,7 +245,7 @@ export default function RapidReader({
           <button
             type="button"
             onClick={restart}
-            className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
             title="Restart"
             aria-label="Restart"
           >
@@ -255,7 +255,7 @@ export default function RapidReader({
             <button
               type="button"
               onClick={() => onBookmark(wordIndex)}
-              className="min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-10 min-w-10 flex items-center justify-center rounded-lg border border-port-border text-gray-400 hover:text-white hover:bg-port-bg/60"
               title="Save bookmark"
               aria-label="Save bookmark"
             >

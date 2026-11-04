@@ -46,6 +46,7 @@ describe('fileInvestigationTask', () => {
     expect(addTask).toHaveBeenCalledWith({
       description: 'Investigate AI provider failure',
       priority: 'MEDIUM',
+      noChangeSuccess: true,
       useWorktree: true,
       openPR: true,
       prCompletion: 'merge-on-green',

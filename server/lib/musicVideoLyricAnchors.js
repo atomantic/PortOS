@@ -38,3 +38,47 @@ export function sungLyricTextWithin(cues, startSec, endSec) {
     .filter(Boolean);
   return lines.length ? lines.join(' / ').slice(0, 2000) : null;
 }
+
+// A phrase ends on a word that closes with a comma, colon, semicolon, dash or
+// sentence mark (trailing quotes and brackets allowed), and always at a line end.
+const PHRASE_END = /[,;:!?.…—–]["'”’)\]]*$/u;
+
+/**
+ * Cut points for a lyric range (#14820): one per sung word (`mode: 'word'`) or
+ * one per phrase (`'phrase'`), in song order, each at its first word's onset,
+ * with `endSec` where its last word ends (the line's end when that word has none).
+ * `words[i]` is the i-th whitespace token of the cue text (timedText.js keeps
+ * the two in step), so `{ cueId, wordIndex, wordCount }` names the words.
+ * Returns `{ cuts, untimed }`; `untimed` lists selected lines with no word timing.
+ */
+export function lyricWordCuts(cues, cueIds, mode = 'phrase') {
+  const wanted = new Set(cueIds || []);
+  const cuts = [];
+  const untimed = [];
+  for (const cue of Array.isArray(cues) ? cues : []) {
+    if (!wanted.has(cue?.id) || !(typeof cue.text === 'string' && cue.text.trim())) continue;
+    const words = Array.isArray(cue.words) ? cue.words : [];
+    if (!words.length || !words.every((w) => finite(w?.startSec))) { untimed.push(cue.text.trim()); continue; }
+    let first = 0;
+    words.forEach((word, i) => {
+      if (mode !== 'word' && i < words.length - 1 && !PHRASE_END.test(String(word.w || ''))) return;
+      cuts.push({ cueId: cue.id, wordIndex: first, wordCount: i - first + 1, startSec: words[first].startSec, endSec: word.endSec ?? cue.endSec ?? null,
+        text: words.slice(first, i + 1).map((w) => w.w).join(' ') });
+      first = i + 1;
+    });
+  }
+  return { cuts: cuts.sort((a, b) => a.startSec - b.startSec), untimed };
+}
+
+/**
+ * Where a shot's word anchor (`{ cueId, wordIndex, wordCount }`) is sung now:
+ * `{ startSec, text }`, or null when its line, word or timing is gone.
+ */
+export function lyricAnchorOnset(cues, anchor) {
+  const cue = (Array.isArray(cues) ? cues : []).find((c) => c?.id === anchor?.cueId);
+  const words = Array.isArray(cue?.words) ? cue.words : [];
+  const count = anchor?.wordCount || 1;
+  const picked = words.slice(anchor?.wordIndex ?? 0, (anchor?.wordIndex ?? 0) + count);
+  if (!Number.isInteger(anchor?.wordIndex) || picked.length !== count || !finite(picked[0]?.startSec)) return null;
+  return { startSec: picked[0].startSec, text: picked.map((w) => w.w).join(' ') };
+}

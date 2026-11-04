@@ -6,6 +6,11 @@ import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
 import { pinPlatform } from './testHelper.js';
 import * as fsPromises from 'fs/promises';
+const { execFileMock } = vi.hoisted(() => ({ execFileMock: vi.fn() }));
+vi.mock('./childProcess.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  execFile: execFileMock,
+}));
 // Mock fs/promises so the `ensureDir` regression test can force `mkdir` to
 // throw a spurious Windows error, and the readJSONFileStrict tests can force a
 // specific `readFile` errno (EACCES can't be provoked portably — chmod 000 is a
@@ -1027,7 +1032,14 @@ describe('fileUtils', () => {
   });
 
   describe('dirSize strict scans', () => {
+    let restorePlatform = null;
+
     afterEach(() => restoreFsMocks());
+
+    afterEach(() => {
+      if (restorePlatform) restorePlatform();
+      restorePlatform = null;
+    });
 
     it('rejects an unreadable path instead of reporting a real zero', async () => {
       const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
@@ -1040,6 +1052,20 @@ describe('fileUtils', () => {
       fsPromises.stat.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
 
       await expect(dirSize('/example/missing', { strict: true })).resolves.toBe(0);
+    });
+
+    it('treats empty PowerShell output as a zero byte Windows directory', async () => {
+      restorePlatform = pinPlatform('win32');
+      fsPromises.stat.mockResolvedValue({ isDirectory: () => true });
+      execFileMock.mockImplementation((_command, _args, _options, callback) => {
+        callback(null, { stdout: '', stderr: '' });
+      });
+
+      await expect(dirSize('/example/empty', { strict: true })).resolves.toBe(0);
+      expect(execFileMock).toHaveBeenCalledWith('powershell', expect.any(Array), expect.objectContaining({
+        env: expect.objectContaining({ DIRSIZE_TARGET: '/example/empty' }),
+      }), expect.any(Function));
+      execFileMock.mockReset();
     });
   });
 

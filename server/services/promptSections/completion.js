@@ -35,7 +35,7 @@ const CHECKOUT_RECOVERY_GUIDANCE = 'Follow the app checkout recovery task above 
 
 const EXTERNAL_REPOSITORY_GUIDANCE = 'Deliver only the external repository work explicitly authorized by the task, in a scratch clone outside the PortOS checkout. You may edit code, commit, push and open a PR there only as the task directs; merge only when the task explicitly authorizes it and its required checks pass. Never edit, commit, push or open a PR from the PortOS checkout. PortOS will not publish or merge this work for you. A verified no-action result (such as zero open alerts) needs no commit or PR. The absence of an existing bot PR does not block creating an authorized fix PR. Report checked evidence, PR links and any unresolved work or blocker; do not claim completion while required work remains.';
 
-const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
+const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release. When no release is needed, retain the captured candidate checkout through server verification; it needs separately verified cleanup.';
 
 /**
  * Why a run told not to touch the repository may still write ONE file — the
@@ -502,11 +502,16 @@ export function buildReconcileFlowCompletionSection({ sentinelPath } = {}) {
 }
 
 /** The release procedure is the deliverable; the sentinel only records its verified outcome. */
-export function buildReleaseFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+export function buildReleaseFlowCompletionSection({ isTui = false, isCli = false, sentinelPath = null } = {}) {
   const lines = ['## Release Workflow Handoff', RELEASE_FLOW_GUIDANCE];
   if (isTui && sentinelPath) {
     lines.push('', 'After the workflow reaches its documented final outcome, write that outcome to the completion sentinel and stop:', '',
       ...buildSentinelWriteSteps(1, sentinelPath, '   ## Release outcome\n   <verified release URL, no-release-needed result, or INCOMPLETE with its first unverified checkpoint>'));
+  } else if (isCli && sentinelPath) {
+    lines.push('', 'After the workflow reaches its final outcome, write a structured completion envelope to this run\'s sentinel and exit. Use `no-action-needed` only when the release check verified no release is needed; use `incomplete` or `blocked` for unfinished work.',
+      SENTINEL_WRITE_PERMISSION_NOTE, '', '```bash', `cat > "${sentinelPath}" <<'EOF'`,
+      '{"summary":"<release outcome and evidence>","taskOutcome":{"status":"<completed|no-action-needed|blocked|incomplete>","reason":"<specific evidence or blocker>"}}',
+      'EOF', '```');
   }
   return lines.join('\n');
 }
@@ -610,6 +615,10 @@ function buildClaimOwnershipSection(agentId) {
     payload: JSON.stringify({ agentId, action, branch: 'BRANCH' }) });
   return [
     '## Claim ownership binding',
+    'When an unpinned issue picker stands down on a specific checked issue because it is operator-parked or resolved, record that issue BEFORE reporting no-action-needed, without creating a branch, worktree, assignment or claim markers. Do not record in-flight or otherwise skipped candidates. Replace 123 with the checked issue number and require parsed JSON with recorded:true:',
+    '```bash', agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/claim-selection',
+      payload: JSON.stringify({ agentId, issueNumber: 123 }) }), '```',
+    'This records selection only; it grants no checkout, merge or cleanup authority. Completion independently checks the recorded issue in the configured repository and the clean source checkout against the live default branch. Bound child claims always take precedence; no parked selection can hide unfinished siblings. A refusal or unreadable response is an unmet completion prerequisite, not permission to fabricate a claim. Pinned issues and runs that already bound a claim keep their existing binding workflow.',
     'Before this run (the parent, never a fan-out child) creates, adopts or checks out ANY claim worktree, bind that exact branch to this run — the pinned issue’s own `claim/…` branch, a tracking epic’s child, a slice split from an oversized issue, each issue a picker or swarm selects, or a claim worktree you are resuming. Replace BRANCH with the branch name and require a parsed JSON response with bound:true:',
     '```bash', command('bind'), '```',
     'Immediately after creating that worktree, repeat the same bind command and require bound:true BEFORE editing or running work there. This records the server-observed physical checkout generation; a refusal means preserve it and report the blocker. An existing resumed checkout is captured by its initial bind.',

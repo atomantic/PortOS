@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, createReadStream, fsyncSync, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { PATHS } from '../lib/paths.js';
+import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
 import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 import { snapshotProcesses } from '../lib/detachedSpawn.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -60,13 +61,13 @@ function hasCompletionMarker(path) {
  */
 function runDbScript(action, endpoint, argument, dumpDir, expectedSha256) {
   const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? PATHS.installRoot,
-    PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: dumpDir, LC_ALL: 'C',
+    PGPASSWORD: process.env.PGPASSWORD || 'portos', PORTOS_DUMP_DIR: toBashPath(dumpDir), LC_ALL: 'C',
     ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].filter(key => process.env[key]).map(key => [key, process.env[key]])),
     ...(expectedSha256 ? { PORTOS_IMPORT_SHA256: expectedSha256 } : {}) };
-  const args = [join(PATHS.root, 'scripts', 'db.sh'), action, '--endpoint',
-    endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, argument];
+  const args = [toBashPath(join(PATHS.root, 'scripts', 'db.sh')), action, '--endpoint',
+    endpoint.host, String(endpoint.port), endpoint.user, endpoint.database, toBashPath(argument)];
   return new Promise((resolve) => {
-    const child = spawn('bash', args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root), stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(resolveBashBinary(), args, { cwd: PATHS.root, env: withSpawnCwdEnv(env, PATHS.root), stdio: ['ignore', 'pipe', 'ignore'] });
     let stdout = '';
     child.stdout.on('data', chunk => { if (stdout.length < 65536) stdout += chunk; });
     child.once('error', () => resolve({ code: null, stdout: '' }));
@@ -89,7 +90,7 @@ async function exportRecoveryDump(journal, id, token, operation) {
   // A failed or incomplete export is never recorded, so it can never be
   // imported; the next attempt exports again after renewed quiescence.
   if (result.code !== 0) throw refused(`the source export failed (exit ${result.code ?? 'spawn'})`);
-  if (result.stdout.trim().split('\n').at(-1) !== path) throw refused('the source export did not publish the recorded dump');
+  if (result.stdout.trim().split('\n').at(-1) !== toBashPath(path)) throw refused('the source export did not publish the recorded dump');
   if (!lstatSync(path).isFile() || !hasCompletionMarker(path)) throw refused('the source export is incomplete');
   syncPath(path);
   syncPath(dirname(path));

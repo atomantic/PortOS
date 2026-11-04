@@ -178,6 +178,21 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/LFM2.5-1.2B-Thinking-GGUF'
   },
   {
+    key: 'lfm3-1.7b',
+    name: 'LFM3 1.7B',
+    category: 'lightweight',
+    recommendedFor: ['lightweight', 'chat'],
+    params: '1.7B',
+    size: '1.1 GB',
+    family: 'lfm3',
+    description: "Liquid AI's tri-hybrid architecture model (1.7B params) with a 256K context window — optimized for edge devices, structured tool-calling, and local agent turns.",
+    capabilities: ['chat', 'tools'],
+    context: 262144,
+    ollama: 'lfm3:1.7b',
+    lmstudio: 'lmstudio-community/LFM3-1.7B-GGUF',
+    lmstudioAliases: ['LiquidAI/LFM3-1.7B-GGUF']
+  },
+  {
     key: 'qwen2.5-7b-instruct',
     name: 'Qwen2.5 7B Instruct',
     category: 'general',
@@ -780,6 +795,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Llama-4-Scout-17B-16E-Instruct-GGUF'
   },
   {
+    key: 'gpt-oss-120b',
+    name: 'GPT-OSS 120B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning', 'coding'],
+    params: '117B / 5.1B active',
+    size: '61 GB',
+    family: 'gpt-oss',
+    description: "OpenAI's flagship open-weights reasoning MoE with 5.1B active parameters — deep chain-of-thought thinking, tools, and agentic reasoning for high-memory systems.",
+    capabilities: ['chat', 'reasoning', 'tools'],
+    context: 131072,
+    ollama: 'gpt-oss:120b',
+    lmstudio: 'lmstudio-community/gpt-oss-120b-GGUF'
+  },
+  {
     key: 'qwen3.5-122b-a10b',
     name: 'Qwen3.5 122B-A10B',
     category: 'general',
@@ -978,6 +1007,21 @@ export const LOCAL_LLM_CATALOG = [
     context: 262144,
     ollama: 'minicpm-v4.6:1b',
     lmstudio: 'openbmb/MiniCPM-V-4_6-gguf'
+  },
+  {
+    key: 'lfm3-vl-2b',
+    name: 'LFM3-VL 2B (vision)',
+    category: 'vision',
+    recommendedFor: ['vision', 'lightweight'],
+    params: '2B',
+    size: '1.5 GB',
+    family: 'lfm3',
+    description: "Liquid AI's compact vision-language model with a 128K context window — step-by-step visual reasoning, document parsing, and chart understanding for edge devices.",
+    capabilities: ['chat', 'reasoning', 'vision'],
+    context: 128000,
+    ollama: 'lfm3-vl:2b',
+    lmstudio: 'lmstudio-community/LFM3-VL-2B-GGUF',
+    lmstudioAliases: ['LiquidAI/LFM3-VL-2B-GGUF']
   },
   {
     key: 'qwen3-vl-2b',

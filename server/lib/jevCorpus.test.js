@@ -52,7 +52,11 @@ describe('corpusExampleKey', () => {
   });
 
   it('is stable across two constructions of the same example', () => {
-    expect(corpusExampleKey(example(7))).toBe(corpusExampleKey(example(7)));
+    const k1 = corpusExampleKey(example(7));
+    const k2 = corpusExampleKey(example(7));
+    expect(typeof k1).toBe('string');
+    expect(k1.length).toBeGreaterThan(0);
+    expect(k1).toBe(k2);
   });
 });
 

@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import YoutubeThumbnailPanel, { thumbnailSources } from './YoutubeThumbnailPanel.jsx';
 
-vi.mock('../../hooks/useMusicVideoCoverLettering.js', () => ({ default: () => ({ fonts: [], styles: [], uploading: false }) }));
+vi.mock('../../hooks/useMusicVideoCoverLettering.js', () => ({ default: () => ({ fonts: [], styles: [], fontState: 'ready', styleState: 'ready', uploading: false }) }));
 vi.mock('../imageGen/GalleryImagePicker', () => ({ default: () => null }));
 vi.mock('../../services/apiMusicVideo.js', () => ({
   previewMusicVideoThumbnailPaint: vi.fn(async (_id, { title }) => ({ prompt: `Example brief "${title}"`, promptAdditions: [{ id: 'youtube-thumbnail-brief', label: 'YouTube thumbnail brief', text: `Example brief "${title}"` }] })),

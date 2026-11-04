@@ -844,7 +844,7 @@ export default function ReviewerPicker({
                       type="button"
                       disabled={disabled || index === 0 || isToolFreeReviewer(value) !== isToolFreeReviewer(orderedSelected[index - 1])}
                       onClick={() => move(index, -1)}
-                      className="min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                       aria-label={`Move ${labelFor(value)} earlier`}
                     >
                       <ChevronUp size={12} />
@@ -853,7 +853,7 @@ export default function ReviewerPicker({
                       type="button"
                       disabled={disabled || index === orderedSelected.length - 1 || isToolFreeReviewer(value) !== isToolFreeReviewer(orderedSelected[index + 1])}
                       onClick={() => move(index, 1)}
-                      className="min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                       aria-label={`Move ${labelFor(value)} later`}
                     >
                       <ChevronDown size={12} />
@@ -880,7 +880,7 @@ export default function ReviewerPicker({
                       type="button"
                       disabled={disabled}
                       onClick={() => remove(value)}
-                      className="min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
                       aria-label={`Remove ${labelFor(value)}`}
                     >
                       <X size={12} />
@@ -928,7 +928,7 @@ export default function ReviewerPicker({
                     type="button"
                     disabled={disabled}
                     onClick={() => removeUsername(value)}
-                    className="min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-9 min-w-9 flex items-center justify-center text-gray-500 hover:text-port-error"
                     aria-label={`Remove @${value}`}
                   >
                     <X size={12} />

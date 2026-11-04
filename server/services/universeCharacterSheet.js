@@ -175,13 +175,13 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     special ? `Special traits panel: ${special}` : '',
     visualIdentity ? `Visual identity panel: ${visualIdentity}` : '',
     paletteLine ? `Color palette zone (top right): a row of color swatch chips, each labeled, in order — ${paletteLine}.` : '',
-    `Expression progression (right side): a row of seven head-and-shoulders portraits of ${name} showing — ${expressionsLine}.`,
+    `Expression progression (right side): exactly seven head-and-shoulders portraits of ${name}. Choose from this complete expression list: ${expressionsLine}. If fewer than seven are supplied, show each supplied expression and add variations to fill the row; if more, choose seven without adding frames.`,
     `Micro-expressions row (below expression progression): a row of five subtle headshot variants of ${name} demonstrating restrained facial nuance.`,
     `Head detail sheet (right side, lower): five small portraits of ${name} from different angles — 3/4 headshot, side headshot, top angle, low angle, three-quarter "elegant angle".`,
     `Neutral baseline + posture variation + close-up pose (lower right): one neutral standing pose, one variant posture (leaning or shifted weight), one close-up dramatic pose.`,
     wardrobeLine ? `Wardrobe / accessories details panel (lower left): labeled close-up cards of distinctive wardrobe pieces — ${wardrobeLine}.` : `Wardrobe / accessories details panel (lower left): labeled close-up cards of the character's signature garments and accessories.`,
     propsLine ? `Prop showcase panel (lower middle): a small still-life of the character's signature props — ${propsLine}.` : '',
-    `Hand gestures panel (lower right): a row of five labeled hand close-ups showing the character's habitual gestures — ${gesturesLine}.`,
+    `Hand gestures panel (lower right): exactly five labeled hand close-ups. Choose from this complete list of the character's habitual gestures: ${gesturesLine}. If fewer than five are supplied, show each supplied gesture and add variations to fill the row; if more, choose five without adding frames.`,
     'Layout: thin black panel borders on off-white paper. Light grey labels under each zone. Consistent character proportions across every view. Render in the same illustrated style throughout the page — do NOT mix art styles between panels.',
   ].filter(Boolean);
 
@@ -332,7 +332,7 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     headerBits,
     physical ? `Physical description: ${physical}` : '',
     `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.`,
-    `Expression row (bottom half): seven head-and-shoulders portrait photographs of the same person facing the camera, showing — ${expressionsLine}.`,
+    `Expression row (bottom half): exactly seven head-and-shoulders portrait photographs of the same person facing the camera. Choose from this complete expression list: ${expressionsLine}. If fewer than seven are supplied, show each supplied expression and add variations to fill the row; if more, choose seven without adding frames.`,
     silhouette ? `Silhouette: ${silhouette}` : '',
     posture ? `Posture: ${posture}` : '',
     special ? `Distinctive traits: ${special}` : '',
@@ -342,6 +342,43 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     'Layout: thin white gutters between frames and a small plain sans-serif caption under each one (FRONT, 3/4, SIDE, BACK, then each expression name). The same person, lighting, exposure and color in every frame.',
   ].filter(Boolean);
 
+  return {
+    prompt: promptParts.join('\n\n'),
+    negativePrompt: '',
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
+/**
+ * Photographic face sheet: a row of five head angles (front, both 3/4s, both
+ * profiles) over a row of five expressions, all of the same face. It is the
+ * close-up reference a shot uses when a head turns, which a full-body sheet's
+ * one small face cannot give. Directions are spelled out against the image's
+ * edges ("turned toward the LEFT edge of the image"), since "3/4 left" alone
+ * reads either way and image models then repeat one side. Hands stay empty:
+ * carried props belong on their own object sheets.
+ */
+function buildCharacterFaceSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterFaceSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+  const styleBits = universeAestheticLine(universe);
+  const { name, age, physical, special, visualIdentity, expressionsLine } = extractCharacterPromptCommon(character);
+  const promptParts = [
+    `PHOTOGRAPHIC FACE REFERENCE SHEET — ten head-and-shoulders photographs of ONE real person, ${name}, against a plain seamless dark grey studio backdrop, in two rows of five with thin dark gutters and a small plain caption under each frame.`,
+    styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+    age ? `Age: ${age}, and they look exactly that age in every frame.` : '',
+    physical ? `Physical description: ${physical}` : '',
+    visualIdentity ? `Facial identity: ${visualIdentity}` : '',
+    special ? `Distinctive traits: ${special}` : '',
+    'Top row, neutral expression, the same camera height and distance: FRONT (facing the camera); 3/4 LEFT (head turned toward the LEFT edge of the image, nose pointing image-left); PROFILE LEFT (full side view looking at the LEFT edge); 3/4 RIGHT (turned toward the RIGHT edge); PROFILE RIGHT (full side view looking at the RIGHT edge). The left-facing and right-facing frames are mirror opposites, never repeats of one side.',
+    `Bottom row, front or near-front: exactly five distinct expressions of the same face. Draw on these character expressions, adding others if needed: ${expressionsLine}.`,
+    'The same person, hair, skin, age, lighting and exposure in all ten frames. Ordinary relaxed mouth and natural teeth. Hands empty or out of frame: no props, cameras, phones or held objects. Plain everyday top, identical in every frame.',
+  ].filter(Boolean);
   return {
     prompt: promptParts.join('\n\n'),
     negativePrompt: '',
@@ -379,6 +416,15 @@ const SHEET_VARIANTS = Object.freeze({
     label: 'Photographic turnaround',
     description: 'Studio photographs of a real person on a plain backdrop — front/3/4/side/back full-body views and a row of expression portraits. No default negatives. For photoreal universes.',
     collectionCategory: 'character-photo-sheet',
+    defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
+  }),
+  face: Object.freeze({
+    id: 'face',
+    build: buildCharacterFaceSheetPrompt,
+    filenameToken: 'face',
+    label: 'Face sheet',
+    description: 'Ten head-and-shoulders photographs of the same face: front, both 3/4 turns and both profiles, then five expressions. The close-up reference that keeps a face the same when a shot turns the head.',
+    collectionCategory: 'character-face-sheet',
     defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
   }),
   blueprint: Object.freeze({
@@ -766,6 +812,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     } : entry) };
   });
   params.characterSheet = { universeId, entryId, variant, requestId };
+  if (options.catalogAttach) params.catalogAttach = options.catalogAttach;
   const queued = await enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
   const latest = await getUniverse(universeId);

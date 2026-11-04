@@ -54,6 +54,13 @@ export const proposeMusicVideoStory = (id, body, options = {}) => request(`/musi
 export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Research and seed (#14822): 202 { status: 'running' }; the result arrives as `music-video:research-seed`.
+export const startMusicVideoSceneResearch = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/research-seed`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const startMusicVideoCameoResearch = (id, cameoId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/research-seed`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const applyMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/apply`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
@@ -122,7 +129,12 @@ export const alignMusicVideoLyrics = (id, body = {}, options = {}) => request(`/
 });
 // Analyze a newly attached song and start aligning never-aligned lyrics.
 // Resolves `{ project, analyzed, alignJobId }`; follow the job with the align events URL.
-export const prepareMusicVideoSong = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+// `refresh` also redoes the analysis and lyric timing that predate a take replaced in place (#14793).
+export const prepareMusicVideoSong = (id, { refresh = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/song/prepare`, {
+  method: 'POST', ...(refresh ? { body: JSON.stringify({ refresh: true }) } : {}), ...options,
+});
+// Keep the old beat grid and lyric timing against a replaced take; resolves the presented project.
+export const keepMusicVideoSongTiming = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/song/keep-timing`, {
   method: 'POST', ...options,
 });
 // The lyric timing playthrough page: the aligned words over a plain frame (same shape as the composition preview).
@@ -156,12 +168,25 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/reorder`, {
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
+// A non-repeating run of wipes on the cuts out of `count` shots from `fromSceneId` → { scenes, updatedAt }.
+export const varyMusicVideoWipes = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/vary-wipes`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const previewMusicVideoPacingRecut = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/pacing-recut`, options);
+export const recutMusicVideoToPacing = (id, revision, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/pacing-recut`, { method: 'POST', body: JSON.stringify({ revision }), ...options });
 // Split a shot its backend cannot render in one take on lyric/phrase
 // boundaries (#8977) → { project, scenes }. `backend` omitted = project pin.
 // `atSec` cuts it in two at that song time instead.
 export const splitMusicVideoScene = (id, sceneId, backend, { atSec = null, ...options } = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/split`, {
     method: 'POST', body: JSON.stringify({ ...(backend ? { backend } : {}), ...(atSec != null ? { atSec } : {}) }), ...options,
+  });
+// Cut the board on sung words over the chosen lyric lines (#14820) → { project, scenes, skipped, laidOut }.
+// `mode` is 'phrase' (one shot per comma phrase) or 'word'. A board with no timed shots gets them laid out (`laidOut`).
+export const cutMusicVideoScenesOnLyrics = (id, { cueIds, mode }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/cut-on-lyrics`, {
+    method: 'POST', body: JSON.stringify({ cueIds, mode }), ...options,
   });
 // Join a scene with the next one, the inverse of split → { project, scene }.
 export const mergeMusicVideoNextScene = (id, sceneId, backend, options = {}) =>
@@ -603,6 +628,17 @@ export const startMusicVideoCastAndSets = (id, body = {}, options = {}) =>
 // `keys` re-renders just those images (and what depends on them).
 export const regenerateMusicVideoCastAndSets = (id, body = {}, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/regenerate`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const selectMusicVideoCastAndSetsImage = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/use-image`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const previewMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/edit-image-preview`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const editMusicVideoCastAndSetsImage = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/edit-image`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const acceptMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/accept-image-edit`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const discardMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/discard-image-edit`, { method: 'POST', body: JSON.stringify(body), ...options });
 // Body: { protagonist?, world?, looks?, cast?, sets?, tests? } — the director's direct edits
 // (a list item is patched by id, a test by 1-based index; `remove: true` drops it).
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
@@ -615,6 +651,11 @@ export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/resume`, { method: 'POST', body: '{}', ...options });
+export const inspectMusicVideoCastAndSetsImages = (id, body = {}, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/inspect`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const acknowledgeMusicVideoCastAndSetsImage = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/acknowledge-image`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const approveMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
 // "Keep approved" (#10141): re-stamp an approved check-in on the project's current concept, style, subjects and song.
@@ -641,6 +682,8 @@ export const importMusicVideoCompositionDirectory = (id, directory, options = {}
   request(`${compositionDocumentPath(id)}/directory`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const startMusicVideoCompositionTemplate = (id, template = 'layered', options = {}) =>
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
+export const upgradeMusicVideoCompositionEngine = (id, directory, options = {}) =>
+  request(`${compositionDocumentPath(id)}/engine/upgrade`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>
   request(`${compositionDocumentPath(id)}/export`, { responseType: 'arraybuffer', ...options });
 export const generateMusicVideoMixedMediaDocument = (id, body, options = {}) =>
@@ -733,3 +776,26 @@ export const musicVideoDcpEventsUrl = jobId => `/api/music-video/dcp/${encodeURI
 export const cancelMusicVideoDcp = (jobId, options = {}) => request(`/music-video/dcp/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });
 export const getMusicVideoDcpLocation = (id, artifactId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/location`, options);
 export const musicVideoDcpReportUrl = (id, artifactId) => `/api/music-video/${encodeURIComponent(id)}/dcp/${encodeURIComponent(artifactId)}/report`;
+
+// Cameos (#14821): every call answers `{ cameos, scenes, updatedAt }` (plus the
+// cameos a create made), since a still change refills the shots linked to it.
+const cameoJson = (method, body, options) => ({ method, ...(body ? { body: JSON.stringify(body) } : {}), ...options });
+export const createMusicVideoCameos = (id, cameos, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos`, cameoJson('POST', { cameos }, options));
+export const updateMusicVideoCameo = (id, cameoId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}`, cameoJson('PATCH', patch, options));
+export const deleteMusicVideoCameo = (id, cameoId, options = {}) => request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}`, cameoJson('DELETE', null, options));
+export const addMusicVideoCameoReferences = (id, cameoId, references, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/references`, cameoJson('POST', { references }, options));
+export const removeMusicVideoCameoReference = (id, cameoId, imageId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/references/remove`, cameoJson('POST', { imageId }, options));
+export const addMusicVideoCameoVariant = (id, cameoId, variant, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants`, cameoJson('POST', variant, options));
+export const updateMusicVideoCameoVariant = (id, cameoId, variantId, patch, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants/${encodeURIComponent(variantId)}`, cameoJson('PATCH', patch, options));
+export const deleteMusicVideoCameoVariant = (id, cameoId, variantId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/variants/${encodeURIComponent(variantId)}`, cameoJson('DELETE', null, options));
+export const linkMusicVideoCameoShots = (id, cameoId, { sceneIds, variantId = null }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/shots`, cameoJson('POST', { sceneIds, variantId }, options));
+export const setMusicVideoCameoStillFromShot = (id, cameoId, { sceneId, variantId = null }, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/still-from-shot`, cameoJson('POST', { sceneId, variantId }, options));
+export const unlinkMusicVideoCameoShots = (id, sceneIds, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cameo-links/clear`, cameoJson('POST', { sceneIds }, options));

@@ -438,16 +438,17 @@ export async function compileFableLoomVisualRequest({
 
 export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4 }) {
   const localFlux2 = mode === 'local' && model?.runner === 'flux2';
+  const localReferences = localFlux2 || (mode === 'local' && model?.runner === 'flux3');
   const runwayCapability = mode === 'runway' ? IMAGE_GEN_PROVIDER_CAPABILITIES.runway : null;
   // Every cloud image backend accepts reference images (imageGenCapabilities.js).
   const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);
   return Object.freeze({
     version: 1, kind: 'image', backend: mode, modelId: model?.id || null,
     modelRevision: model?.revision || null,
-    referenceRoles: localFlux2 || cloudEdit
+    referenceRoles: localReferences || cloudEdit
       ? ['temporal-predecessor', 'character-neutral', 'character-profile', 'character-full-body', 'character-expression-gesture', 'character-wardrobe', 'character-prop-scale', 'character-negative-identity', 'character-draft-reference', 'environment', 'object']
       : [],
-    referenceBudget: localFlux2 || cloudEdit ? Math.min(inputBudget, runwayCapability ? maxInputImages(mode, model?.id) ?? inputBudget : inputBudget) : 0,
+    referenceBudget: localReferences || cloudEdit ? Math.min(inputBudget, runwayCapability ? maxInputImages(mode, model?.id) ?? inputBudget : inputBudget) : 0,
     supportsLora: localFlux2 || (mode === 'local' && model?.runner === 'mflux'),
     loraCompatKey: model?.loraCompatKey || null,
     loraBudget: 8,

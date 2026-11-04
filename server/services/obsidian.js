@@ -6,6 +6,7 @@
  * Notes stay in their original vault directories — PortOS indexes but doesn't copy.
  */
 
+import { homedir } from 'os';
 import { readdir, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
@@ -16,8 +17,8 @@ import { escapeRegExp } from '../lib/textUtils.js';
 
 const VAULTS_FILE = join(PATHS.brain, 'obsidian-vaults.json');
 
-const DEFAULT_ICLOUD_OBSIDIAN = join(
-  process.env.HOME || '',
+export const DEFAULT_ICLOUD_OBSIDIAN = join(
+  homedir(),
   'Library/Mobile Documents/iCloud~md~obsidian/Documents'
 );
 
@@ -168,14 +169,14 @@ export async function getVaultById(id) {
   return vaults.find(v => v.id === id) || null;
 }
 
-export async function detectVaults() {
-  if (!existsSync(DEFAULT_ICLOUD_OBSIDIAN)) return [];
+export async function detectVaults(baseDir = DEFAULT_ICLOUD_OBSIDIAN) {
+  if (!existsSync(baseDir)) return [];
 
-  const entries = await readdir(DEFAULT_ICLOUD_OBSIDIAN, { withFileTypes: true });
+  const entries = await readdir(baseDir, { withFileTypes: true });
   const detected = [];
   for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
-      const vaultPath = join(DEFAULT_ICLOUD_OBSIDIAN, entry.name);
+      const vaultPath = join(baseDir, entry.name);
       if (existsSync(join(vaultPath, '.obsidian'))) {
         detected.push({ name: entry.name, path: vaultPath });
       }

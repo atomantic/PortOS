@@ -6,6 +6,7 @@ const models = vi.hoisted(() => ({ value: [] }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => settings.value) }));
 vi.mock('../../lib/mediaModels.js', () => ({ getImageModels: vi.fn(() => models.value) }));
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
+vi.mock('./flux3Runtime.js', () => ({ diagnoseFlux3Runtime: vi.fn() }));
 vi.mock('./mossRuntime.js', () => ({ diagnoseMossRuntime: vi.fn(), MOSS_MANIFEST: { repo: 'example/moss', revision: 'pinned' } }));
 vi.mock('./mossWeights.js', () => ({ verifyMossWeights: vi.fn() }));
 vi.mock('../../lib/pythonSetup.js', () => ({
@@ -17,6 +18,7 @@ import { diagnoseLocalRuntime } from './localRuntime.js';
 import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { diagnoseMossRuntime } from './mossRuntime.js';
+import { diagnoseFlux3Runtime } from './flux3Runtime.js';
 import { verifyMossWeights } from './mossWeights.js';
 
 const mflux = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', hardwareCompatibility: { state: 'available', reasons: [] } };
@@ -32,6 +34,17 @@ beforeEach(() => {
 // exists to close, because the Settings panel probes a different interpreter and
 // reported "All required packages installed" for an unrenderable machine.
 describe('diagnoseLocalRuntime remedies', () => {
+  it('checks the isolated FLUX.3 runtime without depending on the configured legacy Python', async () => {
+    models.value = [{ ...mflux, id: 'flux3-klein-q4', runner: 'flux3' }];
+    settings.value = {};
+    diagnoseFlux3Runtime.mockResolvedValue({ readiness: 'unavailable', reason: 'Repair runtime', remedy: { kind: 'install-flux3' } });
+    await expect(diagnoseLocalRuntime({ modelId: 'flux3-klein-q4' })).resolves.toMatchObject({ runtime: 'flux3', readiness: 'unavailable', remedy: { kind: 'install-flux3' } });
+    diagnoseFlux3Runtime.mockResolvedValue({ readiness: 'ready' });
+    await expect(diagnoseLocalRuntime({ modelId: 'flux3-klein-q4' })).resolves.toMatchObject({ readiness: 'ready' });
+    expect(getSetupCheck).not.toHaveBeenCalled();
+    expect(isFlux2VenvHealthy).not.toHaveBeenCalled();
+  });
+
   it('keeps native installation, pinned weights and readiness separate without a Python dependency', async () => {
     models.value = [{ ...mflux, id: 'moss-image-sft-bf16', runner: 'moss-swift', repo: 'example/moss', revision: 'pinned' }];
     settings.value = { imageGen: { local: { modelId: 'moss-image-sft-bf16' } } };

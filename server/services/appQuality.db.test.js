@@ -3,13 +3,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { recordAuditQuality, enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
+import { readQualityRecords } from './appQualityFederation.js';
 
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const runDb = requireDbOrSkip('appQuality', health.connected, health.error);
 const appId = `test-quality-${process.pid}-${Date.now()}`;
 
 afterAll(async () => {
-  if (runDb) await query('DELETE FROM app_quality_measurements WHERE app_id = $1', [appId]);
+  if (runDb) await query('DELETE FROM app_quality_measurements WHERE app_id = ANY($1::text[])', [[appId, `${appId}-history`]]);
   await close();
 });
 
@@ -40,5 +41,25 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     expect(retained.rows.map(row => row.report.score)).toEqual([30, 65]);
     expect(other.quality.score).toBeNull();
     expect(app.quality.categories.find(category => category.id === 'better-complexity')).toMatchObject({ agentId: 'agent--1000', score: 65 });
+  });
+
+  it('reads old local history and retains conflicting runs tied at the latest timestamp', async () => {
+    await ensureSchema();
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const write = (agentId, assessedAt, score) => recordAuditQuality({
+      task: { metadata: { app: `${appId}-history` } }, taskType: 'privacy', agentId,
+      workspacePath: '/test-repo', success: true, assessedAt,
+    }, { readFile: async () => `QUALITY_AUDIT_JSON: ${JSON.stringify({
+      version: 1, category: 'privacy', score, worstSeverity: 4,
+      coverage: 'broad', confidence: 'high', summary: 'Assessment.', scannedFiles: 10, totalFiles: 10,
+    })}` });
+    await write('old', '2026-01-01T10:00:00Z', 50);
+    await write('earlier', '2026-09-10T09:00:00Z', 60);
+    await write('tie-a', '2026-09-10T10:00:00Z', 70);
+    await write('tie-b', '2026-09-10T10:00:00Z', 80);
+    const all = await readQualityRecords(`${appId}-history`, null, now);
+    expect(all.map(row => row.report.score).sort()).toEqual([50, 70, 80]);
+    const recent = await readQualityRecords(`${appId}-history`, 30, now);
+    expect(recent.map(row => row.report.score).sort()).toEqual([70, 80]);
   });
 });

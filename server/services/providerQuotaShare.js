@@ -47,17 +47,15 @@ export async function readLocalQuotaCards() {
   const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null);
   const quotas = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
   const capturedAt = isNonBlankStr(raw?.capturedAt) ? raw.capturedAt : latestFetchedAt(quotas);
-  return { quotas, capturedAt };
+  return { quotas, capturedAt, reported: raw?.complete === true };
 }
 
 /**
  * What a stored card claims, ignoring WHEN it was read.
  *
- * A card whose only difference is its `fetchedAt` is the same reading: some
- * adapters stamp the current clock on every call (the image-gen card is derived
- * on read, not scraped), so comparing whole cards would rewrite this file — and
- * invalidate the `usage` sync checksum — on every page poll, handing peers a
- * new slot to pull that says nothing new.
+ * Image-gen is derived on every read, so its read clock alone is not a new
+ * observation. Real provider reads can reconfirm an unchanged allowance at a
+ * later time, which matters when peers choose the freshest quota window.
  */
 const claimOf = ({ fetchedAt, ...rest }) => JSON.stringify(rest);
 
@@ -90,21 +88,26 @@ function nextStamp(prior) {
  * retire the other families' stored readings, or a per-card Refresh would drop
  * this machine out of the fleet view for every provider the user didn't click.
  *
- * The write is skipped when no card's claim changed. Every write invalidates
- * the `usage` sync category's checksum, and a page poll that re-serves
- * identical cached cards is not new information for a peer to pull.
+ * The write is skipped when no claim or provider-observation time changed.
+ * Cached readings retain their timestamps; image-gen's derived read clock and
+ * unsupported placeholders do not by themselves invalidate the usage sync.
  */
-export async function recordLocalQuotaCards(cards) {
+export async function recordLocalQuotaCards(cards, { families = null, complete = null } = {}) {
   const incoming = sanitizeQuotaCards(cards);
-  if (!incoming.length) return null;
+  if (!incoming.length && !families) return null;
   return withLock(async () => {
     const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null, { strict: true });
     const stored = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
     const byFamily = new Map(stored.map((card) => [card.family, card]));
     let changed = false;
+    if (families) {
+      const enabled = new Set(families);
+      for (const id of byFamily.keys()) if (!enabled.has(id)) { byFamily.delete(id); changed = true; }
+    }
     for (const card of incoming) {
       const incumbent = byFamily.get(card.family);
-      if (incumbent && claimOf(incumbent) === claimOf(card)) continue;
+      if (incumbent && claimOf(incumbent) === claimOf(card)
+        && (card.family === 'imagegen' || card.supported === false || !compareNewerWins(card.fetchedAt, incumbent.fetchedAt))) continue;
       // A reading taken EARLIER than the one on file is not an update: a card
       // stamps when its READING was taken, so a source that lags (Codex rollout
       // telemetry, stamped with the turn that produced it) can arrive after a
@@ -116,6 +119,8 @@ export async function recordLocalQuotaCards(cards) {
       changed = true;
     }
     const quotas = [...byFamily.values()];
+    const isComplete = complete === null ? raw?.complete === true : complete;
+    if (isComplete !== (raw?.complete === true)) changed = true;
     const storedAt = isNonBlankStr(raw?.capturedAt) ? raw.capturedAt : latestFetchedAt(quotas);
     if (!changed) return { quotas, capturedAt: storedAt, changed: false };
     // Stamped on the WRITE, so the slot moves whenever its contents do — see
@@ -124,7 +129,7 @@ export async function recordLocalQuotaCards(cards) {
     // writes inside one millisecond would stamp the same instant and the second
     // reading would never be pulled.
     const capturedAt = nextStamp(storedAt);
-    await atomicWrite(PROVIDER_QUOTAS_FILE, { capturedAt, quotas });
+    await atomicWrite(PROVIDER_QUOTAS_FILE, { capturedAt, quotas, complete: isComplete });
     return { quotas, capturedAt, changed: true };
   });
 }

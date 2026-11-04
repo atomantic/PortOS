@@ -12,7 +12,7 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "526e5bef525d70c37dbb5dabe1ea6eab",
+    "claim-issue": "b5e22f254f3c6e8250336610ae16edbb",
     "claim-issue-gitlab": "1551a0567c1049d7c08926c2558523e2",
     "claim-issue-jira": "42dba9e163d5f6912e2d1df2722bf9c4",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
@@ -25,7 +25,7 @@
     "data-safety": "9e930585587a475901a4673427c9d87f",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
-    "do-release": "0770a37985af6fd232ff275b983e36b0",
+    "do-release": "da374e670f5b84144b7ef734377be4d7",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "c94797b4bd3a0d554e225888ed48b76b",
     "error-handling": "416b4e9aa2c1fcc3bfea7a2d38814ae5",
@@ -80,7 +80,7 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 56,
+    "claim-issue": 57,
     "claim-issue-gitlab": 50,
     "claim-issue-jira": 28,
     "code-quality": 6,
@@ -93,7 +93,7 @@
     "data-safety": 4,
     "dependency-updates": 9,
     "design": 1,
-    "do-release": 23,
+    "do-release": 25,
     "do-replan": 2,
     "documentation": 9,
     "error-handling": 4,
@@ -251,7 +251,8 @@
       "5ff3cacaed7480aabe9115332fd72820",
       "c17de3169757b2e1eb24a441e2f9e2ac",
       "18092f8658c2053ac484299dde60857d",
-      "a6c2548f393470ca6427ae2f31eae4fd"
+      "a6c2548f393470ca6427ae2f31eae4fd",
+      "526e5bef525d70c37dbb5dabe1ea6eab"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -387,7 +388,9 @@
       "97ce61508d7dd6616a8c02e2c365b872",
       "3061f2041d25fd80d60189f68ac5c3e0",
       "22c7fa45352bd013b4208cbe8188b5cd",
-      "8118a437451c1cc7d707a30f13e6767e"
+      "8118a437451c1cc7d707a30f13e6767e",
+      "0770a37985af6fd232ff275b983e36b0",
+      "9c621e6dc024fd6a5ad8367db5a6081f"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"

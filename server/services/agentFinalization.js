@@ -37,6 +37,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
+import { getAgentsWithArchive } from './cosAgentHistory.js';
 import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
@@ -63,7 +64,7 @@ import {
   mergeOutcomeReview,
   taskObjective,
 } from '../lib/goalFidelity.js';
-import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '../lib/goalFidelityFollowUp.js';
+import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies, isGoalFidelityInvestigation, overturnedInvestigatedFinding } from '../lib/goalFidelityFollowUp.js';
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift } from '../lib/primaryCheckoutGuard.js';
@@ -74,6 +75,7 @@ import { usesCreativeDirectorScratchCwd, removeCreativeDirectorScratchCwd } from
 import { issueNumberFromRef } from './issueReconcile.js';
 
 import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isUpdateRepoRepairTask, verifyUpdateRepoRepairCompletion } from './updateRepoRepairCompletion.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 /**
  * Release the execution lane and complete tool-execution tracking for a
@@ -136,8 +138,10 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null }) {
+export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
   if (terminatedByUser) return null;
+  if (isUpdateRepoRepairTask(task)) return success
+    && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
   if (isRetirementOnlyRecovery(task)) return (retirementCompletion || await verifyRetirementRecoveryCompletion(task))?.status === 'verified';
   if (success && mergedReviewFollowUp?.status === 'verified') return true;
   const taskType = task?.taskType || 'user';
@@ -161,6 +165,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Only the server-owned selected-issue verifier supplies this proof. Ordinary
   // claim shipping keeps its existing PR/fidelity gates and undeclared criterion.
   if (success && hasClaimFlowContract(task) && claimDisposition?.status === 'verified') return true;
+  if (success && runtimeContinuation?.status === 'verified') return true;
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
@@ -285,6 +290,8 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
 
 // Output-hook outcomes that mean "the hook returned before validating the agent's
 // output at all" — distinct from both a rejection and an acceptance.
+// An approval-gated investigation can start days after the run it investigates.
+const OVERTURN_LOOKBACK_DAYS = 7;
 const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
 
 /**
@@ -945,6 +952,12 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!objective) return claimFlow
     ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
     : noFidelityVerdict();
+  if (isGoalFidelityInvestigation(task)) {
+    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgentsWithArchive({ endAt: Date.now(), lookbackDays: OVERTURN_LOOKBACK_DAYS }) });
+    if (overturned) {
+      return fidelityNotJudged(`This investigation overturned the goal-fidelity finding (${overturned.gap}); its diff is not judged against the investigated objective.`);
+    }
+  }
 
   // Retain the actual compared commits for an investigator on another checkout.
   // Pin before reading the diff so a moving HEAD cannot misattribute the review.
@@ -974,6 +987,17 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
+  // Only a retry can have earlier attempts. A claim's objective is the issue it
+  // selected this time, which an earlier attempt's merge need not concern.
+  const priorDelivery = !claimFlow && Number(task.metadata?.totalSpawnCount) > 1
+    ? await import('./goalFidelityPriorDelivery.js')
+      .then(({ priorTaskDelivery }) => priorTaskDelivery({
+        taskId: task.id, workspacePath, head, startedAt,
+        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length,
+      }))
+      .catch(() => null)
+    : null;
+
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -983,6 +1007,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     // their bounded image content inside the OBJECTIVE block, not as diff data.
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
+    ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
@@ -997,6 +1022,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       backend: result.backend,
       model: result.model,
       ...(truncated ? { diffTruncated: true } : {}),
+      ...(priorDelivery ? { priorDeliveryHeads: priorDelivery.heads } : {}),
       checkedAt: new Date().toISOString(),
     },
     error: null,
@@ -1316,7 +1342,7 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
   // Only an explicit hold suppresses orphan recovery; a failed delivery check
   // must retain the caller's normal failure/retry handling.
-  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
+  let deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
   let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
   const errorAnalysis = refused ? {
     category: interruption.category, origin: interruption.source || 'provider',
@@ -1338,6 +1364,15 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
     ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
     success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
+  if (effectiveSuccess && (agent.metadata?.taskAnalysisType === 'do-release'
+    || agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2)) {
+    const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
+    const delivery = await verifyReleaseDelivery(agent, taskOutcome);
+    if (delivery && !delivery.verified) {
+      taskOutcome = { status: 'incomplete', reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
+      deliveryHeld = true;
+    }
+  }
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
 
   const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
@@ -2106,12 +2141,19 @@ async function finalizeAgentInCompletionContext({
 
   const taskType = task?.taskType || 'user';
 
+  const runtimeContinuation = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'completed'
+    && task.metadata?.runtimeVerification?.status === 'resumed'
+    ? await import('./runtimeVerification.js')
+      .then(({ verifyRuntimeVerificationContinuation }) => verifyRuntimeVerificationContinuation(task, agentId))
+      .catch(() => null) : null;
+
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
   const validationPassed = await evaluateSuccessCriteria({
+    agentId,
     task,
     terminatedByUser,
     workspacePath,
@@ -2123,16 +2165,30 @@ async function finalizeAgentInCompletionContext({
     claimDisposition,
     mergedReviewFollowUp,
     retirementCompletion,
+    runtimeContinuation,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
       return null;
     });
 
+  const runtimeCompletionMissing = task.metadata?.runtimeVerification?.status === 'resumed'
+    && !reportedTaskOutcome && validationPassed !== true;
   let taskOutcome = resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
-    ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedTaskOutcome, success: verdict.success,
+    ? { status: 'incomplete', reason: retirementCompletion.reason }
+    : runtimeCompletionMissing ? { status: 'incomplete', reason: 'Runtime verification completion was not established.' }
+      : reportedTaskOutcome, success: verdict.success,
     validationPassed, branchProvenEmpty, noChangeAllowed: permitsNoChangeCompletion(task),
     noCommitDeclared: declaresNoCommitCriterion(task) });
+  if (verdict.success) {
+    const owner = await getAgentRecord(agentId);
+    if (owner?.metadata?.taskAnalysisType === 'do-release' || owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
+      const { verifyReleaseDelivery } = await import('./releaseDeliveryGate.js');
+      const delivery = await verifyReleaseDelivery(owner, taskOutcome);
+      if (delivery && !delivery.verified) taskOutcome = { status: 'incomplete',
+        reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
+    }
+  }
   if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
     taskOutcome = { status: 'completed', ...(taskOutcome.reason ? { reason: taskOutcome.reason } : {}) };
   }

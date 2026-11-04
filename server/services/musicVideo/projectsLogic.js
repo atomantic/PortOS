@@ -1,5 +1,6 @@
 import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
  *
@@ -44,11 +45,16 @@ import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
 import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
+import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
 import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
-import { cuesSungWithin, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
-import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes } from '../../lib/musicVideoColdOpen.js';
+import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
+import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
+
+/** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
+export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -457,7 +463,7 @@ export function applyProjectPatch(project, patch) {
   const trackChanged = ('trackId' in patch && patch.trackId !== project.trackId)
     || ('uploadedAudioFilename' in patch && patch.uploadedAudioFilename !== project.uploadedAudioFilename);
   if ('mediaMode' in patch || patch.visualSpec || patch.styleReferences) assertMusicVideoMediaSelections({ ...project, ...mergedPatch });
-  if (!trackChanged) return touch(project, mergedPatch);
+  if (!trackChanged) return nextLyricCues ? syncWordAnchoredScenes(project, touch(project, mergedPatch)) : touch(project, mergedPatch);
   // A planned section belongs to the old audio too; clear its provenance so
   // the renderer does not preserve that plan's timing on the replacement song.
   const scenes = (project.scenes || []).map((s) => (s.beatAligned || s.sectionIndex != null
@@ -482,8 +488,10 @@ export function applyProjectPatch(project, patch) {
     ...(project.composition ? { composition: invalidateCompositionTiming(project.composition) } : {}),
     // A vocal stem is a bounce of the OLD song; conditioning a performance on
     // it against the new master would sing the wrong words (#8977).
-    ...(project.vocalStemFilename ? { vocalStemFilename: null } : {}),
+    ...(project.vocalStemFilename ? CLEARED_VOCAL_STEM : {}),
     performanceConditioningSource: 'master',
+    // Lyric timing belonged to the old audio; its recorded basis goes with it (#14793).
+    ...(project.lyricTimingMasterFilename ? { lyricTimingMasterFilename: null } : {}),
     ...mergedPatch,
     ...statusPatch,
     audioAnalysis: null,
@@ -528,6 +536,8 @@ function buildScene(input, { order }) {
     startSec: input.startSec ?? null,
     endSec: input.endSec ?? null,
     beatAligned: input.beatAligned ?? false,
+    ...(input.beatNeedsReview ? { beatNeedsReview: true } : {}),
+    ...(input.pacingCut ? { pacingCut: true } : {}),
     prompt: input.prompt ?? '',
     framePrompt: input.framePrompt ?? null,
     // #8964: a new shot never silently repeats its clip to fill a span — looping
@@ -536,8 +546,11 @@ function buildScene(input, { order }) {
     loop: input.loop ?? false,
     sectionIndex: input.sectionIndex ?? null,
     lyricText: input.lyricText ?? null,
+    ...(input.lyricAnchor ? { lyricAnchor: input.lyricAnchor } : {}),
     visualIntent: input.visualIntent ?? null,
     ...(input.frameReferenceIds ? { frameReferenceIds: input.frameReferenceIds } : {}),
+    ...(input.clipReferenceIds ? { clipReferenceIds: input.clipReferenceIds } : {}),
+    ...(input.researchReferences?.length ? { researchReferences: input.researchReferences } : {}),
     ...(input.setReference ? { setReference: input.setReference } : {}),
     ...(input.characterVariant ? { characterVariant: input.characterVariant } : {}),
     // #8985: what a composed render shows for this span (render.js#sceneLayer).
@@ -556,6 +569,8 @@ function buildScene(input, { order }) {
     ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
+    ...(input.wipeIn ? { wipeIn: input.wipeIn } : {}),
+    ...(input.wipeOut ? { wipeOut: input.wipeOut } : {}),
     ...(input.glitches?.length ? { glitches: input.glitches } : {}),
     ...(input.cutEffect ? { cutEffect: input.cutEffect } : {}),
     ...(input.imageEffect ? { imageEffect: input.imageEffect } : {}),
@@ -640,6 +655,8 @@ function carryOver(prior, fresh) {
     ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
     ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
     ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
+    ...(prior.wipeIn ? { wipeIn: prior.wipeIn } : {}),
+    ...(prior.wipeOut ? { wipeOut: prior.wipeOut } : {}),
     ...(prior.glitches?.length ? { glitches: prior.glitches } : {}),
     ...(prior.cutEffect ? { cutEffect: prior.cutEffect } : {}),
     // A still playing an image effect stays one: the effect is the shot's picture.
@@ -648,6 +665,7 @@ function carryOver(prior, fresh) {
     ...(prior.photoSequence ? { photoSequence: prior.photoSequence, ...(prior.visualLayer === 'still' ? { visualLayer: 'still' } : {}) } : {}),
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
+    ...(prior.cameoId ? { cameoId: prior.cameoId, ...(prior.cameoVariantId ? { cameoVariantId: prior.cameoVariantId } : {}), ...(prior.cameoLabel ? { cameoLabel: prior.cameoLabel } : {}) } : {}),
   };
 }
 
@@ -721,7 +739,7 @@ export function applyStoryboardShotSync(project, plan) {
     const prior = byId.get(shot.sceneId);
     if (!prior) throw new ServerError('A shot changed since the sync was planned. Check it again.', { status: 409, code: 'SHOTS_CHANGED' });
     const patch = 'preMusic' in shot.patch ? { ...shot.patch, preMusic: normalizePreMusic(shot.patch.preMusic) } : shot.patch;
-    return { ...prior, ...patch };
+    return keepAnchorOnItsWord(prior, { ...prior, ...patch }, project.lyricCues);
   });
   const removing = new Set(plan.removed.filter((shot) => !shot.blocked).map((shot) => shot.sceneId));
   const kept = plan.removed.filter((shot) => shot.blocked).map((shot) => byId.get(shot.sceneId)).filter(Boolean);
@@ -744,9 +762,29 @@ export function applyStoryboardShotSync(project, plan) {
 // Scene fields a director edits within an approved shot (its span, wording, selected
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
-const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage'];
+const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
+  'cameoId', 'cameoVariantId', 'cameoLabel'];
+
+/**
+ * A shot linked to another roster cameo (or variant) trades the still it
+ * inherited for the new cameo's; a shot with its own still keeps it (#14821).
+ */
+function linkSceneCameo(project, before, after) {
+  const cameoId = after.cameoId || null;
+  const cameo = findMusicVideoCameo(project, cameoId);
+  if (cameoId && !cameo) throw new ServerError('Cameo not found', { status: 404, code: 'NOT_FOUND' });
+  const variantId = cameo ? after.cameoVariantId || null : null;
+  if (variantId && !(cameo.variants || []).some((v) => v.variantId === variantId)) {
+    throw new ServerError('That variant is not on this cameo', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const linked = { ...after, cameoId, cameoVariantId: variantId };
+  if (!cameoId) { delete linked.cameoId; delete linked.cameoVariantId; delete linked.cameoLabel; }
+  else if (!variantId) delete linked.cameoVariantId;
+  const relinked = before.cameoId !== cameoId || (before.cameoVariantId || null) !== variantId;
+  return relinked ? fillSceneFromCameo(linked, cameoStillFor(cameo, variantId)) : linked;
+}
 
 /**
  * Apply a patch to a single scene. Returns `{ project, updated }`. Throws if the
@@ -760,7 +798,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const kept = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  const patched = 'codeClip' in data ? { ...scenes[idx], ...data } : keepCodeClipWithItsClip(scenes[idx], { ...scenes[idx], ...data });
+  const kept = keepAnchorOnItsWord(scenes[idx], patched, project.lyricCues);
   // A shot turning into a still takes the nearest move to its planned camera (#10589) unless
   // it already has one; from then on its Move picker owns how the still moves.
   const becomesStill = data.visualLayer === 'still' && scenes[idx].visualLayer !== 'still' && !('stillMove' in data) && (kept.stillMove ?? 'hold') === 'hold';
@@ -769,7 +808,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   // Setting a slot directly (an older client, or a hand edit) still records the
   // asset as a take so the candidate list stays a superset of the selection.
   const touchesSlot = Object.values(TAKE_SLOT).some((field) => typeof data[field] === 'string');
-  const updated = touchesSlot ? { ...merged, takes: ensureSceneTakes(merged, undefined, 'manual') } : merged;
+  const slotted = touchesSlot ? { ...merged, takes: ensureSceneTakes(merged, undefined, 'manual') } : merged;
+  const updated = ('cameoId' in data || 'cameoVariantId' in data) ? linkSceneCameo(project, scenes[idx], slotted) : slotted;
   // The partial-patch schema can't enforce endSec >= startSec (the paired value
   // may be unchanged on the record), so validate the merged range here.
   if (updated.startSec != null && updated.endSec != null && updated.endSec < updated.startSec) {
@@ -788,6 +828,33 @@ export function applySceneUpdate(project, sceneId, patch) {
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
+}
+
+/**
+ * "Vary wipes": a wipe out of each of `count` shots from `fromSceneId` in song
+ * order, no style twice in a row (nor the wipe out of the shot before the run),
+ * each replacing that shot's glitch out. The last shot has no cut out and is
+ * skipped. Returns `{ project, scenes }`, `scenes` the changed shots.
+ */
+export function varySceneWipes(project, { fromSceneId, count, styles, lengthSec = null, color = null, seed = 1 }) {
+  const timed = (project.scenes || []).filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
+  const start = timed.findIndex((scene) => scene.sceneId === fromSceneId);
+  if (start < 0) throw new ServerError('Pick a timed shot to start from', { status: 404, code: 'NOT_FOUND' });
+  const run = timed.slice(start, Math.min(timed.length - 1, start + count));
+  if (!run.length) throw new ServerError('The last shot has no cut out to wipe', { status: 400, code: 'VALIDATION_ERROR' });
+  const picks = varyWipes(run.length, { styles, previous: start > 0 ? sceneWipe(timed[start - 1], 'out')?.style ?? null : null, seed });
+  let next = project;
+  const scenes = run.map((scene, i) => {
+    const wipeOut = {
+      style: picks[i],
+      ...(lengthSec ? { lengthSec } : {}),
+      ...(color && MUSIC_VIDEO_EDGED_WIPES.includes(picks[i]) ? { color } : {}),
+    };
+    const outcome = applySceneUpdate(next, scene.sceneId, { wipeOut, transitionOut: null });
+    next = outcome.project;
+    return outcome.updated;
+  });
+  return { project: next, scenes };
 }
 
 /** Remove a scene and re-sequence the remaining scenes' `order`. Returns the next record. */
@@ -814,7 +881,7 @@ export function removeScene(project, sceneId) {
 // the song, its section, and the lyric sung there. A reorder leaves these on
 // their positions and moves only the shot (prompts, frames, clips, takes,
 // direction, camera), so swapping two shots keeps the song timing intact.
-const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricRole', 'lyricSize'];
+const SCENE_SLOT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'sectionIndex', 'sectionLabel', 'lyricText', 'lyricAnchor', 'lyricRole', 'lyricSize'];
 const DRAFT_SHOT_SLOT_FIELDS = ['startSec', 'endSec', 'lyricCueIds'];
 const pickSlot = (record, fields) => Object.fromEntries(fields.filter((k) => k in record).map((k) => [k, record[k]]));
 const withoutSlot = (record, fields) => Object.fromEntries(Object.entries(record).filter(([k]) => !fields.includes(k)));
@@ -900,8 +967,16 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   });
   if (!plan.ok) throw new ServerError(plan.message, { status: 400, code: plan.code });
 
+  return applySceneSplit(project, sceneId, plan.pieces);
+}
+
+/** Apply a previously planned split, shared by the single-shot and pacing actions. */
+export function applySceneSplit(project, sceneId, plannedPieces, { preserveClip = false, needsBeat = false } = {}) {
+  const scenes = project.scenes || [];
+  const idx = scenes.findIndex((s) => s.sceneId === sceneId);
+  const scene = scenes[idx];
   const now = new Date().toISOString();
-  const count = plan.pieces.length;
+  const count = plannedPieces.length;
   // Re-splitting a piece numbers it afresh rather than stacking suffixes.
   const baseLabel = (scene.label || scene.sectionLabel || `Scene ${idx + 1}`).replace(/ · \d+\/\d+$/, '');
   const pieceLabel = (i) => {
@@ -911,15 +986,19 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
   const hasTimedCues = (project.lyricCues || []).some((cue) => typeof cue?.startSec === 'number');
   const pieceLyrics = (piece) => (hasTimedCues ? sungLyricTextWithin(project.lyricCues, piece.startSec, piece.endSec) : scene.lyricText ?? null);
 
-  const pieces = plan.pieces.map((piece, i) => {
-    const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece) };
+  const grid = [...(project.audioAnalysis?.beats || []), ...(project.audioAnalysis?.downbeats || [])];
+  const onGrid = (t) => t === 0 || t === project.audioAnalysis?.durationSec
+    || grid.some((beat) => Math.abs(beat - t) <= 0.005);
+  const pieces = plannedPieces.map((piece, i) => {
+    const timing = { label: pieceLabel(i), startSec: piece.startSec, endSec: piece.endSec, lyricText: pieceLyrics(piece),
+      ...(needsBeat ? { pacingCut: true, beatAligned: onGrid(piece.startSec) && onGrid(piece.endSec) } : {}) };
     if (i === 0) {
       const takes = ensureSceneTakes(scene, now);
-      // A lip-synced take was generated for the old interval and the render
-      // refuses it as re-timed, so the selection is cleared (the take stays a
-      // candidate) and "Generate missing" fills it. A cutaway clip still starts
-      // where the first piece does, so it stays selected and is trimmed.
-      return isPerformanceScene(scene)
+      // The ordinary backend split clears a performance selection and leaves
+      // the take as a candidate. Pacing retains the start-aligned prefix:
+      // performanceShot's playsInSync explicitly permits shortening only its end.
+      // A cutaway clip also starts where the first piece does and is trimmed.
+      return isPerformanceScene(scene) && !preserveClip
         ? { ...scene, ...timing, takes, videoHistoryId: null }
         : { ...scene, ...timing, takes };
     }
@@ -929,6 +1008,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
         prompt: scene.prompt ?? '',
         framePrompt: scene.framePrompt ?? null,
         beatAligned: scene.beatAligned ?? false,
+        ...(scene.pacingCut ? { pacingCut: true } : {}),
         loop: scene.loop ?? false,
         sectionIndex: scene.sectionIndex ?? null,
         visualIntent: scene.visualIntent ?? null,
@@ -948,6 +1028,7 @@ export function splitScene(project, sceneId, { backend = null, atSec = null } = 
     const seeded = {
       ...fresh,
       ...(scene.direction ? { direction: structuredClone(scene.direction) } : {}),
+      ...(needsBeat ? { beatNeedsReview: true } : {}),
       referenceImageId: scene.referenceImageId ?? null,
     };
     return { ...seeded, takes: ensureSceneTakes(seeded, now, 'manual') };
@@ -998,6 +1079,183 @@ function splitAtTime(scene, atSec) {
   return { ok: true, pieces: [{ startSec, endSec: atSec }, { startSec: atSec, endSec }] };
 }
 
+// #14820: a word-anchored shot starts within half a 24 fps frame of its word.
+const ANCHOR_TOLERANCE_SEC = 1 / 48;
+const sameCut = (a, b) => Math.abs(a - b) < 1e-3;
+
+/**
+ * `next` without its word anchor when it was cleared (null) or its start was
+ * moved by hand off its word (or while the word has no timing, so the next
+ * alignment cannot pull it back). Other edits keep it, even on a shot whose
+ * re-sync was blocked, so the storyboard check can still name it.
+ */
+function keepAnchorOnItsWord(prior, next, cues) {
+  if (!('lyricAnchor' in next)) return next;
+  if (next.lyricAnchor && next.startSec === prior.startSec) return next;
+  const onset = next.lyricAnchor ? lyricAnchorOnset(cues, next.lyricAnchor) : null;
+  if (next.lyricAnchor && onset && timedSec(next.startSec) && Math.abs(onset.startSec - next.startSec) <= ANCHOR_TOLERANCE_SEC) return next;
+  return withoutSlot(next, ['lyricAnchor']);
+}
+
+const cutAnchor = (cut) => ({ cueId: cut.cueId, wordIndex: cut.wordIndex, wordCount: cut.wordCount });
+
+/**
+ * A board with no timed shots has nothing to split, so lay one shot per cut over
+ * the chosen lines. Each runs to the next cut, which keeps them contiguous so a
+ * re-alignment moves the shared cut, and the last ends with its last sung word.
+ * Adds no storyboard row and carries no approval: these shots are new to the board.
+ */
+function layOutShotsOnCuts(project, cuts) {
+  const kept = [];
+  for (const cut of cuts) {
+    if (!kept.length || cut.startSec - kept.at(-1).startSec >= MIN_SPLIT_PIECE_SEC) kept.push(cut);
+  }
+  const { project: next, scenes } = addScenes(project, kept.map((cut, i) => ({
+    startSec: cut.startSec,
+    endSec: kept[i + 1]?.startSec ?? Math.max(cut.endSec ?? 0, cut.startSec + MIN_SPLIT_PIECE_SEC),
+    lyricText: cut.text,
+    lyricAnchor: cutAnchor(cut),
+  })));
+  return { project: touch(next, { wordCutBoard: true }), scenes, skipped: cuts.length - kept.length, from: {}, laidOut: true };
+}
+
+/**
+ * Cut the board on sung words (#14820): over the lyric lines `cueIds`, one shot
+ * per phrase (`mode: 'phrase'`, split on commas and sentence marks) or per word,
+ * each starting on its first word's onset and anchored to it (`lyricAnchor`,
+ * with the phrase as its `lyricText`), so re-aligning the vocal moves it with
+ * the word (`syncWordAnchoredScenes`). A word that lands near an existing cut
+ * moves that cut onto it; one inside a shot splits the shot there
+ * (`applySceneSplit`, so later pieces carry the shot's direction and frame).
+ * Words outside every timed shot, or too close to another cut, are skipped. A
+ * board with no timed shots gets its shots laid out over the lines instead
+ * (`layOutShotsOnCuts`, `laidOut: true`). Refused only when the shot manifest owns
+ * the storyboard: a document project can keep its shots on the Board (#14846).
+ * Returns `{ project, scenes, skipped, from, laidOut }`: the anchored shots, how
+ * many cut points were skipped, and each new piece's source shot (for shot locks).
+ */
+export function cutScenesOnLyricWords(project, { cueIds, mode = 'phrase' } = {}) {
+  if (project.productionReview?.draft?.storyboardSource === 'document') {
+    throw new ServerError("This video's shots come from its composition document — anchor them in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_DOCUMENT' });
+  }
+  const { cuts, untimed } = lyricWordCuts(project.lyricCues, cueIds, mode);
+  if (untimed.length) {
+    throw new ServerError(`Align the lyric words first: "${untimed[0].slice(0, 80)}" has no word timing.`, { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_UNTIMED' });
+  }
+  if (!cuts.length) throw new ServerError('Choose lyric lines with sung words to cut on.', { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_EMPTY' });
+  if (!timedSongScenes(project).length) return layOutShotsOnCuts(project, cuts);
+  let next = project;
+  const anchors = new Map();
+  const inside = new Map();
+  let skipped = 0;
+  // An existing cut a word lands near moves onto the word; the shot before it ends there.
+  for (const cut of cuts) {
+    const scenes = timedSongScenes(next);
+    const at = scenes.findIndex((scene) => Math.abs(scene.startSec - cut.startSec) < MIN_SPLIT_PIECE_SEC);
+    const scene = scenes[at];
+    if (scene) {
+      const prev = at > 0 && sameCut(scenes[at - 1].endSec, scene.startSec) ? scenes[at - 1] : null;
+      const movable = !anchors.has(scene.sceneId) && cut.startSec < scene.endSec - MIN_SPLIT_PIECE_SEC
+        && (prev ? cut.startSec > prev.startSec + MIN_SPLIT_PIECE_SEC : Math.abs(scene.startSec - cut.startSec) <= ANCHOR_TOLERANCE_SEC);
+      if (!movable) { skipped += 1; continue; }
+      if (!sameCut(scene.startSec, cut.startSec)) {
+        next = applySceneUpdate(next, scene.sceneId, { startSec: cut.startSec }).project;
+        if (prev) next = applySceneUpdate(next, prev.sceneId, { endSec: cut.startSec }).project;
+      }
+      anchors.set(scene.sceneId, cut);
+      continue;
+    }
+    const host = scenes.find((s) => cut.startSec > s.startSec && cut.startSec < s.endSec);
+    if (!host) { skipped += 1; continue; }
+    inside.set(host.sceneId, [...(inside.get(host.sceneId) || []), cut]);
+  }
+  // Every word inside a shot splits it in one pass, so its pieces number 1/n…n/n.
+  const from = {};
+  for (const [sceneId, sceneCuts] of inside) {
+    const scene = next.scenes.find((s) => s.sceneId === sceneId);
+    const kept = [];
+    for (const cut of sceneCuts) {
+      const last = kept.at(-1)?.startSec ?? scene.startSec;
+      if (cut.startSec - last >= MIN_SPLIT_PIECE_SEC && scene.endSec - cut.startSec >= MIN_SPLIT_PIECE_SEC) kept.push(cut); else skipped += 1;
+    }
+    if (!kept.length) continue;
+    const bounds = [scene.startSec, ...kept.map((cut) => cut.startSec), scene.endSec];
+    const split = applySceneSplit(next, sceneId, bounds.slice(0, -1).map((startSec, i) => ({ startSec, endSec: bounds[i + 1] })));
+    next = split.project;
+    split.scenes.slice(1).forEach((piece, i) => { anchors.set(piece.sceneId, kept[i]); from[piece.sceneId] = sceneId; });
+  }
+  // A board with word cuts renders every timed shot at its saved span (musicVideoLayers.wordTimedScenes).
+  const scenes = next.scenes.map((scene) => {
+    const cut = anchors.get(scene.sceneId);
+    return cut ? { ...scene, lyricText: cut.text, lyricAnchor: cutAnchor(cut) } : scene;
+  });
+  next = carryStoryboardApproval(project, touch(next, { scenes, wordCutBoard: true }), 'Cut shots on lyric words');
+  return { project: next, scenes: scenes.filter((scene) => anchors.has(scene.sceneId)), skipped, from, laidOut: false };
+}
+
+/**
+ * After the lyric words move (#14820), each word-anchored shot starts on its
+ * word's new onset and the shot before it ends there; its `lyricText` follows
+ * the words. A shot whose word is gone keeps its time and is listed
+ * `unresolved`; a move that would leave it or its neighbour under 0.1 s is
+ * `blocked`. What happened is kept on `lyricAnchorSync` for the board to show.
+ * `before` is the record the new lyric came from. Returns the next record.
+ */
+function syncWordAnchoredScenes(before, project) {
+  const order = timedSongScenes(project).map((scene) => ({ ...scene }));
+  const targets = new Map(order.filter((scene) => scene.lyricAnchor)
+    .map((scene) => [scene.sceneId, lyricAnchorOnset(project.lyricCues, scene.lyricAnchor)]));
+  if (!targets.size) return project;
+  const moved = [];
+  const unresolved = [];
+  const blocked = [];
+  const retimed = new Set();
+  // Which shots meet the one before them, on the timing before any move.
+  const meets = order.map((scene, i) => i > 0 && sameCut(order[i - 1].endSec, scene.startSec));
+  const proposed = new Map();
+  order.forEach((scene, i) => {
+    if (!targets.has(scene.sceneId)) return;
+    const onset = targets.get(scene.sceneId);
+    if (!onset) { unresolved.push(scene.sceneId); return; }
+    if (scene.lyricText !== onset.text) { scene.lyricText = onset.text; retimed.add(scene.sceneId); }
+    if (!sameCut(onset.startSec, scene.startSec)) proposed.set(i, onset.startSec);
+  });
+  // Moves depend on their neighbours' moves, so drop any that would leave a shot
+  // under 0.1 s (or overlapping) given the others, until the rest all fit.
+  for (let dropped = true; dropped;) {
+    dropped = false;
+    for (const [i, at] of proposed) {
+      const end = meets[i + 1] && proposed.has(i + 1) ? proposed.get(i + 1) : order[i].endSec;
+      const prevStart = i > 0 ? proposed.get(i - 1) ?? order[i - 1].startSec : null;
+      const fitsBefore = meets[i] ? at >= prevStart + MIN_SPLIT_PIECE_SEC : i === 0 || at >= order[i - 1].endSec;
+      if (at > end - MIN_SPLIT_PIECE_SEC || !fitsBefore) {
+        proposed.delete(i);
+        blocked.push(order[i].sceneId);
+        dropped = true;
+      }
+    }
+  }
+  for (const [i, at] of proposed) {
+    const scene = order[i];
+    moved.push({ sceneId: scene.sceneId, fromSec: scene.startSec, toSec: at });
+    scene.startSec = at;
+    retimed.add(scene.sceneId);
+    if (meets[i]) {
+      const prev = order[i - 1];
+      prev.endSec = at;
+      if (!prev.lyricAnchor) prev.lyricText = sungLyricTextWithin(project.lyricCues, prev.startSec, prev.endSec);
+      retimed.add(prev.sceneId);
+    }
+  }
+  if (!retimed.size && !unresolved.length && !blocked.length) return project;
+  const byId = new Map(order.map((scene) => [scene.sceneId, scene]));
+  const scenes = (project.scenes || []).map((scene) => byId.get(scene.sceneId) || scene);
+  const lyricAnchorSync = moved.length || unresolved.length || blocked.length
+    ? { at: new Date().toISOString(), moved, unresolved, blocked } : project.lyricAnchorSync ?? null;
+  const next = anchorShotsToSungLyrics(touch(project, { scenes, lyricAnchorSync }), [...retimed]);
+  return carryStoryboardApproval(before, next, 'Shots followed their lyric words');
+}
+
 /**
  * Join a scene with the one after it — the inverse of `splitScene`. The first
  * scene keeps its id, takes and selections and stretches to the next scene's
@@ -1038,7 +1296,8 @@ function joinScenes(project, idx, { keep, backend }) {
   const scenes = project.scenes || [];
   const [first, second] = [scenes[idx], scenes[idx + 1]];
   const [kept, removed] = keep === 'first' ? [first, second] : [second, first];
-  if (project.composition?.mode === 'document') {
+  // Only a manifest-sourced storyboard owns the shot order; a Board-sourced document project merges here.
+  if (project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document') {
     throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });
   }
   const lane = backend || project.videoSettings?.backend || null;
@@ -1065,10 +1324,12 @@ function joinScenes(project, idx, { keep, backend }) {
     if (shared) takes = [...takes, shared];
   }
   const lyricText = [first.lyricText, second.lyricText].filter((t) => typeof t === 'string' && t.trim()).join(' / ').slice(0, 2000) || null;
-  const merged = {
+  const merged = withoutSlot({
     ...kept, startSec, endSec, lyricText, takes,
     ...(isPerformanceScene(kept) ? { videoHistoryId: null } : {}),
-  };
+  }, ['lyricAnchor']);
+  // The joined shot starts where the first did, so it is cut on the first one's word, if any.
+  if (first.lyricAnchor) merged.lyricAnchor = first.lyricAnchor;
 
   const nextScenes = [...scenes.slice(0, idx), merged, ...scenes.slice(idx + 2)].map((s, i) => ({ ...s, order: i }));
   const extra = { scenes: nextScenes };

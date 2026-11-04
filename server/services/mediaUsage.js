@@ -102,6 +102,7 @@ function catalogMediaPlace(type, kind, role) {
   if (r === 'plate') return { tab: 'plates', role: 'Plate' };
   if (r.startsWith('design:')) return { tab: 'design', role: 'Design take' };
   if (r.startsWith('greybox-shot:')) return { tab: 'greybox', role: 'Greybox shot' };
+  if (r.startsWith('photoreal:')) return { tab: 'photoreal', role: 'Photoreal render' };
   if (kind === 'portrait') return { tab: null, role: 'Portrait' };
   return { tab: type === 'object' ? 'images' : 'references', role: kind === 'video' ? 'Video' : 'Reference' };
 }

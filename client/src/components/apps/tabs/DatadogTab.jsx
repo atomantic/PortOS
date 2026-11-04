@@ -100,7 +100,7 @@ export default function DatadogTab({ app }) {
             onClick={fetchErrors}
             disabled={loading}
             aria-label="Refresh errors"
-            className="p-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>

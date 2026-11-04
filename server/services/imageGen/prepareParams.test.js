@@ -298,6 +298,82 @@ it('uses moodboard caption text on a backend without image-reference support', a
   expect(data.referenceImagePaths).toBeUndefined();
 });
 
+// The renderer limit must not erase inputs before the existing capability gates see them.
+it('refuses music-video references on renderers that cannot consume them', async () => {
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const request = { prompt: 'a lighthouse', referenceImageFiles: ['lead.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } };
+  getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  await expect(run({ ...request })).rejects.toMatchObject({ code: 'IMAGE_EDIT_UNSUPPORTED_MODE' });
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+  await expect(run({ ...request, modelId: 'schnell' })).rejects.toMatchObject({ code: 'REFERENCE_IMAGES_FLUX2_ONLY' });
+});
+
+// Catches a dropped panel or a take snapshot claiming an identity removed by the renderer cap.
+it('retains automatic panel art within the renderer cap and records only the sent cast inputs', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['start.png', 'a.png', 'b.png', 'c.png', 'd.png', 'panel.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  const sheets = ['a', 'b', 'c', 'd'].map((id) => ({ id: `mvr-cs-cast-${id}`, imageId: `${id}.png` }));
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ visualSpec: { references: sheets }, scenes: [{ sceneId: 's1', panelArt: 'panel.png' }] });
+  const { data } = await run({ prompt: 'Raise the hand', referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png', 'd.png', 'panel.png'],
+    referenceStrengths: [1, 0.8, 0.7, 0.6, 0.5, 0.4],
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, refine: true, castInputs: { ingredientId: null, guides: [], sheets } } });
+  expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['start.png', 'a.png', 'b.png', 'c.png', 'panel.png']);
+  expect(data.referenceImageStrengths).toEqual([1, 0.8, 0.7, 0.6, 0.4]);
+  expect(data.musicVideo.castInputs.sheets).toEqual(sheets.slice(0, 3));
+});
+
+it('keeps separate strengths for repeated named references', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'same.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'a lighthouse', referenceImageFiles: ['same.png', 'same.png'], referenceStrengths: [0.3, 0.9],
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.referenceImageStrengths).toEqual([0.3, 0.9]);
+});
+
+it('names a retained overflow face sheet in the composed board prompt', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'face.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ visualSpec: { references: [] }, castAndSets: { status: 'approved', overflowFaceReferences: [
+    { id: 'mvr-cs-face-example', imageId: 'face.png', role: 'character', label: 'Example face sheet' },
+  ] }, scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'Close-up', referenceImageFiles: ['face.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.prompt).toContain('Reference image 1 is Example face sheet');
+});
+
+it('keeps FLUX.3 music-video references instead of treating the model as text-only', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  const files = Array.from({ length: 6 }, (_, i) => `flux3-${i}.png`);
+  for (const file of files) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'a lighthouse', modelId: 'flux3-klein-q4', width: 1536, height: 864,
+    referenceImageFiles: files, musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(files);
+  expect(data).toMatchObject({ width: 1024, height: 576 });
+});
+
+it('uses the configured cloud model limit and the request limit when a provider declares no maximum', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  const files = Array.from({ length: 11 }, (_, i) => `cloud-${i}.png`);
+  for (const file of files) writeFileSync(join(PATHS.images, file), 'fixture');
+  getProject.mockResolvedValue({ scenes: [{ sceneId: 's1' }] });
+  for (const [mode, config] of [['fal', { enabled: true, model: 'fal-ai/nano-banana-pro' }], ['grok', { enabled: true }]]) {
+    getSettings.mockResolvedValue({ imageGen: { mode, [mode]: config } });
+    const { data } = await run({ prompt: 'a lighthouse', mode, referenceImageFiles: files,
+      musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+    expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(files);
+  }
+});
+
 // Uniquely catches a board still sent with the director's text but without the
 // server's composed look, or with the look and no chips for it (#11317).
 it('composes a board still from the director\'s text and lists what it adds', async () => {
@@ -309,11 +385,64 @@ it('composes a board still from the director\'s text and lists what it adds', as
   expect(data.promptAdditions.map((item) => item.id)).toEqual(['project-style', 'rework-frame', 'mood-board-style']);
 });
 
+// The preview and submission share this preparation path: a Casting guide must
+// keep its identity and position even when an init image leads the inputs.
+it('names Casting guides and project references in the order the backend receives them', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['init.png', 'guide.png', 'set.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({
+    concept: { subjects: [{ ingredientId: 'cat-example', name: 'Example lead' }] },
+    visualSpec: { references: [{ imageId: 'set.png', role: 'set', label: 'Example set' }] },
+    scenes: [{ sceneId: 's1', characterVariant: { ingredientId: 'cat-example', age: 7 } }],
+  });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ mediaKey: 'guide.png', kind: 'reference', library: { guide: true, variant: { age: 7 } } }]);
+  const tag = { projectId: 'mv-1', sceneId: 's1', compose: true };
+  const { data } = await run({ prompt: 'A crowd gathers', initImageFile: 'init.png', referenceImageFiles: ['guide.png', 'set.png'], musicVideo: tag });
+  expect(data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['guide.png', 'set.png']);
+  expect(data.prompt).toContain('Reference image 2 is Example lead · age 7: this exact person.');
+  expect(data.prompt).toContain('Reference image 3 is the set reference "Example set"');
+  expect(data.prompt).not.toContain('Reference image 1 is');
+  expect(data.prompt).not.toContain('add nobody else');
+  expect(data.promptAdditions.find((item) => item.id === 'reference-map').text).toContain('Reference image 2');
+
+  // Without a separate init image, the explicitly picked frame keeps slot 1,
+  // even when that file also appears in the project's reference catalog.
+  const picked = await run({ prompt: 'A crowd gathers', referenceImageFiles: ['set.png', 'guide.png'], musicVideo: { ...tag, fromFrame: true } });
+  expect(picked.data.prompt).not.toContain('Reference image 1 is');
+  expect(picked.data.prompt).toContain('Reference image 2 is Example lead · age 7');
+
+  // A missing catalog read leaves the project's own reference usable.
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue(null);
+  const fallback = await run({ prompt: 'A crowd gathers', referenceImageFiles: ['guide.png', 'set.png'], musicVideo: tag });
+  expect(fallback.data.prompt).not.toContain('Reference image 1 is');
+  expect(fallback.data.prompt).toContain('Reference image 2 is the set reference "Example set"');
+
+  const peer = await prepareGenerateParams({ data: { prompt: 'A crowd gathers', initImageFile: 'init.png', referenceImageFiles: ['set.png'], musicVideo: tag, mediaProviderPeerId: '00000000-0000-4000-8000-000000000001' }, referenceImageFields: [], preview: true });
+  expect((peer.data.promptAdditions || []).map((item) => item.id)).not.toContain('reference-map');
+});
+
+// Composition must not describe the reduced inputs of a degraded render.
+it('refuses incompatible composed FLUX.2 inputs and preserves supported reference positions', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  writeFileSync(join(PATHS.images, 'lead.png'), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'local' } });
+  getProject.mockResolvedValue({ visualSpec: { references: [{ imageId: 'lead.png', role: 'character', label: 'Example lead' }] }, scenes: [{ sceneId: 's1' }] });
+  const request = { prompt: 'A crowd gathers', modelId: 'flux2-klein-9b', referenceImageFiles: ['lead.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } };
+  const supported = await run({ ...request });
+  expect(supported.data.prompt).toContain('Reference image 1 is Example lead');
+  for (const extra of [{ initImageFile: 'init.png' }, { loraFilenames: ['example.safetensors'] }, { loraPaths: ['example.safetensors'] }]) {
+    await expect(run({ ...request, ...extra })).rejects.toMatchObject({ status: 400, code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' });
+  }
+});
+
 // Uniquely catches a panel-linked still sent without its live panel's picks, or naming the wrong reference as the sketch.
 it('directs a panel-linked still by its live storyboard panel and names the sketch\'s reference slot', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
-  for (const file of ['sheet.png', 'sketch.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  for (const file of ['sheet.png', 'sketch.png', 'init.png']) writeFileSync(join(PATHS.images, file), 'fixture');
   getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
   getProject.mockResolvedValue({ storyboardId: 'sb-1', scenes: [{ sceneId: 's1', panelId: 'panel-1', panelArt: 'sketch.png' }] });
   getStoryboard.mockResolvedValue({ id: 'sb-1', beats: [{ panels: [{ id: 'panel-1', action: 'She laces her skates alone', framing: 'wide', facing: 'front' }] }] });
@@ -322,6 +451,8 @@ it('directs a panel-linked still by its live storyboard panel and names the sket
   expect(data.prompt).toContain('She laces her skates alone\nFraming: wide establishing shot.');
   expect(data.prompt).toContain('Reference image 2 is the storyboard sketch');
   expect(data.promptAdditions.map((item) => item.id).slice(0, 3)).toEqual(['storyboard-action', 'storyboard-shot', 'storyboard-sketch']);
+  const withInit = await run({ prompt: '', initImageFile: 'init.png', referenceImageFiles: ['sheet.png', 'sketch.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  expect(withInit.data.prompt).toContain('Reference image 3 is the storyboard sketch');
 });
 
 // Pins cleaner precedence where requests are prepared, without loading a backend.
@@ -355,6 +486,8 @@ it('sends the live greybox capture before set plates, retains the edited frame f
   const rendered = await run({ prompt: 'A wide shot', referenceImageFiles: ['plate.png'], musicVideo: tag });
   expect(rendered.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['layout.png', 'plate.png']);
   expect(rendered.data.promptAdditions.filter((item) => item.id === 'greybox-figure-0')).toHaveLength(1);
+  expect(rendered.data.prompt).toContain('Reference image 1 is the set reference');
+  expect(rendered.data.prompt).not.toContain('it shows no people');
   // Without the composer, the greybox blocking text is appended to the authored prompt once.
   const uncomposed = await run({ prompt: 'A wide shot', referenceImageFiles: ['plate.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
   expect(uncomposed.data.prompt).toMatch(/^A wide shot\n.*Singer stands at the "rail" mark, waving/s);

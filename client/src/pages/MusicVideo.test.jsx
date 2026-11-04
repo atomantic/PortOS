@@ -89,6 +89,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   musicVideoVocalSeparationEventsUrl: (jobId) => `/api/music-video/vocal-stem/separate/${jobId}/events`,
   cancelMusicVideoVocalSeparation: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveRender: vi.fn(async () => ({ jobId: null })),
+  // Composed views read these after a debounce; slower runs must still have a valid transport.
+  getMusicVideoFilmLooks: vi.fn(async () => ({ available: false, total: 0, looks: [] })),
+  getMusicVideoShotRenders: vi.fn(async () => ({ available: false, shots: [], outro: null, ready: 0, total: 0 })),
   getMusicVideoSharingCopy: vi.fn(async () => ({ copy: null, jobId: null })),
   prepareMusicVideoSharingCopy: vi.fn(async () => ({ jobId: 'sharing-example' })),
   musicVideoSharingCopyDownloadUrl: id => `/api/music-video/${id}/sharing-copy/download`,
@@ -241,6 +244,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn(async () => []),
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
+  previewVideoPrompt: vi.fn(async () => ({ backend: 'local', shotPreviewUnavailable: true })),
   uploadGalleryVideo: vi.fn(),
   trimVideoStart: vi.fn(),
   listLorasFull: vi.fn(async () => [{
@@ -316,7 +320,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, trimVideoStart } from '../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideoStart } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
@@ -1078,7 +1082,7 @@ describe('MusicVideo selective section revision (#8987)', () => {
     await waitFor(() => expect(resumeMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mvr-1', { silent: true }));
     expect(startMusicVideoRevision).toHaveBeenCalledWith('mv-1', 'mve-1', {}, { silent: true });
     await waitFor(() => expect(generateVideo).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true });
+    expect(JSON.parse(generateVideo.mock.calls[0][0].musicVideo)).toEqual({ projectId: 'mv-1', sceneId: 's2', revisionId: 'mvr-1', compose: true, expectedShot: 'cutaway' });
     const panel = screen.getByLabelText('Section revision');
     expect(within(panel).getByText('Kept')).toBeInTheDocument();
   });
@@ -1318,6 +1322,24 @@ describe('MusicVideo project video renderer', () => {
     expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
   });
 
+  // A hosted cutaway cannot hear the song, even when the Local project default supplies it.
+  it('previews and renders a Grok override without inheriting Local song audio', async () => {
+    localStorage.removeItem('portos.musicVideo.lastRenderOn');
+    generateVideo.mockResolvedValue({ jobId: 'grok-pick-job' });
+    await openProject({ ...PROJECT_NO_CLIP, videoSettings: { backend: 'local', generationMode: 'suppliedAudio' } }, 'produce');
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'grok' } });
+    expect(render.getByLabelText('Song audio')).toBeDisabled();
+    expect(render.getByLabelText('Song audio')).not.toBeChecked();
+    await waitFor(() => expect(previewVideoPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'grok', musicVideo: expect.objectContaining({ songAudio: false }),
+    }), { silent: true }));
+    fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+    await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'grok', mode: 'image' })));
+    expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'cutaway' });
+    expect(updateMusicVideoProject.mock.calls.some(([, patch]) => patch?.videoSettings)).toBe(false);
+  });
+
   // Uniquely catches "Local LTX" falling through to the install's default model, and a picked length being dropped.
   it('renders a Local LTX pick on the model and length its card shows, LTX-2.5 before the install default', async () => {
     getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
@@ -1424,6 +1446,20 @@ describe('MusicVideo project video renderer', () => {
       })));
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falDuration');
       expect(generateVideo.mock.calls.at(-1)[0]).not.toHaveProperty('falModelId');
+    });
+
+    it('keeps the fal performance song window when overriding a Local supplied-audio project', async () => {
+      getVideoGenStatus.mockResolvedValueOnce({ connected: true, defaultModel: 'ltx23_distilled_q4', falEnabled: true,
+        models: [{ id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4', runtime: 'ltx2' }] });
+      generateVideo.mockResolvedValue({ jobId: 'fal-performance-job' });
+      await openProject(performanceProject({ backend: 'local', generationMode: 'suppliedAudio' }), 'produce');
+      const render = within(await screen.findByRole('region', { name: 'Render' }));
+      fireEvent.change(render.getByLabelText('Render on'), { target: { value: 'fal' } });
+      expect(render.getByLabelText('Song audio')).toBeChecked();
+      expect(render.getByLabelText('Song audio')).toBeDisabled();
+      fireEvent.click(await findEnabledByRole('button', { name: /^Render$/ }));
+      await waitFor(() => expect(generateVideo).toHaveBeenCalledWith(expect.objectContaining({ backend: 'fal', mode: 'image' })));
+      expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ songAudio: false, expectedShot: 'lipsync' });
     });
 
     it('persists a scene switched to a performance shot', async () => {
@@ -2028,6 +2064,37 @@ describe('MusicVideo concept & style editor (#3168)', () => {
 });
 
 describe('MusicVideo YouTube audio import (#1945)', () => {
+  // Uniquely catches an older library response hiding a completed import.
+  it.each([false, true])('reconciles an import during loading, with reconciliation failure=%s', async (fails) => {
+    let resolveOld;
+    let resolveFresh;
+    const track = { id: 'track-new', title: 'New imported song' };
+    listTracks.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    if (fails) listTracks.mockRejectedValueOnce(new Error('Library reconciliation offline'));
+    else listTracks.mockImplementationOnce(() => new Promise((resolve) => { resolveFresh = resolve; }));
+    renderMV();
+    await openCreateForm();
+    const input = await screen.findByPlaceholderText(/Paste a YouTube or Suno link/i);
+    fireEvent.change(input, { target: { value: 'https://youtu.be/example' } });
+    fireEvent.click(within(input.closest('div')).getByRole('button', { name: /Import/i }));
+    await waitFor(() => expect(importTrackFromYoutube).toHaveBeenCalled());
+    await settle();
+    getYtSseState(trackImportEventsUrl('yt-job-1')).latest = { type: 'complete', trackId: track.id, track };
+    fireEvent.change(input, { target: { value: 'https://youtu.be/completed' } });
+    if (fails) {
+      expect(await screen.findByRole('alert')).toHaveTextContent('Library reconciliation offline');
+      expect(screen.queryByText(/No tracks in the music library yet/)).not.toBeInTheDocument();
+      listTracks.mockResolvedValueOnce([track]);
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    } else {
+      await waitFor(() => expect(resolveFresh).toBeTypeOf('function'));
+      await act(async () => resolveFresh([track]));
+    }
+    expect(await screen.findByRole('option', { name: /New imported song/ })).toBeInTheDocument();
+    await act(async () => resolveOld([]));
+    expect(screen.getByRole('option', { name: /New imported song/ })).toBeInTheDocument();
+  });
+
   it('starts an import from the detail view and attaches the finished track to the project', async () => {
     await openProject(PROJECT_NO_CLIP, 'setup');
     const urlInput = screen.getByPlaceholderText(/Paste a YouTube or Suno link/i);
@@ -2646,18 +2713,18 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
   });
 
-  // Uniquely catches a refine sending the frame plus 4 references, over the backends' 4-image cap.
-  it('refines a shot with four references by sending the frame plus the first three', async () => {
+  // The board sends the ordered picks and lets the server apply the actual renderer's capacity.
+  it('refines a shot with four references by sending the frame and all four picks', async () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
-    expect(screen.getByText('Refines and end frames send the frame plus the first 3.')).toBeTruthy();
+    expect(screen.getByText(/A refine or end frame counts its frame first/)).toBeTruthy();
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png'],
+      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png', 'd.png'],
     }), { silent: true }));
   });
 

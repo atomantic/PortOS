@@ -55,6 +55,7 @@ const planWith = (overrides = {}) => ({
   linuxContainment: false,
   supercolliderLive: false,
   dockerContainmentLive: false,
+  macosNative: false,
   ...overrides,
 });
 
@@ -115,11 +116,11 @@ describe('owned stage group settlement', () => {
 describe('resolvePlanStages', () => {
   it('runs only the scopes the plan selected', () => {
     const stages = resolvePlanStages(planWith());
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'commit-message scan', 'server tests']);
   });
 
   it('hands each runner the plan\'s own selector lists', () => {
-    const [, stage] = resolvePlanStages(planWith({
+    const [, , stage] = resolvePlanStages(planWith({
       server: { mode: 'related', files: ['server/lib/a.test.js'], sources: ['server/lib/a.js'] },
     }));
     expect(stage.script).toBe('run-ci-tests.js');
@@ -131,6 +132,7 @@ describe('resolvePlanStages', () => {
       CI_TEST_FILES: '["server/lib/a.test.js"]',
       CI_TEST_SOURCES: '["server/lib/a.js"]',
       PORTOS_PREGATE_GUARDS: '',
+      PORTOS_PREGATE_BASE_REF: '',
     });
   });
 
@@ -139,12 +141,16 @@ describe('resolvePlanStages', () => {
       lint: { mode: 'files', files: ['client/src/App.jsx'] },
       client: { mode: 'files', files: ['client/src/App.test.jsx'], sources: [] },
     }), { baseSha: 'resolved-base' });
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client/server lint', 'server tests', 'client tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'commit-message scan', 'client/server lint', 'server tests', 'client tests']);
     expect(stages[0]).toEqual({
       name: 'hidden-content scan', suite: 'scan', script: 'scan-diff-hidden-content.js',
       args: ['--base', 'resolved-base', '--worktree'], env: {},
     });
-    expect(stages[1].env).toEqual({ CI_LINT_MODE: 'files', CI_LINT_FILES: '["client/src/App.jsx"]' });
+    expect(stages[1]).toEqual({
+      name: 'commit-message scan', suite: 'commit-messages', script: 'scan-commit-session-links.js',
+      args: ['--base', 'resolved-base'], env: {},
+    });
+    expect(stages[2].env).toEqual({ CI_LINT_MODE: 'files', CI_LINT_FILES: '["client/src/App.jsx"]' });
     for (const stage of stages.filter((item) => item.script === 'run-ci-tests.js')) {
       expect(stage.env.CI_BASE_SHA).toBe('resolved-base');
     }
@@ -154,8 +160,8 @@ describe('resolvePlanStages', () => {
     expect(resolvePlanStages(planWith({ promptHistory: false })).map((stage) => stage.name))
       .not.toContain('shipped prompt history');
     const stages = resolvePlanStages(planWith({ promptHistory: true, lint: { mode: 'full', files: [] } }));
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'shipped prompt history', 'client/server lint', 'server tests']);
-    expect(stages[1]).toEqual({
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'commit-message scan', 'shipped prompt history', 'client/server lint', 'server tests']);
+    expect(stages[2]).toEqual({
       name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {},
     });
   });
@@ -165,7 +171,7 @@ describe('resolvePlanStages', () => {
       planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } }),
       { skipLint: true },
     );
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'commit-message scan', 'server tests']);
   });
 
   it('runs each focused structural guard once while retaining direct regressions in both workspaces', () => {
@@ -179,7 +185,7 @@ describe('resolvePlanStages', () => {
     };
     const stages = resolvePlanStages(plan, { guardPlan });
     expect(stages.map(stage => stage.name)).toEqual([
-      'hidden-content scan', 'server structural guards', 'client structural guards', 'server tests'
+      'hidden-content scan', 'commit-message scan', 'server structural guards', 'client structural guards', 'server tests'
     ]);
     for (const scope of ['server', 'client']) {
       const files = stages.filter(stage => stage.suite === scope).flatMap(stage => JSON.parse(stage.env.CI_TEST_FILES));
@@ -198,7 +204,7 @@ describe('resolvePlanStages', () => {
     });
     const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js']) });
     expect(stages.map(stage => stage.name)).toEqual([
-      'hidden-content scan', 'server structural guards', 'client structural guards',
+      'hidden-content scan', 'commit-message scan', 'server structural guards', 'client structural guards',
       'client/server lint', 'server tests', 'client tests', 'client build',
       'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
@@ -242,7 +248,7 @@ describe('pregate hidden-content invocation', () => {
     // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
     // Docs-only changes select no test owners; full plans still have a native inventory.
     for (const path of [
-      'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
+      'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/scan-commit-session-links.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
       'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js',
@@ -356,6 +362,44 @@ describe('pregate hidden-content invocation', () => {
     write('server/lib/helper.js', 'export const helper = 1;\n');
     if (browser) write(BROWSER_SUITES[0], 'export const changed = true;\n');
   }
+
+  it('passes the selected release base to the import guard while a main base still enforces growth', () => {
+    copyFileSync(join(REPO_ROOT, 'scripts/lib/importGrowth.js'), join(root, 'scripts/lib/importGrowth.js'));
+    // Exercise the real guard in a child stage against a real Git base. Each
+    // existing suite gains three leaves, exceeding the unchanged 2,500 limit.
+    write('server/lib/wide.js', 'export const wide = true;\n');
+    for (let index = 0; index < 1000; index++) {
+      write(`server/lib/fixture-${index}.test.js`, "import './wide.js';\n");
+    }
+    write('server/lib/importScoping.test.js', `
+      import { appendFileSync } from 'fs';
+      import { evaluateWorkingTreeImportGrowth, formatImportGrowthReport } from '../../scripts/lib/importGrowth.js';
+      const report = evaluateWorkingTreeImportGrowth({ repoRoot: process.cwd() });
+      appendFileSync('.cache/growth-results', JSON.stringify({ baseRef: process.env.PORTOS_PREGATE_BASE_REF, sha: process.env.CI_BASE_SHA, report }) + '\\n');
+      if (!report.ok) throw new Error(formatImportGrowthReport(report));
+    `);
+    write('scripts/run-ci-tests.js', "await import('../server/lib/importScoping.test.js');\n");
+    git('add', '--all');
+    git('commit', '-qm', 'import growth stage fixture');
+    base = git('rev-parse', 'HEAD');
+    for (const ref of ['refs/remotes/origin/release', 'refs/remotes/origin/main']) git('update-ref', ref, base);
+    mkdirSync(join(root, '.cache'), { recursive: true });
+    write('server/lib/wide.js', "import './leaf-a.js';\nimport './leaf-b.js';\nimport './leaf-c.js';\nexport const wide = true;\n");
+    for (const name of ['a', 'b', 'c']) write(`server/lib/leaf-${name}.js`, `export const value = '${name}';\n`);
+    const invoke = (ref) => spawnSync(process.execPath, ['scripts/pregate.js', '--base', ref, '--full',
+      '--skip-lint', '--skip-db', '--skip-browser', '--skip-build', '--skip-smoke'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_BASE_REF: '', GITHUB_EVENT_NAME: '', GITHUB_REF_NAME: '', PORTOS_PREGATE_BASE_REF: 'release' },
+    });
+    const main = invoke('origin/main');
+    expect(main.status, main.stdout).toBe(1);
+    expect(main.stderr).toContain('Existing-suite growth 3000 (limit 2500)');
+    const release = invoke('origin/release');
+    expect(release.status, release.stderr).toBe(0);
+    expect(release.stdout).toContain('Pregate passed');
+    const observations = readFileSync(join(root, '.cache/growth-results'), 'utf8').trim().split('\n').map(JSON.parse);
+    expect(observations).toContainEqual({ baseRef: 'origin/main', sha: base, report: expect.objectContaining({ ok: false, existingSuiteGrowth: 3000 }) });
+    expect(observations).toContainEqual({ baseRef: 'origin/release', sha: base, report: { ok: true, skipped: expect.stringMatching(/release cycle/) } });
+  });
 
   it('prints the selected guard, broad and browser stages without starting any process', () => {
     prepareGuardFixture({ browser: true });
@@ -928,7 +972,7 @@ describe('pregate hidden-content invocation', () => {
     const before = snapshot();
     const result = run('--skip-lint');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('Pregate passed: hidden-content scan.');
+    expect(result.stdout).toContain('Pregate passed: hidden-content scan, commit-message scan.');
     expect(snapshot()).toEqual(before);
   });
 
@@ -974,7 +1018,7 @@ describe('pregate hidden-content invocation', () => {
     expect(report.treeStable).toBe(true);
     expect(report.head.sha).toBe(git('rev-parse', 'HEAD'));
     expect(report.base.sha).toBe(base);
-    expect(report.stages.map((stage) => [stage.name, stage.status])).toEqual([['hidden-content scan', 'passed']]);
+    expect(report.stages.map((stage) => [stage.name, stage.status])).toEqual([['hidden-content scan', 'passed'], ['commit-message scan', 'passed']]);
     expect(report.stages[0]).not.toHaveProperty('env');
     expect(report.skipped).toEqual([]);
     expect(report.runtime).toMatchObject({ node: process.version, platform: process.platform });
@@ -1351,12 +1395,13 @@ describe('resource suite stages', () => {
   it('orders every selected stage the way CI depends on them, DB suite last', () => {
     const stages = resolvePlanStages(fullPlan, { baseSha: 'base', databaseEnv });
     expect(stages.map((stage) => stage.name)).toEqual([
-      'hidden-content scan', 'client/server lint', 'server tests', 'client tests',
+      'hidden-content scan', 'commit-message scan', 'client/server lint', 'server tests', 'client tests',
       'client build', 'boot smoke', 'browser suites',
       'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     expect(stages.map(describeStageCommand)).toEqual([
       'node scripts/scan-diff-hidden-content.js --base base --worktree',
+      'node scripts/scan-commit-session-links.js --base base',
       'node scripts/run-ci-lint.js',
       'node scripts/run-ci-tests.js server',
       'node scripts/run-ci-tests.js client',
@@ -1378,6 +1423,7 @@ describe('resource suite stages', () => {
       PORTOS_REQUIRE_BROWSER_SUITES: '1',
       PORTOS_TEST_QUIET: '1',
       CI_BASE_SHA: 'base',
+      PORTOS_PREGATE_BASE_REF: '',
     });
   });
 
@@ -1396,12 +1442,12 @@ describe('resource suite stages', () => {
     expect(names({ browser: true })).not.toContain('browser');
     expect(names({ build: true })).not.toContain('build');
     expect(names({ smoke: true })).not.toContain('smoke');
-    expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'lint', 'server', 'client']);
-    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
+    expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'commit-messages', 'lint', 'server', 'client']);
+    expect(names({})).toEqual(['scan', 'commit-messages', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
   });
 
   it('plans no resource stage the planner did not select', () => {
-    expect(resolvePlanStages(planWith(), { databaseEnv }).map((stage) => stage.suite)).toEqual(['scan', 'server']);
+    expect(resolvePlanStages(planWith(), { databaseEnv }).map((stage) => stage.suite)).toEqual(['scan', 'commit-messages', 'server']);
   });
 });
 
@@ -1417,6 +1463,8 @@ describe('uncoveredSuites', () => {
       .toEqual([{ suite: 'supercolliderLive', reason: 'needs a native Linux Docker engine on amd64 and arm64', remedy: UNCOVERED_SUITES.supercolliderLive }]);
     expect(uncoveredSuites(planWith({ dockerContainmentLive: true })))
       .toEqual([{ suite: 'dockerContainmentLive', reason: 'needs a real Docker engine and pulls the pinned Node image', remedy: UNCOVERED_SUITES.dockerContainmentLive }]);
+    expect(uncoveredSuites(planWith({ macosNative: true })))
+      .toEqual([{ suite: 'macosNative', reason: 'a dedicated macOS CI job; the focused local stages do not select it', remedy: UNCOVERED_SUITES.macosNative }]);
     expect(uncoveredSuites(planWith())).toEqual([]);
   });
 
@@ -1466,7 +1514,7 @@ describe('uncoveredSuites', () => {
     const uncovered = uncoveredSuites(selected, { prerequisites, options: { skipBrowser: true, skipBuild: true, skipSmoke: true } });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
     const stages = resolvePlanStages(selected, { skip });
-    expect(stages.map((stage) => stage.suite)).toEqual(['scan', 'server']);
+    expect(stages.map((stage) => stage.suite)).toEqual(['scan', 'commit-messages', 'server']);
     const report = buildPregateReport({
       plan: selected, options: {}, base: { ref: 'origin/main', sha: 'b' }, head: { sha: 'h' }, tree: 't',
       stages: stages.map((stage) => ({ ...stage, command: describeStageCommand(stage), status: 'passed', durationMs: 1 })),

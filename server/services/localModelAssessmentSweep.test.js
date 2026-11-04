@@ -23,6 +23,7 @@ import {
   captureLaunchState, getAssessmentReport, isTuningSweepable, restoreLaunchState, runAssessment,
 } from './localModelAssessments.js';
 import { startSweep, getSweepStatus, cancelSweep, __resetSweep } from './localModelAssessmentSweep.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 // Not mocked: the grid is pure catalog data, and asserting the queue against the
 // real one is what proves the service runs the configurations it advertises.
 import { tuningGridFor } from '../lib/localModelTuning.js';
@@ -51,6 +52,25 @@ beforeEach(() => {
 afterEach(() => __resetSweep());
 
 describe('startSweep', () => {
+  it('keeps update admission closed between measurements and through restoration', async () => {
+    getAssessmentReport.mockResolvedValue(report({ unassessed: [
+      { backend: 'llama', modelId: 'a' }, { backend: 'llama', modelId: 'b' },
+    ] }));
+    const second = Promise.withResolvers();
+    runAssessment.mockResolvedValueOnce(measured()).mockReturnValueOnce(second.promise);
+    let update;
+    await startSweep({ onChange: state => {
+      if (state.completed === 1 && !update) update = maintenance.deferredUpdate.request();
+    } });
+    await vi.waitFor(() => expect(update).toBeTruthy());
+    try {
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+      second.resolve(measured());
+      await vi.waitFor(() => expect(getSweepStatus().settled).toBe(true));
+      expect(restoreLaunchState).toHaveBeenCalledOnce();
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    } finally { second.resolve(measured()); maintenance.deferredUpdate.finish(update.id, false); }
+  });
   it('measures every unmeasured model in order and records what each produced', async () => {
     getAssessmentReport.mockResolvedValue(report({
       unassessed: [{ backend: 'ollama', modelId: 'a' }, { backend: 'ollama', modelId: 'b' }],

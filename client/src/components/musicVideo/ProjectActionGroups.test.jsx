@@ -1,8 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 
-const shotRenders = vi.hoisted(() => ({ status: null }));
-vi.mock('../../hooks/useMusicVideoShotRenders.js', () => ({ default: () => ({ status: shotRenders.status }) }));
+const shotRenders = vi.hoisted(() => ({ status: null, retry: vi.fn() }));
+vi.mock('../../hooks/useMusicVideoShotRenders.js', () => ({ default: () => ({ status: shotRenders.status, retry: shotRenders.retry }) }));
 import { RenderFinalButton } from './ProjectActionGroups.jsx';
 
 const scenes = [{ id: 'a', videoFilename: 'a.mp4' }];
@@ -28,4 +28,13 @@ it('keeps the per-shot hint for a stale or unrendered project and labels the out
   cleanup();
   view({ renderHistoryId: null });
   expect(screen.getByTestId('shot-renders-ready')).toBeTruthy();
+});
+
+it('exposes a failed refresh with an error notice and offers retry rather than claiming ready', () => {
+  shotRenders.status = { available: true, error: { message: 'Shot render status unavailable' }, shots: [], outro: null, ready: 0, total: 0 };
+  view({ renderHistoryId: null });
+  expect(screen.queryByTestId('shot-renders-ready')).toBeNull();
+  expect(screen.getByTestId('shot-renders-error').textContent).toContain('Shot render status unavailable');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(shotRenders.retry).toHaveBeenCalledTimes(1);
 });

@@ -1,9 +1,12 @@
 import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, dirname } from 'path';
-import { homedir } from 'os';
+import { homedir, userInfo } from 'os';
+import { tokenize } from '../../scripts/lib/sourceTokens.js';
+import { analyzeEcosystemPorts, planEcosystemPortEdits } from '../lib/ecosystemPortEdits.js';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { parseEnvContents } from '../lib/portosEnv.js';
 import { detectAppIcon } from './appIconDetect.js';
 import { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType } from './appProcessTypes.js';
 export { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType };
@@ -185,44 +188,350 @@ function findMatchingBrace(content, openBraceIdx) {
 }
 
 /**
+ * Literal entries of apps arrays, shared by discovery and targeted writes.
+ * The dependency-free source lexer keeps regexes and nested templates opaque.
+ */
+function ecosystemAppBlocks(content) {
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    return [];
+  }
+  const punctuation = index => tokens[index]?.t === 'p' ? tokens[index].v : null;
+  const isWord = (index, word) => tokens[index]?.t === 'id' && tokens[index].v === word;
+  const isKey = (index, key) => ['id', 's'].includes(tokens[index]?.t) && tokens[index].v === key;
+  const stack = [];
+  const matching = new Map();
+  const closes = { '}': '{', ']': '[', ')': '(' };
+  for (let i = 0; i < tokens.length; i++) {
+    const symbol = punctuation(i);
+    if (['{', '[', '('].includes(symbol)) stack.push(i);
+    else if (Object.hasOwn(closes, symbol)) {
+      const open = stack.pop();
+      if (punctuation(open) !== closes[symbol]) return [];
+      matching.set(open, i);
+    }
+  }
+  if (stack.length) return [];
+
+  // Only module-scope bindings can supply the exported literal configuration.
+  // Reading unrelated objects as apps would let an example shadow the real app.
+  const bindings = new Map();
+  const declarations = new Set();
+  let exported = null;
+  const isCompleteStatementValue = start => {
+    const end = (matching.get(start) ?? start) + 1;
+    const next = tokens[end];
+    const continuesExpression = next?.t === 'tpl' ||
+      (next?.t === 'id' && ['in', 'instanceof'].includes(next.v)) ||
+      ['.', '?.', '[', '(', '+', '-', '*', '/', '%', '<', '>', '=', '&', '|', '^', '?'].includes(punctuation(end)) ||
+      (punctuation(end) === '!' && punctuation(end + 1) === '=');
+    return !next || [';', ',', '}'].includes(punctuation(end)) ||
+      (!continuesExpression && /[\r\n]/.test(content.slice(tokens[end - 1].i, next.i)));
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (['const', 'let', 'var'].some(word => isWord(i, word)) && tokens[i + 1]?.t === 'id' && punctuation(i + 2) === '=') {
+      const start = i + 3;
+      // Resolve only a whole initializer, never the literal prefix of an expression.
+      if (isCompleteStatementValue(start)) {
+        bindings.set(tokens[i + 1].v, start);
+        declarations.add(i + 1);
+      }
+    }
+    if (isWord(i, 'module') && punctuation(i + 1) === '.' && isWord(i + 2, 'exports') && punctuation(i + 3) === '=') {
+      exported = i + 4;
+    } else if (isWord(i, 'export') && isWord(i + 1, 'default')) {
+      exported = i + 2;
+    }
+    i = matching.get(i) ?? i;
+  }
+  // A declaration initializer is not a reliable name after any write. Be
+  // conservative even for writes inside functions: configuration is never run.
+  const openings = new Map([...matching].map(([open, close]) => [close, open]));
+  const invalidate = (index, mutation = false) => {
+    if (tokens[index]?.t !== 'id' || declarations.has(index) || ['.', '?.'].includes(punctuation(index - 1))) return;
+    let name = tokens[index].v;
+    const seen = new Set();
+    while (name && !seen.has(name)) {
+      seen.add(name);
+      const value = bindings.get(name);
+      bindings.delete(name);
+      name = mutation && tokens[value]?.t === 'id' ? tokens[value].v : null;
+    }
+  };
+  // A member or index write under module.exports changes the exported value
+  // itself, which has no binding to drop.
+  let exportedMutated = false;
+  const invalidateTarget = index => {
+    let root = index;
+    let mutation = false;
+    while (root >= 0) {
+      const open = openings.get(root);
+      if (punctuation(root) === ']' && open !== undefined &&
+          (tokens[open - 1]?.t === 'id' || [']', ')'].includes(punctuation(open - 1)))) {
+        root = open - 1;
+        mutation = true;
+      } else if (['.', '?.'].includes(punctuation(root - 1))) {
+        root -= 2;
+        mutation = true;
+      } else break;
+    }
+    if (isWord(root, 'module') && punctuation(root + 1) === '.' && isWord(root + 2, 'exports') && index > root + 2) exportedMutated = true;
+    if (isWord(root, 'exports') && !['.', '?.'].includes(punctuation(root - 1)) && index > root) exportedMutated = true;
+    invalidate(root, mutation);
+  };
+  // The last token of a member chain such as `alias.env.PORT` or `apps[0]`.
+  const memberEnd = start => {
+    let end = start;
+    for (;;) {
+      if (['.', '?.'].includes(punctuation(end + 1)) && tokens[end + 2]?.t === 'id') end += 2;
+      else if (punctuation(end + 1) === '[' && matching.has(end + 1)) end = matching.get(end + 1);
+      else return end;
+    }
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    if (['++', '--'].includes(punctuation(i))) {
+      invalidateTarget(i - 1);
+      if (tokens[i + 1]?.t === 'id') invalidateTarget(memberEnd(i + 1));
+    }
+    if (punctuation(i) !== '=' || ['=', '>'].includes(punctuation(i + 1)) ||
+        ['=', '!'].includes(punctuation(i - 1)) ||
+        (['<', '>'].includes(punctuation(i - 1)) && punctuation(i - 2) !== punctuation(i - 1))) continue;
+    let target = i - 1;
+    while (['+', '-', '*', '/', '%', '&', '|', '^', '?', '<', '>'].includes(punctuation(target))) target--;
+    const open = openings.get(target);
+    if (['}', ']'].includes(punctuation(target)) && open !== undefined &&
+        !(punctuation(target) === ']' && (tokens[open - 1]?.t === 'id' || [']', ')'].includes(punctuation(open - 1))))) {
+      for (let j = open + 1; j < target; j++) invalidate(j);
+    } else {
+      invalidateTarget(target);
+    }
+  }
+  const resolve = (index, seen = new Set()) => {
+    const token = tokens[index];
+    if (token?.t !== 'id') return index;
+    if (seen.has(token.v) || !bindings.has(token.v)) return null;
+    seen.add(token.v);
+    return resolve(bindings.get(token.v), seen);
+  };
+  const expressionEnd = (start, limit) => {
+    let end = start;
+    while (end < limit && punctuation(end) !== ',') end = (matching.get(end) ?? end) + 1;
+    return end;
+  };
+  const property = (object, key) => {
+    let found = null;
+    const limit = matching.get(object);
+    for (let i = object + 1; i < limit;) {
+      if (punctuation(i) === ',') { i++; continue; }
+      const end = expressionEnd(i, limit);
+      if (isKey(i, key)) {
+        if (punctuation(i + 1) === ':') found = { start: i + 2, end };
+        else if (tokens[i].t === 'id' && end === i + 1) found = { start: i, end };
+      }
+      i = end;
+    }
+    return found;
+  };
+
+  if (exported === null || exportedMutated || !isCompleteStatementValue(exported)) return [];
+  const config = resolve(exported);
+  if (config === null) return [];
+  const appsProperty = punctuation(config) === '{' ? property(config, 'apps') : null;
+  if (appsProperty && (matching.get(appsProperty.start) ?? appsProperty.start) + 1 !== appsProperty.end) return [];
+  const apps = appsProperty ? resolve(appsProperty.start) : config;
+  if (punctuation(apps) !== '[') return [];
+  const blocks = [];
+  const limit = matching.get(apps);
+  for (let i = apps + 1; i < limit;) {
+    if (punctuation(i) === ',') { i++; continue; }
+    const end = expressionEnd(i, limit);
+    const object = (matching.get(i) ?? i) + 1 === end ? resolve(i) : null;
+    if (punctuation(object) === '{') {
+      const name = property(object, 'name');
+      const token = name && name.end === name.start + 1 ? tokens[resolve(name.start)] : null;
+      const value = token?.t === 's' ? token.v
+        : token?.t === 'tpl' && token.exprs.length === 0 ? token.quasis[0] : null;
+      if (value) {
+        blocks.push({ start: tokens[object].i, end: tokens[matching.get(object)].i, name: value });
+      }
+    }
+    i = end;
+  }
+  return blocks;
+}
+
+// Comment spans for best-effort PM2_HOME discovery when source tokenization fails.
+function commentRanges(content) {
+  const ranges = [];
+  let i = 0;
+  const n = content.length;
+  let inString = false;
+  let stringChar = null;
+  while (i < n) {
+    const c = content[i];
+    const nx = i + 1 < n ? content[i + 1] : '';
+    if (inString) {
+      if (c === '\\') { i += 2; continue; }
+      if (c === stringChar) inString = false;
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inString = true; stringChar = c; i++; continue; }
+    if (c === '/' && nx === '/') {
+      const start = i; i += 2;
+      while (i < n && content[i] !== '\n') i++;
+      ranges.push([start, i]);
+      continue;
+    }
+    if (c === '/' && nx === '*') {
+      const start = i; i += 2;
+      while (i < n && !(content[i] === '*' && content[i + 1] === '/')) i++;
+      i += 2;
+      ranges.push([start, Math.min(i, n)]);
+      continue;
+    }
+    i++;
+  }
+  return ranges;
+}
+
+
+/**
+ * Extract and resolve PM2_HOME path from ecosystem config content.
+ * Supports optional declaration keywords (const|let|var), handles single, double,
+ * and backtick quote styles, ignores commented lines and string literals containing
+ * assignments, gives declarations precedence over environment properties, decodes
+ * escapes in string literals, and expands template variables only on backtick template literals.
+ *
+ * @param {string} content
+ * @param {Function} [currentUsername]
+ * @returns {string|null}
+ */
+function extractPm2Home(content, currentUsername = () => {
+  try {
+    return userInfo()?.username || process.env.USERNAME || process.env.USER || 'user';
+  } catch {
+    return process.env.USERNAME || process.env.USER || 'user';
+  }
+}) {
+  let tokens;
+  try {
+    tokens = tokenize(content, new Set(), { jsx: false });
+  } catch {
+    tokens = null;
+  }
+
+  if (tokens) {
+    const resolveTemplate = (tok) => {
+      let result = tok.quasis[0] ?? '';
+      for (let k = 0; k < tok.exprs.length; k++) {
+        const expr = tok.exprs[k].map(t => t.v).join('');
+        if (expr === 'require(os).homedir()' || expr === 'require(node:os).homedir()' || expr === 'process.env.HOME') {
+          result += homedir();
+        } else if (expr === 'require(os).userInfo().username' || expr === 'require(node:os).userInfo().username') {
+          result += currentUsername();
+        } else {
+          result += '${' + expr + '}';
+        }
+        result += tok.quasis[k + 1] ?? '';
+      }
+      return result;
+    };
+
+    const resolveValueToken = (tok) => {
+      if (!tok) return null;
+      if (tok.t === 's') return tok.v;
+      if (tok.t === 'tpl') return resolveTemplate(tok);
+      return null;
+    };
+
+    // 1. First pass: look for declarations / assignments (PM2_HOME = ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (tok.t === 'id' && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === '=') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    // 2. Second pass: look for object properties (PM2_HOME: ...)
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if ((tok.t === 'id' || tok.t === 's') && tok.v === 'PM2_HOME') {
+        if (tokens[i + 1]?.t === 'p' && tokens[i + 1]?.v === ':') {
+          const val = resolveValueToken(tokens[i + 2]);
+          if (val !== null) return val;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // Regex fallback if tokenization failed on malformed JS
+  const comments = commentRanges(content);
+  const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
+
+  // First give precedence to actual PM2_HOME variable declarations / assignments:
+  // e.g. const PM2_HOME = `...`, let PM2_HOME = '...', var PM2_HOME = "...", PM2_HOME = `...`
+  const declRegex = /(?:(?:\bconst|\blet|\bvar)\s+)?\bPM2_HOME\b\s*=\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(declRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  // Fallback to property assignment in env / object blocks:
+  // e.g. PM2_HOME: `...`, PM2_HOME: '...', "PM2_HOME": "..."
+  const propRegex = /['"]?\bPM2_HOME\b['"]?\s*:\s*(?:`([^`]+)`|'([^']+)'|"([^"]+)")/g;
+  for (const match of content.matchAll(propRegex)) {
+    if (inComment(match.index)) continue;
+    if (match[1] !== undefined) {
+      let homePath = match[1];
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.homedir\(\)\}/g, homedir());
+      homePath = homePath.replace(/\$\{require\(\s*['"](?:node:)?os['"]\s*\)\.userInfo\(\)\.username\}/g, currentUsername());
+      homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
+      return homePath;
+    }
+    return match[2] ?? match[3];
+  }
+
+  return null;
+}
+
+/**
  * Parse ecosystem.config.js/cjs to extract all processes with their ports
- * Uses regex parsing since we can't safely execute arbitrary JS
+ * Uses AST analysis when attributable, with best-effort legacy discovery for
+ * unsupported configuration. Writers never use the legacy fallback.
  * @returns {{ processes: Array, pm2Home: string|null }}
  */
 export function parseEcosystemConfig(content) {
   const processes = [];
-  let pm2Home = null;
 
-  // Extract PM2_HOME constant if defined (e.g., const PM2_HOME = `${require("os").homedir()}/.pm2-grace`)
-  // First try template literals (backticks) which can contain nested quotes
-  const templateMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*`([^`]+)`/);
-  if (templateMatch) {
-    let homePath = templateMatch[1];
-    // Replace common template expressions
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-    homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
-    homePath = homePath.replace(/\$\{process\.env\.HOME\}/g, homedir());
-    pm2Home = homePath;
-  } else {
-    // Try regular string literals
-    const stringMatch = content.match(/(?:const|let|var)\s+PM2_HOME\s*=\s*['"]([^'"]+)['"]/);
-    if (stringMatch) {
-      pm2Home = stringMatch[1];
-    } else {
-      // Check for PM2_HOME in env blocks
-      const envPm2HomeMatch = content.match(/PM2_HOME\s*:\s*PM2_HOME/);
-      if (envPm2HomeMatch) {
-        // PM2_HOME is used but defined as a variable - try template literal first
-        const varTemplateMatch = content.match(/PM2_HOME\s*=\s*`([^`]+)`/);
-        if (varTemplateMatch) {
-          let homePath = varTemplateMatch[1];
-          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.homedir\(\)\}/g, homedir());
-          homePath = homePath.replace(/\$\{require\(['"]os['"]\)\.userInfo\(\)\.username\}/g, process.env.USER || 'user');
-          pm2Home = homePath;
-        }
-      }
+  const currentUsername = () => {
+    try {
+      return userInfo()?.username || process.env.USERNAME || process.env.USER || 'user';
+    } catch {
+      return process.env.USERNAME || process.env.USER || 'user';
     }
-  }
+  };
+
+  const pm2Home = extractPm2Home(content, currentUsername);
+  const analyzed = analyzeEcosystemPorts(content);
+  if (analyzed) return { pm2Home, processes: analyzed.map(({ sources, ...proc }) => ({
+    ...proc, port: Object.values(proc.ports)[0] ?? null,
+  })) };
+
 
   // Extract top-level port constants (e.g., const CDP_PORT = 5549)
   const portConstants = {};
@@ -252,100 +561,32 @@ export function parseEcosystemConfig(content) {
     const portsBlock = content.substring(startIdx, endIdx + 1);
 
     // Parse flat entries: KEY: 5550
-    const flatEntries = portsBlock.matchAll(/(\w+)\s*:\s*(\d+)/g);
+    const flatEntries = portsBlock.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
     for (const entry of flatEntries) {
-      portConstants[`PORTS.${entry[1]}`] = parseInt(entry[2], 10);
+      const key = entry[1] ?? entry[2] ?? entry[3] ?? entry[4];
+      portConstants[`PORTS.${key}`] = parseInt(entry[5], 10);
     }
 
     // Parse nested entries: key: { subkey: 5550 }
-    const nestedMatches = portsBlock.matchAll(/(\w+)\s*:\s*\{([^}]+)\}/g);
+    const nestedMatches = portsBlock.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*\{([^}]+)\}/g);
     for (const nestedMatch of nestedMatches) {
-      const parentKey = nestedMatch[1];
-      const nestedContent = nestedMatch[2];
+      const parentKey = nestedMatch[1] ?? nestedMatch[2] ?? nestedMatch[3] ?? nestedMatch[4];
+      const nestedContent = nestedMatch[5];
       const nestedPorts = {};
-      const subEntries = nestedContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      const subEntries = nestedContent.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
       for (const subEntry of subEntries) {
-        const port = parseInt(subEntry[2], 10);
-        portConstants[`PORTS.${parentKey}.${subEntry[1]}`] = port;
-        nestedPorts[subEntry[1]] = port;
+        const key = subEntry[1] ?? subEntry[2] ?? subEntry[3] ?? subEntry[4];
+        const port = parseInt(subEntry[5], 10);
+        portConstants[`PORTS.${parentKey}.${key}`] = port;
+        nestedPorts[key] = port;
       }
       // Also store the whole nested object for `ports: PORTS.server` references
       portConstants[`PORTS.${parentKey}`] = nestedPorts;
     }
   }
 
-  // Match each app block: { name: '...', ... }
-  // This regex captures app objects including nested braces
-  const appBlockRegex = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let match;
-  let _lastIndex = 0;
-
-  while ((match = appBlockRegex.exec(content)) !== null) {
-    const processName = match[1];
-    const startPos = match.index;
-
-    // Find the end of this app block by counting braces
-    let braceCount = 0;
-    let endPos = startPos;
-    let inString = false;
-    let stringChar = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let i = startPos; i < content.length; i++) {
-      const char = content[i];
-      const nextChar = i < content.length - 1 ? content[i + 1] : '';
-
-      // Handle line comments (// ...)
-      if (!inString && !inBlockComment && char === '/' && nextChar === '/') {
-        inLineComment = true;
-        continue;
-      }
-      if (inLineComment && char === '\n') {
-        inLineComment = false;
-        continue;
-      }
-
-      // Handle block comments (/* ... */)
-      if (!inString && !inLineComment && char === '/' && nextChar === '*') {
-        inBlockComment = true;
-        continue;
-      }
-      if (inBlockComment && char === '*' && nextChar === '/') {
-        inBlockComment = false;
-        i++; // Skip the closing /
-        continue;
-      }
-
-      // Skip if in any comment
-      if (inLineComment || inBlockComment) continue;
-
-      // Backticks count as string delimiters so `${...}` braces don't perturb
-      // the count. Use isEscaped() so an even-length backslash run before a
-      // quote (e.g. `\\"`) correctly reads as not-escaped.
-      if ((char === '"' || char === "'" || char === '`') && !isEscaped(content, i)) {
-        if (!inString) {
-          inString = true;
-          stringChar = char;
-        } else if (char === stringChar) {
-          inString = false;
-          stringChar = null;
-        }
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') {
-          braceCount--;
-          if (braceCount === 0) {
-            endPos = i;
-            break;
-          }
-        }
-      }
-    }
-
-    const appBlock = content.substring(startPos, endPos + 1);
+  for (const { start, end, name: processName } of ecosystemAppBlocks(content)) {
+    const appBlock = content.substring(start, end + 1);
 
     // Extract ports - first try the PortOS standard 'ports' object
     let ports = {};
@@ -354,9 +595,10 @@ export function parseEcosystemConfig(content) {
     const portsObjMatch = appBlock.match(/\bports\s*:\s*\{([^}]+)\}/);
     if (portsObjMatch) {
       const portsContent = portsObjMatch[1];
-      const portEntries = portsContent.matchAll(/(\w+)\s*:\s*(\d+)/g);
+      const portEntries = portsContent.matchAll(/(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(\w+))\s*:\s*(\d+)/g);
       for (const entry of portEntries) {
-        ports[entry[1]] = parseInt(entry[2], 10);
+        const key = entry[1] ?? entry[2] ?? entry[3] ?? entry[4];
+        ports[key] = parseInt(entry[5], 10);
       }
     }
 
@@ -487,7 +729,6 @@ export function parseEcosystemConfig(content) {
     const usesVite = /\bvite\b/i.test(appBlock) || /VITE_PORT/i.test(appBlock);
 
     processes.push({ name: processName, port, ports, cwd, usesVite });
-    _lastIndex = endPos;
   }
 
   // Post-process: when an app has both an API process and Vite dev processes,
@@ -566,574 +807,42 @@ export async function parseEcosystemFromPath(dirPath) {
         delete proc.usesVite;
       }
 
-      return { processes, pm2Home };
+      return { processes, pm2Home, portsEditable: analyzeEcosystemPorts(content) !== null };
     }
   }
   return { processes: [], pm2Home: null };
 }
 
-/**
- * Brace-matched `{ start, end }` regions whose numeric values are rewritten
- * by VALUE regardless of key name: every `const PORTS = {...}` block AND every
- * per-app `ports: { api: N, ui: N }` object. parseEcosystemConfig reads the
- * per-app `ports:` object FIRST when deriving uiPort/apiPort/devUiPort, so a
- * rewrite that skipped it would let the edit silently revert on the next
- * config refresh — the exact bug the write-back exists to prevent.
- *
- * Commented-out matches are skipped: rewriting a port inside a commented
- * `const PORTS = {...}` would make writeEcosystemPorts report success while the
- * executable config is untouched (the per-region slice starts at the `{`, so
- * the region's own comment scan can no longer see the leading `//`/`/*`).
- */
-function findValuePortRegions(content) {
-  const comments = commentRanges(content);
-  const inComment = (pos) => comments.some(([s, e]) => pos >= s && pos < e);
-  const regions = [];
-  // `const PORTS = {` (uppercase, any declarator) OR a lowercase `ports: {`
-  // object value — the latter is case-sensitive so it won't match `const PORTS`
-  // or `reports:`.
-  const re = /(?:(?:const|let|var)\s+PORTS\s*=\s*|\bports\s*:\s*)\{/g;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    if (inComment(m.index)) continue;
-    const open = m.index + m[0].length - 1;
-    const end = findMatchingBrace(content, open);
-    if (end >= 0) regions.push({ start: open, end });
-  }
-  return regions;
-}
-
-/**
- * Byte ranges `[start, end)` covered by line comments and block comments,
- * skipping comment markers that appear inside string/template literals. Used to
- * keep the port rewrite from matching (and falsely "succeeding" on) a port that
- * only appears in a comment.
- */
-function commentRanges(content) {
-  const ranges = [];
-  let i = 0;
-  const n = content.length;
-  let inString = false;
-  let stringChar = null;
-  while (i < n) {
-    const c = content[i];
-    const nx = i + 1 < n ? content[i + 1] : '';
-    if (inString) {
-      if (c === '\\') { i += 2; continue; }
-      if (c === stringChar) inString = false;
-      i++;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') { inString = true; stringChar = c; i++; continue; }
-    if (c === '/' && nx === '/') {
-      const start = i; i += 2;
-      while (i < n && content[i] !== '\n') i++;
-      ranges.push([start, i]);
-      continue;
-    }
-    if (c === '/' && nx === '*') {
-      const start = i; i += 2;
-      while (i < n && !(content[i] === '*' && content[i + 1] === '/')) i++;
-      i += 2;
-      ranges.push([start, Math.min(i, n)]);
-      continue;
-    }
-    i++;
-  }
-  return ranges;
-}
-
-/**
- * Replace every match of `re` in `str` with `${prefix}${replacement}`, EXCEPT
- * matches whose port number falls inside a comment. `re` must have its port
- * number as the final capture run so we can locate where the digits begin: a
- * value living only in a comment (`// PORT: 5173`) must NOT count as a rewrite,
- * or the writer would report changed:true while the executable config is
- * untouched, recreating the apps.json-vs-PM2 mismatch the write-back prevents.
- */
-function replaceOutsideComments(str, re, replacement) {
-  const ranges = commentRanges(str);
-  return str.replace(re, (full, prefix, offset) => {
-    const numStart = offset + prefix.length;
-    return ranges.some(([s, e]) => numStart >= s && numStart < e) ? full : `${prefix}${replacement}`;
-  });
-}
-
-/**
- * Find the `{ start, end }` brace-matched region of the app block whose
- * `name:` equals `processName`. Mirrors the block-scan parseEcosystemConfig
- * uses, so a per-process rewrite targets exactly the block the parser derived
- * that process's ports from. Returns the first match (parser semantics) or null.
- */
-function findAppBlock(content, processName) {
-  const re = /\{\s*name\s*:\s*['"]([^'"]+)['"]/g;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    if (m[1] !== processName) continue;
-    const end = findMatchingBrace(content, m.index);
-    if (end >= 0) return { start: m.index, end };
-  }
-  return null;
-}
-
-/**
- * Within a single app block, rewrite the port literal that belongs to `label`
- * (`api`/`ui`/`devUi`) from `oldP` → `newP`, leaving sibling labels alone.
- *
- * The key insight that makes per-label targeting safe inside one block: `PORT`
- * maps to exactly ONE label per process (api OR ui, decided by process name) —
- * the two never collide in the same block. So when two labels share a literal
- * value, they either live in different blocks (block scoping splits them) or in
- * an explicit `ports: { api: N, ui: N }` map (the label KEY splits them). The
- * value-keyed rewriter can't disambiguate either; this one can.
- *
- * Sources rewritten per label mirror parseEcosystemConfig's derivation AND the
- * PM2 runtime env (so the config the parser reads and the env PM2 launches with
- * both move together):
- *   - api  → `ports: { api: N }`, plus env `PORT`/`PORT: … || N`/`port:` ONLY
- *            when the block has no `ports:` REFERENCE (`ports: PORTS.server`) —
- *            for a reference the parser reads the external const, not env, so
- *            rewriting env would falsely report success while the real source
- *            (and displayed port) reverts on refresh.
- *   - ui   → exact `ui:` key, env `VITE_PORT`, `--port N`, and bare env `PORT`
- *            only when there's no explicit ports source (inline object OR
- *            reference) — a UI-named process whose bare `PORT` IS the UI port.
- *   - devUi → exact `devUi:` key (same env/args/bare-PORT sources as ui), PLUS
- *            a Vite process's `ui:` literal when the block has no explicit
- *            `devUi:` key (parseEcosystemConfig relabels ui→devUi when an api
- *            sibling exists, so the on-disk source for that devUi IS `ui:`).
- *
- * Matching the EXACT label key (not a combined `ui|devUi`) means a block that
- * carries both `ui:` and `devUi:` with the same value only rewrites the one the
- * user edited — the sibling keeps its literal.
- *
- * @returns {{ block: string, changed: boolean }}
- */
-function rewriteLabelInBlock(block, label, oldP, newP, processName = '') {
-  // Swap the matched digits to a sentinel first, then resolve the sentinel to
-  // the new value — so a label whose old/new values overlap another source in
-  // the same block can't chain. Each prefix capture group is preserved, so only
-  // the number changes (no whitespace artifact).
-  const ph = 'PORT_TGT_PLACEHOLDER';
-  const NUM = `${oldP}\\b`;
-  // An explicit ports source is what parseEcosystemConfig derives from. An
-  // inline `ports: { ... }` object is rewritable in-block; a `ports: PORTS.x`
-  // REFERENCE points at an external const this block can't reach, so the
-  // same-valued env literal must NOT be used as a fallback for it (false
-  // success + silent runtime-env change). Both forms mean env `PORT` is
-  // metadata, not the parser's value.
-  const hasInlinePortsObj = /\bports\s*:\s*\{/.test(block);
-  const hasPortsReference = /\bports\s*:\s*[A-Za-z_$]/.test(block);
-  const hasExplicitPortsSource = hasInlinePortsObj || hasPortsReference;
-  // Note: a `ports: SOME_REF` whose constant parseEcosystemConfig can't resolve
-  // makes the parser fall back to env/args — but this block-level rewriter has
-  // no constant table, so it can't tell a resolved reference from an unresolved
-  // one and conservatively treats ALL references as explicit sources (suppresses
-  // the env fallback). The cost is a safe 422 on that uncommon malformed-config
-  // shape (no corruption), not a wrong write; resolving it would mean threading
-  // the parser's resolved-port map down into this pure function.
-  // `PORT`/`'PORT'`/`` `PORT` `` followed by `:` and optional whitespace.
-  const PORT_KEY = "['\"`]?\\bPORT\\b['\"`]?\\s*:\\s*";
-  // Which label does a bare env `PORT` map to? Mirror parseEcosystemConfig:
-  // a `-ui`/`-client`-suffixed process routes bare PORT → ui; otherwise → api.
-  // (A browser process routes PORT → health, which is none of api/ui/devUi.)
-  // PM2 launches with this env var, so the bare PORT must move with its label's
-  // port even when an inline ports object is also present — otherwise the
-  // process restarts on the old port while the config/registry show the new.
-  const isUiProcess = /[-_](ui|client)$/i.test(processName);
-  const isBrowserProcess = /[-_]browser$/i.test(processName);
-  const barePortLabel = isBrowserProcess ? 'health' : (isUiProcess ? 'ui' : 'api');
-  // Label-specific runtime env var, mirroring parseEcosystemConfig's
-  // `<STEM>_PORT` → camelCased-stem labeling (API_PORT→api, UI_PORT→ui,
-  // DEV_UI_PORT→devUi). PM2 launches the process WITH this env var, so a shared
-  // inline `ports` edit that left it on the old value would revert at runtime.
-  const LABEL_ENV_KEY = { api: 'API_PORT', ui: 'UI_PORT', devUi: 'DEV_UI_PORT' }[label];
-
-  // Patterns are split by SCOPE:
-  //   - portsObjPats run ONLY inside the inline `ports: { ... }` slice. The
-  //     `api:`/`ui:`/`devUi:` keys are valid only there (the only place
-  //     parseEcosystemConfig reads them); applied over the whole block they'd
-  //     also hit a same-named field elsewhere (e.g. `metadata: { api: N }`) and
-  //     mutate config the parser never used as the port source.
-  //   - blockPats run over the whole block (env keys, args, bare PORT).
-  const portsObjPats = [];
-  const blockPats = [];
-  // Bare env `PORT` should be rewritten whenever it maps to THIS label (per the
-  // process name), regardless of whether an inline ports object also exists —
-  // PM2 launches with it, so it must track the label's port. NOT for a ports
-  // REFERENCE block: there the parser reads the external const and ignores env,
-  // so rewriting the bare PORT would be a false-success runtime-only change.
-  // A UI process's bare PORT serves BOTH `ui` and `devUi`: when an API sibling
-  // exists parseEcosystemConfig relabels that parsed ui port to devUi, so a
-  // devUi edit on a UI-named process targets the same bare PORT.
-  const barePortIsThisLabel = barePortLabel === label || (barePortLabel === 'ui' && label === 'devUi');
-  const rewriteBarePort = barePortIsThisLabel && !hasPortsReference;
-
-  if (label === 'api') {
-    if (hasInlinePortsObj) portsObjPats.push(`(\\bapi\\s*:\\s*)${NUM}`);  // ports: { api: N }
-    if (rewriteBarePort) {
-      // The env `PORT` (and its `|| N` fallback) is the runtime API port here.
-      blockPats.push(`(${PORT_KEY}[^,}\\n]*?\\|\\|\\s*['"]?)${NUM}`);     // PORT: … || N (fallback)
-      blockPats.push(`(${PORT_KEY})${NUM}`);                             // env PORT: N
-    }
-    if (!hasPortsReference) {
-      // Label-specific runtime env var (API_PORT) — PM2 launches with it.
-      blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env API_PORT: N
-    }
-    // A bare lowercase `port:` is parseEcosystemConfig's LAST-RESORT derivation
-    // (`directPortMatch`), consulted only when there's no ports object/env. So
-    // rewrite it ONLY when there's no explicit ports source — otherwise it'd
-    // hit an unrelated same-valued field (e.g. `metadata: { port: 6000 }`) the
-    // parser never read as the API port.
-    if (!hasExplicitPortsSource) blockPats.push(`(\\bport\\s*:\\s*)${NUM}`); // port: N
-  } else {
-    const hasDevUiKey = /\bdevUi\s*:\s*\d/.test(block);
-    if (hasInlinePortsObj) {
-      portsObjPats.push(label === 'devUi' ? `(\\bdevUi\\s*:\\s*)${NUM}` : `(\\bui\\s*:\\s*)${NUM}`); // exact key
-      if (label === 'devUi' && !hasDevUiKey) portsObjPats.push(`(\\bui\\s*:\\s*)${NUM}`); // relabeled-from-ui source
-    }
-    if (!hasPortsReference) {
-      // VITE_PORT/--port mirror the runtime UI/dev port: rewrite them alongside
-      // an inline ports key (desirable — config + runtime move together) or as
-      // the sole source when there's no ports object. But NOT for a ports
-      // REFERENCE whose external const the parser actually reads — rewriting
-      // only the env/args value there is false success (the unchanged const
-      // re-derives the old port on the next refresh).
-      blockPats.push(`(['"\`]?\\bVITE_PORT\\b['"\`]?\\s*:\\s*)${NUM}`); // env VITE_PORT: N
-      blockPats.push(`(--port\\s+)${NUM}`);                            // args --port N
-      // Label-specific runtime env var (UI_PORT / DEV_UI_PORT) — PM2 launches with it.
-      blockPats.push(`(['"\`]?\\b${LABEL_ENV_KEY}\\b['"\`]?\\s*:\\s*)${NUM}`); // env UI_PORT: N
-    }
-    // Bare env `PORT` is the UI port when this is a UI-named process — rewrite it
-    // even alongside an inline ports object (it's the runtime port PM2 uses).
-    if (rewriteBarePort) blockPats.push(`(${PORT_KEY})${NUM}`); // bare PORT of a UI-named process
-  }
-
-  let out = block;
-  // Label-key patterns: rewrite only within the `ports: { ... }` object slice.
-  if (portsObjPats.length > 0) {
-    const open = out.search(/\bports\s*:\s*\{/);
-    if (open >= 0) {
-      const braceIdx = out.indexOf('{', open);
-      const end = findMatchingBrace(out, braceIdx);
-      if (end >= 0) {
-        let inner = out.slice(braceIdx, end + 1);
-        for (const p of portsObjPats) inner = replaceOutsideComments(inner, new RegExp(p, 'g'), ph);
-        out = out.slice(0, braceIdx) + inner + out.slice(end + 1);
-      }
-    }
-  }
-  // Env/args patterns: rewrite over the whole block.
-  for (const p of blockPats) {
-    out = replaceOutsideComments(out, new RegExp(p, 'g'), ph);
-  }
-  const changed = out.includes(ph);
-  out = out.split(ph).join(String(newP));
-  return { block: out, changed };
-}
-
-/**
- * Per-process-label-targeted port rewrite — the disambiguating counterpart to
- * the value-keyed `rewriteEcosystemPorts`. Each edit names the process and the
- * label (`api`/`ui`/`devUi`) to change, so a value shared by two labels in the
- * SAME block (e.g. an explicit `ports: { api: N, ui: N }` map, or a UI process
- * whose bare `PORT` is its only port) is rewritten on exactly the one the user
- * touched. An edit whose label has no rewritable literal inside the process
- * block — e.g. the value lives in an external `const PORTS = {…}` reached via
- * `ports: PORTS.server`, which this in-block rewrite can't see — is returned in
- * `unapplied` (the caller 422s) rather than falsely rewriting a same-valued env
- * literal the parser ignores. Pure (no I/O) for unit-testability.
- *
- * @param {string} content
- * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
- * @returns {{ content: string, applied: Array, unapplied: Array }}
- */
+/** Pure compatibility writers use the same attributable, atomic edit plan. */
 export function rewriteEcosystemPortsByProcess(content, edits) {
-  const valid = (edits || []).filter(e =>
-    e && typeof e.processName === 'string' && typeof e.label === 'string' &&
-    Number.isInteger(e.oldPort) && Number.isInteger(e.newPort) &&
-    e.oldPort > 0 && e.newPort > 0 && e.oldPort !== e.newPort);
-  if (valid.length === 0) return { content, applied: [], unapplied: [] };
-
-  const applied = [];
-  const unapplied = [];
-
-  // Group edits by process so a block is sliced once even when several labels
-  // in it change (e.g. apiPort + uiPort that currently share a value).
-  const byProcess = new Map();
-  for (const e of valid) {
-    if (!byProcess.has(e.processName)) byProcess.set(e.processName, []);
-    byProcess.get(e.processName).push(e);
-  }
-
-  const blocks = [];
-  for (const [name, es] of byProcess) {
-    const range = findAppBlock(content, name);
-    if (!range) { es.forEach(e => unapplied.push(e)); continue; }
-    blocks.push({ range, edits: es });
-  }
-  // Rewrite back-to-front so each splice keeps earlier blocks' offsets valid.
-  blocks.sort((a, b) => b.range.start - a.range.start);
-
-  let out = content;
-  for (const blk of blocks) {
-    let inner = out.slice(blk.range.start, blk.range.end + 1);
-    for (const e of blk.edits) {
-      const r = rewriteLabelInBlock(inner, e.label, e.oldPort, e.newPort, e.processName);
-      inner = r.block;
-      (r.changed ? applied : unapplied).push(e);
-    }
-    out = out.slice(0, blk.range.start) + inner + out.slice(blk.range.end + 1);
-  }
-
-  return { content: out, applied, unapplied };
+  const { content: updated, applied, unapplied } = planEcosystemPortEdits(content, [], edits);
+  return { content: updated, applied, unapplied };
 }
 
-/**
- * Rewrite port literals in an ecosystem.config content string per a remap of
- * old → new port numbers. Pure (no I/O) so it's unit-testable.
- *
- * `ecosystem.config.cjs` is the source of truth for an app's ports — PortOS
- * *derives* uiPort/apiPort/devUiPort from it via parseEcosystemConfig. Editing
- * ports in the UI therefore has to write back here, or PM2 keeps the old ports
- * and the next config refresh re-derives them and clobbers the edit.
- *
- * Replacements are deliberately narrow so unrelated numbers (watch_delay,
- * timeouts) are never touched:
- *   1. numeric values inside a `const PORTS = {...}` block AND each per-app
- *      `ports: {...}` object (arbitrary keys — matched by value),
- *   2. `--port <n>` tokens in args strings,
- *   3. port-ish env keys (`PORT`, `*_PORT`, `VITE_PORT`) and `port:`,
- *   4. top-level port constants (`const API_PORT = <n>`),
- *   5. fallback-expression defaults (`PORT: process.env.PORT || <n>`).
- *
- * Each old value is first swapped to a unique placeholder, then placeholders
- * resolve to new values — so a remap like 6000→6001, 6001→6002 can't chain.
- * Placeholders are NUL-wrapped so index 1's token can't prefix-match index 10's.
- *
- * @param {string} content
- * @param {Map<number,number>|Array<[number,number]>} remap
- * @returns {string}
- */
 export function rewriteEcosystemPorts(content, remap) {
-  const pairs = (remap instanceof Map ? [...remap.entries()] : remap || [])
-    .map(([o, n]) => [Number(o), Number(n)])
-    .filter(([o, n]) => Number.isInteger(o) && Number.isInteger(n) && o > 0 && n > 0 && o !== n);
-  if (pairs.length === 0) return content;
-
-  const ph = (i) => `PORT_REMAP_${i}_`;
-  // Port-ish env keys: PORT, FOO_PORT, VITE_PORT (and quoted variants), plus `port:`.
-  const KEY = `(?:[A-Za-z][A-Za-z0-9_]*_PORT|PORT|port)`;
-
-  // replaceOutsideComments (module scope) skips matches whose port number sits
-  // inside a comment, so a commented `// PORT: 5173` never counts as a rewrite.
-
-  let out = content;
-
-  // 1) Within `const PORTS = {...}` and each per-app `ports: {...}` object,
-  //    swap any `: <old>` value (keys there are arbitrary — API, UI, api, ui).
-  //    Process regions back-to-front so each splice's offsets stay valid for
-  //    the earlier (lower-index) regions still to be rewritten.
-  const regions = findValuePortRegions(out).sort((a, b) => b.start - a.start);
-  for (const region of regions) {
-    let inner = out.slice(region.start, region.end + 1);
-    pairs.forEach(([oldP], i) => {
-      inner = replaceOutsideComments(inner, new RegExp(`(:\\s*)${oldP}\\b`, 'g'), ph(i));
-    });
-    out = out.slice(0, region.start) + inner + out.slice(region.end + 1);
-  }
-
-  // 2) `--port <old>` in args strings.
-  pairs.forEach(([oldP], i) => {
-    out = replaceOutsideComments(out, new RegExp(`(--port\\s+)${oldP}\\b`, 'g'), ph(i));
-  });
-
-  // 3) Port-ish key assignments anywhere (env blocks, ports objects).
-  pairs.forEach(([oldP], i) => {
-    out = replaceOutsideComments(out, new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*)${oldP}\\b`, 'g'), ph(i));
-  });
-
-  // 4) Top-level port constants — `const API_PORT = 5555` / `let CDP_PORT = …`.
-  //    parseEcosystemConfig derives ports from these (a `\w*PORT\w*` name `=`
-  //    number), so an edit that skipped them would revert on the next refresh.
-  pairs.forEach(([oldP], i) => {
-    out = replaceOutsideComments(out, new RegExp(`((?:const|let|var)\\s+\\w*PORT\\w*\\s*=\\s*)${oldP}\\b`, 'g'), ph(i));
-  });
-
-  // 5) Fallback-expression defaults — `PORT: process.env.PORT || 4420`.
-  //    parseEcosystemConfig resolves the `|| <n>` literal, so it must be
-  //    rewritten too. The value isn't adjacent to the key (step 3 misses it),
-  //    so match the port-ish key, then any same-value expression up to `||`.
-  //    `[^,}\n]*?` keeps the match inside one value (no comma/brace/newline).
-  pairs.forEach(([oldP], i) => {
-    out = replaceOutsideComments(out, new RegExp(`(['"\`]?\\b${KEY}\\b['"\`]?\\s*:\\s*[^,}\\n]*?\\|\\|\\s*['"]?)${oldP}\\b`, 'g'), ph(i));
-  });
-
-  // Resolve placeholders → new values.
-  pairs.forEach(([, newP], i) => {
-    out = out.split(ph(i)).join(String(newP));
-  });
-
-  return out;
+  return planEcosystemPortEdits(content, remap).content;
 }
 
-/**
- * Persist a port remap to an app's on-disk ecosystem config (`.cjs` preferred,
- * then `.js`). Returns `{ file, changed }`. No-op (changed:false) when nothing
- * matched. See rewriteEcosystemPorts for why this is the canonical write path.
- *
- * @param {string} repoPath
- * @param {Map<number,number>|Array<[number,number]>} remap
- */
 export async function writeEcosystemPorts(repoPath, remap) {
-  // Same resolution order as parseEcosystemFromPath — rewrite the file the
-  // reader actually derives ports from (see ECOSYSTEM_CONFIG_FILENAMES).
-  for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
-    const filePath = join(repoPath, name);
-    if (!existsSync(filePath)) continue;
-    const content = await readFile(filePath, 'utf-8');
-    const updated = rewriteEcosystemPorts(content, remap);
-    if (updated !== content) {
-      await atomicWrite(filePath, updated);
-      return { file: name, changed: true };
-    }
-    return { file: name, changed: false };
-  }
-  return { file: null, changed: false };
+  const { file, changed } = await writeEcosystemPortEdits(repoPath, remap, []);
+  return { file, changed };
 }
 
-/**
- * Persist a per-process-label-targeted port remap to an app's on-disk ecosystem
- * config (`.cjs` preferred, then `.js`). The disambiguating counterpart to
- * writeEcosystemPorts: use this when a port value is shared by two labels (e.g.
- * `ports: { api: N, ui: N }`) and only one was edited. Returns
- * `{ file, changed, applied, unapplied }`; `unapplied` lists edits whose process
- * block or label literal wasn't found (caller decides whether that's a failure).
- *
- * **All-or-nothing.** The rewrite is computed in full (pure) before any I/O, and
- * the file is written ONLY when every edit applied (`unapplied` is empty). A
- * batch where some labels are rewritable and others aren't (e.g. one port is a
- * literal `PORT: 6000` but a same-valued sibling lives in an external
- * `ports: PORTS.client` reference) must NOT persist its applied subset — the
- * caller turns a non-empty `unapplied` into a 422 and skips the registry update,
- * so a partial on-disk write would leave config and registry inconsistent for a
- * request that "failed". When `unapplied` is non-empty the file is left
- * untouched and `applied` is reported empty (nothing was persisted).
- *
- * @param {string} repoPath
- * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
- */
 export async function writeEcosystemPortsByProcess(repoPath, edits) {
-  for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
-    const filePath = join(repoPath, name);
-    if (!existsSync(filePath)) continue;
-    const content = await readFile(filePath, 'utf-8');
-    const { content: updated, applied, unapplied } = rewriteEcosystemPortsByProcess(content, edits);
-    // Don't persist a partial batch: if any edit couldn't be applied, the
-    // caller rejects the whole request, so writing the applied subset would
-    // desync config from the (un-updated) registry.
-    if (unapplied.length > 0) {
-      return { file: name, changed: false, applied: [], unapplied };
-    }
-    if (updated !== content) {
-      await atomicWrite(filePath, updated);
-      return { file: name, changed: true, applied, unapplied };
-    }
-    return { file: name, changed: false, applied, unapplied };
-  }
-  return { file: null, changed: false, applied: [], unapplied: edits || [] };
+  const { file, changed, applied, unapplied } = await writeEcosystemPortEdits(repoPath, [], edits);
+  return { file, changed, applied, unapplied };
 }
 
-/**
- * Persist a mixed port edit — a value-keyed `remap` (distinct ports) AND a set
- * of per-process-label-targeted `edits` (shared-value ports) — to an app's
- * ecosystem config in ONE atomic write.
- *
- * Both rewrites are computed in memory against the same file content, then the
- * file is written exactly once. This is the only way to keep a mixed edit
- * all-or-nothing: writing the value-keyed pass and the targeted pass as two
- * separate `atomicWrite`s lets the first land on disk before the second reports
- * an unpersistable edit — so a request the caller then 422s would still have
- * partially changed the config. Here, if ANY targeted edit is unapplied, the
- * file is left untouched and the whole result is reported as not-persisted, so
- * the caller's reject path never leaves a partial write behind.
- *
- * Returns `{ file, changed, remapApplied, applied, unapplied }`:
- *   - `remapApplied` — true when the value-keyed remap matched a literal
- *   - `applied`/`unapplied` — the targeted edits that did / didn't rewrite
- *
- * @param {string} repoPath
- * @param {Array<[number,number]>} remap
- * @param {Array<{processName:string,label:string,oldPort:number,newPort:number}>} edits
- */
+/** Plan every requested process/label against one original snapshot, then write once. */
 export async function writeEcosystemPortEdits(repoPath, remap, edits) {
-  const hasRemap = (remap || []).length > 0;
-  const hasEdits = (edits || []).length > 0;
-  if (!hasRemap && !hasEdits) return { file: null, changed: false, remapApplied: false, applied: [], unapplied: [] };
-
   for (const name of ECOSYSTEM_CONFIG_FILENAMES) {
     const filePath = join(repoPath, name);
     if (!existsSync(filePath)) continue;
     const content = await readFile(filePath, 'utf-8');
-
-    // The two passes both run against the in-memory result of the other so a
-    // single write reflects both — but whichever runs SECOND can match a literal
-    // the first pass just created, chaining one edit into another. That happens
-    // when the second pass's match-value equals a value the first produced:
-    //   - value-keyed→targeted chains if a targeted OLD value equals a remap NEW
-    //     value (forward collision), and
-    //   - targeted→value-keyed chains if a remap OLD value equals a targeted NEW
-    //     value (reverse collision).
-    // Pick the order that avoids the collision present; if BOTH directions
-    // collide there's no safe order, so treat the whole batch as unpersistable
-    // (the caller 422s — honest, vs. silently corrupting a sibling port).
-    const remapOlds = remap.map(([o]) => o);
-    const remapNews = remap.map(([, n]) => n);
-    const targetedOlds = (edits || []).map(e => e.oldPort);
-    const targetedNews = (edits || []).map(e => e.newPort);
-    const forwardCollision = hasRemap && hasEdits && targetedOlds.some(o => remapNews.includes(o));
-    const reverseCollision = hasRemap && hasEdits && remapOlds.some(o => targetedNews.includes(o));
-
-    // Both directions collide ⇒ neither single ordering is safe (a true value
-    // cycle, e.g. swapping ui↔devUi between two same-block ports). Resolving it
-    // would need per-edit placeholder staging; that's an exotic intra-block port
-    // swap well outside the shared/derived cases this path targets, so we
-    // conservatively reject (a safe 422 — no corruption) rather than build it.
-    if (forwardCollision && reverseCollision) {
-      return { file: name, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
-    }
-
-    let result, applied, unapplied, remapApplied;
-    if (forwardCollision) {
-      // Run targeted FIRST so the value-keyed pass can't feed it a fresh literal.
-      const t = hasEdits ? rewriteEcosystemPortsByProcess(content, edits) : { content, applied: [], unapplied: [] };
-      const afterRemap = hasRemap ? rewriteEcosystemPorts(t.content, remap) : t.content;
-      result = afterRemap; applied = t.applied; unapplied = t.unapplied;
-      remapApplied = hasRemap && afterRemap !== t.content;
-    } else {
-      // Default: value-keyed first, then targeted (safe when no forward collision).
-      const afterRemap = hasRemap ? rewriteEcosystemPorts(content, remap) : content;
-      const t = hasEdits ? rewriteEcosystemPortsByProcess(afterRemap, edits) : { content: afterRemap, applied: [], unapplied: [] };
-      result = t.content; applied = t.applied; unapplied = t.unapplied;
-      remapApplied = hasRemap && afterRemap !== content;
-    }
-
-    // Persist NOTHING when ANY part of the request is unpersistable — the caller
-    // rejects the whole update (422) in either of these cases, so a partial
-    // write would desync config from the un-updated registry:
-    //   - a requested value-keyed remap matched no literal (`hasRemap` &&
-    //     !remapApplied) — the symmetric twin of an unapplied targeted edit, and
-    //   - any targeted edit couldn't be applied (`unapplied`).
-    const remapFailed = hasRemap && !remapApplied;
-    if (remapFailed || unapplied.length > 0) {
-      return { file: name, changed: false, remapApplied: false, applied: [], unapplied };
-    }
-
-    if (result !== content) {
-      await atomicWrite(filePath, result);
-      return { file: name, changed: true, remapApplied, applied, unapplied };
-    }
-    return { file: name, changed: false, remapApplied, applied, unapplied };
+    const { content: updated, ...result } = planEcosystemPortEdits(content, remap, edits);
+    const changed = updated !== content;
+    if (changed) await atomicWrite(filePath, updated);
+    return { file: name, changed, ...result };
   }
   return { file: null, changed: false, remapApplied: false, applied: [], unapplied: edits || [] };
 }
@@ -1266,10 +975,17 @@ async function applyEnvPorts(dirPath, result, configFiles) {
   const envPath = join(dirPath, '.env');
   if (!existsSync(envPath)) return;
   const content = await readFile(envPath, 'utf-8').catch(() => '');
-  const portMatch = content.match(/PORT\s*=\s*(\d+)/i);
-  if (portMatch) result.apiPort = parseInt(portMatch[1], 10);
-  const viteMatch = content.match(/VITE_PORT\s*=\s*(\d+)/i);
-  if (viteMatch) result.devUiPort = parseInt(viteMatch[1], 10);
+  const env = parseEnvContents(content);
+  const readTcpPort = (key) => {
+    const value = env.get(key);
+    if (value === undefined || !/^\d+$/.test(value)) return null;
+    const port = Number(value);
+    return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+  };
+  const apiPort = readTcpPort('PORT');
+  if (apiPort !== null) result.apiPort = apiPort;
+  const devUiPort = readTcpPort('VITE_PORT');
+  if (devUiPort !== null) result.devUiPort = devUiPort;
   configFiles.push('.env');
 }
 

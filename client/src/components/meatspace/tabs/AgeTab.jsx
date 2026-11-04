@@ -59,14 +59,14 @@ function BirthDateSection({ birthDate, onUpdate }) {
             aria-label="Save"
             onClick={handleSave}
             disabled={saving || !input}
-            className="p-2 rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
           >
             <Check size={16} />
           </button>
           <button
             aria-label="Cancel"
             onClick={handleCancel}
-            className="p-2 rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
           >
             <X size={16} />
           </button>
@@ -89,7 +89,7 @@ function BirthDateSection({ birthDate, onUpdate }) {
           <button
             aria-label="Edit"
             onClick={() => setEditing(true)}
-            className="p-2 rounded text-gray-500 hover:text-gray-300 hover:bg-port-border/50"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-500 hover:text-gray-300 hover:bg-port-border/50"
           >
             <Pencil size={14} />
           </button>

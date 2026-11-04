@@ -1,3 +1,5 @@
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import CastAndSetsImageEditor from './CastAndSetsImageEditor.jsx';
 import { useId, useRef, useState } from 'react';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -15,6 +17,13 @@ const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['ligh
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
 const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
 
+// A prop line is "name: description".
+const propLine = (line) => {
+  const at = line.indexOf(':');
+  const name = line.slice(0, at).trim();
+  const description = line.slice(at + 1).trim();
+  return at > 0 && name && description ? { name, description } : null;
+};
 const lines = (text) => String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
 const cardIdentity = (projectId, revision, item) => JSON.stringify([projectId, revision, item?.key, item?.kind,
   item?.testIndex, item?.setId, item?.label, item?.prompt, item?.deps, item?.refKeys]);
@@ -45,6 +54,15 @@ function editorFor(item, direction, adding = false, subjects = []) {
   if (item.kind === 'expressions') {
     return { list: 'One mood per line: what the face, eyes and head do', values: { text: (p.expressions || []).join('\n') },
       toEdits: (v) => ({ protagonist: { expressions: lines(v.text) } }) };
+  }
+  if (item.kind === 'props') {
+    const props = direction?.props || [];
+    return { list: 'One prop per line: name: exactly how it looks', values: { text: props.map((prop) => `${prop.name}: ${prop.description}`).join('\n') },
+      validate: (v) => lines(v.text).every(propLine) ? null : 'Give every prop a name and description separated by a colon.',
+      toEdits: (v) => ({ props: lines(v.text).map(propLine).map((prop) => {
+        const prior = props.find((old) => old.name.toLowerCase() === prop.name.toLowerCase());
+        return prior ? { ...prop, id: prior.id, owner: prior.owner || '' } : prop;
+      }) }) };
   }
   if (item.kind === 'looks') {
     return { looks: true, values: { looks: (direction?.looks || []).map((look) => ({ ...look, originalName: look.name })) },
@@ -87,10 +105,16 @@ const BINDING_MISSING = {
 function ItemEditor({ editor, label, busy, onSave, onCancel }) {
   const baseId = useId();
   const [values, setValues] = useState(editor.values);
-  const set = (key, value) => setValues((old) => ({ ...old, [key]: value }));
+  const [validationError, setValidationError] = useState(null);
+  const set = (key, value) => { setValidationError(null); setValues((old) => ({ ...old, [key]: value })); };
   return (
     <form className="space-y-2 rounded border border-port-border p-2" aria-label={`Edit ${label}`}
-      onSubmit={(e) => { e.preventDefault(); onSave(editor.toEdits(values)); }}>
+      onSubmit={(e) => {
+        e.preventDefault();
+        const error = editor.validate?.(values);
+        if (error) { setValidationError(error); return; }
+        onSave(editor.toEdits(values));
+      }}>
       {editor.looks ? (
         <div className="space-y-3">
           {values.looks.map((look, index) => (
@@ -121,6 +145,7 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
             : <input id={`${baseId}-${key}`} className={fieldClass} value={values[key]} onChange={(e) => set(key, e.target.value)} />}
         </label>
       ))}
+      {validationError && <p role="alert" className="text-xs text-port-warning">{validationError}</p>}
       <p className="text-[11px] text-port-text-muted">Saving re-renders this image and anything drawn from it.</p>
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={busy} className={`${buttonClass} bg-port-accent text-white border-transparent`}>Save and re-render</button>
@@ -137,8 +162,9 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
  * protagonist. Shown only while the stage is not working. `formSubjects` are the
  * catalog-linked characters an age may be grounded on.
  */
-export default function CastAndSetsItemActions({ item, direction, revision, projectId, busy, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
+export default function CastAndSetsItemActions({ item, image, direction, revision, projectId, busy, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, formSubjects = [], onRegenerate, onEdit, onRefresh }) {
   const [mode, setMode] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [resolution, setResolution] = useState(null);
   const [pending, setPending] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -190,6 +216,25 @@ export default function CastAndSetsItemActions({ item, direction, revision, proj
   const actionBusy = busy || loading;
   return (
     <div className="space-y-2">
+      {image?.status === 'done' && onEditImage && <CastAndSetsImageEditor
+        key={`${projectId}:${revision}:${image.imageId}`} projectId={projectId} item={item} image={image} revision={revision} busy={busy}
+        onRender={onEditImage} onAccept={onAcceptImageEdit} onDiscard={onDiscardImageEdit} />}
+      {onUseImage && <div className="space-y-2">
+        <button type="button" className={buttonClass} disabled={actionBusy} onClick={() => setPickerOpen(true)} aria-label={`Choose primary image for ${label}`}>Choose from gallery</button>
+        {!!image?.history?.length && <details>
+          <summary className="min-h-[44px] cursor-pointer text-xs">Earlier takes ({image.history.length})</summary>
+          <div className="flex flex-wrap gap-2">
+            {image.history.filter((id) => id !== image.imageId).map((imageId) => <div key={imageId} className="w-28 space-y-1">
+              <img src={`/data/images/${encodeURIComponent(imageId)}`} alt={`Earlier ${label} take`} className="h-20 w-full rounded object-cover" loading="lazy" />
+              <button type="button" className={buttonClass} disabled={actionBusy} onClick={() => onUseImage({ key: item.key, imageId })}>Use this image</button>
+            </div>)}
+          </div>
+        </details>}
+        {pickerOpen && <GalleryImagePicker open onClose={() => setPickerOpen(false)} onSelect={(selected) => {
+          setPickerOpen(false);
+          if (selected?.filename) onUseImage({ key: item.key, imageId: selected.filename });
+        }} />}
+      </div>}
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={actionBusy} onClick={() => onRegenerate([item.key])} className={buttonClass} aria-label={`Regenerate ${label}`}>
           <RotateCcw size={12} aria-hidden="true" /> Regenerate

@@ -225,7 +225,7 @@ export default function QuickBrainCapture() {
           onClick={handlePaste}
           aria-label="Paste from clipboard"
           title="Paste from clipboard"
-          className="flex items-center px-2.5 py-2 rounded-lg border border-port-border bg-port-bg text-gray-400 hover:text-gray-200 text-sm transition-colors min-h-[40px]"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center px-2.5 py-2 rounded-lg border border-port-border bg-port-bg text-gray-400 hover:text-gray-200 text-sm transition-colors min-h-[40px]"
         >
           <ClipboardPaste size={14} />
         </button>
@@ -236,7 +236,7 @@ export default function QuickBrainCapture() {
             aria-expanded={showAdvanced}
             aria-controls="quick-brain-advanced"
             aria-label="Toggle ingest options"
-            className={`flex items-center px-2.5 py-2 rounded-lg border text-sm transition-colors min-h-[40px] ${showAdvanced
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center px-2.5 py-2 rounded-lg border text-sm transition-colors min-h-[40px] ${showAdvanced
               ? 'bg-red-500/20 text-red-300 border-red-500/40'
               : 'bg-port-bg text-gray-400 border-port-border hover:text-gray-200'}`}
             title="YouTube ingest options"
@@ -250,7 +250,7 @@ export default function QuickBrainCapture() {
             aria-pressed={creative}
             aria-label="Toggle creative capture mode"
             disabled={isUrl}
-            className={`flex items-center px-2.5 py-2 rounded-lg border text-sm transition-colors min-h-[40px] disabled:opacity-40 disabled:cursor-not-allowed ${creative
+            className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center px-2.5 py-2 rounded-lg border text-sm transition-colors min-h-[40px] disabled:opacity-40 disabled:cursor-not-allowed ${creative
               ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
               : 'bg-port-bg text-gray-400 border-port-border hover:text-gray-200'}`}
             title={isUrl ? 'URLs are saved as links, not creative ideas' : 'Creative mode: flag this thought for the Catalog'}
@@ -262,7 +262,7 @@ export default function QuickBrainCapture() {
           type="submit"
           disabled={!input.trim() || isSubmitting || ingest.active}
           aria-label="Capture"
-          className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
+          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[40px]"
         >
           <Send size={14} />
         </button>

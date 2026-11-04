@@ -196,6 +196,7 @@ import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { createDatabaseAuthority } from '../lib/databaseAuthority.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary, deleteSnapshot } from './backup.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
@@ -1375,6 +1376,23 @@ describe('restorePostgres', () => {
     getServerMajorVersion.mockResolvedValue(16);
     ({ restorePostgres } = await import('./backup.js'));
   });
+  afterEach(async () => {
+    // Each case owns this suite's private admission journal. Retained recovery
+    // rows are part of individual assertions, not work for the next case.
+    for (const operation of maintenance.operations().filter(op => op.kind === 'backup' && op.unsettled)) {
+      const recovery = maintenance.recoverOwned('backup', operation.resource);
+      recovery.completeRecovery?.();
+      await recovery.finish();
+    }
+  });
+
+  it('refuses a database restore while update maintenance is held', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    try {
+      await expect(restorePostgres('/dest', 'snap-1', { dryRun: false })).rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    } finally { maintenance.deferredUpdate.finish(update.id, false); }
+  });
 
   it.each([null, 0, NaN])('refuses an unknown target major %s equally in preview and execution before mutation', async major => {
     getServerMajorVersion.mockResolvedValue(major);
@@ -1625,6 +1643,8 @@ describe('restorePostgres', () => {
       return result;
     });
     await flush();
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
     proc.emit('close', 0);
     await flush();
     await vi.waitFor(() => expect(ensureSchema).toHaveBeenCalledWith({ force: true }));
@@ -1635,6 +1655,8 @@ describe('restorePostgres', () => {
     expect(settled).toBe(false);
     finishMigrations(0);
     await expect(pending).resolves.toMatchObject({ status: 'ok', dryRun: false });
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    maintenance.deferredUpdate.finish(update.id, false);
   });
 
   // #9725: a replay that COMMITTED must never reopen ordinary writes, lose its
@@ -3487,6 +3509,14 @@ describe('restoreSnapshot manifest verification', () => {
 // BEFORE runRsync/spawn is reached, so no fake child process is needed — an
 // invalid filter must never make it into an `--include=` rsync arg.
 describe('restoreSnapshot subdirFilter guard', () => {
+  it('refuses to begin a file restore while an update holds maintenance', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    try {
+      await expect(restoreSnapshot('/dest', 'snap-1', { dryRun: false }))
+        .rejects.toMatchObject({ code: 'MAINTENANCE_HELD' });
+    } finally { maintenance.deferredUpdate.finish(update.id, false); }
+  });
   beforeEach(() => {
     spawn.mockReset();
   });
@@ -5117,6 +5147,39 @@ describe('runBackup lifecycle', () => {
 
     proc.emit('close', 0);
     await first;
+  });
+
+  it('keeps update admission blocked until a backup has finished and releases the fence afterward', async () => {
+    const { maintenance } = await import('../lib/maintenanceAdmission.js');
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, { emit: vi.fn() });
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const update = maintenance.deferredUpdate.request();
+    try {
+      expect(maintenance.operations().some(op => op.kind === 'backup')).toBe(true);
+      expect(maintenance.operations().find(op => op.kind === 'backup').resource).toMatch(/^\d{4}-\d\d-\d\dT/);
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+      proc.emit('close', 0);
+      await pending;
+      expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    } finally {
+      proc.emit('close', 0);
+      await pending.catch(() => {});
+      maintenance.deferredUpdate.finish(update.id, false);
+    }
+  });
+
+  it('does not spawn a backup child if its snapshot identity cannot be recorded', async () => {
+    const { maintenance } = await import('../lib/maintenanceAdmission.js');
+    const admit = maintenance.admit;
+    vi.spyOn(maintenance, 'admit').mockImplementationOnce((...args) => {
+      const permit = admit(...args);
+      return { ...permit, identify: () => { throw new Error('cannot identify backup'); } };
+    });
+    await expect(runBackup(destRoot, { emit: vi.fn() })).rejects.toThrow('cannot identify backup');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(maintenance.operations().some(op => op.kind === 'backup')).toBe(false);
   });
 
   // Feeds the system-idle gate (server/lib/systemIdle.js): a live snapshot

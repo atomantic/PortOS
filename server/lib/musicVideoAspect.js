@@ -42,7 +42,14 @@ export function musicVideoAtAspect(project, aspect) {
 }
 
 /** `{ width, height }` to request a project's reference frames at. */
-export const musicVideoFrameGenSize = (project) => ({ ...MUSIC_VIDEO_FRAME_GEN_SIZES[musicVideoAspect(project)] });
+export const musicVideoFrameGenSize = (project, model = null) => {
+  const size = MUSIC_VIDEO_FRAME_GEN_SIZES[musicVideoAspect(project)];
+  // FLUX.3 accepts dimensions up to 1024, on a 16-pixel grid.
+  if (model?.runner === 'flux3' && Math.max(size.width, size.height) > 1024) {
+    return { width: size.width * 2 / 3, height: size.height * 2 / 3 };
+  }
+  return { ...size };
+};
 
 /** Width over height for each aspect. */
 const ASPECT_RATIO_VALUES = Object.freeze({ '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 });

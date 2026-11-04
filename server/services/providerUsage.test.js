@@ -69,6 +69,9 @@ import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
+import { getFleetQuotaEntries } from './peerUsage.js';
+import { getApiBilledInstanceIds } from './usageFleetBilling.js';
+import { recordLocalQuotaCards } from './providerQuotaShare.js';
 
 // Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
 // `needsProcessGroup` is false there and these sites spawn attached. The policy
@@ -217,6 +220,7 @@ describe('mapCodexQuota', () => {
     expect(quota.note).toContain('2026-01-02T00:00:00Z');
     expect(quota.note).toContain('~/.codex/config.toml overrides Codex model routing');
     expect(quota.note).not.toMatch(/https?:\/\//);
+    expect(quota.routingOverridden).toBe(true);
     expect(quota.limits).toHaveLength(2);
 
     const clean = mapCodexQuota(SAMPLE_RATE_LIMITS, '2026-01-02T00:00:00Z', {
@@ -224,6 +228,7 @@ describe('mapCodexQuota', () => {
       routingOverridden: false,
     });
     expect(clean.note).not.toContain('config.toml');
+    expect(clean.routingOverridden).toBeUndefined();
   });
 
   it('renders a fully-spent window as a 100%-used meter, not an empty card', () => {
@@ -255,12 +260,15 @@ describe('mapCodexQuota', () => {
   it('names the reached limit type when the payload reports one', () => {
     const quota = mapCodexQuota({ ...CREDITS_ONLY_RATE_LIMITS, rate_limit_reached_type: 'weekly' }, null, { now: SAMPLE_NOW });
     expect(quota.error).toContain('weekly');
+    expect(quota.quotaStatus).toBe('limit_reached');
+    expect(quota.quotaScope).toBe('week');
   });
 
   it('says the windows have reset when every reported window expired', () => {
     const quota = mapCodexQuota(SAMPLE_RATE_LIMITS, null, { now: Date.parse('2026-02-01T00:00:00Z') });
     expect(quota.limits).toHaveLength(0);
     expect(quota.error).toContain('has since reset');
+    expect(quota.quotaStatus).toBe('expired');
   });
 });
 
@@ -376,6 +384,83 @@ describe('getProviderQuotas', () => {
     __resetUsageScrapeCache();
     scrapeTuiUsage.mockReset();
     getImageGenQuota.mockClear();
+    getFleetQuotaEntries.mockReset().mockResolvedValue([]);
+    getApiBilledInstanceIds.mockReset().mockResolvedValue([]);
+  });
+
+  it('returns separate peer-only and API-billed readings, ages windows, and reports old peers', async () => {
+    getAllProviders.mockResolvedValueOnce({ providers: [] });
+    getFleetQuotaEntries.mockResolvedValueOnce([
+      { instanceId: 'a', name: 'Peer A', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [{ key: 'week', resetsAt: '2026-01-02T00:00:00.000Z', percentUsed: 100 }], activity: [] }] },
+      { instanceId: 'b', name: 'Peer B', quotaReported: true, quotas: [{ family: 'codex', label: 'Codex', fetchedAt: '2026-01-01T00:00:00.000Z', limits: [], activity: [{ period: 'week', requests: 2, sessions: 1 }] }] },
+      { instanceId: 'old', name: 'Old peer', quotaReported: false, quotas: [] },
+      { instanceId: 'inactive', name: 'Inactive peer', quotaReported: false, usageExpected: false, quotas: [] },
+    ]);
+    const result = await getProviderQuotas({ scope: 'instances' });
+    expect(getApiBilledInstanceIds).toHaveBeenCalledWith({ requireReadable: true });
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: [], includeEmpty: true });
+    expect(result.providers).toHaveLength(2);
+    expect(result.providers[0]).toMatchObject({ origin: { instanceId: 'a' }, limits: [], quotaStatus: 'expired', error: expect.stringMatching(/since reset/) });
+    expect(result.providers[1]).toMatchObject({ origin: { instanceId: 'b' }, activity: [{ requests: 2 }] });
+    expect(result.unreportedInstances).toEqual(['Old peer']);
+  });
+
+  it('excludes API-billed peers from instance quota readings and missing-report entries', async () => {
+    getAllProviders.mockResolvedValueOnce({ providers: [] });
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    const entries = [
+      { instanceId: 'billed', name: 'Billed peer', quotaReported: false, quotas: [{ family: 'grok', label: 'Grok', limits: [] }] },
+      { instanceId: 'included', name: 'Included peer', quotaReported: true, quotas: [{ family: 'grok', label: 'Grok', limits: [] }] },
+    ];
+    getFleetQuotaEntries.mockImplementationOnce(async ({ excludeInstanceIds }) => entries.filter((entry) => !excludeInstanceIds.includes(entry.instanceId)));
+    const result = await getProviderQuotas({ scope: 'instances' });
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: ['billed'], includeEmpty: true });
+    expect(result.providers.map((card) => card.origin.instanceId)).toEqual(['included']);
+    expect(result.unreportedInstances).toEqual([]);
+  });
+
+  it('reads eligible saved peer quotas without starting or recording a local provider read', async () => {
+    getAllProviders.mockClear(); getSettings.mockClear(); recordLocalQuotaCards.mockClear();
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    getFleetQuotaEntries.mockResolvedValueOnce([{ instanceId: 'included', name: 'Included peer', quotaReported: true,
+      quotas: [{ family: 'grok', label: 'Grok', limits: [] }] }]);
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result.providers).toEqual([expect.objectContaining({ family: 'grok', origin: expect.objectContaining({ instanceId: 'included' }) })]);
+    expect(getFleetQuotaEntries).toHaveBeenCalledWith({ excludeInstanceIds: ['billed'], includeEmpty: true });
+    expect(getAllProviders).not.toHaveBeenCalled();
+    expect(getSettings).not.toHaveBeenCalled();
+    expect(recordLocalQuotaCards).not.toHaveBeenCalled();
+    expect(scrapeTuiUsage).not.toHaveBeenCalled();
+  });
+
+  it('does not include unverified peers if billing settings cannot be read', async () => {
+    getApiBilledInstanceIds.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result).toMatchObject({ providers: [], federationUnavailable: true });
+    expect(getFleetQuotaEntries).not.toHaveBeenCalled();
+  });
+
+  it('returns the verified exclusions if the saved peer store cannot be read', async () => {
+    getApiBilledInstanceIds.mockResolvedValueOnce(['billed']);
+    getFleetQuotaEntries.mockRejectedValueOnce(new Error('synthetic peer-store failure'));
+    const result = await getProviderQuotas({ scope: 'peers' });
+    expect(result).toMatchObject({ providers: [], federationUnavailable: true, excludedInstanceIds: ['billed'] });
+  });
+
+  it('reports an unavailable image-quota read separately from a disabled image backend', async () => {
+    getAllProviders.mockResolvedValue({ providers: [] });
+    getSettings.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const incomplete = await getProviderQuotas({ scope: 'instances' });
+    expect(incomplete.imageQuotaComplete).toBe(false);
+    const disabled = await getProviderQuotas({ scope: 'instances' });
+    expect(disabled.imageQuotaComplete).toBe(true);
+    getSettings.mockRejectedValueOnce(new Error('synthetic settings failure'));
+    const imageIncomplete = await getProviderQuotas({ scope: 'instances', family: 'imagegen' });
+    expect(imageIncomplete.imageQuotaComplete).toBe(false);
+    const imageDisabled = await getProviderQuotas({ scope: 'instances', family: 'imagegen' });
+    expect(imageDisabled.imageQuotaComplete).toBe(true);
+    const otherFamily = await getProviderQuotas({ scope: 'instances', family: 'grok' });
+    expect(otherFamily.imageQuotaComplete).toBeNull();
   });
 
   it('unwraps the { providers } object shape from getAllProviders', async () => {
@@ -1000,6 +1085,7 @@ describe('Codex explicit quota refresh', () => {
     getCodexAccountReadiness.mockResolvedValue({ rateLimits: null });
     const [fallback] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
     expect(fallback.note).toContain('Live Codex quota refresh unavailable');
+    expect(fallback.refreshUnavailable).toBe(true);
     getCodexAccountReadiness.mockClear();
     await getProviderQuotas({ family: 'codex', wait: 'never' });
     expect(getCodexAccountReadiness).not.toHaveBeenCalled();

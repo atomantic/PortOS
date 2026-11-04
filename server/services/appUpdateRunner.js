@@ -17,8 +17,9 @@
 import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import { logAction } from './history.js';
-import { checkPortosUpdatePreflight } from './updatePreflight.js';
-import { claimAppOperation, endAppOperation, recordOperationStep } from './appOperations.js';
+import { checkManualUpdateActivity, checkPortosUpdatePreflight } from './updatePreflight.js';
+import { claimAppOperation, endAppOperation, handOffAppOperation, isSoleDeferredUpdateAppOperation, recordOperationStep, runAppOperation } from './appOperations.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { appOperationErrorContext } from '../lib/appOperationErrorContext.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
@@ -45,6 +46,8 @@ export async function runAppUpdate({
   syncFork = false,
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
+  automatic = false,
+  acknowledgeInterruption = false,
 }) {
   const app = await appsService.getAppById(appId);
   if (!app) return { ok: false, reason: 'not-found', appId: null, code: null, message: 'App not found' };
@@ -52,7 +55,20 @@ export async function runAppUpdate({
   // Claimed here, immediately after the app record resolves and BEFORE the
   // preflight await below — the claim has to cover every await that precedes
   // the actual update, or two dispatches land inside the gap.
-  const claim = claimAppOperation(io, app, 'update');
+  let claim;
+  try { claim = claimAppOperation(io, app, 'update'); }
+  catch (error) {
+    if (!['MAINTENANCE_HELD', 'MAINTENANCE_UNAVAILABLE'].includes(error.code)) throw error;
+    return { ok: false, reason: 'refused', appId: app.id, code: error.code, message: error.message };
+  }
+  if (!claim.ok && !automatic && app.id === PORTOS_APP_ID) {
+    const waiting = maintenance.deferredUpdate.operation();
+    if (waiting?.phase === 'waiting' && !waiting.childPid && !waiting.holdId
+      && isSoleDeferredUpdateAppOperation([claim.inFlight], waiting.ownerPid)) {
+      endAppOperation(io, app.id, 'cancellation', claim.inFlight);
+      claim = claimAppOperation(io, app, 'update');
+    }
+  }
   if (!claim.ok) {
     return {
       ok: false,
@@ -67,6 +83,7 @@ export async function runAppUpdate({
   let result = null;
 
   try {
+    return await runAppOperation(operation, async () => {
     // PortOS is itself a managed app, and updating it restarts the whole
     // install — apply the same refusals POST /api/update/execute enforces (a
     // live CoS agent, in-flight Persistent Mind image work, an unacknowledged
@@ -76,11 +93,17 @@ export async function runAppUpdate({
       const refusal = await checkPortosUpdatePreflight({
         acknowledgeFork,
         acknowledgePersistentMindImageBackup,
+        acknowledgeInterruption, deferActivity: true,
       }).then(() => null, (err) => err);
       if (refusal) {
         endAppOperation(io, app.id, 'cancellation');
         operatingAppId = null;
         return { ok: false, reason: 'refused', appId: app.id, code: refusal.code || null, message: refusal.message };
+      }
+      const activityRefusal = await checkManualUpdateActivity({ automatic, acknowledgeInterruption, ignoreAppId: app.id }).then(() => null, err => err);
+      if (activityRefusal) {
+        endAppOperation(io, app.id, 'cancellation'); operatingAppId = null;
+        return { ok: false, reason: 'refused', appId: app.id, code: activityRefusal.code, message: activityRefusal.message };
       }
     }
 
@@ -94,6 +117,8 @@ export async function runAppUpdate({
     let failure = null;
     let errorContext = null;
     result = await appUpdater.updateApp(app, emit, {
+      ...(automatic ? { automatic } : {}),
+      ...(acknowledgeInterruption ? { acknowledgeInterruption } : {}),
       syncFork,
       acknowledgeFork,
       acknowledgePersistentMindImageBackup,
@@ -111,11 +136,15 @@ export async function runAppUpdate({
     // The ledger and the apps-changed broadcast belong to this path now that it
     // is the only way to update an app — a thrown update still gets a row, with
     // success:false, rather than vanishing from the history.
-    await logAction('update', app.id, app.name, {
+    try { await logAction('update', app.id, app.name, {
       steps: result?.steps ?? operation.steps,
       ...(errorContext ? { errorCode: failure.code, errorContext } : {}),
-    }, result?.success === true, failure?.message ?? null);
-    appsService.notifyAppsChanged('update', app.id);
+    }, result?.success === true, failure?.message ?? null); }
+    catch (error) {
+      console.error(`❌ Could not record app update history: ${error.message}`);
+    }
+    try { appsService.notifyAppsChanged('update', app.id); }
+    catch (error) { console.error(`❌ Could not notify app update: ${error.message}`); }
 
     if (result?.selfUpdateStarted) {
       // update.sh will `pm2 delete` THIS process partway through, so there is
@@ -144,8 +173,20 @@ export async function runAppUpdate({
       };
     }
     return { ok: true };
+    });
   } finally {
-    if (operatingAppId && !result?.selfUpdateStarted) {
+    if (operatingAppId && result?.selfUpdateStarted && result.completed) {
+      endAppOperation(io, app.id, 'completion', operation);
+    } else if (operatingAppId && result?.selfUpdateStarted) {
+      await handOffAppOperation(operation, result.supervisorPid);
+      // A supervisor can fail before replacing this server. Clear this exact
+      // progress row when it exits; a later operation must not be removed.
+      result.completion?.then(outcome => {
+        if (!outcome?.success && !outcome?.superseded) io.emit('app:update:error', { appId: app.id,
+          code: outcome?.errorCode || null, message: outcome?.errorMessage || 'The update did not complete' });
+        endAppOperation(io, app.id, outcome?.success ? 'completion' : 'failure', operation);
+      }).catch(() => endAppOperation(io, app.id, 'failure', operation));
+    } else if (operatingAppId) {
       endAppOperation(io, operatingAppId, result?.success === true ? 'completion' : 'failure');
     }
   }

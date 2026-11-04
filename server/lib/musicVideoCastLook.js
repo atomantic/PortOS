@@ -1,4 +1,5 @@
-import { musicVideoCastGuideReferences } from './musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoReferenceChoices } from './musicVideoConditioning.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
 
 /**
  * Cast inputs recorded on a music-video still (#14154).
@@ -10,7 +11,7 @@ import { musicVideoCastGuideReferences } from './musicVideoConditioning.js';
  * is an older take: unknown, not stale. Nothing here re-renders a shot.
  */
 
-const MAX_CAST_INPUTS = 8;
+const MAX_CAST_INPUTS = IMAGE_REFERENCE_REQUEST_LIMIT;
 
 function uniqueStrings(values, max) {
   const out = [];
@@ -70,7 +71,7 @@ export function castLookForTake(project, scene, take, castMedia) {
   if (!take || !Object.hasOwn(take, 'castInputs')) return { status: 'unknown' };
   const inputs = musicVideoCastInputsRecord(take.castInputs);
   if (!inputs) return { status: 'unknown' };
-  const references = project?.visualSpec?.references || [];
+  const references = musicVideoReferenceChoices(project);
   const sheetOlder = inputs.sheets.some((sheet) => {
     const current = references.find((ref) => ref?.id === sheet.id);
     return !current || current.imageId !== sheet.imageId;

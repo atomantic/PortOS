@@ -237,12 +237,11 @@ const BY_ID = new Map(FAL_VIDEO_MODELS.map((m) => [m.id, m]));
 export const getFalVideoModel = (modelId) => (typeof modelId === 'string' ? BY_ID.get(modelId.trim()) || null : null);
 
 /**
- * Models that animate a start frame (the Music Video cutaway lane's choices).
- * Reference-to-video models are left out: they take the frame as a loose
- * reference the prompt must name ("Image 1" / @Image1), which a scene's shot
- * prompt does not do.
+ * Music Video cutaway models that accept a frame, including reference models.
+ * A reference-only model treats it as guidance instead of a pinned first frame;
+ * the shot card and its submitted prompt state that distinction.
  */
-export const FAL_IMAGE_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'i2v'));
+export const FAL_IMAGE_VIDEO_MODELS = Object.freeze(FAL_VIDEO_MODELS.filter((m) => m.kind === 'i2v' || (m.kind === 'ref2v' && m.referenceImages)));
 
 /**
  * Models that move a whole frame to supplied audio (the music-driven
@@ -478,6 +477,8 @@ export function buildFalVideoRequest({
     const refs = [model.image ? null : imageUrl, ...(Array.isArray(referenceImageUrls) ? referenceImageUrls : [])].filter(Boolean);
     if (refs.length > model.referenceImages.max) throw refuse(`${model.label} takes at most ${model.referenceImages.max} reference images`);
     if (refs.length) body[model.referenceImages.param] = refs;
+  } else if (referenceImageUrls?.length) {
+    throw refuse(`${model.label} takes no extra reference images`);
   }
   if (endImageUrl) {
     if (!model.endImage) throw refuse(`${model.label} takes no end frame`);

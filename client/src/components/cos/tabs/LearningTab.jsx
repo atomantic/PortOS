@@ -425,7 +425,7 @@ export default function LearningTab() {
                       {rec.id && (
                         <button
                           onClick={() => handleDismissRec(rec)}
-                          className="opacity-60 hover:opacity-100 transition-opacity shrink-0 -my-2 -mr-1 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                          className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 opacity-60 hover:opacity-100 transition-opacity shrink-0 -my-2 -mr-1 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center"
                           title="Dismiss — won't show again unless this situation worsens significantly"
                           aria-label={`Dismiss recommendation: ${rec.message}`}
                         >

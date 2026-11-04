@@ -2,10 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async (load) => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-production-authoring-') }));
-const localAuthor = vi.hoisted(() => ({ submit: null }));
+const localAuthor = vi.hoisted(() => ({ submit: null, reviewerProvider: null }));
 vi.mock('../promptRunner.js', () => ({
   assertProvider: () => {},
-  resolveProviderAndModel: async () => ({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
+  resolveProviderAndModel: async () => ({ provider: localAuthor.reviewerProvider || { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, selectedModel: 'fixture-model' }),
   runPromptThroughProvider: async ({ prompt, beforeExecute }) => {
     await beforeExecute?.({ provider: { id: 'local-fixture', type: 'api', endpoint: 'http://localhost:11434' }, model: 'fixture-model' });
     return localAuthor.submit(prompt);
@@ -194,6 +194,8 @@ function holdAt() {
   return { reached, release, held: () => { arrive(); return opened; } };
 }
 
+const setDeps = (overrides) => service.__setProductionDepsForTests({ reviewPlate, reviewPlateStrip, resolvePlateReviewer, ...overrides });
+
 async function start(input = {}) {
   const out = await service.startProduction('mv-example', { directive: 'moody, slow', pool: POOL, limits: LIMITS, reviewer: {}, ...input });
   await settle();
@@ -226,7 +228,7 @@ beforeEach(() => {
     project.autoReviews = [...(project.autoReviews || []), reviewRun];
     return { run: reviewRun };
   });
-  service.__setProductionDepsForTests({
+  setDeps({
     loadEnv: async () => env,
     reviewPlate, reviewPlateStrip, resolvePlateReviewer,
     dispatch,
@@ -302,8 +304,8 @@ describe('music video production run (#9066)', () => {
     completeJob('job-4');
     await settle();
     expect(startAutoReview).toHaveBeenCalledTimes(3);
-    expect(startAutoReview.mock.calls.at(-1)[1]).toMatchObject({ startSec: 0, endSec: 8, productionRunId: theRun().id, limits: { maxAttempts: 2, maxGenerations: 6 } });
-    expect(theRun()).toMatchObject({ status: 'running', reviewRunId: 'mvar-example', usage: { generations: 4 } });
+    expect(startAutoReview.mock.calls.at(-1)[1]).toMatchObject({ startSec: 0, endSec: 8, productionRunId: theRun().id, limits: { maxAttempts: 2, maxGenerations: 4 } });
+    expect(theRun()).toMatchObject({ status: 'running', reviewRunId: 'mvar-example', usage: { generations: 6 } });
     expect(theRun().steps.every((s) => s.status === 'completed' && s.rationale)).toBe(true);
 
     // Only a passed continuous review completes the run — never the frames alone.
@@ -386,7 +388,7 @@ describe('music video production run (#9066)', () => {
       store.get('mv-example').scenes[0].referenceImageId = 'director-choice.png';
       return { route: POOL[0], rationale: 'model pick' };
     });
-    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
+    setDeps({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
     await start({ pool: POOL.filter((route) => route.kind === 'image'), stopBefore: 'clips' });
     await settle();
     expect(chooseRoute).toHaveBeenCalled();
@@ -495,7 +497,7 @@ describe('music video production run (#9066)', () => {
   it('refuses a route outside the allowed pool before anything is enqueued', async () => {
     seedProject();
     const chooseRoute = vi.fn(async () => ({ route: { kind: 'image', mode: 'grok', model: null }, rationale: 'model pick' }));
-    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
+    setDeps({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
     await start();
     expect(dispatch).not.toHaveBeenCalled();
     expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 0 } });
@@ -505,7 +507,7 @@ describe('music video production run (#9066)', () => {
   it('lets the chooser pick any eligible member of the pool', async () => {
     seedProject();
     const chooseRoute = vi.fn(async () => ({ route: { kind: 'image', mode: 'codex', model: null }, rationale: 'model pick' }));
-    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
+    setDeps({ loadEnv: async () => env, dispatch, queue: async () => queue, planProject, autoReview: async () => autoReview, chooseRoute });
     await start();
     expect(dispatch.mock.calls.map(([a]) => a.route.mode)).toEqual(['codex', 'codex']);
     expect(theRun().steps[0].rationale).toBe('model pick');
@@ -517,6 +519,16 @@ describe('music video production run (#9066)', () => {
       pool: [{ kind: 'image', mode: 'grok' }, { kind: 'video', mode: 'local', model: 'not-installed' }], limits: LIMITS,
     })).rejects.toMatchObject({ code: 'PRODUCTION_ROUTE_INELIGIBLE', message: expect.stringMatching(/grok.*not enabled.*not-installed.*not installed/s) });
     expect(current().productionRuns).toBeUndefined();
+  });
+
+  it('refuses Start without a reviewer when the active provider is not tool-free (#14549)', async () => {
+    seedProject();
+    localAuthor.reviewerProvider = { id: 'tool-cli', name: 'Tool CLI', type: 'cli', command: 'unknown-agent-cli', args: [] };
+    try {
+      await expect(service.startProduction('mv-example', { pool: POOL, limits: LIMITS }))
+        .rejects.toMatchObject({ code: 'PRODUCTION_REVIEWER_UNAVAILABLE', status: 422, message: expect.stringMatching(/not tool-free/) });
+      expect(current().productionRuns).toBeUndefined();
+    } finally { localAuthor.reviewerProvider = null; }
   });
 
   it('skips a route that cannot condition on the visual-spec references', async () => {
@@ -741,7 +753,7 @@ describe('music video production run (#9066)', () => {
     await settle();
     // job-2 is still queued, so only scene A's clip goes out.
     expect(dispatch.mock.calls.slice(2).map(([a]) => [a.stepKind, a.scene.sceneId])).toEqual([['clip', 'mvs-a']]);
-    expect(theRun().usage.generations).toBe(3);
+    expect(theRun().usage.generations).toBe(4);
   });
 
   it('halts when the creative setup changes, and continues only when resume accepts the new basis', async () => {
@@ -862,7 +874,7 @@ function documentDoubles(realDocuments = null) {
   };
   const render = vi.fn(async (_id, options) => { options.verifyCurrent(current()); return { jobId: 'final-render' }; });
   const cancelRender = vi.fn();
-  service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
+  setDeps({ loadEnv: async () => env, dispatch, queue: async () => queue,
     autoReview: async () => autoReview, documents: async () => realDocuments || documents,
     render: async () => ({ renderMusicVideo: render, cancelRender }),
     resolveAuthoring: async (input) => {
@@ -937,6 +949,40 @@ describe('code-first production execution (#9301)', () => {
     expect(theRun().steps.filter((step) => step.kind === 'author')).toEqual([expect.objectContaining({ status: 'completed' })]);
   });
 
+  it('charges each CLI authoring batch and stops before a submission beyond the generation limit', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const cli = { id: AUTHORING.providerId, type: 'cli', command: 'claude', args: ['--print'] };
+    let submitted = 0;
+    author.mockImplementation(async (_id, input) => {
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      submitted += 1;
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      submitted += 1;
+    });
+    await start({ pool: [], authoring: AUTHORING, limits: { maxGenerations: 1, maxReviewAttempts: 1 } });
+    expect(submitted).toBe(1);
+    expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 1 } });
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['completed']);
+    expect(current().composition.document).toBeUndefined();
+  });
+
+  it('records each admitted CLI authoring batch before accepting its document', async () => {
+    seedCodeFirst(); const { author } = documentDoubles();
+    const cli = { id: AUTHORING.providerId, type: 'cli', command: 'claude', args: ['--print'] };
+    author.mockImplementation(async (_id, input) => {
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      await input.beforeSubmit({ provider: cli, model: AUTHORING.model });
+      return storeMutation((project) => {
+        input.verifyCurrent(project);
+        const document = { directory: 'music-video/mv-example/composition/cli', source: { kind: 'generated' } };
+        return { project: { ...project, composition: { ...project.composition, documentDraft: document } }, document };
+      });
+    });
+    await start({ pool: [], authoring: AUTHORING });
+    expect(theRun()).toMatchObject({ status: 'running', usage: { generations: 2 }, documentCheckpoint: { directory: current().composition.document.directory } });
+    expect(theRun().steps.filter((step) => step.kind === 'author').map((step) => step.status)).toEqual(['completed', 'completed']);
+  });
+
   it('authors a code-only plan with no media routes/jobs and completes only after its reviewed final render', async () => {
     seedCodeFirst(); const { author, render } = documentDoubles();
     await start({ pool: [], authoring: AUTHORING });
@@ -964,7 +1010,7 @@ describe('code-first production execution (#9301)', () => {
     expect(theRun().steps.at(-1).editInterval).toEqual({ startSec: 4, endSec: 8 });
     completeJob('job-3'); await settle();
     expect(author).toHaveBeenCalledOnce(); expect(current().scenes[2].videoHistoryId).toBe('imported-take');
-    expect(theRun().usage.generations).toBe(4);
+    expect(theRun().usage.generations).toBe(5);
   });
 
   it('refuses over-allowance and missing-import plans before any provider submission', async () => {
@@ -974,6 +1020,24 @@ describe('code-first production execution (#9301)', () => {
     expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
     seedCodeFirst({ directions: [{ sceneId: 'mvs-code', medium: 'existing-footage', mediumRationale: 'Imported' }] });
     await expect(start({ pool: POOL, authoring: AUTHORING })).rejects.toMatchObject({ code: 'PRODUCTION_MEDIUM_CONFLICT' });
+  });
+
+  it('names every conflicting shot before refusing a performance planned as a still', async () => {
+    const scenes = [
+      { sceneId: 'mvs-first', label: 'Example close-up', startSec: 0, endSec: 2 },
+      { sceneId: 'mvs-second', label: 'Example close-up', startSec: 2, endSec: 4 },
+      { sceneId: 'mvs-unlabeled', startSec: 4, endSec: 8 },
+    ];
+    seedCodeFirst({ scenes, directions: scenes.map((scene) => ({
+      sceneId: scene.sceneId, mode: 'performance', medium: 'still', mediumRationale: 'Selected still',
+    })) });
+    const { author } = documentDoubles();
+    await expect(start({ pool: [POOL[0]], authoring: AUTHORING })).rejects.toMatchObject({
+      code: 'PRODUCTION_MEDIUM_CONFLICT',
+      message: expect.stringMatching(/Example close-up \(mvs-first\): Visible performance.*Example close-up \(mvs-second\): Visible performance.*mvs-unlabeled: Visible performance/),
+    });
+    expect(dispatch).not.toHaveBeenCalled(); expect(author).not.toHaveBeenCalled();
+    expect(current().productionRuns).toBeUndefined();
   });
 
   it('requires the current plan to be applied before starting any provider work', async () => {
@@ -1115,8 +1179,8 @@ it('rechecks a generated shot and zero allowance after asynchronous provider pre
   await reached;
   store.get('mv-example').productionPolicy.maxGeneratedVideoPercent = 0;
   release(); await settle();
-  expect(jobs).toHaveLength(0); expect(theRun().usage.generations).toBe(0);
-  expect(theRun().steps[0].status).toBe('refused');
+  expect(jobs).toHaveLength(0); expect(theRun().usage.generations).toBe(1);
+  expect(theRun().steps.find((step) => step.kind === 'clip').status).toBe('refused');
 });
 
 it('charges a selected performance retry by its actual padded provider duration without adding edit share', async () => {
@@ -1140,7 +1204,7 @@ it('charges a selected performance retry by its actual padded provider duration 
     jobs[1].status = 'failed'; mediaJobEvents.emit('failed', jobs[1]); await settle();
     // Explicit resume resets slot failure count, but the paid retry budget stays spent.
     await service.resumeProduction('mv-example', theRun().id); await settle();
-    expect(jobs).toHaveLength(2); expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 2, spentUsd: 1.616 } });
+    expect(jobs).toHaveLength(2); expect(theRun()).toMatchObject({ status: 'limit-reached', usage: { generations: 3, spentUsd: 1.616 } });
   } finally { env.isVideoModeUsable = usable; }
 });
 
@@ -1194,6 +1258,33 @@ describe('authored plate preflight', () => {
   const contract = { version: 1, purpose: 'Two people greet', actions: [{ startSec: 0, endSec: 2, subject: 'Person A', description: 'waves' }], reactions: [{ startSec: 2, endSec: 4, subject: 'Person B', description: 'waves back' }] };
   const plateScene = () => ({ sceneId: 'mvs-a', label: 'Greeting', startSec: 0, endSec: 4, framePrompt: 'Two people greet', prompt: 'Both wave', referenceImageId: 'one.png', direction: { actionContract: contract }, takes: [{ takeId: 'take-one', kind: 'image', assetId: 'one.png', status: 'candidate' }] });
   const verdict = (args, status) => plateReviewEvidence(args.scene, args.assetId, args.runId, JSON.stringify({ checks: plateRequirements(args.scene).map(({ id }) => ({ id, status: id === 'plate-2' ? status : 'pass', note: status === 'fail' ? 'Second person is missing' : 'Visible' })) }));
+
+  it('blocks a rendering defect without an action contract and resumes only after the exact defect is acknowledged', async () => {
+    const scene = { ...plateScene(), direction: null };
+    seedProject({ scenes: [scene] });
+    reviewPlate.mockImplementation(async (args) => {
+      await args.beforeExecute();
+      return plateReviewEvidence(args.scene, args.assetId, args.runId, JSON.stringify({ checks: plateRequirements(args.scene).map(({ id }) => ({
+        id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'The chair is fused into the table.' : 'Matches the saved prompt',
+      })) }));
+    });
+    await start({ pool: [POOL[2]] });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(theRun().status).toBe('blocked');
+    const currentScene = current().scenes[0];
+    const take = currentScene.takes[0];
+    const acknowledgement = { basis: take.plateEvidence.basis, note: 'The chair is fused into the table.' };
+    const { reviewSceneTake } = await import('./takes.js');
+    expect(() => reviewSceneTake(current(), scene.sceneId, take.takeId, { acknowledgeRenderQuality: acknowledgement })).toThrow(/changed/);
+    expect(() => reviewSceneTake({ ...current(), scenes: [{ ...currentScene, framePrompt: 'New shot' }] }, scene.sceneId, take.takeId,
+      { acknowledgeRenderQuality: acknowledgement, reviewer: { kind: 'agent', id: 'synthetic-agent' } })).toThrow(/changed/);
+    const accepted = reviewSceneTake(current(), scene.sceneId, take.takeId,
+      { acknowledgeRenderQuality: acknowledgement, reviewer: { kind: 'agent', id: 'synthetic-agent' } });
+    store.set('mv-example', accepted.project);
+    await service.resumeProduction('mv-example', theRun().id, {});
+    await settle();
+    expect(dispatch.mock.calls.map(([args]) => args.stepKind)).toEqual(['clip']);
+  });
 
   it('selects a qualifying existing candidate, retains the failed original, and charges every analysis before video', async () => {
     const scene = plateScene();
@@ -1475,12 +1566,12 @@ describe('budgeted production pilots (#9351)', () => {
     expect(dispatch).toHaveBeenCalledTimes(2);
     await service.resumeProduction('mv-example', theRun().id); await settle();
     expect(dispatch).toHaveBeenCalledTimes(5);
-    expect(theRun().usage.generations).toBe(5);
+    expect(theRun().usage.generations).toBe(6);
   });
 
   it('does not let a changed allowed route bypass its pilot even after a pass', async () => {
     board(); pendingPilot(); await reachPilot();
-    service.__setProductionDepsForTests({ loadEnv: async () => env, dispatch, queue: async () => queue,
+    setDeps({ loadEnv: async () => env, dispatch, queue: async () => queue,
       autoReview: async () => autoReview, chooseRoute: async () => ({ route: POOL[1], rationale: 'changed route' }) });
     verdict({ verdict: 'pass' }); await settle();
     expect(theRun().status).toBe('blocked');
@@ -1498,7 +1589,7 @@ describe('budgeted production pilots (#9351)', () => {
     });
     verdict({ verdict: 'pass' }); await settle();
     expect(jobs).toHaveLength(2);
-    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 2 } });
+    expect(theRun()).toMatchObject({ status: 'blocked', usage: { generations: 3 } });
     expect(theRun().steps.at(-1)).toMatchObject({ status: 'refused', errorCode: 'PRODUCTION_PILOT_REQUIRED' });
   });
 
@@ -1516,7 +1607,7 @@ describe('budgeted production pilots (#9351)', () => {
 
   it('resumes an exhausted shared review budget without regenerating any accepted asset', async () => {
     board();
-    await start({ limits: { maxGenerations: 10, maxReviewAttempts: 1 } });
+    await start({ limits: { maxGenerations: 12, maxReviewAttempts: 1 } });
     completeJob('job-1'); await settle();
     completeJob('job-2'); await settle();
     for (const id of ['job-3', 'job-4', 'job-5']) completeJob(id);

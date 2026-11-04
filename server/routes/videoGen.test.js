@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'path';
@@ -110,6 +110,8 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/musicVideo/projects.js', () => ({
   getProject: vi.fn(),
 }));
+const clipCastReferences = vi.hoisted(() => vi.fn(async () => []));
+vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences }));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
@@ -1217,6 +1219,87 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('POST / — extra reference images on a Grok image-to-video request', () => {
+    const upload = (fieldname, name) => ({ fieldname, path: `/tmp/upload-${name}`, originalname: name, mimetype: 'image/png', size: 1024 });
+    const source = upload('sourceImage', 'frame.png');
+    const refs = [upload('referenceImage1', 'subject.png'), upload('referenceImage2', 'vehicle.png'), upload('referenceImage3', 'prop.png'), upload('referenceImage4', 'extra.png')];
+    const unlinkedPaths = () => unlink.mock.calls.map(([p]) => p);
+    const durableUnlinks = () => unlinkedPaths().filter((p) => /^[\\/]mock[\\/]uploads[\\/]/.test(p));
+    const post = (body) => request(app).post('/api/video-gen/').send({ backend: 'grok', prompt: 'the subject walks forward', mode: 'image', ...body });
+    const allowGrok = async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValue({ imageGen: { grok: { enabled: true, grokPath: '/opt/grok' } } });
+    };
+    afterEach(async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockImplementation(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } }));
+    });
+
+    it('queues the uploads as castReferences in slot order with their labels, owned by the job', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[1], refs[0]);
+      const r = await post({ referenceLabel1: 'the subject - front view', referenceLabel2: '  a red vehicle  ' });
+      expect(r.status).toBe(200);
+      const { params } = mediaJobQueue.enqueueJob.mock.calls[0][0];
+      const durable = () => expect.stringMatching(/^[\\/]mock[\\/]uploads[\\/]video-reference-[^\\/]+\.png$/);
+      expect(params.castReferences).toEqual([
+        { path: durable(), label: 'the subject - front view' },
+        { path: durable(), label: 'a red vehicle' },
+      ]);
+      expect(params.uploadedTempPaths).toEqual(params.castReferences.map((ref) => ref.path));
+      expect(params.uploadedTempPath).toBe(params.sourceImagePath);
+      // Slot 1 was staged before slot 2 regardless of the order the parts arrived in.
+      expect(copyFile.mock.calls.filter(([from]) => from !== source.path).map(([from]) => from))
+        .toEqual([refs[0].path, refs[1].path]);
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([refs[0].path, refs[1].path]));
+      expect(durableUnlinks()).toEqual([]);
+    });
+
+    it('defaults a missing label to empty', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[0]);
+      const r = await post({});
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params.castReferences).toEqual([expect.objectContaining({ label: '' })]);
+    });
+
+    it.each([
+      ['a non-grok backend', { backend: 'local' }, [source, refs[0]], 'VIDEO_REFERENCE_IMAGES_GROK_ONLY'],
+      ['no source image', {}, [refs[0]], 'VIDEO_REFERENCE_IMAGES_NEED_SOURCE'],
+      ['more than three references', {}, [source, ...refs], 'VIDEO_REFERENCE_IMAGES_TOO_MANY'],
+      ['a label with no image', { referenceLabel2: 'orphan' }, [source, refs[0]], 'VIDEO_REFERENCE_LABEL_ORPHANED'],
+    ])('rejects %s with a 400 and removes every upload the parser wrote', async (_name, extra, uploads, code) => {
+      await allowGrok();
+      setPendingUpload(...uploads);
+      const r = await post(extra);
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe(code);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(copyFile).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining(uploads.map((file) => file.path)));
+    });
+
+    it('removes the uploads when the body fails validation (label too long)', async () => {
+      await allowGrok();
+      setPendingUpload(source, refs[0]);
+      const r = await post({ referenceLabel1: 'x'.repeat(121) });
+      expect(r.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([source.path, refs[0].path]));
+    });
+
+    it('unlinks every staged copy when a later reference fails to stage', async () => {
+      await allowGrok();
+      copyFile.mockImplementationOnce(async () => {}).mockImplementationOnce(async () => {}).mockRejectedValueOnce(new Error('ENOSPC'));
+      setPendingUpload(source, refs[0], refs[1]);
+      const r = await post({});
+      expect(r.status).toBe(500);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      expect(new Set(durableUnlinks()).size).toBe(3);
+      expect(unlinkedPaths()).toEqual(expect.arrayContaining([source.path, refs[0].path, refs[1].path]));
+    });
+  });
+
   describe('POST /prompt-preview (#11317)', () => {
     const settings = {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
@@ -1248,6 +1331,62 @@ describe('videoGen routes', () => {
       expect(r.body.promptAdditions).toEqual([style, expect.objectContaining({ label: 'Grok video tool instructions' })]);
       expect(r.body.promptAdditions[1].text).toContain('[prompt]');
       expect(r.body.promptAdditions[1].text).not.toContain('a fox running');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('previews the reference_to_video prompt for held reference images and refuses them off Grok', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValue(settings);
+      const held = { backend: 'grok', prompt: 'the subject turns', previewUploads: ['sourceImage', 'referenceImage1'], referenceLabel1: 'the subject - front view' };
+      const ok = await request(app).post('/api/video-gen/prompt-preview').send(held);
+      expect(ok.status).toBe(200);
+      expect(ok.body.sentPrompt).toContain('reference_to_video');
+      expect(ok.body.sentPrompt).toContain('<IMAGE_1> shows how the subject looks');
+      const refused = await request(app).post('/api/video-gen/prompt-preview').send({ ...held, backend: 'local' });
+      expect(refused.status).toBe(400);
+      expect(refused.body.code).toBe('VIDEO_REFERENCE_IMAGES_GROK_ONLY');
+      getSettings.mockImplementation(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' } } }));
+    });
+
+    it('previews the Grok shot prompt and cast inputs that the queued render sends', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      const { grokVideoSentPrompt } = await import('../services/videoGen/grok.js');
+      const scene = { sceneId: 's1', startSec: 0, endSec: 6, prompt: 'A person waves', camera: { move: 'slow-dolly-in' } };
+      const project = { id: 'mv-1', scenes: [scene] };
+      const refs = [{ path: '/mock/inputs/person.png', label: 'Person · young' }];
+      getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      clipCastReferences.mockResolvedValueOnce(refs).mockResolvedValueOnce(refs);
+      const body = { backend: 'grok', mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 6,
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, expectedClipReferenceFiles: ['person.png'] } };
+      const preview = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(preview.status).toBe(200);
+      expect(preview.body.sentPrompt).toContain('<IMAGE_1> shows how Person looks');
+      expect(preview.body.sentPrompt).toContain('/mock/inputs/person.png');
+      expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'agent-instructions' }));
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+
+      const submitted = await request(app).post('/api/video-gen/').send(body);
+      expect(submitted.status).toBe(200);
+      const params = mediaJobQueue.enqueueJob.mock.calls[0][0].params;
+      const scratchDir = join((await import('node:os')).tmpdir(), 'portos-grok-video-<job>');
+      expect(preview.body.sentPrompt).toBe(grokVideoSentPrompt({ ...params, scratchDir }).record.sentPrompt);
+      expect(params.castReferences).toEqual(refs);
+    });
+
+    it('resolves the project default and keeps an unconditioned Grok shot on image_to_video', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      const project = { id: 'mv-1', scenes: [{ sceneId: 's1', prompt: 'A person waves' }] };
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      getSettings.mockResolvedValueOnce({ ...settings, videoGen: { mode: 'grok' } }).mockResolvedValueOnce({ videoGen: { mode: 'local' } });
+      const body = { mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png',
+        musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true } };
+      const grok = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(grok.status).toBe(200);
+      expect(grok.body.sentPrompt).toContain('image_to_video tool');
+      expect(grok.body.sentPrompt).not.toContain('reference_to_video');
+      const local = await request(app).post('/api/video-gen/prompt-preview').send(body);
+      expect(local.body).toEqual({ backend: 'local', shotPreviewUnavailable: true });
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
@@ -1756,6 +1895,28 @@ describe('videoGen routes', () => {
           sourceImagePath: '/mock/images/passwd',
         }),
       }));
+    });
+
+    it('rejects a mismatched board shot type carried through the video route', async () => {
+      const project = { id: 'mv-1', scenes: [{ sceneId: 'mvs-1', shotMode: 'cutaway' }] };
+      await getMusicVideoProject.withImplementation(async () => project, async () => {
+        const r = await request(app).post('/api/video-gen/').send({ prompt: 'a singer', mode: 'image',
+          sourceImageFile: 'scene-frame.png', musicVideo: JSON.stringify({ projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'lipsync', songAudio: false }) });
+        expect(r.status).toBe(409);
+        expect(r.body.code).toBe('MUSIC_VIDEO_SHOT_TYPE_CHANGED');
+        expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      });
+    });
+
+    it('accepts a matching cutaway shot type through the video route', async () => {
+      const project = { id: 'mv-1', scenes: [{ sceneId: 'mvs-1', shotMode: 'cutaway' }] };
+      await getMusicVideoProject.withImplementation(async () => project, async () => {
+        const tag = { projectId: 'mv-1', sceneId: 'mvs-1', expectedShot: 'cutaway', songAudio: false };
+        const r = await request(app).post('/api/video-gen/').send({ prompt: 'a shot', mode: 'image',
+          sourceImageFile: 'scene-frame.png', musicVideo: JSON.stringify(tag) });
+        expect(r.status).toBe(200);
+        expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ musicVideo: tag }) }));
+      });
     });
 
     it('forwards a musicVideo i2v tag into job.params alongside the resolved frame (#1760 Phase 1)', async () => {
@@ -2993,6 +3154,19 @@ describe('videoGen routes', () => {
       expect(r.body.activeJob.jobId).toBe('running-1');
       expect(r.body.activeJob.status).toBe('running');
       expect(r.body.activeJob.params.prompt).toBe('P running');
+    });
+
+    it('restores only gallery-backed reference images into the editable picker', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
+        id: 'running-refs', kind: 'video', status: 'running', params: {
+          referenceImagePaths: ['/mock/images/cast.png', '/mock/image-refs/guide.png', '/mock/image-refs/cast.png'],
+        },
+      }]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.params.referenceImageFiles).toEqual(['cast.png']);
+      expect(r.body.activeJob.params.unavailableReferenceImageNames).toEqual(['guide.png', 'cast.png']);
+      expect(JSON.stringify(r.body)).not.toContain('/mock/');
     });
 
     it('resumes a federated render from its marker, not the blanked local fields', async () => {

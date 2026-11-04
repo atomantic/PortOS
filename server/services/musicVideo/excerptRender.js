@@ -50,11 +50,16 @@ import { musicVideoEvents } from './events.js';
 import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { excerptRangeFits } from '../../lib/musicVideoExcerptRange.js';
-import { trackedRenderMap } from '../renderActivity.js';
+import { admittedRenderMap } from '../renderActivity.js';
 
 const jobs = new Map();
-const projectExcerptRenders = trackedRenderMap('music-video-excerpt', { noun: 'music video draft render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
+const projectExcerptRenders = admittedRenderMap('music-video-excerpt', { noun: 'music video draft render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
 const PENDING = Symbol('mv-excerpt-render-pending');
+
+// Free the project's slot only while this job still holds it, so a late release can never drop a newer job's lock.
+const releaseExcerptLock = (projectId, jobId) => {
+  if (projectExcerptRenders.get(projectId) === jobId) projectExcerptRenders.delete(projectId);
+};
 
 export const attachExcerptRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
@@ -176,11 +181,13 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   console.log(`🎬 Rendering ${renderer.label} music-video excerpt [${jobId.slice(4, 12)}]: project=${projectId.slice(0, 8)} range=[${startSec.toFixed(2)},${endClamped.toFixed(2)}]s footage=off`);
   const { signal } = job.overlayAbort;
   const finalize = async (patch) => {
-    projectExcerptRenders.delete(projectId);
     const persisted = await settleExcerptRecord(projectId, excerptId, patch).then(() => true, (err) => {
       console.error(`❌ Music-video ${renderer.label} excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+      projectExcerptRenders.markUnsettled(projectId);
       return false;
     });
+    // Free the slot the moment the record is settled: a caller that sees the excerpt complete may start the next one at once.
+    releaseExcerptLock(projectId, jobId);
     closeJobAfterDelay(jobs, jobId);
     if (persisted) musicVideoEvents.emit('excerpt-render', { projectId, excerptId, status: patch.status });
     return persisted;
@@ -219,7 +226,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     await unlink(outputPath).catch(() => {});
     await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
     broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-  });
+  }).finally(() => releaseExcerptLock(projectId, jobId));
   return { jobId, excerptId };
 }
 
@@ -266,6 +273,10 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
   }
   projectExcerptRenders.set(projectId, PENDING);
 
+  return projectExcerptRenders.run(projectId, () => beginExcerptRender({ projectId, stored, project, startSec, endSec, aspect, fade, revisionId, pilotEvidence, verifyCurrent }));
+}
+
+async function beginExcerptRender({ projectId, stored, project, startSec, endSec, aspect, fade, revisionId, pilotEvidence, verifyCurrent }) {
   let handedOff = false;
   try {
     const seeked = SEEKED_EXCERPTS[project.composition?.mode];
@@ -346,6 +357,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
       projectExcerptRenders.set(projectId, jobId);
     } catch (err) {
       await settleExcerptRecord(projectId, excerptId, { status: 'error', error: err.message, filename: null, jobId: null }).catch((settleErr) => {
+        projectExcerptRenders.markUnsettled(projectId);
         console.error(`❌ Music-video excerpt [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} could not settle after a setup failure: ${settleErr.message}`);
       });
       throw err;
@@ -361,12 +373,14 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
     // done). Error/cancel paths attempt persistence before notifying clients
     // to refresh; boot recovery clears a record if that write also fails.
     const finalize = async (patch) => {
-      projectExcerptRenders.delete(projectId);
       const persisted = await settleExcerptRecord(projectId, excerptId, patch)
         .then(() => true, (err) => {
           console.error(`❌ Music-video excerpt render [${jobId.slice(4, 12)}] project ${projectId.slice(0, 8)} status→${patch.status} write failed: ${err.message}`);
+          projectExcerptRenders.markUnsettled(projectId);
           return false;
         });
+      // Free the slot the moment the record is settled (before scratch cleanup and the completion event).
+      releaseExcerptLock(projectId, jobId);
       if (composition) await removeCompositionScratch(jobId).catch((err) => {
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] could not remove its overlay scratch: ${err.message}`);
       });
@@ -453,49 +467,53 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
           // back a stale `status: 'rendering'`.
           await finalize({ status: 'error', error: reason, filename: null, jobId: null });
           broadcastSse(job, { type: 'error', error: reason });
+          releaseExcerptLock(projectId, jobId);
         },
         onClose: async (code, signal) => {
-          job.process = null;
-          await dropGraphFile();
-          if (code !== 0) {
-            const canceled = isMusicVideoRenderCanceled(job, signal);
-            await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
-            return;
-          }
-          if (finishing) {
-            job.overlayAbort = new AbortController();
-            const { signal: finishSignal } = job.overlayAbort;
-            try {
-              await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal: finishSignal, label: 'Music-video excerpt film look',
-                onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
-            } catch (err) {
-              await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);
-              return;
-            }
-            job.overlayAbort = null;
-          }
           try {
-            job.status = 'complete';
-            const contactSheetFilename = await buildContactSheet();
-            const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
-            if (!persisted) {
-              // The record write never landed, so nothing else could have
-              // learned these filenames to reference them — clean up rather
-              // than leaving them as permanently unreferenced orphans on disk.
-              await unlink(outputPath).catch(() => {});
-              if (contactSheetFilename) await unlink(join(PATHS.videoThumbnails, contactSheetFilename)).catch(() => {});
-              broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
+            job.process = null;
+            await dropGraphFile();
+            if (code !== 0) {
+              const canceled = isMusicVideoRenderCanceled(job, signal);
+              await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
               return;
             }
-            console.log(`✅ Music-video excerpt rendered [${jobId.slice(4, 12)}]: ${filename}`);
-            broadcastSse(job, { type: 'complete', result: { excerptId, filename, path: `/data/videos/${filename}`, contactSheetFilename, contactSheetPath: contactSheetFilename ? `/data/video-thumbnails/${contactSheetFilename}` : null } });
-          } catch (err) {
-            job.status = 'error';
-            job.lastError = `Finalize failed: ${err.message}`;
-            console.error(`❌ Music-video excerpt render finalize failed [${jobId.slice(4, 12)}]: ${err.message}`);
-            await finalize({ status: 'error', error: 'Finalize failed', filename: null, jobId: null });
-            broadcastSse(job, { type: 'error', error: 'Excerpt render finalize failed' });
-          }
+            if (finishing) {
+              job.overlayAbort = new AbortController();
+              const { signal: finishSignal } = job.overlayAbort;
+              try {
+                await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal: finishSignal, label: 'Music-video excerpt film look',
+                  onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
+              } catch (err) {
+                await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);
+                return;
+              }
+              job.overlayAbort = null;
+            }
+            try {
+              job.status = 'complete';
+              const contactSheetFilename = await buildContactSheet();
+              const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
+              if (!persisted) {
+                // The record write never landed, so nothing else could have
+                // learned these filenames to reference them — clean up rather
+                // than leaving them as permanently unreferenced orphans on disk.
+                await unlink(outputPath).catch(() => {});
+                if (contactSheetFilename) await unlink(join(PATHS.videoThumbnails, contactSheetFilename)).catch(() => {});
+                broadcastSse(job, { type: 'error', error: 'The excerpt rendered, but saving the result failed — reload the project and try again' });
+                return;
+              }
+              console.log(`✅ Music-video excerpt rendered [${jobId.slice(4, 12)}]: ${filename}`);
+              broadcastSse(job, { type: 'complete', result: { excerptId, filename, path: `/data/videos/${filename}`, contactSheetFilename, contactSheetPath: contactSheetFilename ? `/data/video-thumbnails/${contactSheetFilename}` : null } });
+            } catch (err) {
+              job.status = 'error';
+              job.lastError = `Finalize failed: ${err.message}`;
+              console.error(`❌ Music-video excerpt render finalize failed [${jobId.slice(4, 12)}]: ${err.message}`);
+              await finalize({ status: 'error', error: 'Finalize failed', filename: null, jobId: null });
+              broadcastSse(job, { type: 'error', error: 'Excerpt render finalize failed' });
+            }
+          } catch (err) { projectExcerptRenders.markUnsettled(projectId); throw err; }
+          finally { releaseExcerptLock(projectId, jobId); }
         },
       });
     };
@@ -531,6 +549,7 @@ export async function startExcerptRender(projectId, { startSec, endSec, aspect =
       log(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
       await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+      releaseExcerptLock(projectId, jobId);
     });
 
     return { jobId, excerptId };

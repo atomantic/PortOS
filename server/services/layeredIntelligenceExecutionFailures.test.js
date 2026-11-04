@@ -89,7 +89,9 @@ describe('classifyExecutionFailure', () => {
 
   it('is deterministic', () => {
     const args = { success: false, errorCategory: 'git-error', validationPassed: false };
-    expect(classifyExecutionFailure(args)).toBe(classifyExecutionFailure(args));
+    const first = classifyExecutionFailure(args);
+    expect(first).toBe('execution');
+    expect(classifyExecutionFailure(args)).toBe(first);
   });
 });
 

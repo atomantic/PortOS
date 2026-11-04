@@ -5,7 +5,17 @@ import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { filterLiveAgentIds } from './cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
-import { summarizeSystemActivity } from '../lib/systemIdle.js';
+import { manualUpdateBlockers, summarizeSystemActivity } from '../lib/systemIdle.js';
+
+export async function checkManualUpdateActivity({ automatic = false, acknowledgeInterruption = false, ignoreAppId } = {}) {
+  if (automatic || acknowledgeInterruption) return;
+  const activity = await import('./activeProcessing.js').then(m => m.getObservedUpdateActivity()).catch(() => null);
+  const blockers = manualUpdateBlockers(activity, { ignoreAppId });
+  if (!blockers.length) return;
+  throw new ServerError(`${blockers.map(b => b.label).join(', ')}. ` +
+    'Updating restarts PortOS and Chrome. Active agents, renders and provider calls may fail or lose unsaved progress. Saved state and queued work are preserved. Continue only after saving your work.',
+  { status: 409, code: 'UPDATE_INTERRUPTION_REQUIRED' });
+}
 
 // Shared refusal logic for the PortOS self-update path, called from both
 // POST /api/update/execute (server/routes/update.js) and the app:update
@@ -116,17 +126,19 @@ export function forkSyncRequiredError(remote, status) {
 export async function checkPortosUpdatePreflight({
   acknowledgeFork = false,
   acknowledgePersistentMindImageBackup = false,
+  deferActivity = false,
+  acknowledgeInterruption = false,
 } = {}) {
-  const activeCosAgents = await countActiveCosAgents();
-  if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
-  const renders = listActiveRenders();
-  if (renders.length > 0) throw rendersActiveError(renders);
+  if (!deferActivity && !acknowledgeInterruption) {
+    const activeCosAgents = await countActiveCosAgents();
+    if (activeCosAgents > 0) throw agentsActiveError(activeCosAgents);
+    const renders = listActiveRenders();
+    if (renders.length > 0) throw rendersActiveError(renders);
+  }
 
   const imageCheck = await getPersistentMindImageWorkGuard();
   if (!imageCheck.trusted) throw persistentMindStateUntrustedError();
-  if (!imageCheck.safe && !acknowledgePersistentMindImageBackup) {
-    throw persistentMindImageWorkError(imageCheck);
-  }
+  if (!imageCheck.safe && !acknowledgePersistentMindImageBackup) throw persistentMindImageWorkError(imageCheck);
 
   const status = await updateChecker.getUpdateStatus();
   const remote = status.remoteInfo;

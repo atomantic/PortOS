@@ -45,6 +45,14 @@ describe('taskObjective', () => {
     })).toBe('Add a retry to the uploader\n\nRetry three times\nwith backoff\n\nqueued by hand');
   });
 
+  it('states an autonomous job heading once when the description is the prompt\'s first line', () => {
+    const prompt = '[Improvement: Example] Refresh the catalog\n\nRemove entries that are clearly deprecated.';
+    expect(taskObjective({ description: '[Improvement: Example] Refresh the catalog', metadata: { prompt } })).toBe(prompt);
+    // A description that only prefixes the first line is a distinct statement.
+    expect(taskObjective({ description: '[Improvement: Example]', metadata: { prompt } }))
+      .toBe(`[Improvement: Example]\n\n${prompt}`);
+  });
+
   it('marks task screenshots as objective context without exposing their local reference', () => {
     const objective = taskObjective({
       description: 'Another instance with the latest code is seeing this',

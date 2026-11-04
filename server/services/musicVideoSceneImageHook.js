@@ -99,7 +99,7 @@ const hook = createMediaJobImageHook({
  * so animate it. A refusal (no prompt, a lane that is off) is recorded on the
  * shot's video lane, where its Retry is.
  */
-async function animateStoryboardStill({ projectId, sceneId, still, backend = null, model = null }) {
+async function animateStoryboardStill({ projectId, sceneId, still, backend = null, model = null, songAudio }) {
   try {
     const { requireProject } = await import('./musicVideo/requireProject.js');
     const { dispatchStoryboardStillClip } = await import('./musicVideo/productionDispatch.js');
@@ -107,7 +107,7 @@ async function animateStoryboardStill({ projectId, sceneId, still, backend = nul
     const scene = project.scenes?.find((s) => s.sceneId === sceneId);
     // Only the still this render made: a selection that changed meanwhile is the director's call.
     if (!scene?.referenceImageId || scene.referenceImageId !== still) return;
-    const { jobId } = await dispatchStoryboardStillClip({ project, scene, backend, model });
+    const { jobId } = await dispatchStoryboardStillClip({ project, scene, backend, model, ...(typeof songAudio === 'boolean' ? { songAudio } : {}) });
     console.log(`🎬 music-video storyboard clip queued ${projectId.slice(0, 8)}/${sceneId} → ${jobId}`);
   } catch (err) {
     console.log(`🚫 music-video storyboard clip refused ${projectId.slice(0, 8)}/${sceneId}: ${err.message}`);

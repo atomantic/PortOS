@@ -686,7 +686,7 @@ export function BackupTab() {
                 onClick={addExclude}
                 disabled={!anchorUserExclude(newExclude)}
                 aria-label="Add exclude path"
-                className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
               >
                 <Plus size={16} />
               </button>
@@ -800,7 +800,7 @@ export function BackupTab() {
                               disabled={snap.incomplete}
                               title="Permanently delete this snapshot"
                               aria-label={`Delete snapshot ${snap.id}`}
-                              className="p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] bg-port-border hover:bg-port-error/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <Trash2 size={14} />
                             </button>

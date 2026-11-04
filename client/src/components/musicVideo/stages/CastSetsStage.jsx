@@ -3,6 +3,7 @@ import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
+import CameoRosterPanel from '../CameoRosterPanel.jsx';
 import { VideoCastLinksDisclosure } from '../VideoCastLinks.jsx';
 import { formatCount } from '../../../utils/formatters.js';
 import useMusicVideoCastingChanges from '../../../hooks/useMusicVideoCastingChanges.js';
@@ -61,6 +62,7 @@ export default function CastSetsStage({ board }) {
           onReferenceLabels={board.applyReferenceLabels} onPendingChange={board.setStyleReferencesPending} />
         <fieldset disabled={locked} className="min-w-0"><VisualSpecPanel key={project.id} project={project} onSave={board.saveVisualSpec} /></fieldset>
       </StageSection>
+      <CameoRosterPanel project={project} onApply={board.applyCameos} disabled={locked} />
       {project.castAndSets ? (
         <CastAndSetsCheckin
           id={CAST_CHECKIN_ANCHOR}
@@ -74,9 +76,15 @@ export default function CastSetsStage({ board }) {
           onOpenSheet={board.openArtifact}
           onOpenPreview={board.openPreview}
           onApprove={board.approveCastAndSets}
+          onAcknowledgeImage={castSets.acknowledgeImage}
+          onReinspectImages={castSets.reinspectImages}
           onRegenerate={() => castSets.regenerate()}
           onRegenerateImages={castSets.regenerateImages}
           onEditDirection={castSets.editDirection}
+          onUseImage={castSets.useImage}
+          onEditImage={castSets.editImage}
+          onAcceptImageEdit={castSets.acceptImageEdit}
+          onDiscardImageEdit={castSets.discardImageEdit}
           onRefresh={castSets.refresh}
           onApplyFeedback={castSets.applyFeedback}
           onRemoveFeedback={castSets.removeFeedback}

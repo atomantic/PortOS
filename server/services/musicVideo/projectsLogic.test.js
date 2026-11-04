@@ -745,7 +745,7 @@ describe('mergeNextScene', () => {
     ]);
   });
 
-  it('refuses a merge longer than the backend\'s longest clip, the last scene, and a document composition', () => {
+  it('refuses a merge longer than the backend\'s longest clip, the last scene, and manifest-owned shots', () => {
     const { project, ids } = seed();
     expect(() => mergeNextScene(project, ids[0], { backend: 'grok' })).not.toThrow(); // 9s fits Grok's 10s
     const long = applySceneUpdate(project, ids[2], { endSec: 20 }).project; // 4–20s > 10s
@@ -753,7 +753,13 @@ describe('mergeNextScene', () => {
     expect(() => mergeNextScene(project, ids[2])).toThrow(/no next scene/);
     const swapped = applySceneUpdate(project, ids[1], { startSec: 0, endSec: 2 }).project;
     expect(() => mergeNextScene(swapped, ids[0])).toThrow(/song order/);
-    expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
+    const doc = { ...project, composition: { mode: 'document' } };
+    const withSource = (storyboardSource) => ({ ...doc, productionReview: { draft: { storyboardSource } } });
+    expect(() => mergeNextScene(withSource('document'), ids[0])).toThrow(/shot manifest/);
+    expect(() => mergePreviousScene(withSource('document'), ids[1])).toThrow(/shot manifest/);
+    // Board-sourced (or no draft) document projects keep their shots on the Board and merge normally.
+    expect(() => mergeNextScene(withSource('board'), ids[0])).not.toThrow();
+    expect(() => mergeNextScene(doc, ids[0])).not.toThrow();
   });
 });
 
@@ -1122,11 +1128,16 @@ describe('create-schema parity', () => {
     startSec: 1,
     endSec: 4,
     beatAligned: true,
+    beatNeedsReview: true,
+    pacingCut: true,
     loop: true,
     sectionIndex: 2,
     lyricText: 'line one',
+    lyricAnchor: { cueId: 'lc-1', wordIndex: 0, wordCount: 2 },
     visualIntent: 'calm',
     frameReferenceIds: ['ref-a', 'ref-b'],
+    clipReferenceIds: ['ref-b'],
+    researchReferences: [{ id: 'mvr-research-r1', imageId: 'upload-r1.png', subject: 'Example Breed', pageUrl: 'https://example.com/r1' }],
     characterVariant: { ingredientId: 'cat-chr-x', age: 7 },
     camera: { move: 'slow-dolly-in' },
     visualLayer: 'still',
@@ -1139,6 +1150,8 @@ describe('create-schema parity', () => {
     filmLook: { preset: 'vhs' },
     transitionIn: 'vhs-glitch',
     transitionOut: 'vhs-glitch',
+    wipeIn: { style: 'iris', lengthSec: 0.5, color: '#ff00aa' },
+    wipeOut: { style: 'push-left' },
     glitches: [{ atSec: 0.5, style: 'vhs-glitch' }],
     cutEffect: { style: 'dissolve' },
     imageEffect: 'end-fade',

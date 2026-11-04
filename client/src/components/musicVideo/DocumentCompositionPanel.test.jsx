@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 const api = vi.hoisted(() => ({
   getMusicVideoCompositionDocument: vi.fn(),
   startMusicVideoCompositionTemplate: vi.fn(),
+  upgradeMusicVideoCompositionEngine: vi.fn(),
   importMusicVideoCompositionZip: vi.fn(),
   importMusicVideoCompositionDirectory: vi.fn(),
   getMusicVideoCompositionExport: vi.fn(),
@@ -158,6 +159,17 @@ describe('DocumentCompositionPanel', () => {
     expect(api.detachMusicVideoCompositionDocument).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Click again to detach/ }));
     await waitFor(() => expect(onProject).toHaveBeenLastCalledWith(bare));
+  });
+
+  it('updates the existing layered engine against its selected document revision', async () => {
+    const updated = { ...attached, composition: { ...attached.composition,
+      document: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-updated' } } };
+    api.upgradeMusicVideoCompositionEngine.mockResolvedValue({ project: updated, changed: true });
+    const onProject = vi.fn();
+    render(<DocumentCompositionPanel project={attached} onProject={onProject} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update layered engine' }));
+    await waitFor(() => expect(api.upgradeMusicVideoCompositionEngine).toHaveBeenCalledWith('mv-1', DOCUMENT.directory, { silent: true }));
+    expect(onProject).toHaveBeenCalledWith(updated);
   });
 
   it('expires the replace and detach confirmations after 5 seconds without acting', async () => {

@@ -105,7 +105,11 @@ export function taskObjective(task) {
   const repairContext = summaryBugReport
     ? SUMMARY_DISCLOSURE_REPAIR_CUE
     : '';
-  const parts = [repairContext, description, screenshotContext, typeof context === 'string' ? context.trim() : '']
+  const contextText = typeof context === 'string' ? context.trim() : '';
+  // An autonomous job's description IS its prompt's first line; stating it
+  // twice spends the objective budget on a repeat.
+  const descriptionOpensContext = description !== '' && contextText.split('\n', 1)[0].trim() === description;
+  const parts = [repairContext, descriptionOpensContext ? '' : description, screenshotContext, contextText]
     .filter(part => part !== '');
   if (!parts.length) return null;
   const joined = parts.join('\n\n');

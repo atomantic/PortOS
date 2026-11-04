@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useNavigate } from 'react-router';
 
 vi.mock('../services/socket', () => {
   const handlers = new Map();
@@ -50,12 +50,12 @@ const exclusiveLock = () => {
 const workletNodes = [];
 const audioContext = ({ addModule = () => Promise.resolve() } = {}) => {
   const close = vi.fn(() => Promise.resolve());
-  vi.stubGlobal('AudioContext', function FakeAudioContext() {
+  vi.stubGlobal('AudioContext', vi.fn(function FakeAudioContext() {
     this.sampleRate = 48000;
     this.audioWorklet = { addModule };
     this.createMediaStreamSource = () => ({ connect: vi.fn(), disconnect: vi.fn() });
     this.close = close;
-  });
+  }));
   vi.stubGlobal('AudioWorkletNode', function FakeAudioWorkletNode() {
     this.port = { close: vi.fn() };
     this.disconnect = vi.fn();
@@ -214,6 +214,172 @@ describe('VoiceCallHost', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/no audio hardware/);
   });
 
+  it('cancels call startup when the user selects capture during microphone permission', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    let resolveStream;
+    navigator.mediaDevices.getUserMedia.mockReturnValue(new Promise(resolve => { resolveStream = resolve; }));
+    audioContext();
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Capture system audio' }));
+    const track = { stop: vi.fn() };
+    await act(async () => { resolveStream({ getTracks: () => [track] }); });
+
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
+    expect(screen.getByText('Start capture')).toBeTruthy();
+    // The cancelled startup returned its lock, so capture can start normally.
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+    expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
+  });
+
+  it('detaches the outgoing mode when URL navigation changes an attached call to capture', async () => {
+    const SwitchMode = () => {
+      const navigate = useNavigate();
+      return <button type="button" onClick={() => navigate('/?mode=capture')}>Navigate to capture</button>;
+    };
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    const track = { stop: vi.fn() };
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [track] });
+    const { close } = audioContext();
+    render(<><VoiceCallHost /><SwitchMode /></>, { wrapper: MemoryRouter });
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    act(() => socket.__fire('voice:call:state', { hostAttached: true }));
+    socket.emit.mockClear();
+
+    fireEvent.click(screen.getByText('Navigate to capture'));
+
+    expect(socket.emit).toHaveBeenCalledWith('voice:call:detach');
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Start capture')).toBeTruthy();
+  });
+
+  it('keeps the new capture lock when the outgoing permission request resolves late', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    let resolveOldStream;
+    navigator.mediaDevices.getUserMedia.mockReturnValueOnce(new Promise(resolve => { resolveOldStream = resolve; }))
+      .mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    audioContext();
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Capture system audio' })); });
+    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+    expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
+    const oldTrack = { stop: vi.fn() };
+    await act(async () => { resolveOldStream({ getTracks: () => [oldTrack] }); });
+
+    const probe = vi.fn(() => null);
+    await navigator.locks.request('portos-call-host', { ifAvailable: true }, probe);
+    expect(probe).toHaveBeenCalledWith(null);
+    expect(oldTrack.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the microphone immediately on unmount during worklet loading', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    const track = { stop: vi.fn() };
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [track] });
+    let finishModule;
+    const { close } = audioContext({ addModule: () => new Promise(resolve => { finishModule = resolve; }) });
+    const { unmount } = render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    unmount();
+
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    await act(async () => { finishModule(); });
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
+  });
+
+  it('does not start a test tone after detaching while output routing is pending', async () => {
+    await startSession();
+    act(() => socket.__fire('voice:call:state', { hostAttached: true }));
+    const source = { connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const destination = { stream: { getTracks: () => [] }, disconnect: vi.fn() };
+    const context = vi.mocked(AudioContext).mock.instances[0];
+    context.createBuffer = () => ({ copyToChannel: vi.fn() });
+    context.createBufferSource = () => source;
+    context.createMediaStreamDestination = () => destination;
+    let resolveSink;
+    const element = {
+      play: vi.fn(() => Promise.resolve()), pause: vi.fn(),
+      setSinkId: vi.fn(() => new Promise(resolve => { resolveSink = resolve; })),
+    };
+    vi.stubGlobal('Audio', function FakeAudio() { return element; });
+
+    await act(async () => { fireEvent.click(screen.getByText('Test tone')); });
+    fireEvent.click(screen.getByText('Detach call host'));
+    await act(async () => { resolveSink(); });
+
+    expect(element.play).not.toHaveBeenCalled();
+    expect(source.start).not.toHaveBeenCalled();
+    expect(source.disconnect).toHaveBeenCalledTimes(1);
+    expect(element.srcObject).toBeNull();
+  });
+
+  it.each(['ended', 'routing failure'])('releases test-tone playback on %s', async (outcome) => {
+    await startSession();
+    act(() => socket.__fire('voice:call:state', { hostAttached: true }));
+    const source = { connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn() };
+    const track = { stop: vi.fn() };
+    const destination = { stream: { getTracks: () => [track] }, disconnect: vi.fn() };
+    const context = vi.mocked(AudioContext).mock.instances[0];
+    context.createBuffer = () => ({ copyToChannel: vi.fn() });
+    context.createBufferSource = () => source;
+    context.createMediaStreamDestination = () => destination;
+    const element = {
+      play: vi.fn(() => Promise.resolve()), pause: vi.fn(),
+      setSinkId: vi.fn(() => outcome === 'ended' ? Promise.resolve() : Promise.reject(new Error('output unavailable'))),
+    };
+    vi.stubGlobal('Audio', function FakeAudio() { return element; });
+
+    await act(async () => { fireEvent.click(screen.getByText('Test tone')); });
+    if (outcome === 'ended') {
+      expect(source.start).toHaveBeenCalledTimes(1);
+      act(() => source.onended());
+    } else {
+      expect(element.play).not.toHaveBeenCalled();
+      expect(source.start).not.toHaveBeenCalled();
+      expect(screen.getByText('Test tone failed: output unavailable')).toBeTruthy();
+    }
+    expect(element.pause).toHaveBeenCalledTimes(1);
+    expect(element.srcObject).toBeNull();
+    expect(source.disconnect).toHaveBeenCalledTimes(1);
+    expect(destination.disconnect).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    // Later session cleanup cannot release an already-finished tone twice.
+    fireEvent.click(screen.getByText('Detach call host'));
+    expect(element.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores late call snapshots and audio while capture owns the page', async () => {
+    const { track } = await startSession('Start capture');
+    act(() => socket.__fire('voice:capture:state', { hostAttached: true, turns: 2 }));
+    const makeAudio = vi.fn(function FakeAudio() {
+      return { src: '', addEventListener: vi.fn(), play: vi.fn(() => Promise.resolve()), pause: vi.fn() };
+    });
+    vi.stubGlobal('Audio', makeAudio);
+    act(() => {
+      socket.__fire('voice:call:state', { hostAttached: false, state: 'idle' });
+      socket.__fire('voice:call:state', { error: 'host-taken', hostAttached: false });
+      socket.__fire('voice:call:tts', { wav: new ArrayBuffer(8) });
+    });
+
+    expect(screen.getByText('Stop capture')).toBeTruthy();
+    expect(screen.getByText(/Capturing · 2 utterances/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(makeAudio).not.toHaveBeenCalled();
+  });
+
   it('surfaces the server refusing a second host', async () => {
     render(<VoiceCallHost />, { wrapper: MemoryRouter });
 
@@ -232,6 +398,7 @@ describe('VoiceCallHost', () => {
   });
 
   it('pauses call audio when the server cancels a timed-out voice turn', async () => {
+    await startSession();
     const makeElement = () => ({
       addEventListener: vi.fn(),
       play: vi.fn(() => Promise.resolve()),
@@ -247,8 +414,6 @@ describe('VoiceCallHost', () => {
       createObjectURL: vi.fn(() => 'blob:call-audio'),
       revokeObjectURL,
     });
-    render(<VoiceCallHost />, { wrapper: MemoryRouter });
-
     act(() => {
       socket.__fire('voice:call:tts', { wav: new ArrayBuffer(8) });
       socket.__fire('voice:call:tts', { wav: new ArrayBuffer(8) });

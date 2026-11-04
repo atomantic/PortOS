@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import CatalogLooksPanel from './CatalogLooksPanel';
 import CatalogSheetsPanel from './CatalogSheetsPanel';
-import { listCatalogSheetVariants, previewCatalogSheet } from '../../services/apiCatalog';
+import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
 
 // The real ModelInputPreview renders here, so this pins what the user sees
 // before Generate: which image the look render edits, or why it does not.
@@ -11,6 +11,8 @@ vi.mock('../../services/apiCatalog', () => ({
   renderCatalogSheet: vi.fn(),
   listCatalogSheetVariants: vi.fn(),
 }));
+
+vi.mock('../pipeline/MediaJobThumb', () => ({ default: () => <span>Rendering sheet</span> }));
 
 vi.mock('../../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn() }) }));
 
@@ -76,4 +78,20 @@ describe('CatalogLooksPanel Generate preview', () => {
     expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('Add another compatible reference image');
     expect(screen.getByRole('button', { name: 'Generate sheet' })).toBeDisabled();
   });
+  it('shows a sheet rendering defect and regenerates its own variant and age', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'blocked', label: 'Unavailable sheet' }, { id: 'product', label: 'Product sheet' }] });
+    previewCatalogSheet.mockImplementation(async (_id, body) => {
+      if (body.variant === 'blocked') throw new Error('The current selection has no compatible reference.');
+      return { preview: { sentPrompt: 'Four views of a clock', promptAdditions: [], referenceImages: [] } };
+    });
+    renderCatalogSheet.mockResolvedValue({ jobId: 'replacement-job', variant: 'product' });
+    render(<CatalogSheetsPanel ingredientId="cat-obj-example" payload={{ forms: [{ id: 'old', label: 'Old clock', age: '40' }] }}
+      sheetMedia={[{ mediaKey: 'defect.png', kind: 'reference', role: 'sheet:product@old', library: { review: { status: 'bad', feedback: 'Rendering defect: The clock hands are fused.' } } }]} />);
+    expect(await screen.findByText('Rendering defect: The clock hands are fused.')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('The current selection has no compatible reference.');
+    expect(screen.getByRole('button', { name: 'Regenerate sheet' })).toBeEnabled();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Regenerate sheet' })); });
+    expect(renderCatalogSheet).toHaveBeenCalledWith('cat-obj-example', { variant: 'product', formId: 'old' }, { silent: true });
+  });
+
 });

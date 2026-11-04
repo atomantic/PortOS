@@ -17,6 +17,7 @@ export {
   isSelfDrawnLayer,
   sceneVisualLayer,
   sceneHasAuthoredSpan,
+  sceneUsesAuthoredTiming,
   sceneRenderReady,
   isLayeredComposition,
   LAYERED_COMPOSITION_MODES,

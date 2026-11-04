@@ -20,3 +20,13 @@ it('loads shared filters, displays category evidence, and recovers after a faile
   fireEvent.click(screen.getByRole('button', { name: 'Refresh history' }));
   await waitFor(() => expect(screen.getByText(/No scored assessments/)).toBeInTheDocument());
 });
+
+it('offers preserved historical categories without treating them as active checks', async () => {
+  getAppQualityHistory.mockResolvedValueOnce({ totalCategories: 1,
+    additionalCategories: [{ id: 'old-audit', label: 'Other / previous: old-audit' }],
+    points: [{ date: '2026-09-10', score: 80, ratedCategories: 1,
+      categories: { 'old-audit': { score: 42, coverage: 'broad', confidence: 'high' } } }] });
+  render(<MemoryRouter initialEntries={['/?qualityCategory=old-audit']}><AppQualityHistory appId="example" categories={[{ id: 'security', label: 'Security' }]} /></MemoryRouter>);
+  expect(await screen.findByText('42/100')).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'Other / previous: old-audit' })).toBeInTheDocument();
+});

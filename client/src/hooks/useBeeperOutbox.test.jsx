@@ -60,6 +60,53 @@ describe('useBeeperOutbox', () => {
   });
   afterEach(cleanup);
 
+  it('does not let a read started before a send hide the new pending row', async () => {
+    let finishOldRead;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...ENTRY, state: 'awaiting-confirmation' }] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await act(async () => result.current.submit(ENTRY.body));
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+    await act(async () => finishOldRead({ entries: [] }));
+    await waitFor(() => expect(listOutboxEntries).toHaveBeenCalledTimes(2));
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+  });
+
+  it('restarts an interrupted outbox read after checking delivery', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishOldRead;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishOldRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    reconcileOutboxEntry.mockResolvedValueOnce({ ...pending, state: 'sent' });
+    act(() => { void result.current.refresh(); });
+    await act(async () => result.current.reconcile(pending));
+    await act(async () => finishOldRead({ entries: [pending] }));
+    expect(result.current).toMatchObject({ loadState: 'ready', entries: [{ ...pending, state: 'sent' }] });
+    expect(listOutboxEntries).toHaveBeenCalledTimes(3);
+  });
+
+  it('restarts the interrupted read after overlapping delivery checks', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishRead;
+    let finishFirstCheck;
+    listOutboxEntries.mockReturnValueOnce(new Promise(resolve => { finishRead = resolve; }))
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] })
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise(resolve => { finishFirstCheck = resolve; }))
+      .mockResolvedValueOnce({ ...pending, state: 'sent' });
+    act(() => { void result.current.refresh(); void result.current.reconcile(pending); });
+    await act(async () => result.current.reconcile(pending));
+    await act(async () => { finishFirstCheck(pending); finishRead({ entries: [pending] }); });
+    expect(result.current).toMatchObject({ loadState: 'ready', entries: [{ ...pending, state: 'sent' }] });
+    expect(listOutboxEntries).toHaveBeenCalledTimes(4);
+  });
+
   it('checks delivery in place without sending or clearing the composer, and ignores a late result from another chat', async () => {
     const pending = { ...ENTRY, state: 'awaiting-confirmation', errorCode: 'DELIVERY_UNCONFIRMED' };
     listOutboxEntries.mockResolvedValue({ entries: [pending] });
@@ -96,6 +143,41 @@ describe('useBeeperOutbox', () => {
     });
     await waitFor(() => expect(result.current.entries[0].state).toBe('sent'));
     await act(async () => { finish(pending); await checking; });
+    expect(result.current.entries[0].state).toBe('sent');
+  });
+
+  it('refreshes again when a newer read finished before the delivery check', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishCheck;
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise(resolve => { finishCheck = resolve; }));
+    let checking;
+    act(() => { checking = result.current.reconcile(pending); });
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] })
+      .mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    await act(async () => result.current.refresh());
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+    await act(async () => { finishCheck({ ...pending, state: 'sent' }); await checking; });
+    expect(result.current.entries[0].state).toBe('sent');
+  });
+
+  it('refreshes after an older successful check finishes last for the same row', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValueOnce({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finishFirst, finishSecond;
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve; }))
+      .mockReturnValueOnce(new Promise(resolve => { finishSecond = resolve; }));
+    let first, second;
+    act(() => { first = result.current.reconcile(pending); second = result.current.reconcile(pending); });
+    await act(async () => { finishSecond(pending); await second; });
+    expect(result.current.entries[0].state).toBe('awaiting-confirmation');
+
+    listOutboxEntries.mockResolvedValueOnce({ entries: [{ ...pending, state: 'sent' }] });
+    await act(async () => { finishFirst({ ...pending, state: 'sent' }); await first; });
     expect(result.current.entries[0].state).toBe('sent');
   });
 

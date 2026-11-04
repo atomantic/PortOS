@@ -14,6 +14,7 @@ vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('../services/appDeployer.js', () => ({ runDeployFlow: vi.fn() }));
 vi.mock('../services/updatePreflight.js', () => ({
   checkPortosUpdatePreflight: vi.fn(async () => {}),
+  checkManualUpdateActivity: vi.fn(async () => {}),
 }));
 vi.mock('../services/appUpdater.js', () => ({ updateApp: vi.fn() }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn() }));
@@ -36,6 +37,7 @@ import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import { logAction } from '../services/history.js';
 import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
 import { __resetAppOperations, registerAppHandlers } from '../sockets/apps.js';
 
 // Two app records pointing at ONE checkout — the case app id alone can't catch.
@@ -112,6 +114,35 @@ describe('app socket handlers', () => {
     __resetAppOperations();
     bus = makeBus();
     appsService.getAppById.mockImplementation(async (id) => APPS[id] ?? null);
+  });
+
+  it('waits for Create App standardization and refuses another once update maintenance starts', async () => {
+    const entered = deferred();
+    const work = deferred();
+    pm2Standardizer.runStandardizeFlow.mockImplementation(async () => { entered.resolve(); return work.promise; });
+    const client = connect(bus);
+    const run = client.fire('standardize:start', { repoPath: '/repos/new-app' });
+    onTestFinished(async () => { work.resolve({ success: true }); await run; });
+    await entered.promise;
+    const update = maintenance.deferredUpdate.request();
+    onTestFinished(() => maintenance.deferredUpdate.finish(update.id, false));
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+    work.resolve({ success: true });
+    await run;
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    await client.fire('standardize:start', { repoPath: '/repos/another-app' });
+    expect(client.last('standardize:complete').payload).toMatchObject({ success: false });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a standardization admission refusal to the requested app', async () => {
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    onTestFinished(() => maintenance.deferredUpdate.finish(update.id, false));
+    const client = connect(bus);
+    await client.fire('app:standardize', { appId: 'app-a' });
+    expect(client.last('app:standardize:error').payload).toMatchObject({ appId: 'app-a' });
+    expect(pm2Standardizer.analyzeApp).not.toHaveBeenCalled();
   });
 
   describe('in-flight collision guard', () => {
@@ -269,6 +300,46 @@ describe('app socket handlers', () => {
   });
 
   describe('PortOS self-update handoff', () => {
+    it('publishes typed asynchronous consent refusal before removing the Git update operation', async () => {
+      const done = deferred();
+      appUpdater.updateApp.mockResolvedValueOnce({ success: true, selfUpdateStarted: true,
+        supervisorPid: 12345, completion: done.promise, steps: [] });
+      const client = connect(bus);
+      await client.fire('app:update', { appId: PORTOS_APP_ID });
+      done.resolve({ success: false, errorCode: 'UPDATE_INTERRUPTION_REQUIRED', errorMessage: 'Save work before continuing' });
+      await vi.waitFor(() => expect(client.last('app:update:error')?.payload.code).toBe('UPDATE_INTERRUPTION_REQUIRED'));
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+    it('lets a manual Git update replace a handed-off waiting automatic operation', async () => {
+      const done = deferred();
+      const waiting = maintenance.deferredUpdate.request();
+      appUpdater.updateApp.mockResolvedValueOnce({ success: true, selfUpdateStarted: true,
+        supervisorPid: waiting.ownerPid, completion: done.promise, steps: [] })
+        .mockResolvedValueOnce({ success: true, steps: [] });
+      const client = connect(bus);
+      try {
+        await client.fire('app:update', { appId: PORTOS_APP_ID });
+        expect(appUpdater.updateApp).toHaveBeenCalledTimes(1);
+        await client.fire('app:update', { appId: PORTOS_APP_ID, acknowledgeInterruption: true });
+        expect(appUpdater.updateApp).toHaveBeenCalledTimes(2);
+        expect(client.events('app:update:error')).toHaveLength(0);
+        done.resolve({ success: false, superseded: true });
+      } finally { done.resolve({ success: false }); maintenance.deferredUpdate.finish(waiting.id, false); }
+    });
+    it('reports a successful handoff despite a history failure and removes its row when the updater exits', async () => {
+      const done = deferred();
+      const { maintenance } = await import('../lib/maintenanceAdmission.js');
+      appUpdater.updateApp.mockResolvedValue({ success: true, selfUpdateStarted: true, supervisorPid: 12345,
+        completion: done.promise, steps: [] });
+      logAction.mockRejectedValueOnce(new Error('history unavailable'));
+      const client = connect(bus);
+      await client.fire('app:update', { appId: 'app-a' });
+      expect(client.events('app:update:error')).toHaveLength(0);
+      expect(maintenance.operations().filter(op => op.kind === 'app-operation')).toEqual([]);
+      expect(client.last('app:operations:active').payload.operations).toHaveLength(1);
+      done.resolve({ success: false });
+      await vi.waitFor(() => expect(client.last('app:operations:active').payload.operations).toEqual([]));
+    });
     it('keeps the operation live and reports no completion once update.sh owns the restart', async () => {
       // update.sh pm2-deletes THIS process partway through, so appUpdater
       // returns as soon as the detached script is launched. Reporting the
@@ -279,6 +350,7 @@ describe('app socket handlers', () => {
       appUpdater.updateApp.mockResolvedValue({
         success: true,
         selfUpdateStarted: true,
+        supervisorPid: 12345,
         steps: [{ step: 'git-pull', success: true }, { step: 'app-update', success: true }],
       });
       const client = connect(bus);
@@ -320,7 +392,8 @@ describe('app socket handlers', () => {
       expect(appUpdater.updateApp).toHaveBeenCalledWith(
         APPS['app-a'],
         expect.any(Function),
-        { syncFork: false, acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
+        { syncFork: false,
+        acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
       );
     });
   });

@@ -66,6 +66,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { browserCleanupDeadline as withDeadline, reapOwnedBrowser } from './ownedBrowserCleanup.js';
+import { sandboxedChromiumOptions } from './playwrightSandbox.js';
 import { _testChromeProcessFacts } from '../../server/services/htmlComposition/testBrowserCleanup.js';
 
 export const BROWSER_FIXTURE_STARTUP_MS = 60000;
@@ -207,6 +208,7 @@ export async function startBrowserFixture({
   name, createServer, viteConfig, chromium, launchOptions = {}, warmup, phaseMs = BROWSER_FIXTURE_PHASE_MS,
   observeLaunch = _observeOwnedBrowserLaunch,
 }) {
+  const sandboxedOptions = sandboxedChromiumOptions(launchOptions);
   const budget = phaseMs.vite + phaseMs.chromium + phaseMs.warmup + phaseMs.cleanup;
   if (budget >= BROWSER_FIXTURE_STARTUP_MS) {
     throw new Error(`${name} phase budgets (${budget}ms) must fit inside the ${BROWSER_FIXTURE_STARTUP_MS}ms startup hook`);
@@ -313,7 +315,7 @@ export async function startBrowserFixture({
     const launching = launchBrowser({
       headless: true,
       timeout,
-      ...launchOptions,
+      ...sandboxedOptions,
       env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp },
     }, () => abandoned || failed).then(({ browser, closer }) => {
       settle();

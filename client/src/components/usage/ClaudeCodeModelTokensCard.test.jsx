@@ -22,7 +22,7 @@ describe('ClaudeCodeModelTokensCard', () => {
     render(<ClaudeCodeModelTokensCard period="30d" from="" to="" isCustom={false} />);
     expect(await screen.findByText(/all instances/)).toBeTruthy();
     expect(screen.getAllByText('model-x').length).toBeGreaterThan(0);
-    expect(screen.getByText(/API-billed, not in total/)).toBeTruthy();
+    expect(screen.getByText(/API-billed/)).toBeTruthy();
     expect(api.getClaudeCodeModelUsage).toHaveBeenCalledWith({ period: '30d' }, { silent: true });
   });
 
@@ -31,5 +31,21 @@ describe('ClaudeCodeModelTokensCard', () => {
     render(<ClaudeCodeModelTokensCard period="7d" from="2026-09-01" to="2026-09-15" isCustom />);
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(api.getClaudeCodeModelUsage).toHaveBeenCalledWith({ from: '2026-09-01', to: '2026-09-15' }, { silent: true });
+  });
+
+  it('refreshes the surrounding chart when the transcript scan changed', async () => {
+    const onRefreshed = vi.fn();
+    api.getClaudeCodeModelUsage.mockResolvedValue({ models: [], totals: {}, transcriptRefreshed: true });
+    render(<ClaudeCodeModelTokensCard period="7d" from="" to="" isCustom={false} onRefreshed={onRefreshed} />);
+    await screen.findByText('No Claude Code usage found in this window.');
+    expect(onRefreshed).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes the chart when another caller already completed a newer scan', async () => {
+    const onRefreshed = vi.fn();
+    api.getClaudeCodeModelUsage.mockResolvedValue({ models: [], totals: {}, transcriptRefreshed: false, transcriptUpdatedAt: '2026-09-02T00:00:00Z' });
+    render(<ClaudeCodeModelTokensCard period="7d" from="" to="" isCustom={false} onRefreshed={onRefreshed} transcriptUpdatedAt="2026-09-01T00:00:00Z" />);
+    await screen.findByText('No Claude Code usage found in this window.');
+    expect(onRefreshed).toHaveBeenCalledTimes(1);
   });
 });

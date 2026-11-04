@@ -33,7 +33,7 @@ import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
 import { isSelfDrawnLayer } from '../../lib/musicVideoLayers.js';
 import { beginNextAttempt } from './autoReview.js';
@@ -125,6 +125,15 @@ const defaults = {
     if (!provider || provider.id !== input?.providerId || provider.enabled === false || !selectedModel || selectedModel !== input?.model) throw new ServerError('The selected code-authoring provider/model is unavailable', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     if (!isAuthoringOneShotProvider(provider)) throw new ServerError('Choose an API, a tool-free headless CLI, or a read-only-sandboxed codex CLI for code authoring', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
     return { providerId: provider.id, model: selectedModel, ...(input.effort ? { effort: input.effort } : {}), costUsd: isFreeProvider(provider) ? 0 : null };
+  },
+  // Same rule autoReviewService.callReviewer applies to a production review, checked at Start so an
+  // unset reviewer falls back to the active provider only when that provider is eligible (#14549).
+  assertReviewerEligible: async (input) => {
+    const { resolveProviderAndModel } = await import('../promptRunner.js');
+    const { provider, selectedModel } = await resolveProviderAndModel(input || {});
+    if (!provider || provider.enabled === false) throw new ServerError('No enabled AI provider is available for production review; select a tool-free reviewer provider', { status: 422, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
+    if (!isToolFreeOneShotProvider(provider)) throw new ServerError(`Provider "${provider.name || provider.id}" is not tool-free; select a tool-free reviewer provider and model`, { status: 422, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
+    if ((input?.providerId && provider.id !== input.providerId) || (input?.model && selectedModel !== input.model)) throw new ServerError('The selected production reviewer is unavailable', { status: 409, code: 'PRODUCTION_REVIEWER_UNAVAILABLE' });
   },
   releaseRevisionSection: async (...args) => (await import('./revisionService.js')).releaseRevisionSection(...args),
 };
@@ -225,7 +234,7 @@ async function preflightPlate(projectId, runId, sceneId) {
       const reserved = await mutateProjectRecord(projectId, (current) => {
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
         if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate selection or intent changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
-        return reserveProductionStep(current, runId, { kind: 'plate', sceneId, route: { kind: 'plate', mode: reviewer.provider.id, model: reviewer.model }, costUsd: reviewer.costUsd, processId: PROCESS_ID });
+        return reserveProductionStep(current, runId, { kind: 'plate', sceneId, rationale: 'Inspect the saved still prompt and rendering quality before animation', route: { kind: 'plate', mode: reviewer.provider.id, model: reviewer.model }, costUsd: reviewer.costUsd, processId: PROCESS_ID });
       }).catch((error) => ({ error }));
       if (reserved.error) return { halt: { status: LIMIT_CODES.has(reserved.error.code) ? 'limit-reached' : 'blocked', reason: `Plate review needed: ${reserved.error.message}` } };
       const verifyCurrent = async (execution) => {
@@ -236,7 +245,7 @@ async function preflightPlate(projectId, runId, sceneId) {
         if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId
           || !ensureSceneTakes(scene).some((entry) => entry.assetId === take.assetId && entry.status !== 'rejected')) throw new ServerError('Plate changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
       };
-      const result = await deps.reviewPlate({ scene: original, assetId: take.assetId, runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
+      const result = await deps.reviewPlate({ scene: original, assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
       await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, reserved.step.key, { status: result.error ? 'failed' : 'completed', error: result.error?.message }));
       if (result.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${result.error.message}` } };
       evidence = result;
@@ -251,7 +260,7 @@ async function preflightPlate(projectId, runId, sceneId) {
       if (saved.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${saved.error.message}` } };
     }
     if (evidence.verdict === 'unverified') return { halt: { status: 'blocked', reason: 'Plate review needed: inconclusive evidence. Select or repair a plate, then resume.' } };
-    if (evidence.verdict === 'pass' && !plateAdjacencyFailed(evidence, runId)) {
+    if (selectedPlatePasses({ ...original, referenceImageId: take.assetId, takes: [{ ...take, plateEvidence: evidence }] }, runId)) {
       const selected = await mutateProjectRecord(projectId, (current) => {
         assertProductionActive(current, runId, PROCESS_ID);
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
@@ -352,7 +361,7 @@ async function dispatchSlot(projectId, runId, { stepKind, sceneId, revisionId = 
   const stillRepair = repair ? { at: repair.at, replaces: repair.replaces } : null;
   // A director can choose a different frame after the scheduler inspected the board.
   if (stepKind === 'frame' && scene.referenceImageId && !stillRepair && !plateRepairBasis && !revisionId) return { ok: false };
-  if (stepKind === 'clip' && scene.direction?.actionContract) {
+  if (stepKind === 'clip') {
     // A plate that fails against its neighbor gets the same single repair as one that fails alone.
     for (let pass = 0; ; pass++) {
       const admission = await preflightPlate(projectId, runId, sceneId);
@@ -463,11 +472,19 @@ async function authorDocument(projectId, runId, action) {
       beforeSubmit: async ({ provider, model }) => {
         if (provider.id !== run.authoring.providerId || model !== run.authoring.model) throw new ServerError('The authoring provider/model changed; no fallback is allowed', { status: 409, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
         if (!isAuthoringOneShotProvider(provider)) throw new ServerError('This code authoring provider cannot run without tools', { status: 422, code: 'PRODUCTION_AUTHORING_UNAVAILABLE' });
-        // Local authoring submits once per section batch (#10515); one reserved step covers the
-        // whole document, so a later batch only rechecks that the step is still open.
+        // Local API authoring keeps its existing one-step document reservation. Each CLI
+        // submission is a separate metered attempt, so settle the previous batch and
+        // reserve the next before dispatching it under the generation limit.
         if (key) {
-          verifyCurrent(await requireProject(projectId));
-          return;
+          if (provider.type !== 'cli') {
+            verifyCurrent(await requireProject(projectId));
+            return;
+          }
+          await mutateProjectRecord(projectId, (current) => {
+            verifyCurrent(current);
+            return settleProductionStep(current, runId, key, { status: 'completed' });
+          });
+          key = null;
         }
         const costUsd = isFreeProvider(provider) ? 0 : null;
         const reserved = await mutateProjectRecord(projectId, (current) => {
@@ -742,6 +759,7 @@ export async function startProduction(projectId, { directive, pool: requested, l
   }
   const assets = codeFirstProductionAssets(project);
   const authoring = assets ? await deps.resolveAuthoring(requestedAuthoring) : null;
+  await deps.assertReviewerEligible(reviewer);
   const pool = bindSuppliedAudio(normalizeProductionPool(requested, { allowEmpty: !!assets }), project);
   await assertPoolEligible(pool, await deps.loadEnv());
   // The autopilot cuts on the song (#9290) unless the director chose how it

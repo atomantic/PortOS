@@ -136,6 +136,56 @@ it saves the choice without running a provider; **Regenerate** renders the new
 plates before they can be approved. Capturing an image or selecting a camera
 alone never starts generation.
 
+## Render it in Blender (Photoreal tab)
+
+The Environment's **Photoreal** tab rebuilds the saved greybox parts in Blender and
+renders the cameras you tick. **EEVEE preview** takes seconds per camera on a GPU;
+**Cycles final** path traces (Metal, OptiX, CUDA, HIP or oneAPI when present,
+otherwise CPU) at a 1920-pixel long edge. Samples default per engine and the last
+choice is remembered on this device. Progress arrives live; a render keeps running
+if you leave the tab.
+
+Blender comes from **Code Animation › Production › Blender execution**: set the
+executable there and run its check first (Blender 4.2 through 5.2; 5.2.3 is the
+target). The render runs PortOS's own script with the greybox passed as data, in
+the same contained or trusted-local worker mode as Code Animation. A greybox
+showing an attached .glb is not rebuilt yet; switch its layout source to the saved
+parts.
+
+Each render attaches to the Environment as a reference image tagged for that
+camera and replaces the camera's previous render unless that one is a photo plate.
+**Use as photo plate** makes the newest render the camera's plate (see above).
+**Download .blend** gives the latest built scene, with parts grouped by zone,
+landmarks and anchors as empties, and every saved camera, ready to dress in
+Blender.
+
+### Dress it (Look)
+
+The **Look** card on the Photoreal tab sets how Blender dresses the layout:
+a material per zone or part from a fixed list of presets (wood floor, painted
+wall, carpet, tile, chrome, mirror, neon and others), each with a color, wear
+and optional glow; spot, area and point lights; and atmosphere (haze, world
+color and brightness, exposure, and whether to keep the daylight sun). Pick
+**Provider › model › effort**, describe the look, check **Show full prompt**,
+and choose **Dress with AI**. The result is a preview listing its materials and
+lights; **Apply look** saves it (as a revision of the Environment) and the next
+render uses it. With a look saved, the box edits it unless you choose to start
+over. The look never moves geometry; a rule for a part you later remove simply
+stops matching. **Remove look** goes back to flat zone colors and the sun.
+
+### Fly-through
+
+**Render fly-through** glides one camera through the ticked cameras in the order
+they are listed. It starts on the first camera's framing, eases through each
+camera's position, aim and lens, and ends on the last. It uses the chosen engine
+and samples at 24 fps, for 2 to 60 seconds (8 by default), so its cost is that
+many frames: EEVEE takes seconds per frame on a GPU, and Cycles about as long per
+frame as one camera's still. The frames become an H.264 MP4 saved to **Media
+History**, named after the Environment and its cameras. There it can be picked
+as a video reference for a video model. The tab plays the newest fly-through and
+links to it. A fly-through leaves the cameras' stills and photo plates alone.
+The kept `.blend` holds the animated **Fly-through** camera.
+
 ## Create or edit with AI
 
 Choose **Provider › model › effort**, or leave it at the active provider default.

@@ -8,11 +8,12 @@ import { atomicWrite, rmGuarded } from '../../lib/fileCore.js';
 import { readJSONFileStrict } from '../../lib/jsonIo.js';
 import { PATHS } from '../../lib/paths.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
 import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
-import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
+import { isDeterministicCodeSource, MUSIC_VIDEO_CODE_SOURCE_MAX } from '../../lib/musicVideoValidation.js';
 import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
@@ -90,6 +91,11 @@ function hasAmbientThreeRandom(fn) {
 // Only an exact function declaration is embedded as a literal in generated.js.
 // In particular, no model-supplied top-level statement ever runs in the page.
 function checkedFunction(source) {
+  // Say so plainly: an over-long section used to read as a determinism failure,
+  // and the retry kept the length because it hunted for a banned call instead.
+  if (typeof source === 'string' && source.length > MUSIC_VIDEO_CODE_SOURCE_MAX) {
+    throw fail(`A section function is ${source.length} characters, over the ${MUSIC_VIDEO_CODE_SOURCE_MAX}-character limit. Return a shorter render function`, 'SECTION_SOURCE_TOO_LONG');
+  }
   if (!isDeterministicCodeSource(source)) throw fail('A section contains a networked or non-deterministic call', 'NONDETERMINISTIC_SECTION');
   let body;
   try { body = parse(source, { sourceType: 'script' }).program.body; }
@@ -207,10 +213,12 @@ async function authoringContext(project) {
   return { song, scenes, basis: basisFor(project), structuralBasis: basisFor(project, false), palette: paletteFromProject(project) };
 }
 
-// A local model spends the whole stream-stall window evaluating a huge prompt before the first
-// token, which the stall timer cannot tell apart from a hang (#10515). Above this, a local
-// provider authors sections in bounded batches instead of one whole-song request.
+// Local models can spend the stream-stall window evaluating a huge prompt (#10515).
+// CLI authors also need bounded work: a whole-song answer can hit the model's output
+// limit repeatedly before the CLI prints its final response. Use the same checkpointed
+// section batches for both, with a separate budget for the CLI transport.
 export const LOCAL_PROMPT_BUDGET_CHARS = 100_000;
+export const CLI_PROMPT_BUDGET_CHARS = 120_000;
 
 // The scenes overlapping any of `sections` (all of them when every section is listed).
 function batchScenes(scenes, sections) {
@@ -232,7 +240,7 @@ function batchSectionIds(ids, promptFor, budget) {
   if (current.length) batches.push(current);
   for (const batch of batches) {
     const size = promptFor(batch).length;
-    if (size > budget) throw fail(`The authoring prompt for section ${batch.join(', ')} is ${size} characters, over the ${budget}-character budget for a local model. Trim the treatment, cast or style context, or choose a provider with a larger context.`, 'COMPOSITION_PROMPT_TOO_LARGE');
+    if (size > budget) throw fail(`The authoring prompt for section ${batch.join(', ')} is ${size} characters, over the ${budget}-character authoring budget. Trim the treatment, cast or style context, or choose another provider.`, 'COMPOSITION_PROMPT_TOO_LARGE');
   }
   return batches;
 }
@@ -276,7 +284,7 @@ function generatedFiles(manifest) {
 async function priorManifest(project) {
   const pointer = project.composition?.documentDraft || project.composition?.document;
   if (pointer?.source?.kind !== 'generated') throw fail('Generate a mixed-media document before revising a section', 'NO_GENERATED_DOCUMENT', 409);
-  const files = await readDocumentFiles({ ...project, composition: { ...project.composition, document: pointer } }, { requireLyricVisibility: false });
+  const files = await readDocumentFiles({ ...project, composition: { ...project.composition, document: pointer } }, { requireLyricVisibility: false, requireSelectedEffects: false });
   const file = files.get('manifest.json');
   if (!file) throw fail('The generated document manifest is missing', 'COMPOSITION_DOCUMENT_MISSING', 409);
   const manifest = JSON.parse(await readFile(file.abs, 'utf8'));
@@ -317,7 +325,7 @@ async function sharedStyleFor(project, context, prior) {
   };
 }
 
-// Sections a failed batched local attempt accepted for this exact basis; another basis restores nothing.
+// Sections a failed batched attempt accepted for this exact basis; another basis restores nothing.
 async function readAuthoringCheckpoint(stagingPath, stagingBasis, ids) {
   const checkpoint = await readJSONFileStrict(stagingPath, null, { logError: false });
   if (!checkpoint.ok) throw fail('The saved authoring checkpoint could not be read', 'COMPOSITION_CHECKPOINT_INVALID', 409);
@@ -355,7 +363,7 @@ function buildGeneratedManifest(project, context, prior, { ids, sharedStyle, upd
   };
 }
 
-async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = LOCAL_PROMPT_BUDGET_CHARS } = {}) {
+async function runAuthoring(projectId, { providerId, model, effort, sectionId = null, eventRevision = false, expectedDraft = null, feedback = '', beforeSubmit = null, verifyCurrent = () => {}, promptBudgetChars = null } = {}) {
   const project = await requireProject(projectId);
   assertProductionApproval(project, 'storyboard');
   const context = await authoringContext(project);
@@ -374,9 +382,9 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
       title: project.name, song: { ...context.song, sections }, palette: context.palette, treatment: project.treatment,
       visualSpec: project.visualSpec, scenes, styleLines: sharedStyle.styleLines,
       onlySectionId: sectionId, sharedStyle, directionContext: castAndSetsCodeContext(project, scoped ? { sceneIds: scenes.map((scene) => scene.sceneId), sections } : {}),
-    });
+    }) + `\n\nSize limit: each section's render function source must be at most ${MUSIC_VIDEO_CODE_SOURCE_MAX} characters; longer sections are rejected.`;
   };
-  const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback.slice(0, 8000)}` : prompt);
+  const withFeedback = (prompt) => (feedback ? `${prompt}\n\nReview findings for this section (retain the approved medium and selected assets; never invent a footage fallback):\n${feedback}` : prompt);
   const guardedBeforeSubmit = async (submission) => {
     const current = await getProject(projectId);
     assertProductionApproval(current, 'storyboard');
@@ -388,16 +396,19 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     try {
       return await runModel({ providerId, model, effort, automation: project.automation, prompt, source: 'music-video-document', beforeSubmit: guardedBeforeSubmit });
     } catch (err) {
-      if (/timed out/i.test(err?.message || '') && !/prompt was \d+ characters/.test(err.message)) err.message += ` (prompt was ${prompt.length} characters)`;
+      if (/timed out/i.test(err?.message || '') && !/prompt was \d+ characters/.test(err.message)) err.message += ` (prompt was ${withCreativeLatitude(prompt).length} characters)`;
       throw err;
     }
   };
   // Resolve the provider only when there is something to split, so single-section runs are unchanged.
   const fullPrompt = withFeedback(promptFor(ids));
-  const resolved = ids.length > 1 && fullPrompt.length > promptBudgetChars
+  const fullSize = withCreativeLatitude(fullPrompt).length;
+  const resolved = ids.length > 1 && fullSize > (promptBudgetChars ?? LOCAL_PROMPT_BUDGET_CHARS)
     ? await resolveMusicVideoLlm({ providerId, model, effort, automation: project.automation, stage: 'authoring' }) : null;
-  const batches = resolved && isLocalProvider(resolved.provider)
-    ? batchSectionIds(ids, (batchIds) => withFeedback(promptFor(batchIds)), promptBudgetChars) : null;
+  const local = resolved && isLocalProvider(resolved.provider);
+  const batchBudget = promptBudgetChars ?? (local ? LOCAL_PROMPT_BUDGET_CHARS : CLI_PROMPT_BUDGET_CHARS);
+  const batches = resolved && (local || resolved.provider?.type === 'cli') && fullSize > batchBudget
+    ? batchSectionIds(ids, (batchIds) => withCreativeLatitude(withFeedback(promptFor(batchIds))), batchBudget) : null;
   // Regenerable, machine-local runtime checkpoint, separate from published documents.
   // Include the exact prompt as well as the project basis: approved cast/style inputs
   // and review feedback can change without changing the structural timeline.
@@ -409,7 +420,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
   })).digest('hex');
   const updated = new Map();
   let run;
-  // Replaced with a checkpoint writer for batched local runs.
+  // Replaced with a checkpoint writer for batched runs.
   let persist = async () => {};
   // Keep what an answer got right, then ask once more for each missing or rejected section
   // on its own, telling the model why (a local model often drops a section, breaks the JSON
@@ -451,7 +462,7 @@ async function runAuthoring(projectId, { providerId, model, effort, sectionId = 
     persist = saveProgress;
     // Replace a checkpoint from another basis before any new provider work.
     await saveProgress();
-    console.log(`🎬 Music-video document prompt is ${fullPrompt.length} chars; authoring ${ids.length} sections in ${batches.length} batches on a local model (${updated.size} staged)`);
+    console.log(`🎬 Music-video document prompt is ${fullSize} chars; authoring ${ids.length} sections in ${batches.length} batches (${updated.size} staged)`);
     if (updated.size === ids.length) {
       // Publication still needs the production caller's reservation/current-step guard
       // when a previous attempt finished authoring but failed before staging the document.

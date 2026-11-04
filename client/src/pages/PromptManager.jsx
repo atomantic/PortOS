@@ -781,7 +781,7 @@ export default function PromptManager() {
                   <button
                     onClick={() => setStageQuery('')}
                     aria-label="Clear stage search"
-                    className="absolute right-1 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute right-1 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-white"
                   >
                     <X size={14} />
                   </button>
@@ -1405,7 +1405,7 @@ export default function PromptManager() {
         actions={(
           <button
             onClick={loadData}
-            className="p-2 text-gray-400 hover:text-white"
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white"
             title="Reload" aria-label="Reload"
           >
             <RefreshCw size={20} />

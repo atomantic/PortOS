@@ -53,8 +53,7 @@ export function _getMaintenanceWatcher() {
   return watcher;
 }
 
-export async function resumeMaintenance(input) {
-  const status = maintenance.resume(input);
+export async function wakeAfterMaintenance({ waitForCompletion = false } = {}) {
   // Re-evaluate saved policies. These functions retain their daemon, pause,
   // domain, budget and quota gates; do not call CoS.resume or mind.resume.
   const [{ dequeueNextTask, resumeDeferredCompletions }, { recheckPersistentMindSchedule }] = await Promise.all([
@@ -62,10 +61,25 @@ export async function resumeMaintenance(input) {
   ]);
   // The normal-state response must not wait for filesystem verification. Finish
   // the bounded deterministic repair before admitting more queued agent work.
-  void resumeDeferredCompletions()
-    .catch(error => console.warn(`⚠️ Completion recovery deferred after maintenance: ${error.message}`))
-    .then(() => dequeueNextTask())
-    .catch(error => console.error(`❌ CoS dequeue after maintenance failed: ${error.message}`));
-  await Promise.allSettled([recheckPersistentMindSchedule()]);
+  const repair = resumeDeferredCompletions().catch(error => {
+    console.warn(`⚠️ Completion recovery deferred after maintenance: ${error.message}`);
+    throw error;
+  });
+  const dequeue = repair.catch(() => {}).then(() => dequeueNextTask());
+  const mind = recheckPersistentMindSchedule();
+  if (waitForCompletion) {
+    const results = await Promise.allSettled([repair, dequeue, mind]);
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure) throw failure.reason;
+  } else {
+    void repair.catch(() => {});
+    void dequeue.catch(error => console.error(`❌ CoS dequeue after maintenance failed: ${error.message}`));
+    await Promise.allSettled([mind]);
+  }
+}
+
+export async function resumeMaintenance(input) {
+  const status = maintenance.resume(input);
+  await wakeAfterMaintenance();
   return status;
 }

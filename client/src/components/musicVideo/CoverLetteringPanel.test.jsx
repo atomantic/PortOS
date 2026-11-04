@@ -10,6 +10,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 const lettering = {
   fonts: [{ id: 'example-font', family: 'Example Font', ext: 'ttf', width: 0.5, addedAt: '2026-01-01T00:00:00.000Z' }],
   styles: [{ key: 'example artist', name: 'Example Artist', design: { layout: 'center', typeface: 'serif', titleStyle: 'outline' }, updatedAt: '2026-01-01T00:00:00.000Z' }],
+  fontState: 'ready', styleState: 'ready',
   uploading: false,
   uploadFont: vi.fn(async () => null),
   removeFont: vi.fn(async () => true),

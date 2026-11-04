@@ -495,9 +495,9 @@ export default function GraphCanvas({
         )}
       </div>
       <div className="absolute top-3 right-3 z-10 flex flex-col gap-1">
-        <button type="button" aria-label="Zoom in" onClick={() => zoomAt(sizeRef.current.width / 2, sizeRef.current.height / 2, ZOOM_STEP)} className="port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Plus size={14} /></button>
-        <button type="button" aria-label="Zoom out" onClick={() => zoomAt(sizeRef.current.width / 2, sizeRef.current.height / 2, 1 / ZOOM_STEP)} className="port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Minus size={14} /></button>
-        <button type="button" aria-label="Fit to view" onClick={fit} className="port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Maximize2 size={14} /></button>
+        <button type="button" aria-label="Zoom in" onClick={() => zoomAt(sizeRef.current.width / 2, sizeRef.current.height / 2, ZOOM_STEP)} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Plus size={14} /></button>
+        <button type="button" aria-label="Zoom out" onClick={() => zoomAt(sizeRef.current.width / 2, sizeRef.current.height / 2, 1 / ZOOM_STEP)} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Minus size={14} /></button>
+        <button type="button" aria-label="Fit to view" onClick={fit} className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 port-media-overlay port-media-overlay-item w-8 h-8 flex items-center justify-center rounded-lg"><Maximize2 size={14} /></button>
       </div>
       <div className="absolute bottom-3 left-3 z-10 max-w-[70%] flex flex-col gap-1.5">
         <button

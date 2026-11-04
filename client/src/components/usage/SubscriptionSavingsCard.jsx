@@ -13,7 +13,7 @@ const NO_FAMILIES = [];
 // The three derived figures per plan, defined ONCE so the mobile cards, the
 // desktop table and the Subscriptions page can't drift into showing different
 // things (the first two already had: mobile was missing the totals row).
-export const rowCells = (row) => [
+export const rowCells = (row, incomplete = false) => [
   { key: 'period', label: 'This period', value: row.configured ? formatUsd(row.periodCost) : null },
   { key: 'api', label: 'Est. API cost', value: formatUsd(row.apiCost) },
   {
@@ -21,11 +21,11 @@ export const rowCells = (row) => [
     label: 'Savings',
     value: row.configured ? formatUsd(row.savings, { signed: true }) : null,
     tone: row.configured ? savingsTone(row.savings) : undefined,
-    suffix: row.configured && row.multiplier != null ? `${row.multiplier}×` : null
+    suffix: !incomplete && row.configured && row.multiplier != null ? `${row.multiplier}×` : null
   }
 ];
 
-const totalCells = (totals) => [
+const totalCells = (totals, incomplete = false) => [
   { key: 'period', label: 'This period', value: formatUsd(totals.periodCost) },
   { key: 'api', label: 'Est. API cost', value: formatUsd(totals.apiCost) },
   {
@@ -33,7 +33,7 @@ const totalCells = (totals) => [
     label: 'Savings',
     value: formatUsd(totals.savings, { signed: true }),
     tone: savingsTone(totals.savings),
-    suffix: totals.savingsPercent != null ? `${totals.savingsPercent}%` : null
+    suffix: !incomplete && totals.savingsPercent != null ? `${totals.savingsPercent}%` : null
   }
 ];
 
@@ -159,8 +159,9 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
             Subscription vs. API Cost
           </h3>
           <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-            What your quota plans cost over {windowLabel}, against what the same usage would have cost at API rates.
+            What your quota plans cost over {windowLabel}, against the API-rate equivalent across instances marked as using subscriptions. Each shared plan is priced once.
           </p>
+          {savings.costIncomplete && <p className="text-xs text-port-warning">Some subscription-covered usage or provider classifications are unavailable; API costs and savings are incomplete.</p>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {dirty && (
@@ -179,8 +180,8 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                 {formatUsd(totals.savings, { signed: true })}
               </div>
               <div className="text-[10px] text-gray-500">
-                {totals.savings >= 0 ? 'saved' : 'over API cost'}
-                {totals.multiplier != null && ` · ${totals.multiplier}×`}
+                {savings.costIncomplete ? 'estimated savings (partial)' : totals.savings >= 0 ? 'saved' : 'over API cost'}
+                {!savings.costIncomplete && totals.multiplier != null && ` · ${totals.multiplier}×`}
               </div>
             </div>
           )}
@@ -208,7 +209,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                   <CostInput row={row} value={displayValue(drafts, row)} onChange={onChange} idPrefix="mobile" />
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-[11px] text-white">
-                  {rowCells(row).map((cell) => (
+                  {rowCells(row, savings.costIncomplete).map((cell) => (
                     <div key={cell.key}>
                       <span className="text-gray-500 block">{cell.label}</span>
                       <CellValue cell={cell} />
@@ -224,7 +225,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                   <span className="text-gray-400 font-normal text-xs">{formatUsd(totals.monthlyCost, { trimWhole: true })}/mo</span>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-[11px] text-white">
-                  {totalCells(totals).map((cell) => (
+                  {totalCells(totals, savings.costIncomplete).map((cell) => (
                     <div key={cell.key}>
                       <span className="text-gray-500 block">{cell.label}</span>
                       <CellValue cell={cell} />
@@ -260,7 +261,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                     <td className="py-2 px-2">
                       <CostInput row={row} value={displayValue(drafts, row)} onChange={onChange} idPrefix="desktop" />
                     </td>
-                    {rowCells(row).map((cell) => (
+                    {rowCells(row, savings.costIncomplete).map((cell) => (
                       <td key={cell.key} className="py-2 px-2 text-right text-gray-300">
                         <CellValue cell={cell} />
                       </td>
@@ -275,7 +276,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
                     <td className="py-2 px-2 text-gray-400 font-normal">
                       {formatUsd(totals.monthlyCost, { trimWhole: true })}/mo
                     </td>
-                    {totalCells(totals).map((cell) => (
+                    {totalCells(totals, savings.costIncomplete).map((cell) => (
                       <td key={cell.key} className="py-2 px-2 text-right">
                         <CellValue cell={cell} />
                       </td>
@@ -294,7 +295,7 @@ export default function SubscriptionSavingsCard({ savings, onSaved }) {
         {savings.unmatchedApiCost > 0 && (
           <>
             {' '}<span className="text-gray-400">{formatUsd(savings.unmatchedApiCost)}</span> of estimated API cost came from
-            usage no subscription covers (pay-as-you-go API providers or pre-breakdown legacy rows) and is excluded from savings.
+            usage not attributed to a configured subscription (including unknown peer providers and legacy rows) and is excluded from savings.
           </>
         )}
         {' '}Savings inherit the estimate&rsquo;s accuracy — rows badged estimated above understate real usage.

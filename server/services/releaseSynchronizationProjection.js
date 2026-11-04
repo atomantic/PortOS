@@ -25,8 +25,9 @@ function buildReleaseSynchronizationPayload(entry) {
     prUrl: syncPr,
     headSha: syncHead,
     blocker: synchronization?.blocker || null,
+    ...(synchronization?.delivery && { delivery: synchronization.delivery }),
     ...(reset && { operatorReset: reset, nextAction: 'The operator retired this checkpoint; its historical synchronization remains unverified.' }),
-    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && {
+    ...(synchronization?.status === 'blocked' && synchronization.blocker === 'publisher-candidate-checkout-unverified' && !reset && !synchronization.delivery && {
       nextAction: 'No server-captured seed identifies the publisher checkout, so this synchronization cannot be verified. Confirm the release reached development, then retire this checkpoint with the operator reset.',
     }),
     verifiedAt: synchronization?.verifiedAt || null,
@@ -84,7 +85,7 @@ function findMatchingOutboxEntryForAgent(agent, outbox) {
 
 export function projectTaskReleaseMilestones(task, entryOrOutbox) {
   if (!task) return task;
-  const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
+  const entry = [1, 2].includes(entryOrOutbox?.version) && entryOrOutbox.identity
     ? entryOrOutbox
     : findMatchingOutboxEntryForTask(task, entryOrOutbox);
   if (!entry) return task;
@@ -102,7 +103,7 @@ export function projectTaskReleaseMilestones(task, entryOrOutbox) {
 
 export function projectAgentReleaseMilestones(agent, entryOrOutbox) {
   if (!agent) return agent;
-  const entry = entryOrOutbox?.version === 1 && entryOrOutbox.identity
+  const entry = [1, 2].includes(entryOrOutbox?.version) && entryOrOutbox.identity
     ? entryOrOutbox
     : findMatchingOutboxEntryForAgent(agent, entryOrOutbox);
   if (!entry) return agent;

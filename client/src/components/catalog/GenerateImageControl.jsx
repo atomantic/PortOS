@@ -75,7 +75,7 @@ export default function GenerateImageControl({ ingredientId, name, description, 
     inFlight.current = true;
     setSourceError(null);
     if (direct) setStarting(true);
-    else { setEditing(true); setPrefilling(true); }
+    else { if (!editing) promptEdited.current = false; setEditing(true); setPrefilling(true); }
     await prepare().then(async ({ seed, world, kin }) => {
       if (!mounted.current) return;
       setUniverse(world);
@@ -127,7 +127,7 @@ export default function GenerateImageControl({ ingredientId, name, description, 
     </button>
     {quick && <button type="button" onClick={() => run(false)} disabled={disabled || busy} aria-label={`Edit image prompt for ${name}`}
       title="Edit prompt and preview universe additions"
-      className="inline-flex items-center justify-center p-2 rounded border border-port-border text-gray-400 hover:text-port-accent disabled:opacity-50">
+      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-2 rounded border border-port-border text-gray-400 hover:text-port-accent disabled:opacity-50">
       <SlidersHorizontal size={14} aria-hidden="true" />
     </button>}
     <Modal open={editing} onClose={close} usePortal ariaLabel={`Generate image for ${name}`} size="md"

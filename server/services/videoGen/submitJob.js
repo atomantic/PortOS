@@ -16,6 +16,8 @@ import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { isDefaultSpeedProfile } from '../../lib/videoSpeedProfiles.js';
 import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
 import { prepareRemoteMediaJob, negotiateVideoConstraints } from '../federatedMedia/remoteSubmission.js';
 import { getLoom } from '../fableLoom/records.js';
@@ -375,6 +377,25 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
     ? await musicVideoProjectAspect(body.musicVideo.projectId)
     : null;
+  // A Music Video shot animated on Grok carries its cast sheets beside the still,
+  // so people stay recognizable once the clip moves past the opening frame.
+  const musicVideoReferences = backend === VIDEO_GEN_MODE.GROK && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
+    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipCastReferences(body.musicVideo)
+    : [];
+  // Caller-uploaded reference images (staged by the Grok lane) follow any Music
+  // Video sheets, in upload order. Only a Grok render with a source frame uses them.
+  const castReferences = [...musicVideoReferences, ...(backend === VIDEO_GEN_MODE.GROK && sourceImagePath ? prepared.castReferences || [] : [])];
+  if (castReferences.length > MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT) {
+    throw new ServerError(`Grok can send at most ${MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT} combined clip references.`,
+      { status: 400, code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
+  }
+  const falModel = backend === VIDEO_GEN_MODE.FAL
+    ? getFalVideoModel(performanceParams?.modelId || body.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL) : null;
+  const useFalReferences = Boolean(falModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
+  const falReferences = useFalReferences
+    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
+      musicVideoClipReferenceCapacity('fal', falModel), { excludePath: sourceImagePath })
+    : [];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
     mode: backend,
@@ -385,6 +406,11 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
+    ...(castReferences.length ? { castReferences } : {}),
+    ...(useFalReferences ? {
+      referenceImagePaths: falReferences.map((ref) => ref.path),
+      clipReferenceLabels: falReferences.map(({ label, role }) => ({ label, ...(role ? { role } : {}) })),
+    } : {}),
     ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
     // standalone fal lip sync: the uploaded voice clip (a Music Video performance shot overrides below)
     ...(prepared.audioFilePath ? { audioFilePath: prepared.audioFilePath, uploadedTempPaths: prepared.uploadedTempPaths, lipSync: { enableTranscription: false } } : {}),

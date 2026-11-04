@@ -36,6 +36,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const store = new Map();
 let writeTail = Promise.resolve();
 const clone = (v) => JSON.parse(JSON.stringify(v));
+// A project saved before lock removal: per-shot locks carried from the covering board approval,
+// with the approver stamped on the named shots. Nothing writes these now.
+const legacyShotLocks = (actual, sceneIds, fields) => {
+  const stored = clone(store.get('mv-auto'));
+  const project = { ...stored, productionReview: { ...stored.productionReview, approvals: { ...stored.productionReview?.approvals,
+    storyboard: { basis: actual.productionReviewBasis(stored).storyboard } } } };
+  const carried = actual.carryShotLocks(project, project);
+  for (const id of sceneIds) carried.productionReview.shotApprovals[id] = { ...carried.productionReview.shotApprovals[id], ...fields };
+  return carried;
+};
 vi.mock('./projects.js', () => {
   return {
     getProject: async (id) => (store.has(id) ? clone(store.get(id)) : null),
@@ -1863,7 +1873,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
 
     // Legacy director-created locks are no longer a precondition for repairing a still.
     store.get('mv-auto').scenes[1].referenceImageId = 'b2.png';
-    store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a', 'mvs-b'], locked: true, approvedBy: 'director' })));
+    store.set('mv-auto', legacyShotLocks(actual, ['mvs-a', 'mvs-b'], { approvedBy: 'director' }));
     doubles.resumeProduction.mockClear();
     answers.stills = [{ verdict: 'revise', score: 5, notes: 'Wrong sky.', issues: [{ sceneId: 'mvs-a', text: 'The sky is noon, not dusk.' }] }];
     await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'awaiting-video' } });
@@ -1946,7 +1956,7 @@ describe('orchestrated mode (brief.orchestrator)', () => {
     it('applies pilot repairs regardless of legacy run or director shot locks', async () => {
       const actual = await vi.importActual('./productionReview.js');
       await pilotFixture();
-      const lock = (fields) => store.set('mv-auto', clone(actual.setShotLocks(clone(store.get('mv-auto')), { sceneIds: ['mvs-a'], locked: true, ...fields })));
+      const lock = (fields) => store.set('mv-auto', legacyShotLocks(actual, ['mvs-a'], fields));
       lock({ approvedBy: 'orchestrator', reviewer: { kind: 'orchestrator', runId: runOf().id } });
       reviewPilot('rev-1', { verdict: 'revise', reason: 'The skater floats above the ramp.' });
       await blocked();

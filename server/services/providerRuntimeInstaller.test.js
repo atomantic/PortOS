@@ -3,7 +3,7 @@ import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
 
 // The npm-prefix probe shells out; the PATH-adoption contract itself is covered
 // by lib/npmGlobalBin.test.js.
-const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null) }));
+const npmGlobalBin = vi.hoisted(() => ({ adoptNpmGlobalBinDir: vi.fn(async () => null), inspectNpmGlobalCommand: vi.fn() }));
 vi.mock('../lib/npmGlobalBin.js', () => npmGlobalBin);
 
 import {
@@ -188,6 +188,21 @@ describe('provider runtime installer', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: !IS_WIN,
     }));
+  });
+
+  it('uses a reviewed executable only for its supported self-update action', () => {
+    const spawnImpl = vi.fn(() => ({ pid: 123 }));
+    const path = IS_WIN ? 'C:\\fixture\\opencode.exe' : '/fixture/opencode';
+    spawnRuntimeInstaller('opencode', { action: 'update', verifiedCommand: path, spawnImpl });
+    expect(spawnImpl).toHaveBeenCalledWith(path, ['upgrade'], expect.objectContaining({ shell: false }));
+    expect(() => spawnRuntimeInstaller('opencode', { action: 'install', verifiedCommand: path, spawnImpl })).toThrow('not valid');
+    expect(spawnImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('can keep the vendor updater in its supervisor process group', () => {
+    const spawnImpl = vi.fn(() => ({ pid: 123 }));
+    spawnRuntimeInstaller('opencode', { action: 'update', detached: false, spawnImpl });
+    expect(spawnImpl).toHaveBeenCalledWith(expect.any(String), ['upgrade'], expect.objectContaining({ detached: false }));
   });
 
   // A provider may be configured with any command spelling its vendor accepts

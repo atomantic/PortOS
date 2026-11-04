@@ -45,7 +45,7 @@ const UNPIN_SLOP_PX = 14;
  * total); tap a pin to remove it. The legend reads the newest pin, else today.
  * Hand-drawn SVG.
  */
-export default function RollingCostCard() {
+export default function RollingCostCard({ coverage, fleetRevision }) {
   const [range, setRange] = useState(() => {
     const saved = safeReadStorage(RANGE_KEY);
     return RANGES.some((r) => r.id === saved) ? saved : DEFAULT_RANGE;
@@ -63,7 +63,7 @@ export default function RollingCostCard() {
       .catch(() => null)
       .then((result) => { if (!cancelled) setData(result); });
     return () => { cancelled = true; };
-  }, [range]);
+  }, [range, fleetRevision]);
 
   const chooseRange = (id) => {
     setRange(id);
@@ -178,6 +178,8 @@ export default function RollingCostCard() {
           <div className="text-[10px] sm:text-xs text-gray-500">Today</div>
         </div>
       </div>
+
+      {(data?.pricingIncomplete || coverage?.classificationUnreported?.length > 0 || coverage?.missingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
 
       <div className="flex gap-1" role="group" aria-label="Chart range">
         {RANGES.map((r) => (

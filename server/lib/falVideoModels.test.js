@@ -104,6 +104,8 @@ describe('buildFalVideoRequest — per-family wire bodies', () => {
     expect(refused(() => buildFalVideoRequest({ modelId: 'fal-ai/minimax/hailuo-02/standard/text-to-video', prompt: 'x', imageUrl: 'i' }))).toBe('FAL_MODEL_INPUT');
     expect(refused(() => buildFalVideoRequest({ modelId: FAL_LIPSYNC_VIDEO_MODEL, imageUrl: 'i' }))).toBe('FAL_MODEL_INPUT');
     expect(refused(() => build('fal-ai/veo3.1/fast/image-to-video', { prompt: '' }))).toBe('FAL_MODEL_INPUT');
+    expect(() => build('fal-ai/minimax/hailuo-02/standard/image-to-video', { referenceImageUrls: ['https://example.com/ref.png'] }))
+      .toThrow(/takes no extra reference images/);
     expect(buildFalVideoRequest({ modelId: 'example/uncurated-model', prompt: 'x' })).toBeNull();
   });
 });

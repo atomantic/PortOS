@@ -593,7 +593,7 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByLabelText('Pronouns')).toHaveValue('she/her');
     expect(screen.getByDisplayValue('Decode the machine.')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Being underestimated.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Physical Description')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Physical Description')).toHaveValue('Sharp eyes, ink-stained cuffs.');
     expect(screen.queryByRole('button', { name: 'Edit full character sheet' })).not.toBeInTheDocument();
     expect(getUniverse).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
@@ -927,11 +927,31 @@ describe('CatalogIngredient — character sheet', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /^Render$/i })).toHaveProperty('disabled', true));
   });
 
+  it('keeps ownership controls after reloading the same character through a library route', async () => {
+    const { router } = await renderPage('/catalog/character/cat-chr-1');
+    await screen.findByLabelText('Universe ownership and usage');
+    await act(async () => router.navigate('/casting/cat-chr-1'));
+    expect(await screen.findByLabelText('Universe ownership and usage')).toBeVisible();
+  });
+
+  it('uses the latest physical description when reopening generation after cancelling an edited prompt', async () => {
+    await renderPage('/casting/cat-chr-1');
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    const prompt = await screen.findByPlaceholderText(/Describe the image to render/i);
+    await waitFor(() => expect(prompt.value).toContain('Sharp eyes'));
+    fireEvent.change(prompt, { target: { value: 'A temporary prompt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.change(screen.getByLabelText('Physical Description'), { target: { value: 'A silver coat' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
+    await waitFor(() => expect(screen.getByPlaceholderText(/Describe the image to render/i).value).toContain('A silver coat'));
+  });
+
   it('collapses a compact sheet group when its header is clicked', async () => {
     await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('she/her')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Visual identity/ }));
-    expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).not.toBeVisible();
+    expect(screen.getByLabelText('Silhouette notes')).not.toBeVisible();
+    expect(screen.getByLabelText('Physical Description')).toBeVisible();
     expect(screen.getByDisplayValue('she/her')).toBeInTheDocument();
   });
 
@@ -1807,6 +1827,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
   it('prefills the image prompt with only the record\'s own words', async () => {
     getCatalogIngredientDetails.mockImplementation(async () => ({ ...detailsOf({ ...HERO, refs: [] }), media: [] }));
     await renderPage('/casting/cat-chr-hero/references');
+    fireEvent.click(await screen.findByRole('link', { name: 'Generate image in Profile' }));
     fireEvent.click(await screen.findByRole('button', { name: /^Generate$/i }));
     const promptBox = await screen.findByPlaceholderText(/Describe the image to render/i);
     expect(promptBox.value).toBe('Example Hero: Tall, green cloak.');

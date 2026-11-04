@@ -9,6 +9,7 @@
 import { Dice5 } from 'lucide-react';
 import { FormField } from '../ui/FormField';
 import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
+import { formatDownloadGb } from '../../utils/formatters.js';
 import {
   isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
   isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
@@ -141,7 +142,9 @@ export default function AdvancedParamsPanel({
   const activeSpeedProfile = showSpeedProfiles
     ? speedProfiles.find((p) => p.id === speedProfileId) || null
     : null;
-  const incompatibleH3Profile = currentModel?.speedProfiles?.some((p) => p.id === speedProfileId && isMiniMaxH3SpeedProfile(p)) && !activeSpeedProfile;
+  const speedAdapterEstimate = formatDownloadGb(Number((activeSpeedProfile?.adapter?.sizeBytes / 1e9).toFixed(2)));
+  const selectedH3Profile = h3Profiles.find((p) => p.id === speedProfileId);
+  const incompatibleH3Profile = selectedH3Profile && !activeSpeedProfile;
   // A profile drives steps AND CFG together, exactly as a samplerLocked model
   // does — leaving either editable would let the user half-override a
   // validated schedule and get neither its speed nor its quality.
@@ -155,7 +158,7 @@ export default function AdvancedParamsPanel({
   return (
     <div className="border-t border-port-border pt-3 space-y-3">
       <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Advanced</h2>
-      {incompatibleH3Profile && <p role="alert" className="text-xs text-port-warning">The selected LightX2V profile requires a single text/image clip at 1344×768. Change the mode/canvas or select Quality before rendering.</p>}
+      {incompatibleH3Profile && <p role="alert" className="text-xs text-port-warning">The selected speed profile requires a single text/image clip at {selectedH3Profile.canvases.map(([w, h]) => `${w}×${h}`).join(', ')}. Change the mode/canvas or select Quality before rendering.</p>}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {showFrames && <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
             <select
@@ -300,7 +303,7 @@ export default function AdvancedParamsPanel({
               <button
                 type="button"
                 onClick={onRandomSeed}
-                className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
                 title="Use a random seed for each render" aria-label="Randomize seed"
               >
                 <Dice5 className="w-4 h-4" />
@@ -380,7 +383,7 @@ export default function AdvancedParamsPanel({
                   <p className="mt-1 text-xs text-gray-500 break-all">{activeSpeedProfile.adapter.file} · alpha {activeSpeedProfile.adapter.alpha}/rank {activeSpeedProfile.adapter.rank} · shifts {activeSpeedProfile.videoShift}/{activeSpeedProfile.audioShift}. No fallback.</p>
                   {onSpeedProfileDownload
                     ? <ModelDownloadBadge status={speedProfileStatus} onDownload={onSpeedProfileDownload}
-                        onCancel={onCancelSpeedProfileDownload} estimateLabel="1.38 GB adapter" />
+                        onCancel={onCancelSpeedProfileDownload} estimateLabel={speedAdapterEstimate ? `${speedAdapterEstimate} adapter` : undefined} />
                     : <p className="text-xs text-gray-500">Manage this adapter download on the Video Gen page.</p>}
                   {speedProfileStatus?.cached && onSpeedProfileDownload && <button type="button" onClick={onSpeedProfileDownload} className="text-xs text-port-accent">Download adapter again</button>}
                   {speedProfileDownloadError && <p role="alert" className="text-xs text-port-error">{speedProfileDownloadError}</p>}

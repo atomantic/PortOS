@@ -156,6 +156,7 @@ export default function AIProviders() {
   );
   const hasCodexSubscriptionProvider = providers.some(isCodexSubscriptionProvider);
   const [observationUnavailable, setObservationUnavailable] = useState({});
+  const providerListRevision = useRef({ read: 0, mutation: 0 });
   const observationRevision = useRef({ account: 0, readiness: 0, status: 0 });
   const observationMounted = useMounted();
 
@@ -313,6 +314,8 @@ export default function AIProviders() {
   // position. The `loadError` path still swaps in the error state, because there
   // genuinely is nothing left to show.
   const loadData = async () => {
+    const readRevision = ++providerListRevision.current.read;
+    const mutationRevision = providerListRevision.current.mutation;
     setLoading(providers.length === 0);
     setLoadError(false);
     let providersFailed = false;
@@ -324,6 +327,14 @@ export default function AIProviders() {
       }),
       api.getProviderStatuses().catch(() => ({ providers: {} })),
     ]);
+    if (!observationMounted.current) return;
+    if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
+    if (readRevision !== providerListRevision.current.read) return;
+    // A successful in-place mutation is newer than this snapshot. Keep its
+    // immediate result and reconcile the rest of the list from a fresh read.
+    if (mutationRevision !== providerListRevision.current.mutation) {
+      return loadData();
+    }
     if (providersFailed || !providersData) {
       setLoadError(true);
       setProviders([]);
@@ -338,7 +349,6 @@ export default function AIProviders() {
         ? providersData.runnerAllowedCommands
         : null);
     }
-    if (statusRevision === observationRevision.current.status) setStatuses(statusData.providers || {});
     setLoading(false);
   };
 
@@ -396,7 +406,10 @@ export default function AIProviders() {
   const handleSetActive = async (id) => {
     if (!id) return;
     const result = await api.setActiveProvider(id).catch(() => null);
-    if (result) setActiveProviderId(id);
+    if (result) {
+      providerListRevision.current.mutation += 1;
+      setActiveProviderId(id);
+    }
   };
 
   const handleTest = async (id) => {
@@ -439,6 +452,7 @@ export default function AIProviders() {
       toast.error('Could not save the ChatGPT subscription transport');
       return;
     }
+    providerListRevision.current.mutation += 1;
     setProviders((current) => current.map((entry) => (
       entry.id === provider.id ? { ...entry, textTransportEnabled: true } : entry
     )));
@@ -507,6 +521,7 @@ export default function AIProviders() {
     if (!models.includes(defaultModel)) updates.models = [defaultModel, ...models];
     const updated = await api.updateProvider(provider.id, updates).catch(() => null);
     if (!updated) return;
+    providerListRevision.current.mutation += 1;
     setProviders((prev) => prev.map((entry) => (
       entry.id === provider.id ? { ...entry, ...updates } : entry
     )));
@@ -560,6 +575,7 @@ export default function AIProviders() {
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
         const modelCatalog = Array.isArray(result.modelCatalog) ? result.modelCatalog : result.models;
+        providerListRevision.current.mutation += 1;
         setProviders(current => {
           const refreshed = current.find(p => p.id === result.id);
           const group = new Set([result.id, ...(refreshed?.executionModes || []).map(mode => mode.id)]);
@@ -636,6 +652,7 @@ export default function AIProviders() {
 
   const handleCreateFleetProvider = async (provider) => {
     const created = await api.createProvider(provider);
+    providerListRevision.current.mutation += 1;
     setProviders((current) => [...current, created]);
     toast.success(`${created.name} is connected to the fleet GPU host`);
     return created;
@@ -645,6 +662,7 @@ export default function AIProviders() {
   // leaving the user to create a duplicate and manually delete the old one.
   const handleUpdateFleetProvider = async (id, patch) => {
     const updated = await api.updateProvider(id, patch);
+    providerListRevision.current.mutation += 1;
     setProviders((current) => current.map((entry) => (entry.id === id ? updated : entry)));
     toast.success(`${updated.name} is connected to the fleet GPU host`);
     return updated;

@@ -5,10 +5,14 @@ vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...aw
 vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
+vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
+  ...(await importOriginal()), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+}));
 vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import { previewVideoPrompt } from '../../services/apiImageVideo.js';
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // The editor shows the still or the clip, one at a time.
@@ -17,6 +21,67 @@ const show = (name) => fireEvent.click(within(screen.getByRole('group', { name: 
 beforeEach(() => {
   localStorage.clear();
   useVideoFileSrc.mockReturnValue({});
+  previewVideoPrompt.mockClear();
+});
+
+it('holds Render while clip references are saving or failed and releases it after a retry', async () => {
+  let settle;
+  const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+  const project = { id: 'mv-1', visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+  ] } };
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', prompt: 'Rider turns', startSec: 0, endSec: 4, referenceImageId: 'frame.png', takes: [] });
+    return <SceneCard scene={scene} project={project} index={0} expanded lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+  render(<Harness />);
+  show('Clip');
+  const clip = screen.getByRole('group', { name: 'Clip references' });
+  fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
+  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  const generate = screen.getByRole('button', { name: 'Render' });
+  expect(generate.disabled).toBe(true);
+  settle(false);
+  await waitFor(() => expect(within(clip).getByRole('button', { name: 'Retry saving clip references' })).toBeTruthy());
+  expect(generate.disabled).toBe(true);
+  fireEvent.click(within(clip).getByRole('button', { name: 'Retry saving clip references' }));
+  settle(true);
+  await waitFor(() => expect(generate.disabled).toBe(false));
+  expect(onSave).toHaveBeenLastCalledWith('s1', { clipReferenceIds: ['rider', 'bike'] });
+});
+
+it('also waits for clip-reference edits before starting a storyboard-to-clip render', async () => {
+  let settle;
+  const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+  const project = { id: 'mv-1', visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    { id: 'bike', imageId: 'bike.png', role: 'prop', label: 'Bike' },
+  ] } };
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'Rider turns', startSec: 0, endSec: 4, takes: [] });
+    return <SceneCard scene={scene} project={project} index={0} expanded lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }}
+      onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} onGenerateFrame={vi.fn()} />;
+  }
+  render(<Harness />);
+  const clip = screen.getByRole('group', { name: 'Clip references' });
+  fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
+  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  const generate = screen.getByRole('button', { name: 'Clip from storyboard' });
+  expect(generate.disabled).toBe(true);
+  settle(true);
+  await waitFor(() => expect(generate.disabled).toBe(false));
+});
+
+it('previews the Grok shot with the duration and frame the card will submit', async () => {
+  const scene = { sceneId: 's1', startSec: 0, endSec: 8, prompt: 'A person waves', referenceImageId: 'still.png', takes: [] };
+  render(<SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded
+    lipSyncBackend="grok" falVideoSettings={{ backend: 'grok', grokDuration: 6 }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+  await waitFor(() => expect(previewVideoPrompt).toHaveBeenCalledWith(expect.objectContaining({
+    backend: 'grok', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 10,
+    musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, songAudio: false },
+  }), { silent: true }));
 });
 
 describe('code shot (#10297)', () => {
@@ -255,8 +320,12 @@ describe('move buttons (#10785)', () => {
     expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
     fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
     expect(onMove).toHaveBeenCalledWith(1, 1);
+    // A Board-sourced document project still reorders; only a manifest-owned one is locked.
     rerender(<SceneCard {...props} documentComposition />);
     fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    expect(screen.queryByText(/comes from the composition document/)).toBeNull();
+    rerender(<SceneCard {...props} documentComposition manifestOwnsShots />);
     expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
     expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
@@ -267,7 +336,7 @@ describe('Merge with next (#10810)', () => {
   const scene = { sceneId: 's1', startSec: 0, endSec: 4, takes: [] };
   const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges into the next scene, and hides when last, in a document composition, or past the backend limit', () => {
+  it('merges into the next scene, and hides when last, when the manifest owns the shots, or past the backend limit', () => {
     const onMergeNext = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
     show('Clip');
@@ -277,8 +346,10 @@ describe('Merge with next (#10810)', () => {
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} isLast />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
-    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} manifestOwnsShots />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
+    expect(screen.getByRole('button', { name: /Merge with next/ })).toBeTruthy();
   });
 });
 
@@ -287,7 +358,7 @@ describe('Merge over previous', () => {
   const scene = { sceneId: 's2', startSec: 4, endSec: 8, takes: [] };
   const props = { index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges this shot over the previous one, and hides when first, in a document composition, or past the backend limit', () => {
+  it('merges this shot over the previous one, and hides when first, when the manifest owns the shots, or past the backend limit', () => {
     const onMergePrevious = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
     show('Clip');
@@ -297,8 +368,10 @@ describe('Merge over previous', () => {
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} index={0} onMergePrevious={onMergePrevious} prevStartSec={0} />);
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
-    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} manifestOwnsShots />);
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} documentComposition />);
+    expect(screen.getByRole('button', { name: 'Merge over previous' })).toBeTruthy();
   });
 });
 
@@ -384,27 +457,14 @@ describe('scene timing and provider presentation (#11046)', () => {
   });
 });
 
-describe('Render ignores legacy shot locks', () => {
-  it('renders directly for an unlocked still and a previously locked video', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
+describe('Render', () => {
+  it('renders directly and offers no lock action', () => {
     const scene = { sceneId: 's1', prompt: 'She spins the reel', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onGenerateFrame = vi.fn();
-    const toggle = vi.fn();
-    const card = (still, clip) => (
-      <ShotLockContext.Provider value={{ locks: { s1: still }, clips: { s1: clip }, toggle, busy: false }}>
-        <SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
-          onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />
-      </ShotLockContext.Provider>
-    );
-    const { rerender } = render(card('open', 'open'));
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
+      onGenerateFrame={onGenerateFrame} onPlacePoolItem={vi.fn()} falVideoSettings={{ backend: 'local' }} />);
     expect(screen.queryByTestId('render-refusal')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
-    expect(toggle).not.toHaveBeenCalled();
-    onGenerateVideo.mockClear();
-    rerender(card('locked', 'locked'));
-    expect(screen.getByRole('button', { name: 'Render again' }).disabled).toBe(false);
     expect(screen.queryByRole('button', { name: /unlock|lock video/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
     expect(onGenerateVideo).toHaveBeenCalledWith(scene, { card: expect.objectContaining({ prompt: scene.prompt }) });
@@ -418,14 +478,11 @@ describe('Render ignores legacy shot locks', () => {
 describe('motion prompt from the storyboard panel', () => {
   // Uniquely catches a panel-linked shot asking for a typed prompt, or a typed prompt never handing back to the panel.
   it('renders from the panel direction until the director types their own, and links back in one tap', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', panelId: 'p1', visualIntent: 'She laces her skates', referenceImageId: 'still.png', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onSave = vi.fn();
     const card = (shot) => (
-      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
-      </ShotLockContext.Provider>
     );
     const { rerender } = render(card(scene));
     const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
@@ -445,19 +502,16 @@ describe('motion prompt from the storyboard panel', () => {
 describe('clip from the storyboard panel', () => {
   // Uniquely catches the tap animating the sketch instead of rendering the shot's real still first.
   it('renders the still first with the card lane to animate it, and keeps Still only one tap away', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const scene = { sceneId: 's1', prompt: 'She laces her skates', panelId: 'p1', panelArt: 'panel.png', startSec: 0, endSec: 4, takes: [] };
     const onGenerateVideo = vi.fn();
     const onGenerateFrame = vi.fn();
     render(
-      <ShotLockContext.Provider value={{ locks: { s1: 'open' }, clips: { s1: 'open' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={scene} index={0} expanded project={{ id: 'mv-example', scenes: [scene] }} onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo} onGenerateFrame={onGenerateFrame}
           lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} />
-      </ShotLockContext.Provider>,
     );
     expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
-    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok' } });
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { thenClip: { backend: 'grok', songAudio: false } });
     fireEvent.click(screen.getByRole('button', { name: 'Still only' }));
     expect(onGenerateFrame).toHaveBeenLastCalledWith(scene);
     expect(onGenerateVideo).not.toHaveBeenCalled();
@@ -698,7 +752,6 @@ describe('clip playback and coverage', () => {
   // Catches source trim losing its scene argument or becoming enabled during
   // take/render work after the preview moves out of SceneCard.
   it('trims the source at the chosen frame and preserves every busy gate', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     const onTrimClip = vi.fn();
     const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onTrimClip };
     const { container, rerender } = render(<SceneCard {...props} />);
@@ -713,9 +766,7 @@ describe('clip playback and coverage', () => {
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
     rerender(<SceneCard {...props} generatingVideo />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
-    rerender(<ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
-      <SceneCard {...props} />
-    </ShotLockContext.Provider>);
+    rerender(<SceneCard {...props} />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeEnabled();
   });
 });
@@ -733,7 +784,27 @@ describe('Sent to the model', () => {
     expect(within(inputs).getByText('She shakes her head')).toBeTruthy();
     fireEvent.click(within(inputs).getByLabelText('Song audio'));
     fireEvent.click(screen.getByRole('button', { name: 'Render' }));
-    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true } }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: { prompt: 'She shakes her head', songAudio: true, expectedClipReferenceFiles: [] } }));
+  });
+
+  it.each(['fal', 'runway'])('sends silent cutaways on %s without changing the project audio default', (backend) => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      falVideoSettings={{ backend, generationMode: 'suppliedAudio' }} />);
+    expect(screen.getByLabelText('Song audio')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({ songAudio: false }) }));
+  });
+
+  it('does not silently discard Local song audio when the selected model is unavailable', () => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()} onGenerateVideo={onGenerateVideo}
+      falVideoSettings={{ backend: 'local', modelId: 'missing-model', generationMode: 'suppliedAudio' }} />);
+    expect(screen.getByLabelText('Song audio')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).not.toHaveProperty('songAudio');
   });
 });
 
@@ -776,6 +847,34 @@ describe('VHS glitch transitions', () => {
     fireEvent.change(out, { target: { value: '' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: null });
     expect(screen.getByLabelText('Effect in').value).toBe('');
+  });
+
+  // Uniquely catches a cut keeping both a glitch and a wipe, or a wipe's length
+  // or edge color saving the wrong shape.
+  it('swaps a glitch for a wipe, sets its length and edge, and swaps back', async () => {
+    const onSave = vi.fn();
+    const onVaryWipes = vi.fn(async () => {});
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, takes: [], transitionOut: 'vhs-glitch' });
+      return <SceneCard scene={scene} index={0} onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} onVaryWipes={onVaryWipes} />;
+    }
+    render(<Harness />);
+    const out = screen.getByLabelText('Effect out');
+    fireEvent.change(out, { target: { value: 'heart' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart' }, transitionOut: null });
+    fireEvent.change(screen.getByLabelText('Effect out wipe length'), { target: { value: '0.5' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart', lengthSec: 0.5 } });
+    fireEvent.change(screen.getByLabelText('Edge'), { target: { value: '#ff3366' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'heart', lengthSec: 0.5, color: '#ff3366' } });
+    // A move wipe has no edge, and keeps the length.
+    fireEvent.change(out, { target: { value: 'push-left' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    expect(screen.queryByLabelText('Edge')).toBeNull();
+    fireEvent.change(out, { target: { value: 'vhs-glitch' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { transitionOut: 'vhs-glitch', wipeOut: null });
+    fireEvent.change(screen.getByLabelText('over'), { target: { value: '16' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Vary wipes' })); });
+    expect(onVaryWipes).toHaveBeenCalledWith('s1', 16);
   });
 });
 
@@ -924,11 +1023,8 @@ describe('clip speed and offset by hand', () => {
   });
 
   it('remains editable for a video with a legacy lock', async () => {
-    const { ShotLockContext } = await import('./ShotLock.jsx');
     render(
-      <ShotLockContext.Provider value={{ locks: { s1: 'locked' }, clips: { s1: 'locked' }, toggle: () => {}, busy: false }}>
         <SceneCard scene={{ sceneId: 's1', videoHistoryId: 'clip-1', startSec: 0, endSec: 4, speedFps: 2, takes: [] }} index={0} expanded onEditLocal={() => {}} onSave={() => {}} />
-      </ShotLockContext.Provider>,
     );
     expect(screen.getByRole('button', { name: 'Play the clip one fps faster' }).disabled).toBe(false);
     expect(screen.getByLabelText('Speed').value).toBe('2');

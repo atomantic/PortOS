@@ -19,6 +19,7 @@ import { isNonBlankStr } from '../../lib/textUtils.js';
 import { requireProject } from './requireProject.js';
 import { analyzeProjectSong } from './projectAudio.js';
 import { startLyricAlign } from './lyricAlignJob.js';
+import { projectSongAudioChange } from './songAudio.js';
 
 const hasAudio = (project) => Boolean(project?.trackId || project?.uploadedAudioFilename);
 const autonomousRunActive = (project) => {
@@ -31,7 +32,8 @@ const autonomousRunActive = (project) => {
  * isolated vocal: never aligned, or aligned only against the full mix (whose
  * word times stretch over intros and dense verses).
  */
-function needsAutoAlignment(project) {
+function needsAutoAlignment(project, audioChange) {
+  if (audioChange?.lyricsStale) return true;
   if (project?.productionReview?.draft?.lyricsMode === 'instrumental') return false;
   const cues = (project?.lyricCues || []).filter((cue) => isNonBlankStr(cue?.text));
   if (cues.length === 0) return false;
@@ -42,18 +44,21 @@ function needsAutoAlignment(project) {
 /**
  * Analyze and align what is missing. Resolves `{ project, analyzed, alignJobId }`:
  * the current project, whether analysis ran, and the alignment job to follow
- * (null when none was needed).
+ * (null when none was needed). `refresh` is the director's "re-analyze and
+ * re-time" after the linked track's audio was replaced in place (#14793): it
+ * also redoes whichever of the analysis and lyric timing predates the new file.
  */
-export async function autoPrepareSong(projectId, { analyze = analyzeProjectSong, align = startLyricAlign } = {}) {
+export async function autoPrepareSong(projectId, { refresh = false, analyze = analyzeProjectSong, align = startLyricAlign, audioChange = projectSongAudioChange } = {}) {
   let project = await requireProject(projectId);
   if (!hasAudio(project) || autonomousRunActive(project)) return { project, analyzed: false, alignJobId: null };
+  const changed = refresh ? await audioChange(project) : null;
   let analyzed = false;
-  if (!project.audioAnalysis) {
+  if (!project.audioAnalysis || changed?.analysisStale) {
     project = await analyze(project.id);
     analyzed = true;
   }
   let alignJobId = null;
-  if (needsAutoAlignment(project)) {
+  if (needsAutoAlignment(project, changed)) {
     ({ jobId: alignJobId } = await align(project.id, { separateVocals: true }));
     console.log(`🎤 Started automatic lyric alignment for ${project.id}`);
   }

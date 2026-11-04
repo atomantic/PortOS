@@ -20,6 +20,7 @@ import {
 import toast from '../ui/Toast';
 import TabPills from '../ui/TabPills';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailedState from '../ui/LoadFailedState';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import {
@@ -255,6 +256,8 @@ const diffSlicePatches = (next, previous) => {
 
 export function ImageGenTab() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
 
   // Deep-linkable active sub-tab, backed by the `mediaTab` search param so the
@@ -328,6 +331,8 @@ export function ImageGenTab() {
   const { load } = form;
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError(false);
     Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
       .then(([s, tools]) => {
         if (!active) return;
@@ -339,10 +344,10 @@ export function ImageGenTab() {
         setGrokToolRegistered(tools.some((t) => t.id === GROK_TOOL_ID));
         setAgyToolRegistered(tools.some((t) => t.id === AGY_TOOL_ID));
       })
-      .catch(() => { if (active) toast.error('Failed to load image gen settings'); })
+      .catch(() => { if (active) setLoadError(true); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [load]);
+  }, [load, loadAttempt]);
 
   // Probe the provider whose tab is open (undefined → the saved default
   // backend). Every result is tagged with the tab that asked for it and only
@@ -377,10 +382,9 @@ export function ImageGenTab() {
       for (const [slicePath, partial] of diffSlicePatches(next, saved)) {
         await patchSettingsSlice(slicePath, partial, { silent: true });
       }
-      // The normalized values become both the inputs and the saved snapshot,
-      // so what the user sees matches what was persisted and trailing
-      // whitespace cannot leave the form dirty after a successful save.
-      form.markSaved(next);
+      // Acknowledge this submission without replacing edits made while its
+      // requests were pending. Untouched fields still adopt normalization.
+      form.markSaved(next, values);
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -468,6 +472,11 @@ export function ImageGenTab() {
   };
 
   if (loading) return <BrailleSpinner text="Loading image gen settings" />;
+  if (loadError) return <LoadFailedState
+    title="Could not load image generation settings"
+    hint="Retry to load your saved configuration."
+    onRetry={() => setLoadAttempt(attempt => attempt + 1)}
+  />;
 
   return (
     <div className="space-y-4">

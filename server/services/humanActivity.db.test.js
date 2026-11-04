@@ -18,7 +18,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 const tzState = vi.hoisted(() => ({ tz: 'UTC' }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => tzState.tz }));
 
-import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle, eraseEvents, listSourceCounts } from './humanActivity.js';
+import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount, countEventsByHandle, eraseEvents, listSourceCounts, listConversations, deleteEvents } from './humanActivity.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -44,6 +44,7 @@ const ALIAS_SOURCE = `test-${nonce}-alias`;
 afterAll(async () => {
   if (dbReady) {
     await query('DELETE FROM human_activity_events WHERE source = ANY($1::text[])', [[SOURCE, ALIAS_SOURCE]]).catch(() => {});
+    await query('DELETE FROM human_activity_events WHERE dedupe_key LIKE ANY($1::text[])', [[`${nonce}-wa-%`, `${nonce}-gm-%`]]);
     await close();
   }
 });
@@ -424,5 +425,75 @@ describe.skipIf(!runDb)('eraseEvents — user-driven source erasure (#12987)', (
 
     const again = await recordEvents(rows.slice(0, 4));
     expect(again.recorded).toBe(4);
+  });
+});
+
+describe.skipIf(!runDb)('WhatsApp conversation management (#14694)', () => {
+  it('groups historical identities and purges only the selected conversation', async () => {
+    const scope = `${nonce}-family:%_`;
+    const title = `${nonce}-title`;
+    const other = `${nonce}-other`;
+    await recordEvents([
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-scope`, metadata: { chatScope: scope } }),
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-current`, metadata: { conversationId: scope, chatScope: scope } }),
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-title`, metadata: { conversationId: '', chatScope: '', chatTitle: title } }),
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-other`, metadata: { conversationId: other, chatScope: scope, chatTitle: title } }),
+      mk({ dedupeKey: `${nonce}-wa-source`, metadata: { conversationId: scope } }),
+    ]);
+    const conversations = await listConversations({ source: 'whatsapp', q: nonce });
+    expect(new Map(conversations.map((row) => [row.chatGuid, row.eventCount]))).toEqual(new Map([[JSON.stringify(['scope', scope]).replace(',', ', '), 2], [JSON.stringify(['title', title]).replace(',', ', '), 1], [JSON.stringify(['id', other]).replace(',', ', '), 1]]));
+    expect(await listEvents({ source: 'whatsapp', conversationId: scope })).toHaveLength(2);
+    expect(await deleteEvents({ source: 'whatsapp', conversationId: scope })).toEqual({ deleted: 2 });
+    expect(await listEvents({ source: 'whatsapp', conversationId: scope })).toEqual([]);
+    expect(await listEvents({ source: SOURCE, conversationId: scope })).toHaveLength(1);
+    expect(await listEvents({ source: 'whatsapp', conversationId: other })).toHaveLength(1);
+    expect(await deleteEvents({ source: 'whatsapp', chatGuid: JSON.stringify(['title', title]).replace(',', ', ') })).toEqual({ deleted: 1 });
+    expect(await listEvents({ source: 'whatsapp', conversationId: other })).toHaveLength(1);
+    await recordEvents([
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-collision-scope`, metadata: { chatScope: title } }),
+      mk({ source: 'whatsapp', dedupeKey: `${nonce}-wa-collision-title`, metadata: { conversationId: title, chatTitle: title } }),
+    ]);
+    expect(await deleteEvents({ source: 'whatsapp', conversationId: title })).toEqual({ deleted: 0 });
+    expect(await deleteEvents({ source: 'whatsapp', chatGuid: JSON.stringify(['title', title]).replace(',', ', ') })).toEqual({ deleted: 1 });
+    expect(await listEvents({ source: 'whatsapp', conversationId: title })).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!runDb)('Message thread conversation management', () => {
+  it('groups threads by account and threadId and purges only the selected conversation', async () => {
+    const threadA = `${nonce}-thread-a`;
+    const threadB = `${nonce}-thread-b`;
+    const account1 = `${nonce}-acc-1`;
+    const account2 = `${nonce}-acc-2`;
+    await recordEvents([
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-1`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-2`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account2, dedupeKey: `${nonce}-gm-3`, metadata: { threadId: threadA } }),
+      mk({ source: 'gmail', accountId: account1, dedupeKey: `${nonce}-gm-4`, metadata: { threadId: threadB } }),
+      mk({ source: 'gmail', accountId: null, dedupeKey: `${nonce}-gm-mbox`, metadata: { threadId: threadB } }),
+    ]);
+    const conversations = await listConversations({ source: 'gmail', q: nonce });
+    const convMap = new Map(conversations.map((r) => [r.chatGuid, r.eventCount]));
+    const keyAcc1ThreadA = JSON.stringify([account1, threadA]).replace(',', ', ');
+    const keyAcc2ThreadA = JSON.stringify([account2, threadA]).replace(',', ', ');
+    expect(convMap.get(keyAcc1ThreadA)).toBe(2);
+    expect(convMap.get(keyAcc2ThreadA)).toBe(1);
+    expect(convMap.get(JSON.stringify([account1, threadB]).replace(',', ', '))).toBe(1);
+    expect(convMap.get(threadB)).toBe(1);
+
+    // Raw conversationId does not purge account-scoped threads (#14694 follow-up)
+    expect(await deleteEvents({ source: 'gmail', conversationId: threadA })).toEqual({ deleted: 0 });
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(2);
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc2ThreadA })).toHaveLength(1);
+
+    expect(await deleteEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toEqual({ deleted: 2 });
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc1ThreadA })).toHaveLength(0);
+    // Account 2 with same thread is preserved
+    expect(await listEvents({ source: 'gmail', chatGuid: keyAcc2ThreadA })).toHaveLength(1);
+
+    // Mbox thread without accountId is selectable and purgeable by raw threadId
+    expect(await listEvents({ source: 'gmail', chatGuid: threadB })).toHaveLength(1);
+    expect(await deleteEvents({ source: 'gmail', chatGuid: threadB })).toEqual({ deleted: 1 });
+    expect(await listEvents({ source: 'gmail', chatGuid: threadB })).toHaveLength(0);
   });
 });

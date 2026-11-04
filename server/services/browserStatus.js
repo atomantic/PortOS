@@ -1,4 +1,5 @@
 import { browserEvents, getFullStatus } from './browserService.js';
+import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 
 // CDP, PM2 and completed downloads can change outside PortOS without callbacks.
 // Only mounted Browser consumers pay for this shared, read-only observation.
@@ -40,16 +41,22 @@ export async function getBrowserStatusSnapshot({ fresh = false } = {}) {
       break;
     }
     const changed = failure || JSON.stringify(next) !== JSON.stringify(snapshot);
+    const browserChanged = failure || (snapshot && (snapshot.connected !== next.connected || snapshot.process?.pid !== next.process?.pid
+      || snapshot.cdpEndpoint !== next.cdpEndpoint || snapshot.version?.Browser !== next.version?.Browser));
     snapshot = next;
     failure = null;
     sampledAt = Date.now();
     if (changed) notify();
+    if (browserChanged) runtimeUpdateEvents.emit('changed', { browserChanged: true });
     return snapshot;
   })().catch(err => {
     const changed = !failure || failure.message !== err.message;
     failure = err;
     sampledAt = Date.now();
-    if (changed) notify();
+    if (changed) {
+      notify();
+      runtimeUpdateEvents.emit('changed', { browserChanged: true });
+    }
     throw err;
   }).finally(() => { pending = null; });
   return pending;

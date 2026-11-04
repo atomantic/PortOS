@@ -49,10 +49,21 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toMatch(/LOOK, LIGHTING, COLOR and TEXTURE only/);
     expect(prompt).toContain('0. a kitchen — steam and brass');
     expect(prompt).toContain('The image generator never sees the mood board');
+    expect(prompt).toContain('People and wardrobe sheets show empty, relaxed hands');
+    expect(prompt).toContain('Put carried or held objects in props, never in these descriptions');
+    expect(prompt).toContain('avoid unexplained contradictions');
     expect(prompt).not.toContain('moodRefs');
     expect(prompt).toContain('Director guidance: keep it night-lit');
     expect(prompt).toContain('1. Chorus 0:20–1:00');
     expect(prompt).not.toContain('This is a REVISION');
+  });
+
+  it('keeps explicitly requested unusual set details ahead of general plausibility', () => {
+    const story = 'A car is parked at a boarded-up abandoned house.';
+    const prompt = buildCastAndSetsPrompt({ ...project, concept: { ...project.concept, prompt: story } });
+    expect(prompt).toContain(`Concept: ${story}`);
+    expect(prompt).toContain("preserve the director's requested story details, including deliberate unusual or stylized arrangements");
+    expect(prompt).not.toContain('a car belongs at a lived-in house');
   });
 
   it('designs from the song\'s Suno style, falling back to the track, and keeps it apart from the visual style', () => {
@@ -319,5 +330,44 @@ describe('fixed supporting cast in the merge (#14069)', () => {
     const { direction } = mergeCastAndSetsDirection(null, answer([person('Young Keeper'), person('Helper')], forms), { sections, fixedCast });
     expect(direction.cast.map((c) => c.name)).toEqual(['Helper', 'Twin']);
     expect(direction.protagonist.forms[0].subjectId).toBe('mvc-young');
+  });
+});
+
+describe('Cast & Sets props', () => {
+  const PROPS = [
+    { name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+    { id: 'Bike!', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+    { name: 'placeholder only' },
+  ];
+
+  it('asks for every recurring object and keeps the described props', () => {
+    expect(buildCastAndSetsPrompt(project)).toMatch(/props: EVERY object a character carries, holds, uses or rides/);
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS })), { sections });
+    expect(direction.props).toEqual([
+      { id: 'renee-s-camera', name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+      { id: 'bike', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+    ]);
+  });
+
+  it('adds a catalog object the director linked when the answer left it out, and lists it in the prompt', () => {
+    const linked = { ...project, concept: { ...project.concept, subjects: [{ id: 'obj-1', kind: 'object', name: 'VHS-C camcorder', description: 'charcoal camcorder, red REC light', ingredientId: 'cat-obj-1' }] } };
+    expect(buildCastAndSetsPrompt(linked)).toContain('FIXED PROPS (catalog objects the director chose');
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS.slice(0, 1) })),
+      { sections, fixedProps: [{ id: 'obj-1', name: 'VHS-C camcorder', description: 'charcoal camcorder, red REC light' }] });
+    expect(direction.props.map((item) => item.name)).toEqual(['VHS-C camcorder', "Renee's camera"]);
+  });
+
+  it('keeps a direction saved before props existed in its old shape, and lets the director replace the list', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections });
+    expect(direction).not.toHaveProperty('props');
+    const edited = applyCastAndSetsDirectionEdits(direction, { props: [{ name: 'Snapshot camera', description: 'black 35mm compact' }] }, { sections });
+    expect(edited.direction.props).toEqual([{ id: 'snapshot-camera', name: 'Snapshot camera', owner: '', description: 'black 35mm compact' }]);
+    expect(edited.changed).toContain('props');
+  });
+
+  it('keeps a named fixed object even when it has no catalog description', () => {
+    const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: [] })),
+      { sections, fixedProps: [{ id: 'obj-1', name: 'Lantern', description: '' }] });
+    expect(direction.props).toEqual([{ id: 'lantern', name: 'Lantern', owner: '', description: 'Lantern' }]);
   });
 });

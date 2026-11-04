@@ -474,6 +474,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // worktree, or a job that runs a shell command directly.
   'POST /api/cos/merge-handoff',
   'POST /api/cos/claim-ownership',
+  'POST /api/cos/claim-selection',
   'POST /api/cos/start',
   'POST /api/cos/resume',
   'POST /api/cos/evaluate',
@@ -504,6 +505,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/cos/schedule/trigger',
   'POST /api/cos/schedule/branch-reconcile/refresh',
   'POST /api/cos/schedule/release-synchronization/operator-reset',
+  'POST /api/cos/schedule/release-synchronization/verify-delivery',
   // Removes a checkout and its merged branch under a scoped release.
   'POST /api/cos/schedule/branch-reconcile/checkouts/retire',
   'POST /api/cos/schedule/branch-reconcile/checkouts/review',
@@ -700,6 +702,10 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/publish-kit/copy',
   'POST /api/music-video/:id/cast-and-sets',
   'POST /api/music-video/:id/cast-and-sets/regenerate',
+  'POST /api/music-video/:id/cast-and-sets/edit-image',
+  'POST /api/music-video/:id/cast-and-sets/accept-image-edit',
+  'POST /api/music-video/:id/cast-and-sets/use-image',
+  'POST /api/music-video/:id/cast-and-sets/inspect',
   'PATCH /api/music-video/:id/cast-and-sets/direction',
   'POST /api/music-video/:id/cast-and-sets/feedback',
   'POST /api/music-video/:id/cast-and-sets/resume',
@@ -833,12 +839,15 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'PUT /api/browser/config',
   'POST /api/browser/launch',
   'POST /api/browser/restart',
+  'GET /api/browser/update-preflight',
   'POST /api/browser/stop',
   'POST /api/browser/navigate',
   'GET /api/browser/pages',
   'GET /api/browser/downloads',
   'GET /api/browser/downloads/:name',
   'POST /api/harnesses/action',
+  'GET /api/harnesses/update-reference',
+  'POST /api/harnesses/review-update',
   'POST /api/local-llm/laya-mlx/install',
   'POST /api/local-llm/security-guard/install',
   'POST /api/local-llm/jev/install',
@@ -1080,6 +1089,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  'POST /api/catalog/ingredients/:id/photoreal/look/draft',
+  // Photoreal runs the operator-checked Blender executable on the host.
+  'POST /api/catalog/ingredients/:id/photoreal/render',
   // New from prompt hands the user's prompt and the story's context to a
   // caller-chosen provider (possibly a tool-capable harness). Joining is data-only.
   'POST /api/catalog/stories/draft',
@@ -1177,6 +1189,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/update/node-runtime',
   'POST /api/update/node-runtime/startup',
   'POST /api/update/pm2',
+  // Managed Blender: downloads and copies an app bundle, then switches the renderer.
+  'POST /api/update/software/blender',
 
   // Brain links (#8742): git clone/pull in the linked repo, opening a host
   // app, or queuing a CoS malware-scan/repo-study agent. `buckets` CRUD,
@@ -1330,6 +1344,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // runner, and the Writers Room handoff, which writes a Creative Director
   // project and treatment.
   'POST /api/agent-context/mcp',
+  'POST /api/music-video/:id/cast-and-sets/acknowledge-image',
   'POST /api/music-video/:id/cast-and-sets/approve',
   'POST /api/music-video/:id/cast-and-sets/skip',
   'POST /api/music-video/:id/production-review/prepare',

@@ -391,7 +391,7 @@ export default function LayeredIntelligenceTab({ appId, li, onChange, providers,
                   <button
                     type="button"
                     onClick={() => setCustom(custom.filter((_, j) => j !== i))}
-                    className="p-2 text-gray-500 hover:text-port-error shrink-0"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 text-gray-500 hover:text-port-error shrink-0"
                     aria-label={`Remove custom source ${i + 1}`}
                   >
                     <Trash2 size={14} />

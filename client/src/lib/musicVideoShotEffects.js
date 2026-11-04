@@ -11,6 +11,7 @@
 import { MUSIC_VIDEO_CUT_EFFECTS, MUSIC_VIDEO_CUT_EFFECT_LABELS, sceneCutEffect } from './musicVideoCutEffects.js';
 import { MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS, sceneImageEffect } from './musicVideoImageEffects.js';
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS, sceneTransitions } from './musicVideoTransitions.js';
+import { MUSIC_VIDEO_WIPE_LABELS, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
 
 /** Where an effect plays in its shot. */
 export const SHOT_EFFECT_SLOTS = Object.freeze(['start', 'mid', 'end']);
@@ -18,10 +19,12 @@ export const SHOT_EFFECT_SLOT_LABELS = Object.freeze({ start: 'Start', mid: 'Mid
 
 /**
  * Every effect option, `{ id, label, slots }`: the glitch styles play at any
- * slot, a cut effect only at a shot's end, an image effect only inside a still.
+ * slot, a wipe at a shot's start or end, a cut effect only at its end, an
+ * image effect only inside a still.
  */
 export const SHOT_EFFECT_OPTIONS = Object.freeze([
   ...MUSIC_VIDEO_TRANSITIONS.map((id) => ({ id, label: MUSIC_VIDEO_TRANSITION_LABELS[id], slots: SHOT_EFFECT_SLOTS })),
+  ...MUSIC_VIDEO_WIPES.map((id) => ({ id, label: `${MUSIC_VIDEO_WIPE_LABELS[id]} wipe`, slots: ['start', 'end'] })),
   ...MUSIC_VIDEO_CUT_EFFECTS.map((id) => ({ id, label: MUSIC_VIDEO_CUT_EFFECT_LABELS[id], slots: ['end'] })),
   ...MUSIC_VIDEO_IMAGE_EFFECTS.map((id) => ({ id, label: MUSIC_VIDEO_IMAGE_EFFECT_LABELS[id], slots: ['mid'] })),
 ]);
@@ -35,13 +38,13 @@ export const shotEffectLabel = (id) => LABELS.get(id) || id;
  * sets its own.
  */
 export function shotEffects(scene, { layered = false, planned = null } = {}) {
-  const { transitionIn, transitionOut, shotGlitches = [] } = sceneTransitions(scene);
+  const { transitionIn, transitionOut, wipeIn, wipeOut, shotGlitches = [] } = sceneTransitions(scene);
   const image = sceneImageEffect(scene, { layered });
   const cut = sceneCutEffect(scene, planned?.get(scene?.sceneId) ?? null);
   return {
-    start: transitionIn ? [transitionIn] : [],
+    start: transitionIn ? [transitionIn] : wipeIn ? [wipeIn.style] : [],
     mid: [...(image ? [image.effect] : []), ...shotGlitches.map((glitch) => glitch.style)],
-    end: [...(transitionOut ? [transitionOut] : []), ...(cut?.enabled ? [cut.style] : [])],
+    end: [...(transitionOut ? [transitionOut] : wipeOut ? [wipeOut.style] : []), ...(cut?.enabled ? [cut.style] : [])],
   };
 }
 
