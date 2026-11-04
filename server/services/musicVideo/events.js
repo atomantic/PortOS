@@ -65,6 +65,8 @@ import { EventEmitter } from 'events';
 //     tab was filled ('open'), closed by hand ('closed') or discarded; bridged
 //     to `music-video:publish-draft`. 'posted' adds `url` and `project`: the
 //     director posted from the filled tab and PortOS recorded the link.
+//     'queued' / 'filling' carry no draftId, only a `message`: what a fill
+//     still in progress waits on (another fill holding the browser) or is doing.
 //   'cover-art'     → { projectId, project } — the release cover art was
 //     composed, or a cover source image was queued, landed or failed; bridged
 //     to `music-video:cover-art`.

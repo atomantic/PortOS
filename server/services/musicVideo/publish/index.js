@@ -17,7 +17,7 @@ import { mutateProjectRecord } from '../projects.js';
 import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../../sunoShareLink.js';
-import { connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
+import { browserOperationInProgress, connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
 import { tiktokAdapter } from './tiktok.js';
@@ -236,7 +236,16 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   payload = await withAudio(target, payload, project, deps);
   payload = await withCovers(target, payload, deps);
   for (const draft of [...drafts.values()]) if (draft.projectId === projectId && draft.target === target) await closeDraft(draft, deps);
+  // The PortOS Browser fills one post at a time (X can hold it for minutes while its
+  // upload finishes): say what this fill waits on, then what it is doing.
+  const progress = (state, message) => musicVideoEvents.emit('publish-draft', { projectId, target, state, message });
+  const holder = browserOperationInProgress();
+  if (holder) {
+    const what = holder.label ? `${holder.label} to finish` : 'another PortOS Browser task to finish';
+    progress('queued', `Waiting for ${what}${holder.status ? ` (${holder.status})` : ''}`);
+  }
   return serialize(async () => {
+    progress('filling', `Opening ${adapter.label} in the PortOS Browser`);
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
     const page = await context.newPage();
     try {
@@ -261,7 +270,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       await browser.close().catch(() => {});
       throw err;
     }
-  });
+  }, { label: adapter.label, onStep: (status) => progress('filling', `${adapter.label}: ${status}`) });
 }
 
 /**

@@ -583,6 +583,9 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
       <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} commitOption={commitOption} flairs={flairs} idFor={idFor} account={account} excerpts={excerpts} />
       <PostPreview label={label} preview={preview} />
       {!posted && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
+      {busy === 'prepare' && (
+        <p role="status" className="text-[11px] text-port-text-muted">{publishing.progress?.[target] || 'Filling in the PortOS Browser…'}</p>
+      )}
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>

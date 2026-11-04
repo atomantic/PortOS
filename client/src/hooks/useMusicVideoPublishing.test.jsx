@@ -60,6 +60,20 @@ describe('music-video publishing project boundary', () => {
     expect(screen.queryByText('Example A')).not.toBeInTheDocument();
   });
 
+  it('shows what a running fill waits on, then drops it once the fill lands', async () => {
+    const fill = deferred();
+    api.prepareMusicVideoPublishDraft.mockReturnValueOnce(fill.promise);
+    render(<Posting id="project-a" />);
+    await screen.findByText(rowLabel('YouTube'));
+    fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill draft' }));
+    expect(within(row('YouTube')).getByRole('status')).toHaveTextContent('Filling in the PortOS Browser…');
+    const onDraft = socket.on.mock.calls.find(([event]) => event === 'music-video:publish-draft')[1];
+    act(() => { onDraft({ projectId: 'project-a', target: 'youtube', state: 'queued', message: 'Waiting for X thread to finish (uploading the video to X)' }); });
+    expect(within(row('YouTube')).getByRole('status')).toHaveTextContent('Waiting for X thread to finish (uploading the video to X)');
+    await act(async () => { fill.resolve({ draftId: 'draft-a', summary: { title: 'Example A' } }); });
+    expect(within(row('YouTube')).queryByText(/Waiting for X thread/)).toBeNull();
+  });
+
   it('ignores a late old-project preparation without clearing the current preparation', async () => {
     const first = deferred();
     const second = deferred();

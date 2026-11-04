@@ -18,16 +18,27 @@ import { isVitestRunner } from '../../../lib/runtimeEnv.js';
 export const PUBLISH_STEP_TIMEOUT_MS = 60_000;
 
 let browserTail = Promise.resolve();
+// What holds the PortOS Browser now, so a queued fill can say what it waits on.
+let activeOperation = null;
+let pendingOperations = 0;
 
 /**
  * Run `fn` after every earlier PortOS Browser operation settles. Typing goes to
  * whichever tab has focus, so every driver of the shared browser — a publish
  * draft or an autonomous Suno song — queues here, not on a private tail.
  */
-export function serializeBrowserOperation(fn) {
-  const run = browserTail.then(fn, fn);
+export function serializeBrowserOperation(fn, operation = null) {
+  pendingOperations += 1;
+  const start = () => { activeOperation = operation ? { ...operation } : {}; return fn(); };
+  const run = browserTail.then(start, start).finally(() => { pendingOperations -= 1; activeOperation = null; });
   browserTail = run.catch(() => {});
   return run;
+}
+
+/** `null` when the PortOS Browser is free, else `{ label, status }` of the operation holding it (either may be null). */
+export function browserOperationInProgress() {
+  if (!pendingOperations) return null;
+  return { label: activeOperation?.label || null, status: activeOperation?.status || null };
 }
 
 /** Connect to the running PortOS Browser (launching it when it is stopped, unless `launch: false`). */
@@ -65,7 +76,16 @@ export const stepFailed = (label, step, err) => new ServerError(`${label}: ${ste
 });
 
 /** Run one named step, turning a Playwright timeout into a `stepFailed` naming it. */
-export async function step(label, name, fn) {
+/**
+ * Run one named step of a platform fill. `status` is what the director reads
+ * while it runs (default: the step's name); the operation holding the browser
+ * reports it through its `onStep`.
+ */
+export async function step(label, name, fn, { status } = {}) {
+  if (activeOperation) {
+    activeOperation.status = status || name;
+    try { activeOperation.onStep?.(activeOperation.status); } catch (err) { console.error(`❌ Publish step report failed: ${err.message}`); }
+  }
   try {
     return await fn();
   } catch (err) {

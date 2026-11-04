@@ -17,6 +17,7 @@ const projects = await import('../projects.js');
 const { preparePublishDraft, discardPublishDraft, listPublishDrafts, recordPublishPost, removePublishPost, prepareCrossLinkEdit, setPublishCrossLinks } = await import('./index.js');
 const { musicVideoEvents } = await import('../events.js');
 const { stackerNewsAdapter } = await import('./stackerNews.js');
+const { step } = await import('./browser.js');
 
 const platforms = { stackerNews: { enabled: true, account: null }, youtube: { enabled: true, account: null }, x: { enabled: true, account: 'antic' } };
 
@@ -169,6 +170,32 @@ describe('publish drafts (#9282)', () => {
       expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
       expect(pages[0].closed).toBe(false); // the tab now shows their post
       expect(await listPublishDrafts(id, { connect })).toEqual([]);
+    } finally {
+      musicVideoEvents.off('publish-draft', onEvent);
+    }
+  });
+
+  it('says what a fill waits on while another holds the PortOS Browser, and what each fill is doing', async () => {
+    const first = await readyProject();
+    const second = await readyProject();
+    const { connect } = fakeBrowser();
+    let release;
+    const held = new Promise((r) => { release = r; });
+    const slow = adapter({ label: 'X thread', prepare: vi.fn(async () => {
+      await step('X thread', 'wait for the uploads', () => held, { status: 'uploading the video to X' });
+      return {};
+    }) });
+    const events = [];
+    const onEvent = (e) => { if (e.state === 'queued' || e.state === 'filling') events.push(e); };
+    musicVideoEvents.on('publish-draft', onEvent);
+    try {
+      const holding = preparePublishDraft(first, 'stackerNews', {}, { connect, adapters: { stackerNews: slow }, platforms });
+      await vi.waitFor(() => expect(events.some((e) => e.message === 'X thread: uploading the video to X')).toBe(true));
+      const waiting = preparePublishDraft(second, 'stackerNews', {}, { connect, adapters: { stackerNews: adapter() }, platforms });
+      await vi.waitFor(() => expect(events).toContainEqual({ projectId: second, target: 'stackerNews', state: 'queued', message: 'Waiting for X thread to finish (uploading the video to X)' }));
+      release();
+      await Promise.all([holding, waiting]);
+      expect(events.filter((e) => e.projectId === second).map((e) => e.state)).toEqual(['queued', 'filling']);
     } finally {
       musicVideoEvents.off('publish-draft', onEvent);
     }
