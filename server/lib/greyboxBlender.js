@@ -294,9 +294,14 @@ def apply_look(look):
         look_lights.objects.link(light)
     haze = look['atmosphere'].get('haze', 0)
     if haze > 0 and part_objects:
+        # The air the cameras look through: parts, cameras and lights, at least
+        # 4 m tall, with a margin, so an open or floor-only layout still gets haze.
         corners = [obj.matrix_world @ Vector(c) for _, obj in part_objects for c in obj.bound_box]
-        low = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
-        high = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
+        corners += [cam.location.copy() for cam, _ in camera_by_shot.values()]
+        corners += [to_blender(spec['position']) for spec in look['lights']]
+        low = Vector((min(c.x for c in corners) - 1, min(c.y for c in corners) - 1, min(c.z for c in corners)))
+        high = Vector((max(c.x for c in corners) + 1, max(c.y for c in corners) + 1, max(c.z for c in corners) + 1))
+        high.z = max(high.z, low.z + 4)
         mesh = bpy.data.meshes.new('Haze')
         size = high - low
         verts, faces = box(size.x, size.y, size.z)
