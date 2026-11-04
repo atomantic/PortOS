@@ -912,6 +912,20 @@ describe('autoFixer — stale deployed build in the investigation body', () => {
     _resetAutoFixerForTests();
   });
 
+  // The goal-fidelity gate judges a finished investigation against this text.
+  // Under the old wording a local reviewer held a merged root-cause fix (#14841)
+  // because the checklist read as the requirements and the fix as unrequested.
+  it('states the fix as the deliverable and frames the checks as non-deliverable', async () => {
+    emitProviderFailure({ provider: 'Ollama', model: 'm-1' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    const { context } = filedTasks()[0];
+    expect(context).toContain('## Objective\nFind why this run failed and fix the cause.');
+    expect(context).toContain('## Starting Checks\nThese help locate the cause. They are not deliverables');
+    expect(context).not.toContain('## Investigation Steps');
+    expect(context.indexOf('## Objective')).toBeLessThan(context.indexOf('## Starting Checks'));
+  });
+
   it('names the boot-vs-HEAD gap and leads the steps with ruling it out', async () => {
     installState.getBootCommit.mockReturnValue('aaaaaaa1111111111111111111111111111111a');
     installState.getInstallState.mockResolvedValue({

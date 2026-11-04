@@ -624,6 +624,13 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
   const lines = [
     '# AI Provider Execution Failure',
     '',
+    // The goal-fidelity gate judges the finished diff against this text. Without
+    // a stated deliverable, a small local reviewer graded the checks below as
+    // the requirements and a merged root-cause fix as unrequested, holding a
+    // delivered run and respawning it.
+    '## Objective',
+    'Find why this run failed and fix the cause. The cause may be outside the provider: when a PortOS prompt, caller, timeout or setting drove the run into this failure, change that code, even in a file that does not mention the provider. Report the evidence without a code change only when the fault is outside PortOS (an outage, a quota, credentials) or a fix is already committed and only needs a restart.',
+    '',
     '## Run Details',
     `- **Run ID:** ${ctx.runId || 'N/A'}`,
     `- **Provider:** ${ctx.provider || 'Unknown'}`,
@@ -698,7 +705,8 @@ function buildAIProviderErrorContext(error, diagnostics, installState = null) {
     lines.push('');
   }
 
-  lines.push('## Investigation Steps');
+  lines.push('## Starting Checks');
+  lines.push('These help locate the cause. They are not deliverables, and a diff is not expected to show them.');
   const steps = [
     'Check if the AI provider is configured correctly in /devtools/providers',
     'Verify API keys and endpoints are valid',

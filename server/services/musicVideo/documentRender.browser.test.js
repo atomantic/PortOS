@@ -391,7 +391,10 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', audio]);
     const encode = async (name, windowStart, windowEnd) => {
       const outputPath = join(PATHS.videos, name);
-      await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: name.replace('.mp4', ''), audioPath: audio, outputPath, windowStart, windowEnd });
+      // Grade isolation does not depend on resolution, and 1080p software rendering
+      // took this test past its deadline on CI runners (#14845).
+      const plan = { ...(await prepareDocumentRender(project)), frame: { width: 1280, height: 720 } };
+      await encodeDocumentComposition({ project, plan, jobId: name.replace('.mp4', ''), audioPath: audio, outputPath, windowStart, windowEnd });
       const raw = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
       return (frame, x, y = 18) => [...raw.subarray((frame * 64 * 36 + y * 64 + x) * 3, (frame * 64 * 36 + y * 64 + x) * 3 + 3)];
     };
