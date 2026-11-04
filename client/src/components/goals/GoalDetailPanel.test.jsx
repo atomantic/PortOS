@@ -133,6 +133,20 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
     expect(priorityBadge.className).toContain('px-1');
     expect(priorityBadge.className).not.toContain('inline-flex');
   });
+
+  it('renders zero-minute todo estimates with their unit instead of a bare zero text node', async () => {
+    await renderPanel({
+      ...baseGoal,
+      todos: [
+        { id: 't-zero', title: 'zero estimate', status: 'todo', priority: 'low', estimateMinutes: 0 },
+        { id: 't-estimate', title: 'estimated task', status: 'todo', priority: 'medium', estimateMinutes: 15 },
+      ],
+    });
+
+    expect(screen.getByText('0m')).toBeTruthy();
+    expect(screen.getByText('15m')).toBeTruthy();
+    expect(screen.queryByText('0', { exact: true })).toBeNull();
+  });
 });
 
 describe('GoalDetailPanel provenance chip', () => {
