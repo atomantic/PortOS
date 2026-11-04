@@ -1,20 +1,29 @@
 # Video speed profiles
 
-A **speed profile** is a named, pre-validated sampler configuration a user picks
+A **speed profile** is a named sampler configuration a user picks
 in Video Gen instead of hand-tuning Steps and CFG. Selecting one swaps the whole
 schedule at once — stage-1 and stage-2 step counts, guidance, and runtime
-acceleration levers such as TeaCache — for a documented wall-time saving.
+acceleration levers such as TeaCache — to trade quality for speed.
 
-Shipped today: **Fast** on `ltx25_mlx_q8` (LTX-2.5 MLX Q8), labelled
-`~35-45% faster`.
+Shipped today: **Fast** on `ltx25_mlx_q8` (LTX-2.5 MLX Q8). It keeps its
+8+3-step schedule, while the quality default uses 30 first-stage steps. The
+previous numerical speed estimate used a different quality baseline; measure
+representative LTX-2.5 shots against the current default before quoting one.
+Fast requests TeaCache using coefficients calibrated on LTX-2.3, not 2.5, so
+its results are experimental. The quality audio-to-video and native Extend
+paths leave TeaCache off; it can change framing or detail as well as speed.
 
-That label is deliberately conservative and traceable to the only numbers this
-repo can cite: the step schedule measured ~30-35% off wall time in the
-`PORTOS_T2V_TWO_STAGE` experiment (~1.4-1.5x), and the pin documents ~1.2x for
-TeaCache at its calibrated threshold — ~1.7-1.85x combined. It is deliberately
-not "2x", which would outrun the evidence, and on a pin without the TeaCache
-kwarg the cache half degrades away entirely. Raise it only against an A/B
-measured on 2.5 itself.
+For LTX-2.5, the model's stock conditioner is Gemma 4 12B in 4-bit form even
+though its transformer is Q8 ([pinned model card](https://huggingface.co/MrMofer/ltx-2.5-mlx-q8/blob/f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc/README.md)).
+Higher precision is a hypothesis, not a verified quality upgrade: the evaluated
+substitutes failed the existing coherence/behavior gate. Video Gen already
+exposes CFG, image strength and resolution for controlled comparisons; the
+guided pipeline refines at full output resolution. Keep the full decoder for
+delivery. More steps and larger frames take longer and may require more memory.
+The pinned runtime also contains a second-order HQ sampler, but PortOS does not
+yet expose it or claim it preserves the image anchor without a render test.
+The current upstream runtime explicitly declines TeaCache for 2.5 because it
+is not calibrated ([upstream notes](https://github.com/dgrauet/ltx-2-mlx#ltx-25)).
 
 ## Why it exists
 
@@ -34,10 +43,9 @@ runner *actually* managed to apply.
 Three rules govern the whole feature.
 
 **1. Quality is a no-op, not a variant.** `SPEED_PROFILE_DEFAULT_ID`
-(`'quality'`) resolves to `null`. A default render builds byte-identical spawn
-args to one from before this feature existed and stamps no extra history
-fields. Absence and `'quality'` are the same request on the client, in the
-route, and in the service.
+(`'quality'`) resolves to `null`. The model's current defaults and explicit
+sampler overrides apply, with no extra profile history fields. Absence and
+`'quality'` are the same request on the client, in the route, and in the service.
 
 **2. An incompatible request degrades — it never 400s and never half-applies.**
 A knob that only makes a render faster must not reject a submitted job. When a
@@ -79,8 +87,8 @@ actually inside the model pack? `scripts/generate_ltx2.py` probes both, emits a
  "degraded":["teacache","adapter"]}
 ```
 
-The render still happens at the profile's step schedule; it is just slower than
-the label promises, and the user is told so rather than left with a stopwatch —
+The render still happens at the profile's step schedule; it may be slower than
+expected, and the user is told which levers were unavailable —
 both live (a `STATUS:` line during the render) and after the fact (the lightbox
 shows `Speed profile: fast — reduced: teacache unavailable`).
 

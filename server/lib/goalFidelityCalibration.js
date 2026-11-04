@@ -118,7 +118,7 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
   diff: Object.freeze({
     file: 'server/services/agentFinalization.js',
     symbol: 'evaluateGoalFidelity',
-    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agentFinalization.js`, capped at `MAX_FIDELITY_DIFF_CHARS`',
+    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agentFinalization.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
   }),
   rubric: Object.freeze({
     file: 'server/services/codeReview.js',

@@ -745,7 +745,7 @@ describe('mergeNextScene', () => {
     ]);
   });
 
-  it('refuses a merge longer than the backend\'s longest clip, the last scene, and a document composition', () => {
+  it('refuses a merge longer than the backend\'s longest clip, the last scene, and manifest-owned shots', () => {
     const { project, ids } = seed();
     expect(() => mergeNextScene(project, ids[0], { backend: 'grok' })).not.toThrow(); // 9s fits Grok's 10s
     const long = applySceneUpdate(project, ids[2], { endSec: 20 }).project; // 4–20s > 10s
@@ -753,7 +753,13 @@ describe('mergeNextScene', () => {
     expect(() => mergeNextScene(project, ids[2])).toThrow(/no next scene/);
     const swapped = applySceneUpdate(project, ids[1], { startSec: 0, endSec: 2 }).project;
     expect(() => mergeNextScene(swapped, ids[0])).toThrow(/song order/);
-    expect(() => mergeNextScene({ ...project, composition: { mode: 'document' } }, ids[0])).toThrow(/shot manifest/);
+    const doc = { ...project, composition: { mode: 'document' } };
+    const withSource = (storyboardSource) => ({ ...doc, productionReview: { draft: { storyboardSource } } });
+    expect(() => mergeNextScene(withSource('document'), ids[0])).toThrow(/shot manifest/);
+    expect(() => mergePreviousScene(withSource('document'), ids[1])).toThrow(/shot manifest/);
+    // Board-sourced (or no draft) document projects keep their shots on the Board and merge normally.
+    expect(() => mergeNextScene(withSource('board'), ids[0])).not.toThrow();
+    expect(() => mergeNextScene(doc, ids[0])).not.toThrow();
   });
 });
 

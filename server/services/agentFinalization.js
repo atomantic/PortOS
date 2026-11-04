@@ -37,7 +37,8 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
-import { getAgent, getAgentRecord, getAgents, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { getAgentsWithArchive } from './cosAgentHistory.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
@@ -289,6 +290,8 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
 
 // Output-hook outcomes that mean "the hook returned before validating the agent's
 // output at all" — distinct from both a rejection and an acceptance.
+// An approval-gated investigation can start days after the run it investigates.
+const OVERTURN_LOOKBACK_DAYS = 7;
 const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
 
 /**
@@ -950,7 +953,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
     : noFidelityVerdict();
   if (isGoalFidelityInvestigation(task)) {
-    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgents().catch(() => []) });
+    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgentsWithArchive({ endAt: Date.now(), lookbackDays: OVERTURN_LOOKBACK_DAYS }) });
     if (overturned) {
       return fidelityNotJudged(`This investigation overturned the goal-fidelity finding (${overturned.gap}); its diff is not judged against the investigated objective.`);
     }
@@ -984,6 +987,17 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
+  // Only a retry can have earlier attempts. A claim's objective is the issue it
+  // selected this time, which an earlier attempt's merge need not concern.
+  const priorDelivery = !claimFlow && Number(task.metadata?.totalSpawnCount) > 1
+    ? await import('./goalFidelityPriorDelivery.js')
+      .then(({ priorTaskDelivery }) => priorTaskDelivery({
+        taskId: task.id, workspacePath, head, startedAt,
+        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length,
+      }))
+      .catch(() => null)
+    : null;
+
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -993,6 +1007,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     // their bounded image content inside the OBJECTIVE block, not as diff data.
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
+    ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
@@ -1007,6 +1022,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       backend: result.backend,
       model: result.model,
       ...(truncated ? { diffTruncated: true } : {}),
+      ...(priorDelivery ? { priorDeliveryHeads: priorDelivery.heads } : {}),
       checkedAt: new Date().toISOString(),
     },
     error: null,

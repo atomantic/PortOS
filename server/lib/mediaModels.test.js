@@ -263,7 +263,7 @@ describe('mediaModels registry', () => {
       audioDurationDriven: true,
       frameStride: 8,
       maxNumFrames: 1017,
-      steps: 8,
+      steps: 30,
     });
     expect(ltx25.disclosure.weightsLicense.name).toBe('LTX-2.x Community License');
     expect(ltx25.disclosure.estimatedDownloadGb).toBe(67.7);

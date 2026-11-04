@@ -127,7 +127,7 @@ export const ADDABLE_IMAGE_RUNNERS = Object.freeze(
 // Default steps/guidance per target so an added entry renders sanely without
 // the user having to know each pipeline's sweet spot. Mirrors the shipped
 // DEFAULT_REGISTRY entries.
-const VIDEO_DEFAULTS = { mlx_video: { steps: 25, guidance: 3.0 }, ltx2: { steps: 8, guidance: 3.0 }, ltx25: { steps: 8, guidance: 3.0 } };
+const VIDEO_DEFAULTS = { mlx_video: { steps: 25, guidance: 3.0 }, ltx2: { steps: 8, guidance: 3.0 }, ltx25: { steps: 30, guidance: 3.0 } };
 const IMAGE_DEFAULTS = {
   [RUNNER_FAMILIES.MFLUX]: { steps: 20, guidance: 3.5 },
   [RUNNER_FAMILIES.FLUX2]: { steps: 8, guidance: 3.5 },
