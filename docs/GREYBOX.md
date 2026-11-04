@@ -159,6 +159,20 @@ camera and replaces the camera's previous render unless that one is a photo plat
 landmarks and anchors as empties, and every saved camera, ready to dress in
 Blender.
 
+### Dress it (Look)
+
+The **Look** card on the Photoreal tab sets how Blender dresses the layout:
+a material per zone or part from a fixed list of presets (wood floor, painted
+wall, carpet, tile, chrome, mirror, neon and others), each with a color, wear
+and optional glow; spot, area and point lights; and atmosphere (haze, world
+color and brightness, exposure, and whether to keep the daylight sun). Pick
+**Provider › model › effort**, describe the look, check **Show full prompt**,
+and choose **Dress with AI**. The result is a preview listing its materials and
+lights; **Apply look** saves it (as a revision of the Environment) and the next
+render uses it. With a look saved, the box edits it unless you choose to start
+over. The look never moves geometry; a rule for a part you later remove simply
+stops matching. **Remove look** goes back to flat zone colors and the sun.
+
 ## Create or edit with AI
 
 Choose **Provider › model › effort**, or leave it at the active provider default.

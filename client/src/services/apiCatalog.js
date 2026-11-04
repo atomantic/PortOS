@@ -329,6 +329,17 @@ export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
 export const getCatalogPhotoreal = (id, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal`, options);
 
+// Photoreal look (materials, lights, atmosphere). Draft is a preview only; the
+// prompt preview calls no provider; `look: null` clears it.
+export const draftCatalogPhotorealLook = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/look/draft`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const previewCatalogPhotorealLookPrompt = (id, body, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/look/prompt`, { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const saveCatalogPhotorealLook = (id, look, { source, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/look`, { method: 'PUT', body: JSON.stringify({ look, ...(source ? { source } : {}) }), ...options });
+
 export const startCatalogPhotorealRender = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/render`, { method: 'POST', body: JSON.stringify(body), ...options });
 

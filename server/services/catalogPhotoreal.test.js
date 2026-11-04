@@ -67,6 +67,7 @@ beforeEach(() => {
 describe('startPhotorealRender', () => {
   it('renders the saved greybox in Blender, attaches each camera, keeps plates and the .blend', async () => {
     const record = place();
+    record.payload.photoreal = { materials: [], lights: [{ id: 'panel', type: 'area', position: [0, 6, 0], watts: 600 }], atmosphere: { haze: 0.2 } };
     db.getIngredient.mockResolvedValue(record);
     const worker = fakeWorker({
       'report.json': JSON.stringify({ version: '5.2.3', engine: 'CYCLES', device: 'GPU', backend: 'METAL', samples: 64, parts: 1, shots: [{ shotId: 'wide', seconds: 12.5 }] }),
@@ -85,7 +86,8 @@ describe('startPhotorealRender', () => {
 
     // The scene goes in as data beside PortOS's own script; argv never runs caller code.
     const data = JSON.parse(fakeWorker.lastFiles.find((f) => f.path === 'greybox-blender.json').content);
-    expect(data).toMatchObject({ engine: 'CYCLES', samples: 64, longEdge: 1920, shotIds: ['wide', 'booth'] });
+    expect(data).toMatchObject({ engine: 'CYCLES', samples: 64, longEdge: 1920, shotIds: ['wide', 'booth'],
+      look: { lights: [{ id: 'panel', size: 0.25 }], atmosphere: { haze: 0.2, sun: false } } });
     expect(worker.mock.calls[0][0].tool.argv('entry.py')).toEqual(expect.arrayContaining(['--background', '--disable-autoexec', '--python', 'entry.py']));
     expect(upload).toHaveBeenCalledWith(expect.objectContaining({ role: 'photoreal:wide', mimeType: 'image/png', dataBase64: PNG.toString('base64'),
       caption: expect.stringContaining('Cycles, 64 samples, 12.5s') }));

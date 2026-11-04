@@ -1,4 +1,4 @@
-import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema } from '../lib/catalogGreyboxValidation.js';
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -68,6 +68,7 @@ import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/em
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
 import { getPhotorealStatus, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
+import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalogPhotorealLook.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
@@ -823,6 +824,27 @@ router.get('/ingredients/:id/photoreal', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/photoreal/render', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogPhotorealRenderSchema, req.body);
   res.status(202).json(await startPhotorealRender(req.params.id, body));
+}));
+
+// Photoreal look (materials, lights, atmosphere): AI draft is a preview only.
+router.post('/ingredients/:id/photoreal/look/draft', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogPhotorealLookDraftSchema, req.body);
+  res.json(await draftPhotorealLook(req.params.id, body));
+}));
+
+router.post('/ingredients/:id/photoreal/look/prompt', asyncHandler(async (req, res) => {
+  const body = validateRequest(catalogPhotorealLookDraftSchema, req.body);
+  res.json(await previewPhotorealLookPrompt(req.params.id, body));
+}));
+
+router.put('/ingredients/:id/photoreal/look', asyncHandler(async (req, res) => {
+  const { look, source } = validateRequest(catalogPhotorealLookSaveSchema, req.body);
+  const updated = await savePhotorealLook(req.params.id, look, { source });
+  res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
+  projectToCanon(updated.id, updated).catch((err) => {
+    console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
+  });
 }));
 
 router.get('/ingredients/:id/photoreal/blend', asyncHandler(async (req, res) => {
