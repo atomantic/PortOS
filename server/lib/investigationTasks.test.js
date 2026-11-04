@@ -15,6 +15,7 @@ import {
   isInvestigationTask,
   resolveInvestigationRetryTargets,
 } from './investigationTasks.js';
+import { permitsNoChangeCompletion } from './noChangeCompletion.js';
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
 
 const blocked = (id, metadata = {}) => ({ id, status: 'blocked', metadata: { blockedCategory: 'unknown', ...metadata } });
@@ -241,6 +242,14 @@ describe('investigation delivery postures', () => {
   it('isolates a client-queued investigation exactly like an unattended one', () => {
     expect(CLIENT_INVESTIGATION_DELIVERY.useWorktree).toBe(INVESTIGATION_TASK_DELIVERY.useWorktree);
     expect(CLIENT_INVESTIGATION_DELIVERY.openPR).toBe(INVESTIGATION_TASK_DELIVERY.openPR);
+  });
+
+  it('lets every investigation posture finish with no code change', () => {
+    // Autofixer prompts tell the agent to report without a change when the fault
+    // is outside PortOS; finalization must honour that or the task respawns.
+    for (const delivery of [INVESTIGATION_TASK_DELIVERY, CLIENT_INVESTIGATION_DELIVERY]) {
+      expect(permitsNoChangeCompletion({ metadata: { ...delivery, isInvestigation: true } })).toBe(true);
+    }
   });
 
   it('reviews the client-queued PR instead of merging it on green — a human is present', () => {
