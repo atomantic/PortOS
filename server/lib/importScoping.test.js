@@ -179,6 +179,25 @@ const NARROWED = [
   // also walks peerExecutionAdapters' lazy import of installState.js.
   ['services/installState.js', '../scripts/run-migrations.js',
     'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
+  // #14867: optional music-video and agent workflows load where they run.
+  ['lib/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
+    'reads IMAGE_REFERENCE_REQUEST_LIMIT from the referenceLimits.js leaf'],
+  ['lib/musicVideoValidation.js', 'lib/musicVideoConditioning.js',
+    'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
+  ['routes/signal.js', 'lib/validation.js',
+    'loads the shared validator inside the conversation handlers'],
+  ['routes/signal.js', 'lib/musicVideoValidation.js',
+    'loads the shared validator inside the conversation handlers'],
+  ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
+    'loads vocal-stem storage only when checking a stem against the master'],
+  ['services/musicVideo/lyricAlignCore.js', 'services/musicVideo/vocalStem.js',
+    'loads vocal-stem storage only when picking the alignment audio'],
+  ['services/musicVideo/vocalSeparation.js', 'services/musicVideo/vocalStem.js',
+    'loads vocal-stem storage only when attaching a separated stem'],
+  ['services/cosAgentHistory.js', 'services/cosAgentLifecycle.js',
+    'loads agent lifecycle storage inside the archived-agent lookup'],
+  ['services/cosAgentHistory.js', 'services/cosAgentIndex.js',
+    'loads agent index storage inside the archived-agent lookup'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -215,6 +234,9 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
     expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
+    expect(reaches('lib/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
+    expect(reaches('lib/validation.js', 'lib/musicVideoValidation.js')).toBe(true);
+    expect(reaches('services/musicVideo/vocalStem.js', 'services/musicVideo/projects.js')).toBe(true);
   });
 
   it('keeps the process-type vocabulary dependency-free', () => {
