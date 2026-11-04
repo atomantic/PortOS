@@ -41,6 +41,7 @@ import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } 
 import { getInstanceId } from './instanceIdentity.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';
 import { supersedingTimestamp } from '../lib/tombstones.js';
 import { parseTsMs, compareNewerWins } from '../lib/lwwTimestamp.js';
@@ -160,6 +161,9 @@ const caches = {
 };
 
 const CACHE_TTL_MS = 2000;
+// meta.json is one shared settings document, so serialize the complete
+// read/merge/write cycle rather than only its final atomic write.
+const queueMetaWrite = createFileWriteQueue();
 
 // Default settings
 const DEFAULT_META = {
@@ -237,10 +241,16 @@ export async function saveMeta(meta) {
  * Update brain settings (partial update)
  */
 export async function updateMeta(updates) {
-  const meta = await loadMeta();
-  const updated = { ...meta, ...updates };
-  await saveMeta(updated);
-  return updated;
+  return queueMetaWrite(async () => {
+    // Read from disk inside the queue: a cached snapshot could predate a
+    // preceding queued update if another caller populated it before entry.
+    caches.meta.data = null;
+    caches.meta.timestamp = 0;
+    const meta = await loadMeta();
+    const updated = { ...meta, ...updates };
+    await saveMeta(updated);
+    return updated;
+  });
 }
 
 // =============================================================================
