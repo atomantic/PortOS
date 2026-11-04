@@ -59,41 +59,42 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   // Jobs this panel watched run (or started); only their finish reloads or toasts.
   const watched = useRef(new Set());
   const startingRef = useRef(false);
+  const finished = useRef(new Set());
   const job = status?.job || null;
   const running = job?.state === 'running';
   const engineInfo = ENGINES.find((e) => e.id === engine);
   const sampleValue = samples ?? engineInfo.defaultSamples;
+
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
 
   useEffect(() => {
     let live = true;
     getCatalogPhotoreal(record.id, { silent: true })
       .then((next) => { if (live) setStatus(next); })
       .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
+    // Decided as each frame arrives, not in an effect, so a finish batched with the
+    // start response is still seen. Only a job this panel watched or is starting
+    // reloads or toasts; a finish that beats the start response counts as ours.
     const onFrame = (frame) => {
-      if (frame?.ingredientId !== record.id) return;
-      setStatus((cur) => ({ ...(cur || {}), job: frame.job }));
+      if (frame?.ingredientId !== record.id || !frame.job) return;
+      const next = frame.job;
+      setStatus((cur) => ({ ...(cur || {}), job: next }));
+      if (next.state === 'running') { watched.current.add(next.id); return; }
+      finished.current.add(next.id);
+      if (!watched.current.delete(next.id) && !startingRef.current) return;
+      if (next.state === 'done') {
+        onRenderedRef.current?.();
+        getCatalogPhotoreal(record.id, { silent: true })
+          .then((fresh) => { if (live) setStatus((cur) => ({ ...fresh, job: cur?.job || fresh.job })); })
+          .catch(() => {});
+      } else if (next.state === 'failed') {
+        toast.error(`Blender render failed: ${next.error || 'unknown error'}`);
+      }
     };
     socket.on('catalog:photoreal', onFrame);
     return () => { live = false; socket.off('catalog:photoreal', onFrame); };
   }, [record.id]);
-
-  // A finished render attaches images and replaces the .blend: reload both.
-  useEffect(() => {
-    if (!job) return undefined;
-    if (job.state === 'running') { watched.current.add(job.id); return undefined; }
-    // A worker can finish before the start response arrives; that frame is ours too.
-    if (!watched.current.delete(job.id) && !startingRef.current) return undefined;
-    let active = true;
-    if (job.state === 'done') {
-      onRendered?.();
-      getCatalogPhotoreal(record.id, { silent: true })
-        .then((next) => { if (active) setStatus((cur) => ({ ...next, job: cur?.job || next.job })); })
-        .catch(() => {});
-    } else if (job.state === 'failed') {
-      toast.error(`Blender render failed: ${job.error || 'unknown error'}`);
-    }
-    return () => { active = false; };
-  }, [job, record.id, onRendered]);
 
   // Default to every camera until the user picks.
   const chosen = selected.size ? [...selected].filter((id) => shots.some((s) => s.id === id)) : shots.map((s) => s.id);
@@ -121,6 +122,8 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
     startingRef.current = false;
     setStarting(false);
+    // Already finished (its frame came first and was handled): nothing to watch.
+    if (started?.state === 'running' && !finished.current.has(started.id)) watched.current.add(started.id);
     // Keep a finish frame for this job that beat the response here.
     if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };

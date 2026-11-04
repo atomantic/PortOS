@@ -52,8 +52,11 @@ describe('PhotorealPanel', () => {
     startCatalogPhotorealRender.mockImplementation(() => new Promise((resolve) => { respond = resolve; }));
     fireEvent.click(screen.getByRole('button', { name: 'Render 2 cameras' }));
     await waitFor(() => expect(respond).toBeTypeOf('function'));
-    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-9', state: 'done', engine: 'eevee', shotIds: ['wide', 'booth'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } }));
-    await act(async () => respond({ id: 'pr-9', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], startedAt: new Date().toISOString() }));
+    // Same batch: React may commit both together.
+    await act(async () => {
+      handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-9', state: 'done', engine: 'eevee', shotIds: ['wide', 'booth'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } });
+      respond({ id: 'pr-9', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], startedAt: new Date().toISOString() });
+    });
     expect(onRendered).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
   });
