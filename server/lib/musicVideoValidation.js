@@ -10,9 +10,8 @@ import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCredits
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
-import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './musicVideoConditioning.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *

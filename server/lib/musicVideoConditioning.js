@@ -1,5 +1,6 @@
 import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
-import { IMAGE_REFERENCE_REQUEST_LIMIT, isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
+import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
@@ -13,8 +14,7 @@ import { musicVideoCameoReferences } from './musicVideoCameos.js';
  * Flagging a reference adds a candidate, never a separate fixed render quota.
  */
 export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
-/** Research photos one shot holds (scene.researchReferences, #14822). */
-export const MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT = 6;
+export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT };
 
 // The Grok CLI does not expose its underlying video-model id. Seven references
 // is supported by both the older Imagine model and the newer 1.5 model.

@@ -6,9 +6,6 @@
  * (an approval-gated follow-up, a retry) has to read the archive buckets too.
  */
 
-import { getAgents } from './cosAgentLifecycle.js';
-import { getAgentsByDate } from './cosAgentIndex.js';
-
 const DAY_MS = 86_400_000;
 
 /**
@@ -20,6 +17,11 @@ const DAY_MS = 86_400_000;
 export async function getAgentsWithArchive({ endAt, lookbackDays }) {
   const days = Array.from({ length: lookbackDays }, (_, back) =>
     new Date(endAt - back * DAY_MS).toISOString().slice(0, 10));
+  // Loaded on first lookup so importing this module does not pull the agent lifecycle/index storage graphs.
+  const [{ getAgents }, { getAgentsByDate }] = await Promise.all([
+    import('./cosAgentLifecycle.js'),
+    import('./cosAgentIndex.js'),
+  ]);
   const lists = await Promise.all([
     getAgents().catch(() => []),
     ...days.map(day => getAgentsByDate(day, { repairSummaries: false }).catch(() => [])),

@@ -339,6 +339,7 @@ export * from './slotstreamModels.js';
 export * from './maintenanceSequence.js';
 export * from './managedDaemon.js';
 export * from './recordedProjectDir.js';
+export * from './referenceLimits.js';
 export * from './vllmQwenProject.js';
 export * from './wslDistro.js';
 export * from './qwenAgentParsers.js';
