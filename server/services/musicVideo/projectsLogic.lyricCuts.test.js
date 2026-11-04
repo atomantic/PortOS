@@ -51,6 +51,85 @@ describe('cutScenesOnLyricWords', () => {
   });
 });
 
+describe('cutScenesOnLyricWords on a composition document', () => {
+  const documentProject = (draft) => ({ ...project(), composition: { mode: 'document' }, ...(draft ? { productionReview: { draft } } : {}) });
+
+  // Catches the guard keying on the render style again, which refused boards whose document reads PORTOS_MV.scenes.
+  it('cuts when the storyboard comes from the Board, or no draft says otherwise', () => {
+    for (const board of [documentProject({ storyboardSource: 'board' }), documentProject({ cast: 'x' }), documentProject()]) {
+      const { scenes, laidOut } = cutScenesOnLyricWords(board, { cueIds: ['l1'], mode: 'phrase' });
+      expect(laidOut).toBe(false);
+      expect(scenes.map((s) => s.lyricText)).toEqual(['Great Danoodle,', 'Beagle,', 'Pug!']);
+      expect(scenes[0].lyricAnchor).toEqual({ cueId: 'l1', wordIndex: 0, wordCount: 2 });
+    }
+  });
+
+  // Catches a document-owned shot list being cut on the Board, where its manifest would never see the change.
+  it('refuses when the storyboard comes from the document', () => {
+    const refusal = { status: 400, code: 'MUSIC_VIDEO_LYRIC_CUT_DOCUMENT' };
+    expect(() => cutScenesOnLyricWords(documentProject({ storyboardSource: 'document' }), { cueIds: ['l1'], mode: 'phrase' })).toThrow(expect.objectContaining(refusal));
+  });
+});
+
+describe('cutScenesOnLyricWords on a board with no timed shots', () => {
+  const empty = (extra = {}) => applyProjectPatch(buildProjectRecord({ name: 'Roll call' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' }),
+    { lyricCues: LINES.map((line) => cue(line)), ...extra });
+
+  // Catches the empty board silently skipping every word, gaps between laid-out shots, or the last shot running past its words.
+  it('lays one contiguous anchored shot per phrase over the chosen lines', () => {
+    const { project: next, scenes, skipped, laidOut } = cutScenesOnLyricWords(empty(), { cueIds: ['l1', 'l2'], mode: 'phrase' });
+    expect(laidOut).toBe(true);
+    expect(skipped).toBe(0);
+    expect(next.wordCutBoard).toBe(true);
+    expect(scenes.map((s) => s.lyricText)).toEqual(['Great Danoodle,', 'Beagle,', 'Pug!', 'Corgi,', 'Collie,', 'Shih Tzu,']);
+    expect(scenes.map((s) => s.startSec)).toEqual([10, 11.8, 12.7, 14, 14.9, 15.8]);
+    scenes.slice(1).forEach((s, i) => expect(s.startSec).toBe(scenes[i].endSec));
+    expect(scenes.at(-1).endSec).toBe(16.7 + 0.5);
+    expect(scenes[5].lyricAnchor).toEqual({ cueId: 'l2', wordIndex: 2, wordCount: 2 });
+    expect(next.scenes.map((s) => s.order)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  // Catches laid-out shots that stop following their words, the point of anchoring them.
+  it('leaves the laid-out shots following their words on re-alignment', () => {
+    const { project: laid } = cutScenesOnLyricWords(empty(), { cueIds: ['l1'], mode: 'phrase' });
+    const moved = applyProjectPatch(laid, { lyricCues: LINES.map((line) => cue(line, { 'l1:2': 0.25 })) });
+    const beagle = moved.scenes.find((s) => s.lyricText === 'Beagle,');
+    const great = moved.scenes.find((s) => s.lyricText === 'Great Danoodle,');
+    expect(beagle.startSec).toBeCloseTo(12.05, 6);
+    expect(great.endSec).toBeCloseTo(12.05, 6);
+  });
+
+  // Catches an untimed or cold-open shot counting as somewhere to cut, which would skip every word.
+  it('treats a board of only untimed and cold-open shots as empty and keeps those shots', () => {
+    const base = addScenes(empty(), [{ label: 'Untimed' }, { label: 'Cold open', preMusic: { durationSec: 3 } }]).project;
+    const { project: next, laidOut, scenes } = cutScenesOnLyricWords(base, { cueIds: ['l4'], mode: 'word' });
+    expect(laidOut).toBe(true);
+    expect(scenes.map((s) => s.lyricText)).toEqual(['Akita', 'and', 'Malamute']);
+    expect(next.scenes.map((s) => s.label)).toEqual(expect.arrayContaining(['Untimed', 'Cold open']));
+    expect(next.scenes).toHaveLength(5);
+  });
+
+  // Catches two words on one onset becoming a zero-length shot.
+  it('skips a word too close to the cut before it', () => {
+    const crowded = { id: 'c', text: 'a b c', startSec: 1, endSec: 3, words: [
+      { w: 'a', startSec: 1, endSec: 1.04, conf: 'matched' }, { w: 'b', startSec: 1.05, endSec: 1.9, conf: 'matched' }, { w: 'c', startSec: 2, endSec: 3, conf: 'matched' },
+    ] };
+    const { scenes, skipped } = cutScenesOnLyricWords(empty({ lyricCues: [crowded] }), { cueIds: ['c'], mode: 'word' });
+    expect(skipped).toBe(1);
+    expect(scenes.map((s) => [s.lyricText, s.startSec, s.endSec])).toEqual([['a', 1, 2], ['c', 2, 3]]);
+  });
+
+  it('still refuses lines without word timing', () => {
+    const untimed = empty({ lyricCues: [{ id: 'l1', text: 'Great Danoodle', startSec: 10, endSec: 13 }] });
+    expect(() => cutScenesOnLyricWords(untimed, { cueIds: ['l1'], mode: 'phrase' })).toThrow(/Align the lyric words first/);
+  });
+
+  it('refuses a document-sourced storyboard even when the board is empty', () => {
+    const owned = { ...empty(), composition: { mode: 'document' }, productionReview: { draft: { storyboardSource: 'document' } } };
+    expect(() => cutScenesOnLyricWords(owned, { cueIds: ['l1'], mode: 'phrase' })).toThrow(/shot manifest/);
+  });
+});
+
 describe('word-anchored shots after re-alignment', () => {
   // Catches anchors left on stale times, a predecessor that gaps or overlaps, or unanchored shots being moved.
   it('moves each anchored shot with its word and ends the shot before it there', () => {

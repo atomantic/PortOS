@@ -1269,9 +1269,9 @@ function ProjectWorkspace({
 
   // Cut the board on sung words over a run of lyric lines (#14820).
   const handleCutOnLyrics = ({ cueIds, mode }) => cutMusicVideoScenesOnLyrics(selected.id, { cueIds, mode }, { silent: true })
-    .then(({ project, scenes, skipped }) => {
+    .then(({ project, scenes, skipped, laidOut }) => {
       replaceProject(project);
-      toast.success(`Cut ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: outside a shot or too close to a cut)` : ''}`);
+      toast.success(`${laidOut ? 'Laid out' : 'Cut'} ${pluralize(scenes.length, 'shot')} on the words${skipped ? ` (${pluralize(skipped, 'word')} skipped: ${laidOut ? '' : 'outside a shot or '}too close to a cut)` : ''}`);
     })
     .catch((err) => toast.error(err?.message || 'Failed to cut on the lyric words'));
 
