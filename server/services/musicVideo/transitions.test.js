@@ -207,8 +207,9 @@ describe.skipIf(!ffmpeg)('a wipe on a cut in the final render', () => {
 
 // Uniquely catches the held outgoing frame losing its own grade (regaining its
 // source color at the cut under the incoming shot's grade), whole film or segment.
+// Grain puts the held, incoming and finishing grades' labeled graphs in one filter graph.
 describe.skipIf(!ffmpeg)('a wipe between differently graded shots', () => {
-  it("keeps each shot's grade on its own picture through the wipe", () => {
+  it.each([['neutral', 0], ['golden-hour', 0.012]])("keeps each shot's grade on its own picture through the wipe, with %s incoming at grain %d", (preset, grain) => {
     const song = join(dir, 'wipe-grade-song.wav');
     run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-y', song]);
     const clips = ['0xd02020', '0x2020d0'].map((color, i) => {
@@ -217,11 +218,11 @@ describe.skipIf(!ffmpeg)('a wipe between differently graded shots', () => {
       return { sceneId: `s${i}`, videoPath, width: W, height: H, fps: FPS, duration: 1, sourceSec: 1, loop: false, inSec: 0, outSec: 1, frameFit: 'fill' };
     });
     Object.assign(clips[0], sceneTransitions({ wipeOut: { style: 'iris', lengthSec: 0.5 } }));
-    const grade = { preset: 'neutral', grain: 0, sections: [{ sceneId: 's0', preset: 'monochrome' }] };
+    const grade = { preset, grain, sections: [{ sceneId: 's0', preset: 'monochrome' }] };
     const corners = (path) => {
       const raw = run(['-i', path, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
       const size = W * H * 3;
-      // 'g' gray (the graded outgoing shot), 'b' the neutral incoming shot, 'r' an ungraded red.
+      // 'g' gray (the graded outgoing shot), 'b' the incoming shot, 'r' an ungraded red.
       return Array.from({ length: raw.length / size }, (_, f) => {
         const [r, g, b] = raw.subarray(f * size, f * size + 3);
         return b > r + 60 ? 'b' : r > g + 60 ? 'r' : 'g';
@@ -236,10 +237,13 @@ describe.skipIf(!ffmpeg)('a wipe between differently graded shots', () => {
     const output = join(dir, 'wipe-grade.mp4');
     const plan = buildMusicVideoFfmpegArgs(clips, song, output, { audioDurationSec: 2, frameGrid: true, grade });
     run(plan.args.filter((arg, i) => !(arg === '-progress' || plan.args[i - 1] === '-progress')));
+    // Every grade's labels are its own: each opens once and closes once.
+    const labels = plan.args[plan.args.indexOf('-filter_complex') + 1].match(/\[grade\w*\]/g) ?? [];
+    expect(labels.every((label) => labels.filter((other) => other === label).length === 2)).toBe(true);
     const film = corners(output);
     expect(film.slice(0, FPS + 5)).toBe('g'.repeat(FPS + 5));
     expect(film.slice(FPS + 6)).toBe('b'.repeat(FPS - 6));
-    // The incoming shot is neutral from its first frame.
+    // The incoming shot keeps its own grade from its first frame.
     expect(centre(output).slice(FPS)).toBe('b'.repeat(FPS));
     const segmentPath = join(dir, 'wipe-grade-segment.mp4');
     const segment = buildMusicVideoFfmpegArgs(clips, song, segmentPath, { audioDurationSec: 2, frameGrid: true, grade, segment: { index: 1 } });
