@@ -12,7 +12,7 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "b5e22f254f3c6e8250336610ae16edbb",
+    "claim-issue": "8ce75abd48c80ac22a750285faa7eba3",
     "claim-issue-gitlab": "1551a0567c1049d7c08926c2558523e2",
     "claim-issue-jira": "42dba9e163d5f6912e2d1df2722bf9c4",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
@@ -43,8 +43,8 @@
     "over-engineering": "fadf29ccd1bad774a5b8918ac21fa8d1",
     "performance": "199e7e4cc0429f8d96380b31563400dc",
     "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
-    "plan-task": "9c52dfc57d3205c07fa3c7b4a5ad9961",
-    "plan-task-claim": "9110a3922ccfbb1064a012490d7b1ef1",
+    "plan-task": "de878963a1325ae796c74e81ba8deafb",
+    "plan-task-claim": "2acac033c34658a4b7d0c64f6cb69ecd",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
     "pr-reviewer-review": "37f6ff606146317c8c56a35a5c12d586",
@@ -80,7 +80,7 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 57,
+    "claim-issue": 58,
     "claim-issue-gitlab": 50,
     "claim-issue-jira": 28,
     "code-quality": 6,
@@ -111,8 +111,8 @@
     "over-engineering": 1,
     "performance": 8,
     "plan-feature": 6,
-    "plan-task": 29,
-    "plan-task-claim": 6,
+    "plan-task": 30,
+    "plan-task-claim": 7,
     "pr-reviewer": 5,
     "pr-watcher": 2,
     "privacy": 2,
@@ -252,7 +252,8 @@
       "c17de3169757b2e1eb24a441e2f9e2ac",
       "18092f8658c2053ac484299dde60857d",
       "a6c2548f393470ca6427ae2f31eae4fd",
-      "526e5bef525d70c37dbb5dabe1ea6eab"
+      "526e5bef525d70c37dbb5dabe1ea6eab",
+      "b5e22f254f3c6e8250336610ae16edbb"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -500,7 +501,8 @@
       "b718701c2d4ed2b4900225fc58857208",
       "65fc9ce5622b4943174185b570b2580d",
       "2c44649f0365a0cb26858a529ca3681f",
-      "46f4e87abda325e98784840be0ce4710"
+      "46f4e87abda325e98784840be0ce4710",
+      "9c52dfc57d3205c07fa3c7b4a5ad9961"
     ],
     "plan-task-claim": [
       "07f6252f00905f9c6e4134a3d3587310",
@@ -508,7 +510,8 @@
       "5accb7695a69c00a4fb2250f7a2543c7",
       "ad2c4fc2081846ab3251b06f4a3ed6e8",
       "ccbf6f7dfe99f30bcaa598937699bdb0",
-      "fcacbef318f746322c3c76fde4dc5c28"
+      "fcacbef318f746322c3c76fde4dc5c28",
+      "9110a3922ccfbb1064a012490d7b1ef1"
     ],
     "pr-reviewer": [
       "679680b3b382aeb6786df01c4d1a90c6",
