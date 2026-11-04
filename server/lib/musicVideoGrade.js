@@ -76,7 +76,10 @@ export function musicVideoGradeFilter(grade, sections, { fps = 24, offsetSec = 0
     const channels = ['r', 'g', 'b'].map((channel, i) => {
       const value = preset === 'monochrome' ? '(0.2126*r(X,Y)+0.7152*g(X,Y)+0.0722*b(X,Y))/255' : `${channel}(X,Y)/255`;
       const curve = CURVES[preset][i];
-      return `${channel}='st(0,${value});255*clip(ld(0)+${curve}*ld(0)*(1-ld(0))+0.16*ld(0)*(1-ld(0))*(2*ld(0)-1)+${settings.grain}*${noise}*4*ld(0)*(1-ld(0)),0,1)'`;
+      // geq evaluates every term per pixel, so a zero term is left out, not multiplied by 0 (#14845).
+      const terms = ['ld(0)', ...(curve ? [`${curve}*ld(0)*(1-ld(0))`] : []), '0.16*ld(0)*(1-ld(0))*(2*ld(0)-1)',
+        ...(settings.grain ? [`${settings.grain}*${noise}*4*ld(0)*(1-ld(0))`] : [])];
+      return `${channel}='st(0,${value});255*clip(${terms.join('+')},0,1)'`;
     });
     return `geq=${channels.join(':')}:enable='${sumExpr(ranges)}'`;
   });
