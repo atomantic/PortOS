@@ -13,6 +13,7 @@
  *   already-published video matched `studio.youtube.com` once and was edited).
  */
 import { ServerError } from '../../../lib/errorHandler.js';
+import { isVitestRunner } from '../../../lib/runtimeEnv.js';
 
 export const PUBLISH_STEP_TIMEOUT_MS = 60_000;
 
@@ -33,7 +34,7 @@ export function serializeBrowserOperation(fn) {
 export async function connectPortosBrowser({ launch = true } = {}) {
   // The PortOS Browser carries the operator's real sign-ins (Suno, socials): a test
   // that misses a double must fail, never spend credits or post as the operator.
-  if (process.env.VITEST) {
+  if (isVitestRunner()) {
     throw new ServerError('Tests must not drive the real PortOS Browser; stub this dependency.', { status: 503, code: 'PORTOS_BROWSER_UNAVAILABLE' });
   }
   const { getHealthStatus, launchBrowser } = await import('../../browserService.js');
