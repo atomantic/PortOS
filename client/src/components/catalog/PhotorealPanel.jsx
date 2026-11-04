@@ -76,7 +76,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const scene = record.payload?.greybox ?? null;
   const shots = useMemo(() => scene?.shots || [], [scene]);
   const [status, setStatus] = useState(null);
-  const [selected, setSelected] = useState(() => new Set());
+  const [selected, setSelected] = useState(null);
   const [engine, setEngine] = useState(() => readPrefs()?.engine || 'eevee');
   const [samples, setSamples] = useState(() => readPrefs()?.samples ?? null);
   const [flySeconds, setFlySeconds] = useState(() => readPrefs()?.flySeconds ?? FLY_SECONDS.default);
@@ -150,9 +150,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
   // Default to every camera until the user picks; always in list order, which is
   // also the order a fly-through visits them.
-  const chosen = shots.filter((s) => !selected.size || selected.has(s.id)).map((s) => s.id);
+  const chosen = shots.filter((s) => selected === null || selected.has(s.id)).map((s) => s.id);
   const toggleShot = (id) => setSelected((cur) => {
-    const base = cur.size ? new Set(cur) : new Set(shots.map((s) => s.id));
+    const base = cur === null ? new Set(shots.map((s) => s.id)) : new Set(cur);
     if (base.has(id)) base.delete(id); else base.add(id);
     return base;
   });
