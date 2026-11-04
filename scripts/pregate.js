@@ -153,7 +153,8 @@ export function describeStageCommand(stage) {
  *
  * Pure, so the plan -> stage mapping is testable without spawning anything.
  * The hidden-content scan always runs first, even if lint/tests select no
- * work, and the shipped prompt-history guard (CI's `prompt-history` job: one
+ * work, then the commit-message scan (no AI session links in this branch's
+ * commits), and the shipped prompt-history guard (CI's `prompt-history` job: one
  * git-history read, seconds locally) follows it when selected. Order after
  * that runs the shared structural guards first, then CI's dependency order:
  * lint, unit tests, the client build and its bundle pin, the boot smoke, the browser suites, and the DB suite
@@ -168,6 +169,12 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, skip = {}, 
     suite: 'scan',
     script: 'scan-diff-hidden-content.js',
     args: ['--base', baseSha, '--worktree'],
+    env: {},
+  }, {
+    name: 'commit-message scan',
+    suite: 'commit-messages',
+    script: 'scan-commit-session-links.js',
+    args: ['--base', baseSha],
     env: {},
   }];
 
@@ -957,7 +964,7 @@ async function main() {
     let result = results[index];
     // Even prerequisite probes may start Chrome. Defer them until every early
     // guard has passed, retaining not-run resource stages on an early failure.
-    if (!probed && !result.guard && !['scan', 'prompt-history'].includes(result.suite)) {
+    if (!probed && !result.guard && !['scan', 'commit-messages', 'prompt-history'].includes(result.suite)) {
       const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
       ({ uncovered, stages } = planStages(prerequisites, databaseEnv));
       announceUncovered(uncovered);

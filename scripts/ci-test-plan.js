@@ -262,11 +262,11 @@ const FULL_TRIGGER_RULES = [
   // prove themselves against the complete suite rather than their own scope.
   // Only the ones the windows-server job itself executes (ci-base-sha,
   // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
-  // planner, lint runner, hidden-content scan and status verifier run on Linux
+  // planner, lint runner, hidden-content and commit-message scans and status verifier run on Linux
   // jobs only, so a Windows run would observe nothing they change.
   { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
-  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|scan-commit-session-links|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
 // Native Windows coverage is intentionally limited to CLI/TUI execution,
