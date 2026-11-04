@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { ImagePlus, Trash2, X } from 'lucide-react';
+import { ImagePlus, Images, Trash2, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
+import MediaImage from '../MediaImage';
 import StageSection from './StageSection.jsx';
 import ResearchSeedForm from './ResearchSeedForm.jsx';
 import toast from '../ui/Toast';
@@ -17,6 +18,7 @@ import {
 const FIELD = 'w-full min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-[32px]';
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
 const NEED_LABELS = { research: 'research', references: 'photos', still: 'still', variant: 'variant still' };
+const REFERENCE_ORIGIN_LABELS = { upload: 'Upload', gallery: 'Gallery', research: 'Research', shot: 'Shot' };
 const FILTERS = [
   { id: '', label: 'All' },
   { id: 'research', label: 'Needs research' },
@@ -25,21 +27,28 @@ const FILTERS = [
   { id: 'unlinked', label: 'No shots' },
 ];
 const imageSrc = (imageId) => `/data/images/${encodeURIComponent(imageId)}`;
+// A grouped count: a roster's photo and shot totals pass 1,000.
+const countOf = (count, noun) => `${formatCount(count)} ${count === 1 ? noun : `${noun}s`}`;
+const rosterName = (cameo) => `${cameo.name}${cameo.label && cameo.label !== cameo.name ? ` (${cameo.label})` : ''}`;
+const shotsAndNeeds = (shots, needs = []) => `${countOf(shots, 'shot')}${needs.length ? ` · needs ${needs.map((n) => NEED_LABELS[n]).join(', ')}` : ' · ready'}`;
 
 /** The roster's one-line summary: how many cameos and what they still need. */
 export function cameosSummary(coverage) {
   const { totals } = coverage;
   if (!totals.cameos) return 'No cameos yet';
   return [
-    `${formatCount(totals.cameos)} ${totals.cameos === 1 ? 'cameo' : 'cameos'} · ${formatCount(totals.linkedShots)} linked shots`,
+    `${countOf(totals.cameos, 'cameo')} · ${countOf(totals.photos, 'photo')}`,
     totals.research ? `${formatCount(totals.research)} need research` : null,
+    totals.references ? `${formatCount(totals.references)} need photos` : null,
     totals.still ? `${formatCount(totals.still)} need a still` : null,
+    // Last: a phone's two-line summary clamps here, and what's missing matters more.
+    countOf(totals.linkedShots, 'linked shot'),
   ].filter(Boolean).join(' · ');
 }
 
 function Thumb({ imageId, label, className = 'h-12 w-12' }) {
   return imageId
-    ? <img src={imageSrc(imageId)} alt={label} className={`${className} shrink-0 rounded border border-port-border bg-black object-cover`} />
+    ? <MediaImage src={imageSrc(imageId)} thumbnail loading="lazy" alt={label} className={`${className} shrink-0 rounded border border-port-border bg-black object-cover`} />
     : <span className={`${className} flex shrink-0 items-center justify-center rounded border border-dashed border-port-border text-[10px] text-port-text-muted`}>No still</span>;
 }
 
@@ -81,7 +90,7 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
         <div className="min-w-0 flex-1 space-y-1">
           <p className="text-sm font-medium">{cameo.name}</p>
           <p className="text-[11px] text-port-text-muted">
-            {formatCount(linked.length)} {linked.length === 1 ? 'shot' : 'shots'}{need.length ? ` · needs ${need.map((n) => NEED_LABELS[n]).join(', ')}` : ' · ready'}
+            {shotsAndNeeds(linked.length, need)}
           </p>
           <div className="flex flex-wrap gap-1">
             <button type="button" className={BUTTON} onClick={() => setPicker({ kind: 'still' })}><ImagePlus size={12} aria-hidden="true" /> Pick still</button>
@@ -244,10 +253,96 @@ function CameoEditor({ project, cameo, coverage, onApply, onClose, disabled }) {
 }
 
 /**
+ * Every shown cameo's reference photos, grouped by cameo (#14868), so a roster
+ * can be reviewed without opening each one. Removals run one at a time: each
+ * answer carries the whole roster, so an older one landing after a newer one
+ * would bring a removed photo back.
+ */
+function CameoPhotoReview({ project, cameos, coverageById, onApply, onOpen, disabled }) {
+  const [removing, setRemoving] = useState(() => new Set());
+  const queue = useRef(Promise.resolve());
+  const scroller = useRef(null);
+  const photos = cameos.reduce((n, cameo) => n + (cameo.references || []).length, 0);
+
+  // The button is about to leave the DOM, so a keyboard user's place moves to a surviving photo.
+  const moveFocusFrom = (button) => {
+    if (document.activeElement !== button) return;
+    const others = [...scroller.current.querySelectorAll('[data-cameo-photo-remove]')];
+    const at = others.indexOf(button);
+    const isFree = (other) => other.getAttribute('aria-disabled') !== 'true';
+    const next = others.slice(at + 1).find(isFree) || others.slice(0, at).reverse().find(isFree) || scroller.current;
+    next.focus({ preventScroll: true });
+  };
+  const remove = (button, cameoId, imageId) => {
+    const key = `${cameoId}/${imageId}`;
+    if (removing.has(key)) return;
+    setRemoving((prev) => new Set(prev).add(key));
+    queue.current = queue.current
+      .then(() => removeMusicVideoCameoReference(project.id, cameoId, imageId, { silent: true }))
+      .then((answer) => { moveFocusFrom(button); onApply(answer); })
+      .catch((err) => toast.error(err?.message || 'Failed to remove the photo'))
+      .finally(() => setRemoving((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      }));
+  };
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[11px] text-port-text-muted">{countOf(photos, 'photo')} across {countOf(cameos.length, 'cameo')}</p>
+      <div ref={scroller} tabIndex={-1} className="max-h-[80vh] space-y-3 overflow-y-auto rounded border border-port-border p-2">
+        {cameos.map((cameo) => {
+          const references = cameo.references || [];
+          const coverage = coverageById.get(cameo.cameoId);
+          return (
+            <section key={cameo.cameoId} aria-label={cameo.name} className="min-w-0 space-y-1">
+              <button type="button" onClick={() => onOpen(cameo.cameoId)} className="flex min-h-[44px] w-full min-w-0 flex-col justify-center rounded px-1 text-left hover:bg-port-border/30">
+                <span className="block w-full truncate text-sm">{rosterName(cameo)}</span>
+                <span className="block w-full truncate text-[11px] text-port-text-muted">{countOf(references.length, 'photo')} · {shotsAndNeeds(coverage?.shots || 0, coverage?.needs)}</span>
+              </button>
+              {references.length ? (
+                <ul className="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-2">
+                  {references.map((ref, index) => {
+                    const href = ref.pageUrl || ref.sourceUrl;
+                    const photoName = `${cameo.name} photo ${index + 1}`;
+                    const pending = removing.has(`${cameo.cameoId}/${ref.imageId}`);
+                    return (
+                      <li key={ref.imageId} className={`min-w-0 ${pending ? 'opacity-50' : ''}`}>
+                        <div className="relative">
+                          <MediaImage src={imageSrc(ref.imageId)} thumbnail loading="lazy" alt={photoName} className="aspect-square w-full rounded border border-port-border bg-black object-cover" />
+                          {cameo.stillImageId === ref.imageId && <span className="port-media-overlay-strong absolute left-1 top-1 rounded px-1 text-[10px]">Still</span>}
+                        </div>
+                        <div className="flex min-w-0 items-center justify-between gap-1">
+                          {href
+                            ? <a href={href} target="_blank" rel="noreferrer noopener" aria-label={`Source of ${photoName}`} className="inline-flex min-h-[44px] min-w-0 items-center truncate text-[11px] text-port-accent">Source</a>
+                            : <span className="min-w-0 truncate text-[11px] text-port-text-muted">{REFERENCE_ORIGIN_LABELS[ref.source] || 'No link'}</span>}
+                          <button type="button" data-cameo-photo-remove disabled={disabled} aria-disabled={pending || undefined} aria-label={`Remove ${photoName}`}
+                            onClick={(e) => remove(e.currentTarget, cameo.cameoId, ref.imageId)}
+                            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg hover:bg-port-border/40 disabled:opacity-50">
+                            <X size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : <p className="px-1 text-[11px] text-port-text-muted">No photos yet.</p>}
+            </section>
+          );
+        })}
+        {!cameos.length && <p className="text-[11px] text-port-text-muted">No cameos match.</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
  * Look › Cameos (#14821): the researched cameos the video shows, beyond the
  * capped cast. Each keeps its research, reference photos, one chosen still and
  * its variants; linked shots with no still of their own show that still. The
- * open cameo is `?cameo=<id>` so it can be linked to.
+ * open cameo is `?cameo=<id>` and the photo review `?cameoView=photos`, so both
+ * can be linked to.
  */
 export default function CameoRosterPanel({ project, onApply, disabled = false }) {
   const [params, setParams] = useSearchParams();
@@ -260,11 +355,13 @@ export default function CameoRosterPanel({ project, onApply, disabled = false })
   const coverageById = useMemo(() => new Map(coverage.cameos.map((c) => [c.cameoId, c])), [coverage]);
   const openId = params.get('cameo');
   const open = roster.find((s) => s.cameoId === openId) || null;
-  const setOpen = (cameoId) => setParams((prev) => {
+  const reviewing = params.get('cameoView') === 'photos';
+  const setParam = (name, value) => setParams((prev) => {
     const next = new URLSearchParams(prev);
-    if (cameoId) next.set('cameo', cameoId); else next.delete('cameo');
+    if (value) next.set(name, value); else next.delete(name);
     return next;
   }, { replace: true });
+  const setOpen = (cameoId) => setParam('cameo', cameoId);
   const q = query.trim().toLowerCase();
   const shown = roster.filter((s) => {
     const c = coverageById.get(s.cameoId);
@@ -283,41 +380,47 @@ export default function CameoRosterPanel({ project, onApply, disabled = false })
   };
 
   return (
-    <StageSection id="mv-look-cameos" title="Cameos" summary={cameosSummary(coverage)} defaultOpen={Boolean(open)}>
+    <StageSection id="mv-look-cameos" title="Cameos" summary={cameosSummary(coverage)} defaultOpen={Boolean(open) || reviewing}>
       <p className="text-[11px] text-port-text-muted">
         Things the video shows in many shots, like each dog in a roll call. Research each one, add photos of the real thing, and pick one still: every linked shot without its own still shows it.
       </p>
       {open && <CameoEditor key={open.cameoId} project={project} cameo={open} coverage={coverageById.get(open.cameoId)} onApply={onApply} onClose={() => setOpen(null)} disabled={disabled} />}
       {roster.length > 0 && (
         <div className="space-y-2">
-          <div className="flex flex-wrap gap-1" role="group" aria-label="Show cameos">
-            {FILTERS.map((f) => (
-              <button key={f.id || 'all'} type="button" aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}
-                className={`${BUTTON} ${filter === f.id ? 'border-port-accent text-port-accent' : ''}`}>{f.label}</button>
-            ))}
+          <div className="flex flex-wrap items-center gap-1">
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Show cameos">
+              {FILTERS.map((f) => (
+                <button key={f.id || 'all'} type="button" aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}
+                  className={`${BUTTON} ${filter === f.id ? 'border-port-accent text-port-accent' : ''}`}>{f.label}</button>
+              ))}
+            </div>
+            <button type="button" aria-pressed={reviewing} onClick={() => setParam('cameoView', reviewing ? null : 'photos')}
+              className={`${BUTTON} ${reviewing ? 'border-port-accent text-port-accent' : ''}`}><Images size={12} aria-hidden="true" /> Review photos</button>
           </div>
           <label htmlFor={`mv-cameos-${project.id}-search`} className="sr-only">Search cameos</label>
           <input id={`mv-cameos-${project.id}-search`} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search cameos" className={FIELD} />
-          <ul className="max-h-[28rem] divide-y divide-port-border overflow-y-auto rounded border border-port-border">
-            {shown.map((s) => {
-              const c = coverageById.get(s.cameoId);
-              return (
-                <li key={s.cameoId}>
-                  <button type="button" onClick={() => setOpen(s.cameoId)} aria-current={openId === s.cameoId || undefined}
-                    className="flex min-h-[44px] w-full items-center gap-2 px-2 py-1 text-left hover:bg-port-border/30">
-                    <Thumb imageId={s.stillImageId} label="" className="h-10 w-10" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{s.name}{s.label && s.label !== s.name ? ` (${s.label})` : ''}</span>
-                      <span className="block truncate text-[11px] text-port-text-muted">
-                        {formatCount(c?.shots || 0)} {c?.shots === 1 ? 'shot' : 'shots'}{c?.needs.length ? ` · needs ${c.needs.map((n) => NEED_LABELS[n]).join(', ')}` : ' · ready'}
+          {reviewing ? (
+            <CameoPhotoReview project={project} cameos={shown} coverageById={coverageById} onApply={onApply} onOpen={setOpen} disabled={disabled} />
+          ) : (
+            <ul className="max-h-[28rem] divide-y divide-port-border overflow-y-auto rounded border border-port-border">
+              {shown.map((s) => {
+                const c = coverageById.get(s.cameoId);
+                return (
+                  <li key={s.cameoId}>
+                    <button type="button" onClick={() => setOpen(s.cameoId)} aria-current={openId === s.cameoId || undefined}
+                      className="flex min-h-[44px] w-full items-center gap-2 px-2 py-1 text-left hover:bg-port-border/30">
+                      <Thumb imageId={s.stillImageId || s.references?.[0]?.imageId} label="" className="h-10 w-10" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm">{rosterName(s)}</span>
+                        <span className="block truncate text-[11px] text-port-text-muted">{shotsAndNeeds(c?.shots || 0, c?.needs)}</span>
                       </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-            {!shown.length && <li className="px-2 py-2 text-[11px] text-port-text-muted">No cameos match.</li>}
-          </ul>
+                    </button>
+                  </li>
+                );
+              })}
+              {!shown.length && <li className="px-2 py-2 text-[11px] text-port-text-muted">No cameos match.</li>}
+            </ul>
+          )}
         </div>
       )}
       <form onSubmit={add} className="space-y-1">
