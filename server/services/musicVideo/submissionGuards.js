@@ -165,18 +165,21 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched. Add a video tool, or replan the project without generated video.');
   }
   const scene = project?.scenes?.find((entry) => entry.sceneId === musicVideo.sceneId);
+  let referencePromptPrefix = null;
   if (body.mode === 'ic-ingredients-25' && scene) {
     // Resolve against this exact project snapshot, then capture dependencies
     // from it below. An earlier resolver may have seen an older selection.
     const { musicVideoClipReferences } = await import('./clipCastReferences.js');
     const current = await musicVideoClipReferences(musicVideo, 8, { project, excludePath: prepared.sourceImagePath || null, includePromptLabels: true });
-    const labels = musicVideo.expectedClipReferenceLabels;
-    const prefix = Array.isArray(labels) ? `Reference sheet: ${labels.join(', ')}.\n\nGenerated video: ` : null;
+    const labels = current.map((ref) => ref.promptLabel);
+    const prefix = `Reference sheet: ${labels.join(', ')}.\n\nGenerated video: `;
+    const expectedLabels = musicVideo.expectedClipReferenceLabels;
     if (JSON.stringify(current.map((ref) => ref.path)) !== JSON.stringify(params.icReferencePaths || [])
-      || JSON.stringify(current.map((ref) => ref.promptLabel)) !== JSON.stringify(labels)
-      || !prefix || !params.prompt.startsWith(prefix)) {
+      || (Array.isArray(expectedLabels) && (JSON.stringify(labels) !== JSON.stringify(expectedLabels)
+        || !params.prompt.startsWith(prefix)))) {
       refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed while preparing the render. Review them and submit again.');
     }
+    if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
     const actual = backend === VIDEO_GEN_MODE.GROK ? (params.castReferences || []).map((ref) => basename(ref.path))
@@ -203,6 +206,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
   }
   const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox });
+  if (referencePromptPrefix) params.prompt = referencePromptPrefix + params.prompt;
   assertShotTiming({ params, scene, performance, prepared });
   applyActionContract({ params, scene, performance });
   await assertSourceAudioCurrent({ project, prepared });

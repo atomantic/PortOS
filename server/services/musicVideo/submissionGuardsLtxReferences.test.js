@@ -34,6 +34,21 @@ describe('LTX clip reference snapshot', () => {
     await expect(applyMusicVideoSubmissionGuards(request())).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
   });
 
+  it('builds reference labels for a tagged caller without a client snapshot', async () => {
+    const input = request();
+    input.body.musicVideo = { projectId: 'project', sceneId: 'shot', compose: true, promptAsTyped: true };
+    input.params.prompt = 'A rider turns';
+    await applyMusicVideoSubmissionGuards(input);
+    expect(input.params.prompt).toBe('Reference sheet: Rider.\n\nGenerated video: A rider turns');
+  });
+
+  it('still rejects changed reference files when the label snapshot is omitted', async () => {
+    const input = request();
+    input.body.musicVideo = { projectId: 'project', sceneId: 'shot' };
+    m.project.scenes[0].clipReferenceIds = ['ref-b'];
+    await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+  });
+
   it('records the same snapshot that resolved the actual files', async () => {
     const input = request();
     await applyMusicVideoSubmissionGuards(input);

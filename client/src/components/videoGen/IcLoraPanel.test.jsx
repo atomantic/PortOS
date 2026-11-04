@@ -128,6 +128,13 @@ describe('IcLoraPanel — image-kind references (#3112)', () => {
     expect(screen.getByText(/In-flight render is conditioned on guide\.png.*re-pick references/i)).toBeTruthy();
   });
 
+  it('names the 2.5 model and runtime when that model is unavailable', () => {
+    render(<IcLoraPanel {...imageProps} spec={icLoraSpecForMode('ic-ingredients-25')} hasCompatibleModel={false} />);
+    expect(screen.getByText('ltx25_mlx_q8')).toBeTruthy();
+    expect(screen.getByText('INSTALL_LTX25=1 bash scripts/setup-image-video.sh')).toBeTruthy();
+    expect(screen.queryByText('ltx23_dgrauet_q4')).toBeNull();
+  });
+
   it('opens the gallery picker for the clicked reference row', () => {
     const onBrowseReferenceImage = vi.fn();
     render(<IcLoraPanel {...imageProps} onBrowseReferenceImage={onBrowseReferenceImage} />);

@@ -222,6 +222,7 @@ export function useVideoGenForm({
     if (incomingSourceImage) {
       setSourceImageFile(incomingSourceImage);
       setSourceImageUpload(null);
+      setUnavailableSourceImageName('');
       setMode((m) => (m === 'text' ? 'image' : m));
     }
   }, [incomingSourceImage]);

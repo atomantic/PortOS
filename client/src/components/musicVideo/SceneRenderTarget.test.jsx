@@ -3,6 +3,7 @@ vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...aw
 import { render, screen, within } from '@testing-library/react';
 import SceneRenderTarget, { lastRenderTarget, rememberRenderTarget, renderTargetOptions, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import { FAL_IMAGE_VIDEO_MODELS, falVideoResolutions } from '../../lib/falVideoModels.js';
+import { RUNWAY_VIDEO_MODELS } from '../../lib/runwayVideoModels.js';
 
 const models = [
   { id: 'ltx25_example', name: 'LTX-2.5 Example', runtime: 'ltx25', supportedModes: ['text', 'image', 'fflf', 'a2v'] },
@@ -23,6 +24,49 @@ describe('the shot card local model picker', () => {
   it('offers image models for a cutaway and audio-to-video models for a performance shot', () => {
     expect(modelNames(false)).toEqual(['LTX-2.5 Example', 'Wan Example']);
     expect(modelNames(true)).toEqual(['LTX-2.5 Example', 'Ref2VA Example']);
+  });
+
+  it('automatically covers the final action interval while preserving a deliberate shorter pick', () => {
+    const scene = { sceneId: 's1', startSec: 0, endSec: 8.01 };
+    const context = { models, scene, performance: false };
+    expect(renderTargetOverrides('local', {}, {}, context).numFrames).toBe(217);
+    expect(renderTargetOverrides('local', {}, { numFrames: 193 }, context).numFrames).toBe(193);
+    render(<SceneRenderTarget id="pick" value="local" performance={false} saved={{}} models={models} scene={scene}
+      minFrames={121} onChange={() => {}} onOptionsChange={() => {}} />);
+    expect(screen.getByLabelText('Clip length').value).toBe('217');
+    expect(screen.getByRole('option', { name: /covers shot/ }).value).toBe('217');
+  });
+
+  it.each([
+    { startSec: 0, endSec: 4 },
+    { startSec: null, endSec: null },
+  ])('uses the cold-open duration instead of song timing $startSec–$endSec', (songTiming) => {
+    const scene = { sceneId: 's1', ...songTiming, preMusic: { durationSec: 8 } };
+    expect(renderTargetOverrides('local', {}, {}, { models, scene, performance: false }).numFrames).toBe(193);
+    render(<SceneRenderTarget id="pick" value="local" performance={false} saved={{}} models={models} scene={scene}
+      minFrames={121} onChange={() => {}} onOptionsChange={() => {}} />);
+    expect(screen.getByLabelText('Clip length').value).toBe('193');
+  });
+});
+
+describe('hosted clip length labels', () => {
+  it.each([
+    ['grok', '6s'],
+    [`fal:${FAL_IMAGE_VIDEO_MODELS.find((model) => model.duration)?.id}`, null],
+    [`runway:${RUNWAY_VIDEO_MODELS[0].id}`, null],
+  ])('shows %s lengths in seconds', (value, expected) => {
+    render(<SceneRenderTarget id="pick" value={value} performance={false} saved={{}} models={models}
+      scene={{ sceneId: 's1', startSec: 0, endSec: 4 }} onChange={() => {}} onOptionsChange={() => {}} />);
+    const label = within(screen.getByLabelText('Clip length')).getByRole('option', { name: /covers shot/ }).textContent;
+    expect(parseFloat(label)).toBeGreaterThanOrEqual(4);
+    if (expected) expect(label).toContain(expected);
+  });
+
+  it('keeps a hosted cold-open default aligned with the priced song-timing request', () => {
+    render(<SceneRenderTarget id="pick" value="fal:fal-ai/minimax/hailuo-02/standard/image-to-video" performance={false}
+      saved={{}} models={models} scene={{ sceneId: 's1', startSec: 0, endSec: 10, preMusic: { durationSec: 3 } }}
+      onChange={() => {}} onOptionsChange={() => {}} />);
+    expect(within(screen.getByLabelText('Clip length')).getByRole('option', { name: /covers shot/ }).textContent).toBe('10s · covers shot');
   });
 });
 

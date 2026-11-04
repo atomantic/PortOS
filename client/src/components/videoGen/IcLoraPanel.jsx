@@ -224,7 +224,13 @@ export default function IcLoraPanel({
         />
       )}
 
-      {!hasCompatibleModel && <Ltx2RuntimeMissingNotice subject={spec.label} />}
+      {!hasCompatibleModel && (spec.mode === 'ic-ingredients-25' ? (
+        <p className="text-[11px] text-port-warning">
+          LTX 2.5 References requires an LTX-2.5 MLX model. Restore <code>ltx25_mlx_q8</code> in{' '}
+          <code>data/media-models.json</code>, then install its runtime with{' '}
+          <code>INSTALL_LTX25=1 bash scripts/setup-image-video.sh</code>.
+        </p>
+      ) : <Ltx2RuntimeMissingNotice subject={spec.label} />)}
     </div>
   );
 }

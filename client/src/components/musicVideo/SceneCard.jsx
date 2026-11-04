@@ -204,8 +204,12 @@ export default function SceneCard({
   const referenceModel = referenceBackend === 'fal'
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
     : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
-  const canUseLtxReferences = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
+  // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
+  // them after the storyboard's first frame has landed instead.
+  const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
+  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
     && renderSettings?.generationMode !== 'audioReactive';
+  const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
   const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
@@ -264,7 +268,6 @@ export default function SceneCard({
   };
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
-  const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
   const storyboardRefusal = storyboardDefault ? greyboxRefusal || referenceRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
@@ -674,6 +677,9 @@ export default function SceneCard({
                   ...(event.target.checked ? { songAudio: false, endFrame: false } : {}) }))} />
               Use LTX reference images (requires Ingredients adapter; at least 121 frames)
             </label>
+          )}
+          {storyboardDefault && ltxReferencesAvailable && (
+            <p className="text-xs text-port-text-muted">Generate the storyboard frame first to use LTX reference images.</p>
           )}
           {canUseLtxReferences && ltxReferencesGreyboxBlocked && (
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>

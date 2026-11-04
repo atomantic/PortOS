@@ -69,6 +69,11 @@ describe('AdvancedParamsPanel', () => {
     expect(screen.getByLabelText('Frames')).toBeTruthy();
   });
 
+  it('does not offer chunking for an LTX reference render', () => {
+    renderPanel({ mode: 'ic-ingredients-25', chunks: 2, currentModel: { runtime: 'ltx25', supportedModes: MLX_MODES } });
+    expect(screen.queryByLabelText('Chunks')).toBeNull();
+  });
+
   it('hides the manual frame picker when A2V follows the uploaded audio duration', () => {
     renderPanel({
       mode: 'a2v',

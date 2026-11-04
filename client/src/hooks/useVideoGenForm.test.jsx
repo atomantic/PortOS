@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useNavigate } from 'react-router';
 
 const extractLastFrame = vi.fn();
 vi.mock('../services/api', () => ({ extractLastFrame: (...a) => extractLastFrame(...a) }));
@@ -1206,6 +1206,18 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
     expect(result.current.icLoraModeBlocked).toBe(true);
     act(() => result.current.clearSourceImage());
     expect(result.current.unavailableSourceImageName).toBe('');
+  });
+
+  it('clears a missing-upload warning when Continue supplies a new opening frame', async () => {
+    const wrapper = ({ children }) => <MemoryRouter initialEntries={['/media/video']}>{children}</MemoryRouter>;
+    const { result } = renderHook(() => ({ form: useVideoGenForm({ models: [LTX25],
+      modelContext: { defaultModel: LTX25.id }, availableLoras: [], grokEnabled: false }), navigate: useNavigate() }), { wrapper });
+    await act(async () => { result.current.form.applyResumedParams({ modelId: LTX25.id, mode: 'ic-ingredients-25',
+      unavailableSourceImageName: 'old-upload.png', icReferenceImageFiles: ['rider.png'], numFrames: 121 }); });
+    expect(result.current.form.unavailableSourceImageName).toBe('old-upload.png');
+    await act(async () => { result.current.navigate('/media/video?sourceImageFile=new-frame.png'); });
+    expect(result.current.form.sourceImageFile).toBe('new-frame.png');
+    expect(result.current.form.unavailableSourceImageName).toBe('');
   });
 
   it('does NOT carry a remixed record\'s promise onto whatever image the user picks next', async () => {

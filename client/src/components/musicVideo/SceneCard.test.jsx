@@ -1174,6 +1174,20 @@ it('passes the selected LTX character references and prompt labels from the shot
   }) }));
 });
 
+it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
+  const scene = { sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'The rider turns',
+    clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } };
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image'] }];
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateFrame={vi.fn()} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+  expect(screen.getByRole('button', { name: 'Clip from storyboard' })).toBeTruthy();
+  expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+  expect(screen.getByText(/Generate the storyboard frame first to use LTX reference images/)).toBeTruthy();
+});
+
 it('shows the effective LTX reference clip length and refuses an empty motion prompt', () => {
   const scene = { sceneId: 's1', prompt: '', referenceImageId: 'start.png',
     clipReferenceIds: ['rider'], startSec: 0, endSec: 3, takes: [] };

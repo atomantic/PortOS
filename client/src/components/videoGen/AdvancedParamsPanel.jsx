@@ -12,7 +12,7 @@ import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import { formatDownloadGb } from '../../utils/formatters.js';
 import {
   isMiniMaxH3SpeedProfile, frameOptionsForModel, fpsOptionsForModel, CHUNK_OPTIONS,
-  isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
+  isIcLoraMode, isModelAllowedForMode, supportsVideoAudioControls, supportsVideoAudioPromptControls,
   contextFrameOptionsForModel, selectedContextFramesForModel, supportsContextWindow,
   DEFAULT_SPEED_PROFILE_ID, speedProfilesForMode,
   videoChainChunkModes,
@@ -63,7 +63,7 @@ export default function AdvancedParamsPanel({
   const showFrames = !(mode === 'a2v' && currentModel?.audioDurationDriven === true);
   // Chunk chaining seeds chunk N+1 from chunk N's last frame, so it needs i2v —
   // the same predicate the picker uses, not a second reading of supportedModes.
-  const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
+  const showChunks = mode !== 'a2v' && !isIcLoraMode(mode) && isModelAllowedForMode(currentModel, 'image');
   // ltx2 extend conditions on the source's latent rather than a single frame,
   // so image strength is meaningless for it.
   const showImageStrength = mode === 'image' || mode === 'ic-ingredients-25' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));

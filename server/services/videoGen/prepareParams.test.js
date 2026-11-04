@@ -1011,6 +1011,18 @@ describe('LTX 2.5 reference sheet admission', () => {
       icReferencePaths: ['/mock/images/renee.png'] });
   });
 
+  it('rejects a declared opening frame that no longer exists', async () => {
+    vi.mocked(resolveGalleryImage).mockReturnValueOnce(null);
+    await expect(prepare({ ...request, sourceImageFile: 'missing.png' }))
+      .rejects.toMatchObject({ status: 400, code: 'IC_LORA_SOURCE_MISSING' });
+  });
+
+  it('allows an intentionally omitted opening frame', async () => {
+    const result = await prepare({ ...request, sourceImageFile: '' });
+    expect(result.sourceImagePath).toBeNull();
+    expect(result.icReferencePaths).toEqual(['/mock/images/renee.png']);
+  });
+
   it('rejects a short render or a skipped refinement before staging', async () => {
     await expect(prepare({ ...request, numFrames: 113 })).rejects.toMatchObject({ code: 'IC_LORA_REFERENCE_TOO_SHORT' });
     await expect(prepare({ ...request, icSkipStage2: true })).rejects.toMatchObject({ code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });

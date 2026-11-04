@@ -8,6 +8,7 @@ import {
 } from '../../lib/runwayVideoModels.js';
 import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
+import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 
@@ -132,12 +133,13 @@ export function defaultLocalModelId({ models = [], saved = {}, defaultModel = ''
 
 const shotSpan = (scene) => (typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
   ? scene.endSec - scene.startSec : null);
+const localShotSpan = (scene) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene);
 
 /** The shortest frame count of `model` that covers the shot, else its longest; null for an untimed shot. */
 export function coveringFrames(model, spanSec) {
   if (!(spanSec > 0)) return null;
   const frames = frameOptionsForModel(model);
-  return frames.find((count) => count / LOCAL_FPS >= spanSec - 1e-6) ?? frames[frames.length - 1];
+  return frames.find((count) => (count - 1) / LOCAL_FPS >= spanSec - 1e-6) ?? frames[frames.length - 1];
 }
 
 const falLengths = (model) => {
@@ -154,7 +156,7 @@ const falLengths = (model) => {
  */
 export function renderTargetOverrides(value, saved, options = {}, context = {}) {
   if (!value) return null;
-  const spanSec = shotSpan(context.scene);
+  const spanSec = value === 'local' ? localShotSpan(context.scene) : shotSpan(context.scene);
   if (value === 'local') {
     // A remembered model this shot can't use (a non-lip-sync model on a lip-synced shot) falls back to the default.
     const choices = localModelChoices(context.models || [], context.performance);
@@ -216,7 +218,7 @@ export default function SceneRenderTarget({
     onOptionsChange?.(next);
     rememberRenderTarget(value, next);
   };
-  const spanSec = shotSpan(scene);
+  const spanSec = value === 'local' ? localShotSpan(scene) : shotSpan(scene);
   const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
   const localChoices = localModelChoices(models, performance);
   const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
@@ -227,6 +229,11 @@ export default function SceneRenderTarget({
   const falModel = value.startsWith('fal:') ? getFalVideoModel(overrides.falModelId) : null;
   const runwayModel = value.startsWith('runway:') ? getRunwayVideoModel(overrides.runwayModelId) : null;
   const coversLabel = (sec) => (spanSec != null ? `${formatSec(sec)} · covers shot` : `${formatSec(sec)} · default`);
+  const localCoversLabel = (frames) => {
+    const length = formatSec(frames / LOCAL_FPS);
+    if (spanSec == null) return `${length} · default`;
+    return `${length} · ${(frames - 1) / LOCAL_FPS >= spanSec - 1e-6 ? 'covers shot' : 'shorter than shot'}`;
+  };
   return (
     <>
       <span className="flex min-w-0 max-w-full flex-1 basis-48 items-center gap-1 sm:flex-initial">
@@ -252,7 +259,7 @@ export default function SceneRenderTarget({
               onChange={(frames) => set({ numFrames: Number(frames) || null })}>
               {localFrameOptions.map((frames) => (
                 <option key={frames} value={frames}>
-                  {frames === coveringFrames(localModel, spanSec) ? coversLabel(frames / LOCAL_FPS) : formatSec(frames / LOCAL_FPS)}
+                  {frames === coveringFrames(localModel, spanSec) ? localCoversLabel(frames) : formatSec(frames / LOCAL_FPS)}
                 </option>
               ))}
             </OptionSelect>

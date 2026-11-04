@@ -111,7 +111,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   getProject: vi.fn(),
 }));
 const clipCastReferences = vi.hoisted(() => vi.fn(async () => []));
-vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences }));
+vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences, musicVideoClipReferences: clipCastReferences }));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
@@ -2951,6 +2951,29 @@ describe('videoGen routes', () => {
           expect(r.body.error).toMatch(/only valid with an IC remix mode/i);
           expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
         });
+      });
+
+      it('queues a tagged LTX 2.5 reference request without optional client label metadata', async () => {
+        const scene = { sceneId: 's1', shotMode: 'cutaway', startSec: 0, endSec: 5, prompt: 'A rider turns',
+          referenceImageId: 'start.png', clipReferenceIds: ['rider'] };
+        const project = { id: 'mv-1', scenes: [scene], visualSpec: { references: [{ id: 'rider', imageId: 'rider.png' }] } };
+        getMusicVideoProject.mockResolvedValue(project);
+        clipCastReferences.mockResolvedValue([{ path: '/mock/images/rider.png', label: 'Rider', promptLabel: 'Rider' }]);
+        videoGenService.listVideoModels.mockReturnValueOnce([{ id: 'ltx25_mlx_q8', runtime: 'ltx25', supportedModes: ['text', 'image'], defaultFrames: 121 }]);
+        try {
+          const r = await request(app).post('/api/video-gen/').send({
+            backend: 'local', modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25', prompt: 'A rider turns',
+            sourceImageFile: 'start.png', icReferenceImageFiles: ['rider.png'], numFrames: 121,
+            musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true },
+          });
+          expect(r.status, JSON.stringify(r.body)).toBe(200);
+          expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+            prompt: 'Reference sheet: Rider.\n\nGenerated video: A rider turns', icReferencePaths: ['/mock/images/rider.png'],
+          }) }));
+        } finally {
+          getMusicVideoProject.mockReset();
+          clipCastReferences.mockReset().mockResolvedValue([]);
+        }
       });
     });
   });

@@ -1250,6 +1250,11 @@ async function resolvePreparedParams({
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
+  if (declaredMode === 'ic-ingredients-25' && body.sourceImageFile && !sourceImagePath) {
+    await cleanupStaged();
+    throw new ServerError('The selected opening frame is missing or could not be resolved. Choose it again.',
+      { status: 400, code: 'IC_LORA_SOURCE_MISSING' });
+  }
   // Re-run the same contract now that the gallery pick has been resolved to a
   // real path: the pre-staging pass only saw that a filename was *declared*, so
   // a stale/missing gallery entry would otherwise fall through to a text render.
