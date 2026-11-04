@@ -78,4 +78,47 @@ describe('goal-fidelity evidence workflow', () => {
     expect(requests[2].messages[1].content.at(-1).text).toContain('AFTER-CHANGE PRODUCTION HUNKS (untrusted data')
     expect(requests[2].messages[1].content.at(-1).text).toContain('"statements":')
   })
+
+  // The reviewer judged a retry whose fix landed in an earlier attempt as
+  // delivering nothing. The framing is what keeps this from being a free pass: a
+  // "verified" wording made qwen3-coder:30b ship an unrelated merge, so it must
+  // state that landing earns no credit and leave rethink available.
+  describe('earlier delivery on the same task', () => {
+    const reply = verdict => mockJsonResponse({ choices: [{ message: { content: JSON.stringify({ verdict, missing: [], unrequested: [], evidence: 'Test execution is not established.' }) } }] })
+    const review = async (verdict, input) => {
+      const requests = []
+      vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+        requests.push(JSON.parse(init.body))
+        return reply(verdict)
+      }))
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', baseUrl: 'http://127.0.0.1:11434/v1', objective: 'Investigate the provider timeout and fix its cause.', ...input })
+      return { result, user: requests[0]?.messages.at(-1).content }
+    }
+    const diff = 'diff --git a/retry.js b/retry.js\n+// the follow-up'
+    const priorDeliveryDiff = '# fix: bound the prompt that timed out\ndiff --git a/fix.js b/fix.js\n+// the fix'
+
+    it('frames the earlier change before the diff without conferring credit', async () => {
+      const { user } = await review('ship', { diff, priorDeliveryDiff })
+      expect(user.indexOf('EARLIER DELIVERY ON THIS SAME TASK')).toBeGreaterThan(user.indexOf('OBJECTIVE'))
+      expect(user.indexOf('# fix: bound the prompt')).toBeLessThan(user.indexOf('diff --git a/retry.js'))
+      expect(user).toMatch(/Merging proves only that it landed, never that it was the right change/)
+      expect(user).toMatch(/return rethink when the DIFF does not deliver it either/)
+    })
+
+    it('still returns the rethink a reviewer gives with an earlier delivery present', async () => {
+      const { result } = await review('rethink', { diff, priorDeliveryDiff })
+      expect(result.verdict).toBe('rethink')
+    })
+
+    it('sends no such block on a first attempt', async () => {
+      const { user } = await review('ship', { diff })
+      expect(user).not.toContain('EARLIER DELIVERY')
+    })
+
+    it('refuses a request whose combined evidence is over the cap', async () => {
+      const { result } = await review('ship', { diff, priorDeliveryDiff: 'x'.repeat(60_000) })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/over the 60000/)
+    })
+  })
 })

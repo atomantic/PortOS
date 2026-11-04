@@ -984,6 +984,17 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     return fidelityNotJudged('PR remediation is not judgeable from a diff: its objective is forge state (CI, merges), and the run window holds only a test-file CI repair.');
   }
 
+  // Only a retry can have earlier attempts. A claim's objective is the issue it
+  // selected this time, which an earlier attempt's merge need not concern.
+  const priorDelivery = !claimFlow && Number(task.metadata?.totalSpawnCount) > 1
+    ? await import('./goalFidelityPriorDelivery.js')
+      .then(({ priorTaskDelivery }) => priorTaskDelivery({
+        taskId: task.id, workspacePath, head, startedAt,
+        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length,
+      }))
+      .catch(() => null)
+    : null;
+
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -993,6 +1004,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     // their bounded image content inside the OBJECTIVE block, not as diff data.
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
+    ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
@@ -1007,6 +1019,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       backend: result.backend,
       model: result.model,
       ...(truncated ? { diffTruncated: true } : {}),
+      ...(priorDelivery ? { priorDeliveryHeads: priorDelivery.heads } : {}),
       checkedAt: new Date().toISOString(),
     },
     error: null,

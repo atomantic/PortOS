@@ -92,6 +92,11 @@ vi.mock('./goalFidelityFollowUp.js', () => ({
   runGoalFidelityFollowUp: (...args) => runGoalFidelityFollowUpMock(...args),
 }));
 
+const priorTaskDeliveryMock = vi.fn(async () => null);
+vi.mock('./goalFidelityPriorDelivery.js', () => ({
+  priorTaskDelivery: (...args) => priorTaskDeliveryMock(...args),
+}));
+
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
 
@@ -222,6 +227,44 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  describe('a retry whose earlier attempt already merged', () => {
+    const retryTask = { id: 'task-retry', description: 'Investigate the provider timeout and fix its cause', taskType: 'internal', metadata: { totalSpawnCount: '2' } };
+    const earlier = { diff: '# fix: bound the prompt\ndiff --git a/fix.js b/fix.js', heads: ['a'.repeat(40)] };
+
+    it('reviews the earlier delivery alongside the retry\'s own diff and records it', async () => {
+      execGit.mockResolvedValueOnce({ stdout: `${'b'.repeat(40)}\n`, stderr: '', exitCode: 0 });
+      priorTaskDeliveryMock.mockResolvedValueOnce(earlier);
+      await finalize({ task: retryTask });
+      const [args] = runLocalGoalFidelityReviewMock.mock.calls.at(-1);
+      expect(args.priorDeliveryDiff).toBe(earlier.diff);
+      expect(args.diff).toBe('diff --git a/a.js b/a.js');
+      expect(priorTaskDeliveryMock.mock.calls.at(-1)[0]).toMatchObject({
+        taskId: retryTask.id, head: 'b'.repeat(40), maxChars: 60_000 - args.diff.length,
+      });
+      expect(completion().goalFidelity.priorDeliveryHeads).toEqual(earlier.heads);
+    });
+
+    // The detector stays armed: an earlier merge is evidence, never a pass.
+    it('still holds the run when the reviewer answers rethink with that evidence', async () => {
+      priorTaskDeliveryMock.mockResolvedValueOnce(earlier);
+      runLocalGoalFidelityReviewMock.mockResolvedValueOnce(verdict({ verdict: 'rethink', missing: ['the requested fix'] }));
+      await finalize({ task: retryTask });
+      expect(completion()).toMatchObject({ success: false, goalFidelity: { verdict: 'rethink' } });
+    });
+
+    it('does not look on a first attempt', async () => {
+      await finalize({ task: { ...retryTask, metadata: { totalSpawnCount: '1' } } });
+      expect(priorTaskDeliveryMock).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock.mock.calls.at(-1)[0]).not.toHaveProperty('priorDeliveryDiff');
+    });
+
+    it('falls back to the ordinary review when the lookup fails', async () => {
+      priorTaskDeliveryMock.mockRejectedValueOnce(new Error('unreadable archive'));
+      await finalize({ task: retryTask });
+      expect(runLocalGoalFidelityReviewMock.mock.calls.at(-1)[0]).not.toHaveProperty('priorDeliveryDiff');
+    });
+  });
+
   it('captures completion outside an expired spawn Git lifetime without reopening that lifetime', async () => {
     const git = await vi.importActual('../lib/execGit.js');
     let completionCallback;
