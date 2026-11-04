@@ -82,6 +82,7 @@ export * from './musicVideoAspect.js';
 export * from './musicVideoFiling.js';
 export * from './musicVideoMotion.js';
 export * from './musicVideoTakes.js';
+export * from './musicVideoFlyer.js';
 export * from './musicVideoSceneAttention.js';
 export * from './musicVideoSceneTiming.js';
 export * from './musicVideoCoverOverlay.js';

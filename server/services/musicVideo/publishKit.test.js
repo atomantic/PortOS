@@ -25,6 +25,7 @@ const kit = await import('./publishKit.js');
 const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+const validation = await import('../../lib/musicVideoValidation.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
 const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
@@ -382,6 +383,15 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit.copy.youtube).toEqual({ title: 'Drafted', description: 'd', tags: ['my tag'] });
     // Right after a draft nothing was edited, so redrafting needs no confirmation.
     await expect(kit.draftPublishKitCopy(id, {}, deps)).resolves.toBeTruthy();
+  });
+
+  it('merges the flyer fields as they are edited and clears the QR link override with an empty string', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { flyer: { title: 'EXAMPLE', url: 'https://example.com/watch' } });
+    const { project } = await kit.updatePublishKitCopy(id, { flyer: { tagline: 'Out now', url: '' } });
+    expect(project.publishKit.flyer).toEqual({ title: 'EXAMPLE', tagline: 'Out now', url: '' });
+    expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { image: 'elsewhere' } })).toThrow();
   });
 
   it('saves the draft inputs as they are edited without marking the posts hand-edited', async () => {
