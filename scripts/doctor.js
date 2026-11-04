@@ -137,9 +137,10 @@ export async function runProbe(probe) {
   ]);
   clearTimeout(timer);
 
+  const available = Boolean(result?.available ?? (result?.status === 'available'));
   return {
     name: probe.name,
-    status: result?.available ? 'available' : 'unavailable',
+    status: available ? 'available' : 'unavailable',
     detail: scrubHomePath(String(result?.detail ?? '')),
     required,
   };
@@ -449,7 +450,7 @@ export function defaultProbes({ root = ROOT } = {}) {
     { name: 'npm', required: false, run: probeNpm },
     { name: 'git:merge-tree', required: true, run: () => {
       const result = probeGitMergeTree(root);
-      return { status: result.ok ? 'available' : 'unavailable', detail: result.ok ? '--write-tree and --merge-base supported' : result.detail };
+      return { available: result.ok, detail: result.ok ? '--write-tree and --merge-base supported' : result.detail };
     } },
     { name: 'submodule:slashdo', required: true, run: () => probeSubmodule(root) },
     ...WORKSPACES.map((workspace) => ({
