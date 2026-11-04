@@ -14,6 +14,10 @@ const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
 const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
 const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPSTREAM_OWNER : app.forgeAccount;
+// Claude Code sessions (desktop, CLI, cloud) push from `claude/<name>` branches
+// and drive their own PR to merge. PortOS never creates that prefix, so a
+// watchdog coordinator there would only race the live session.
+const EXTERNAL_AGENT_BRANCH_RE = /^claude\//;
 
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
@@ -125,6 +129,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
     if (owner) disposition = owner.status === 'blocked' ? 'blocked' : 'actively-owned';
     else if (!pr.headSha) disposition = 'unknown';
     else if (pr.isDraft) disposition = 'draft';
+    else if (EXTERNAL_AGENT_BRANCH_RE.test(pr.headBranch || '')) disposition = 'externally-managed';
     else if (!await trust.isTrusted(pr.author)) disposition = 'untrusted-excluded';
     else if (pr.labels.some(label => ['blocked', 'do-not-merge', 'hold'].includes(label.toLowerCase()))) disposition = 'blocked';
     else if (pr.checks.some(check => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING'].includes(check.status))) disposition = 'waiting-for-ci-review';
