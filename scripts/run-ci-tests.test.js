@@ -354,6 +354,72 @@ it.each(['files', 'full'])('validates the guard proof before the actual %s Vites
 }, 150_000);
 
 
+it('keeps a green shard\'s memo entries when a later sequential shard fails and skips only that shard on the rerun', async () => {
+  const files = ['server/lib/shardA.test.js', 'server/lib/shardB.test.js', 'server/lib/shardC.test.js', 'server/lib/shardD.test.js'];
+  const sandbox = await createRunnerSandbox(files);
+  const { scratch: fixture, repo: root } = sandbox;
+  try {
+    for (const [file, source] of Object.entries({
+      'server/vitest.config.js': 'export default {};',
+      'server/vitest.setup.js': 'export {};',
+      'scripts/vitestCiPool.js': 'export const vitestCiPool = () => ({});',
+      'server/package.json': '{"name":"server"}',
+      'server/package-lock.json': '{}',
+      'server/node_modules/vitest/package.json': '{"version":"5.0.5"}',
+    })) {
+      mkdirSync(dirname(join(root, file)), { recursive: true });
+      writeFileSync(join(root, file), source);
+    }
+    // PORTOS_FAKE_FAIL names the one selected file that fails; the fake npm
+    // supplies only the process/report boundary, never selection or memo logic.
+    installFakeNpm(fixture, [
+      'const fs = require("fs"), path = require("path");',
+      'const args = process.argv.slice(2);',
+      'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+      'const bad = process.env.PORTOS_FAKE_FAIL;',
+      'const failed = selection.include.includes(bad);',
+      'const report = args.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+      'fs.writeFileSync(report, JSON.stringify({ numPassedTests: selection.include.length - (failed ? 1 : 0), numFailedTests: failed ? 1 : 0,',
+      'testResults: selection.include.map(file => ({ name: path.resolve("server", file), status: file === bad ? "failed" : "passed", assertionResults: [{ status: file === bad ? "failed" : "passed" }] })) }));',
+      'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: failed ? "failed" : "passed", errorCount: 0, errors: [] }));',
+      'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+      'process.exitCode = failed ? 1 : 0;',
+    ].join('\n'));
+    const memoDir = join(fixture, 'memo');
+    const run = (index, fail = '') => spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
+      cwd: root, encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+        CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: '[]', CI_SHARD: `${index}/2`,
+        PORTOS_TEST_MEMO: '', PORTOS_TEST_MEMO_DIR: memoDir, PORTOS_FAKE_FAIL: fail,
+        GITHUB_EVENT_NAME: 'push', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+    });
+    const slices = [1, 2].map(index => vitestShardSlice(files, { repoRoot: root, scope: 'server', index, count: 2 }));
+    // The two shards partition the selection exactly: no omitted or duplicated file.
+    expect(slices.flat().sort()).toEqual([...files].sort());
+    const failing = toWorkspacePath('server', slices[1][0]);
+
+    const first = run(1, failing);
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stdout).toMatch(/recorded \d+ green entries/);
+
+    const second = run(2, failing);
+    expect(second.status).not.toBe(0);
+    expect(second.stdout).not.toMatch(/recorded \d+ green entries/);
+
+    // After the bounded fixture correction, shard 1 is skipped by the memo and shard 2 runs.
+    const rerunFirst = run(1);
+    expect(rerunFirst.status, rerunFirst.stderr).toBe(0);
+    expect(rerunFirst.stdout).toContain(`skipped ${slices[0].length} of ${slices[0].length} selected files`);
+    expect(rerunFirst.stdout).not.toContain('RAN ');
+    const rerunSecond = run(2);
+    expect(rerunSecond.status, rerunSecond.stderr).toBe(0);
+    expect(rerunSecond.stdout).toContain('skipped 0 of');
+    expect(rerunSecond.stdout).toContain('RAN ');
+  } finally {
+    await destroyGitSandbox(fixture);
+  }
+}, 150_000);
+
 it('partitions complete browser profiles before per-shard memo reuse and preserves scoped owners', async () => {
   const sandbox = await createRunnerSandbox(BROWSER_SUITES);
   const { scratch: fixture, repo: root } = sandbox;

@@ -14,6 +14,7 @@ import {
   buildCiTestPlan,
   collectPlanInputs,
   ALWAYS_RUN_TESTS,
+  FULL_SUITE_SHARDS,
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
 import {
@@ -203,15 +204,21 @@ describe('resolvePlanStages', () => {
       build: true, smoke: true, db: true, browser: { files: BROWSER_SUITES.slice(0, 1) },
     });
     const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js']) });
+    // A full plan runs CI's shard split one shard per stage; related stays whole.
+    const unit = (scope) => mode === 'full'
+      ? Array.from({ length: FULL_SUITE_SHARDS[scope] }, (_, index) => `${scope} tests (shard ${index + 1}/${FULL_SUITE_SHARDS[scope]})`)
+      : [`${scope} tests`];
     expect(stages.map(stage => stage.name)).toEqual([
       'hidden-content scan', 'commit-message scan', 'server structural guards', 'client structural guards',
-      'client/server lint', 'server tests', 'client tests', 'client build',
+      'client/server lint', ...unit('server'), ...unit('client'), 'client build',
       'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     for (const scope of ['server', 'client']) {
-      expect(stages.find(stage => stage.name === `${scope} tests`).env).toMatchObject({
-        CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(plan[scope].files), CI_TEST_SOURCES: JSON.stringify(plan[scope].sources),
-      });
+      for (const name of unit(scope)) {
+        expect(stages.find(stage => stage.name === name).env).toMatchObject({
+          CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(plan[scope].files), CI_TEST_SOURCES: JSON.stringify(plan[scope].sources),
+        });
+      }
     }
     expect(stages.filter(stage => stage.guard).flatMap(stage => stage.files).sort()).toEqual(tracked.sort());
   });
@@ -1381,6 +1388,42 @@ describe('describeBrowserSelection', () => {
   });
 
 
+});
+
+describe('full-suite unit shards', () => {
+  const fullPlan = planWith({
+    server: { mode: 'full', files: [], sources: [] },
+    client: { mode: 'full', files: [], sources: [] },
+    browser: { files: BROWSER_SUITES.slice(0, 1) },
+  });
+  const unitStages = (stages, scope) => stages.filter((stage) => stage.suite === scope && stage.script === 'run-ci-tests.js' && !stage.guard);
+
+  it('runs CI\'s documented shard split sequentially with one shared per-scope env', () => {
+    const stages = resolvePlanStages(fullPlan, { baseSha: 'base' });
+    for (const scope of ['server', 'client']) {
+      const shards = unitStages(stages, scope);
+      const count = FULL_SUITE_SHARDS[scope];
+      expect(shards.map((stage) => stage.env.CI_SHARD)).toEqual(Array.from({ length: count }, (_, index) => `${index + 1}/${count}`));
+      expect(shards.map((stage) => stage.name)).toEqual(shards.map((_, index) => `${scope} tests (shard ${index + 1}/${count})`));
+      const { CI_SHARD: _shard, ...shared } = shards[0].env;
+      for (const stage of shards) expect({ ...stage.env, CI_SHARD: undefined }).toEqual({ ...shared, CI_SHARD: undefined });
+    }
+    expect(unitStages(stages, 'server')[0].env).toMatchObject({ PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' });
+    expect(unitStages(stages, 'client')[0].env).not.toHaveProperty('PORTOS_CI_BROWSER_OWNER');
+  });
+
+  it('keeps scoped plans, guards and the browser stage on one unslice invocation', () => {
+    const scoped = resolvePlanStages(planWith({ server: { mode: 'related', files: [], sources: ['server/lib/a.js'] } }), { baseSha: 'base' });
+    expect(unitStages(scoped, 'server')).toHaveLength(1);
+    const browser = resolvePlanStages(fullPlan, { baseSha: 'base' }).find((stage) => stage.suite === 'browser');
+    expect(browser.env).toHaveProperty('CI_SHARD', undefined);
+    // An inherited matrix shard cannot slice a non-sharded stage.
+    expect(stageSpawnEnv({ CI_SHARD: '1/2' }, browser.env, { ownsGroup: false })).not.toHaveProperty('CI_SHARD');
+    expect(stageSpawnEnv({ CI_SHARD: '1/2' }, unitStages(scoped, 'server')[0].env, { ownsGroup: false })).not.toHaveProperty('CI_SHARD');
+    const guards = resolvePlanStages(planWith(), { baseSha: 'base', guardPlan: { server: { files: ['server/lib/a.test.js'] }, client: { files: [] } } })
+      .find((stage) => stage.guard);
+    expect(stageSpawnEnv({ CI_SHARD: '1/2' }, guards.env, { ownsGroup: false })).not.toHaveProperty('CI_SHARD');
+  });
 });
 
 describe('resource suite stages', () => {
