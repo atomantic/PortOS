@@ -607,6 +607,21 @@ export async function snapshotProcesses() {
   return rows;
 }
 
+/** Cross-platform process identities and commands for maintenance/survivor checks. */
+export async function snapshotMaintenanceProcesses({ platform = process.platform, run = execFileAsync, selfPid = process.pid } = {}) {
+  if (platform !== 'win32') return snapshotProcesses();
+  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,@{Name="StartedAt";Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString("o")}}} | ConvertTo-Json -Compress'],
+  { timeout: 15000, maxBuffer: 32 * 1024 * 1024 });
+  const decoded = JSON.parse(stdout.replace(/^\uFEFF/, ''));
+  const records = Array.isArray(decoded) ? decoded : [decoded];
+  const rows = records.map(row => ({ pid: Number(row?.ProcessId), ppid: Number(row?.ParentProcessId) || null, state: 'S', command: row?.CommandLine ?? '',
+    startedAt: row?.StartedAt ? Date.parse(row.StartedAt) : null }));
+  if (rows.some(row => !Number.isSafeInteger(row.pid) || row.pid <= 0)
+    || !rows.some(row => row.pid === selfPid && row.command)) throw new Error('Incomplete process table');
+  return rows;
+}
+
 // The supervisor subshell of EVERY detached launch — including launches from
 // versions that predate the writer registry — runs this exact script text.
 export const isDetachedSupervisorCommand = (command) => command.includes('d="$1"; shift') && command.includes('$d/pid');
