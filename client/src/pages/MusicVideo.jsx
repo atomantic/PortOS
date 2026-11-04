@@ -1219,16 +1219,41 @@ function ProjectWorkspace({
     saveScene(sceneId, patch);
   };
 
-  // Visual spec (#8965) — optimistic local merge, then a chained PATCH whose
-  // response carries server-minted reference ids back onto the board.
+  // Reconcile each response beneath newer optimistic patches so a slow save
+  // cannot erase later edits; a failed save falls back to the last saved spec.
   const visualSpecSaveChain = useRef(Promise.resolve());
+  const visualSpecPending = useRef(new Map());
   const saveVisualSpec = (patch) => {
     const projectId = selected.id;
+    let state = visualSpecPending.current.get(projectId);
+    if (!state) {
+      state = { base: selected.visualSpec || {}, pending: [] };
+      visualSpecPending.current.set(projectId, state);
+    }
+    const entry = { patch };
+    state.pending.push(entry);
     patchProject(projectId, (p) => ({ visualSpec: { ...(p.visualSpec || {}), ...patch } }));
+    const settle = (proj) => {
+      if (proj) state.base = proj.visualSpec || { ...state.base, ...patch };
+      state.pending = state.pending.filter((item) => item !== entry);
+      const desired = state.pending.reduce((spec, item) => ({ ...spec, ...item.patch }), state.base);
+      const fields = new Set([...Object.keys(patch), ...state.pending.flatMap((item) => Object.keys(item.patch))]);
+      patchProject(projectId, (p) => {
+        const visualSpec = { ...(p.visualSpec || {}) };
+        for (const field of fields) {
+          if (Object.hasOwn(desired, field)) visualSpec[field] = desired[field];
+          else delete visualSpec[field];
+        }
+        return { visualSpec };
+      });
+      if (!state.pending.length) visualSpecPending.current.delete(projectId);
+      return proj;
+    };
     visualSpecSaveChain.current = visualSpecSaveChain.current
       .then(() => updateMusicVideoProject(projectId, { visualSpec: patch }, { silent: true }))
-      .then((proj) => { if (proj?.visualSpec) patchProject(projectId, { visualSpec: proj.visualSpec }); })
-      .catch((err) => toast.error(err?.message || 'Failed to save visual spec'));
+      .then(settle)
+      .catch((err) => { toast.error(err?.message || 'Failed to save visual spec'); return settle(null); });
+    return visualSpecSaveChain.current;
   };
   const handlePickerSelect = (item) => {
     if (!item?.filename || !pickerTarget || !selected) return;
