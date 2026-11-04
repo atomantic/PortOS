@@ -32,6 +32,7 @@ const PRE_INSTALL_ENTRYPOINTS = [
   'scripts/ci-test-plan.js',
   'scripts/check-import-case.js',
   'scripts/scan-diff-hidden-content.js',
+  'scripts/scan-commit-session-links.js',
 ];
 
 /**

@@ -124,6 +124,16 @@ same rules to external pull-request content before the model-abuse classifier
 sees it — and which honors no marker, because that author is not trusted to
 grant one.
 
+Next, `node scripts/scan-commit-session-links.js` refuses a pull request whose
+commit messages link to an AI conversation session (`claude.ai/code/session`,
+`claude.ai/chat/`, `claude.ai/share/`, `chatgpt.com/c/` or `/share/`, and the
+`chat.openai.com` spellings), naming each offending commit. History on `main` is
+permanent, so this runs before merge. The depth-2 checkout does not hold the
+pull request's commits, so the script reads them from the compare API against
+the default branch: commits already on `main` never fail it, and a release PR
+does not answer for the `main` commits it promotes. Pregate runs the same check
+over `<merge base>..HEAD` right after the hidden-content scan.
+
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the
 server job with those files selected. The one exception is a PR that changes
@@ -172,8 +182,8 @@ CI run that never needed it — they keep the documented skip.
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
 diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural guards, lint, and
-focused unit tests: edited test files and sibling tests for changed sources,
+hidden-content and commit-message scans, early server and client structural
+guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
 including untracked tests, without expanding through transitive imports.
 
 `npm run pregate -- --full` opts into the CI-selected broad suites locally:
@@ -1300,7 +1310,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`commit-messages`, `import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or
