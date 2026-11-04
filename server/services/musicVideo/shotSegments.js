@@ -30,6 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
+import { shotFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
@@ -75,14 +76,7 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
 
-const hasOwnLook = (scene) => !!(scene?.filmLook && typeof scene.filmLook === 'object');
-
-/** A shot's own pinned look, else the video's; null when the shot plays clean. Pure. */
-function shotFilmLook(project, scene) {
-  const own = hasOwnLook(scene) ? scene.filmLook : null;
-  const look = normalizeFilmLook(own || project?.filmLook);
-  return look && !isFilmLookNeutral(look) ? look : null;
-}
+const hasOwnLook = scene => !!(scene?.filmLook && typeof scene.filmLook === 'object');
 
 /**
  * `value` with every timed entry (an object carrying a finite `startSec`) that

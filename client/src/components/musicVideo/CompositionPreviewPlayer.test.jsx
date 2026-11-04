@@ -1308,3 +1308,15 @@ describe('native composition playback', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+it('keeps shot-only film looks available and reloads the document when a shot look changes', async () => {
+  globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
+  const scene = { sceneId: 's1', startSec: 0, endSec: 5, filmLook: { preset: 'vhs', grain: 0.3 } };
+  const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [scene] }} />);
+  expect(screen.getByRole('button', { name: 'Film look' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(opens().at(-1)[1].look).toEqual({ preset: 'none' }));
+  const firstRevision = opens().at(-1)[1].revision;
+  rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...scene, filmLook: { preset: 'super8', grain: 0.4 } }] }} />);
+  await waitFor(() => expect(opens().at(-1)[1].revision).not.toBe(firstRevision));
+  expect(opens().at(-1)[1].look).toEqual({ preset: 'none' });
+});
