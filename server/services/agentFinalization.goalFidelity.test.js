@@ -48,6 +48,9 @@ vi.mock('./cosAgentLifecycle.js', () => ({
   completeAgent: (...args) => completeAgentMock(...args),
 }));
 
+const getAgentsByDateMock = vi.fn(async () => []);
+vi.mock('./cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAgentsByDateMock(...args) }));
+
 const updateTaskMock = vi.fn(async () => ({}));
 vi.mock('./cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
@@ -208,6 +211,7 @@ const completion = () => completeAgentMock.mock.calls[0][1];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getAgentsByDateMock.mockReset().mockResolvedValue([]);
   claimVerifier.verifyClaimDisposition.mockResolvedValue(null);
   execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'synthetic-token' } });
@@ -382,6 +386,21 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
       expect(completion()).toMatchObject({ success: true });
       expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    it('does not judge an investigation whose overturned run now lives only in the archive', async () => {
+      getAgents.mockResolvedValue([]);
+      getAgentsByDateMock.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z', stamp)]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+    });
+
+    it('still judges an investigation whose archived run carries no overturn stamp', async () => {
+      getAgents.mockResolvedValue([]);
+      getAgentsByDateMock.mockResolvedValue([investigatedRun('agent-original', '2026-01-01T00:00:00Z')]);
+      await finalize({ task });
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledTimes(1);
     });
 
     it('still judges an investigation of a newer finding that nothing overturned', async () => {

@@ -37,7 +37,8 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that both transition modules
 // import, which puts it inside the facade's closure, so the facade is out of
 // reach here.
-import { getAgent, getAgentRecord, getAgents, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { getAgentsWithArchive } from './cosAgentHistory.js';
+import { getAgent, getAgentRecord, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { updateTask } from './cosTaskStore.js';
 import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
@@ -289,6 +290,8 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
 
 // Output-hook outcomes that mean "the hook returned before validating the agent's
 // output at all" — distinct from both a rejection and an acceptance.
+// An approval-gated investigation can start days after the run it investigates.
+const OVERTURN_LOOKBACK_DAYS = 7;
 const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
 
 /**
@@ -950,7 +953,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
     : noFidelityVerdict();
   if (isGoalFidelityInvestigation(task)) {
-    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgents().catch(() => []) });
+    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgentsWithArchive({ endAt: Date.now(), lookbackDays: OVERTURN_LOOKBACK_DAYS }) });
     if (overturned) {
       return fidelityNotJudged(`This investigation overturned the goal-fidelity finding (${overturned.gap}); its diff is not judged against the investigated objective.`);
     }
