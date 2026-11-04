@@ -86,6 +86,10 @@ describe('buildFlyerHtml', () => {
     const html = buildFlyerHtml(flyer);
     expect(html).toContain('@page { size: letter; margin: 0; }');
     expect(html).toContain('<h1>A &lt;b&gt;</h1>');
+    // A printed short link replaces the shown text only; the QR still encodes the real link.
+    const short = buildFlyerHtml({ ...flyer, printedLink: 'https://is.gd/example' });
+    expect(short).toContain('<p class="url">is.gd/example</p>');
+    expect(short).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).not.toContain('class="qr placeholder"');
     expect(html).toContain('<body class="retro">'); // 80s look, full page unless the director picks otherwise

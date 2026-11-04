@@ -16,6 +16,7 @@ const TEXT_FIELDS = [
   { key: 'byline', label: 'Artist' },
   { key: 'tagline', label: 'Tagline', multiline: true },
   { key: 'scanLine', label: 'Beside the QR code' },
+  { key: 'printedLink', label: 'Printed link (optional, e.g. a short link; the QR keeps the full link)' },
   { key: 'details', label: 'Small print (cast, credits, thanks)', multiline: true },
 ];
 

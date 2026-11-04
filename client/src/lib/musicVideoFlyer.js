@@ -28,7 +28,7 @@ export const FLYER_LAYOUTS = Object.freeze([
   { id: 'half', label: '2 per page' },
 ]);
 
-export const FLYER_TEXT_LIMITS = Object.freeze({ kicker: 60, title: 120, byline: 120, tagline: 300, scanLine: 60, details: 1200 });
+export const FLYER_TEXT_LIMITS = Object.freeze({ kicker: 60, title: 120, byline: 120, tagline: 300, scanLine: 60, printedLink: 120, details: 1200 });
 
 const str = (v) => (typeof v === 'string' ? v : '');
 const isUrl = (v) => /^https?:\/\//i.test(str(v).trim());
@@ -68,6 +68,8 @@ export function resolveFlyer(project, { youtubeUrl = '' } = {}) {
     byline: pick('byline', ''),
     tagline: pick('tagline', ''),
     scanLine: pick('scanLine', 'Scan to watch'),
+    // Text printed under the QR (a short link people can type); the QR still encodes qrUrl.
+    printedLink: pick('printedLink', ''),
     details: pick('details', ''),
     url: custom,
     image,
@@ -150,7 +152,8 @@ export function buildFlyerHtml(flyer, { origin = '', autoPrint = false } = {}) {
     : '<div class="qr placeholder">QR code<br>goes here once<br>the YouTube link<br>is in</div>';
   const retro = f.style !== 'clean';
   const half = f.layout === 'half';
-  const urlLine = f.qrUrl ? `<p class="url">${escapeHtml(displayUrl(f.qrUrl))}</p>` : '<p class="url muted">youtube link pending</p>';
+  const shown = str(f.printedLink).trim() || f.qrUrl;
+  const urlLine = shown ? `<p class="url">${escapeHtml(displayUrl(shown))}</p>` : '<p class="url muted">youtube link pending</p>';
   // The label beside the QR; on a half sheet it moves to the text column so the QR gets the whole right side.
   const label = `<div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>`;
   const page = `<main class="page${half ? ' half' : ''}${image ? '' : ' noimg'}">${half ? '<div class="row">' : ''}<div class="info">
