@@ -69,6 +69,34 @@ describe('PhotorealPanel', () => {
     expect(fly).toBeDisabled();
   });
 
+  it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
+    show();
+    const seconds = await screen.findByLabelText('Seconds');
+    fireEvent.change(seconds, { target: { value: '1' } });
+    fireEvent.change(seconds, { target: { value: '15' } });
+    expect(seconds).toHaveValue(15);
+    expect(screen.getByRole('button', { name: /Render fly-through \(360 frames\)/ })).toBeInTheDocument();
+
+    // Emptied then left: restores an in-range value.
+    fireEvent.change(seconds, { target: { value: '' } });
+    fireEvent.blur(seconds);
+    expect(seconds).toHaveValue(2);
+
+    const samples = screen.getByLabelText('Samples');
+    fireEvent.change(samples, { target: { value: '' } });
+    fireEvent.change(samples, { target: { value: '64' } });
+    expect(samples).toHaveValue(64);
+
+    // Out-of-range text still in the field is clamped when the render starts.
+    startCatalogPhotorealRender.mockResolvedValue({ id: 'pr-c', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], startedAt: new Date().toISOString() });
+    fireEvent.change(seconds, { target: { value: '9999' } });
+    fireEvent.click(screen.getByRole('button', { name: /Render fly-through/ }));
+    await waitFor(() => expect(startCatalogPhotorealRender).toHaveBeenCalled());
+    const body = startCatalogPhotorealRender.mock.calls[0][1];
+    expect(body.samples).toBe(64);
+    expect(body.flythroughSeconds).toBeLessThan(9999);
+  });
+
   it('keeps a finish frame that arrives before the start response', async () => {
     const onRendered = vi.fn();
     show({ onRendered });

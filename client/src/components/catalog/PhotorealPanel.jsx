@@ -13,6 +13,27 @@ import { useTimeTick } from '../../hooks/useTimeTick';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 
+const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(Number(value) || min)));
+
+// Raw text while a number field is focused so partial input ("1" on the way to
+// "15") isn't clamped; the clamped value is committed on blur and used by render.
+function useDraftNumber({ committed, min, max, onCommit }) {
+  const [draft, setDraft] = useState(null);
+  const effective = draft === null ? committed : clampInt(draft, min, max);
+  return {
+    effective,
+    inputProps: {
+      value: draft ?? committed,
+      onChange: (event) => setDraft(event.target.value),
+      onBlur: () => {
+        if (draft === null) return;
+        setDraft(null);
+        onCommit(effective);
+      },
+    },
+  };
+}
+
 const ENGINES = [
   { id: 'eevee', label: 'EEVEE preview', defaultSamples: 32, note: 'Seconds per camera on a GPU.' },
   { id: 'cycles', label: 'Cycles final', defaultSamples: 128, note: 'Path traced; minutes per camera.' },
@@ -140,21 +161,19 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     setSamples(null);
     writePrefs({ engine: id, samples: null, flySeconds });
   };
-  const changeSamples = (value) => {
-    const next = Math.min(MAX_SAMPLES, Math.max(1, Math.round(Number(value) || 1)));
-    setSamples(next);
-    writePrefs({ engine, samples: next, flySeconds });
-  };
-  const changeFlySeconds = (value) => {
-    const next = Math.min(FLY_SECONDS.max, Math.max(FLY_SECONDS.min, Math.round(Number(value) || FLY_SECONDS.min)));
-    setFlySeconds(next);
-    writePrefs({ engine, samples, flySeconds: next });
-  };
+  const samplesField = useDraftNumber({
+    committed: sampleValue, min: 1, max: MAX_SAMPLES,
+    onCommit: (next) => { setSamples(next); writePrefs({ engine, samples: next, flySeconds }); },
+  });
+  const secondsField = useDraftNumber({
+    committed: flySeconds, min: FLY_SECONDS.min, max: FLY_SECONDS.max,
+    onCommit: (next) => { setFlySeconds(next); writePrefs({ engine, samples, flySeconds: next }); },
+  });
 
   const render = async ({ flythrough = false } = {}) => {
     if (chosen.length < (flythrough ? 2 : 1) || running || starting) return;
     setStarting(true);
-    const body = { shotIds: chosen, engine, samples: sampleValue, ...(flythrough ? { flythroughSeconds: flySeconds } : {}) };
+    const body = { shotIds: chosen, engine, samples: samplesField.effective, ...(flythrough ? { flythroughSeconds: secondsField.effective } : {}) };
     const started = await startCatalogPhotorealRender(record.id, body, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
     setStarting(false);
@@ -231,8 +250,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               ))}
               <label htmlFor="photoreal-samples" className="inline-flex items-center gap-1.5 text-xs text-gray-400">
                 Samples
-                <input id="photoreal-samples" type="number" min={1} max={MAX_SAMPLES} value={sampleValue} disabled={running}
-                  onChange={(event) => changeSamples(event.target.value)}
+                <input id="photoreal-samples" type="number" min={1} max={MAX_SAMPLES} disabled={running} {...samplesField.inputProps}
                   className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
               </label>
             </div>
@@ -304,12 +322,11 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               <div className="flex flex-wrap items-center gap-3">
                 <label htmlFor="photoreal-fly-seconds" className="inline-flex items-center gap-1.5 text-xs text-gray-400">
                   Seconds
-                  <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} value={flySeconds} disabled={running}
-                    onChange={(event) => changeFlySeconds(event.target.value)}
+                  <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
                 <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting} className={actionButton}>
-                  <Film size={16} aria-hidden="true" /> Render fly-through ({flySeconds * FLY_FPS} frames)
+                  <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}
               </div>
