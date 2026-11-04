@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Printer, QrCode } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
 import useContainerWidth from '../../hooks/useContainerWidth.js';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import { FLYER_IMAGE_CHOICES, FLYER_STYLES, FLYER_TEXT_LIMITS, buildFlyerHtml, flyerImagePath, resolveFlyer } from '../../lib/musicVideoFlyer.js';
 import { releaseLinkUrl } from '../../../../server/lib/musicVideoCrossLinks.js';
 
@@ -40,6 +41,7 @@ export default function FlyerPanel({ project, publishKit }) {
   const [edits, setEdits] = useState({});
   const draft = { ...saved, ...edits };
   const [saveState, setSaveState] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const saveSeq = useRef(0);
   const [frameRef, frameWidth] = useContainerWidth();
   if (!project?.id || !publishKit?.saveCopy) return null;
@@ -64,7 +66,18 @@ export default function FlyerPanel({ project, publishKit }) {
     window.open(url, '_blank', 'noopener');
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
-  const imageChoices = FLYER_IMAGE_CHOICES.filter((c) => c.id === 'none' || c.id === draft.image || flyerImagePath(kit, c.id));
+  const imageChoices = FLYER_IMAGE_CHOICES.filter((c) => c.id === 'none' || c.id === 'gallery' || c.id === draft.image || flyerImagePath(kit, c.id));
+  const chooseImage = (choice) => {
+    if (choice === 'gallery') { setPickerOpen(true); return; }
+    edit('image', choice);
+    save({ image: choice });
+  };
+  const pickGalleryImage = (item) => {
+    setPickerOpen(false);
+    if (!item?.filename) return;
+    setEdits((e) => ({ ...e, image: 'gallery', imageFile: item.filename }));
+    save({ image: 'gallery', imageFile: item.filename });
+  };
   const scale = frameWidth ? frameWidth / PAGE_W : 0;
   const idFor = (k) => `mv-flyer-${project.id}-${k}`;
 
@@ -111,9 +124,15 @@ export default function FlyerPanel({ project, publishKit }) {
           </fieldset>
           <div className="space-y-1">
             <label htmlFor={idFor('image')} className="block font-medium">Image</label>
-            <select id={idFor('image')} value={draft.image} onChange={(e) => { edit('image', e.target.value); save({ image: e.target.value }); }} className={inputClass}>
-              {imageChoices.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-            </select>
+            <div className="flex gap-1.5">
+              <select id={idFor('image')} value={draft.image} onChange={(e) => chooseImage(e.target.value)} className={inputClass}>
+                {imageChoices.map((c) => <option key={c.id} value={c.id}>{c.id === 'gallery' && draft.image === 'gallery' ? 'Gallery image' : c.label}</option>)}
+              </select>
+              {draft.image === 'gallery' && (
+                <button type="button" onClick={() => setPickerOpen(true)} className="shrink-0 rounded border border-port-border px-3 py-2 text-sm min-h-[44px] sm:min-h-0">Change</button>
+              )}
+            </div>
+            {pickerOpen && <GalleryImagePicker open allowUpload onClose={() => setPickerOpen(false)} onSelect={pickGalleryImage} />}
           </div>
           {TEXT_FIELDS.map(({ key, label, multiline }) => {
             const Field = multiline ? 'textarea' : 'input';

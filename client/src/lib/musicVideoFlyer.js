@@ -12,6 +12,7 @@ export const FLYER_IMAGE_CHOICES = Object.freeze([
   { id: 'cover', label: 'Cover art' },
   { id: 'youtubeThumbnail', label: 'YouTube thumbnail' },
   { id: 'thumbnail', label: 'Best video frame' },
+  { id: 'gallery', label: 'Gallery image…' },
   { id: 'none', label: 'No image' },
 ]);
 
@@ -33,6 +34,7 @@ export function flyerImagePath(kit, choice) {
   if (choice === 'cover') return thumbs(k.coverArt?.filename);
   if (choice === 'youtubeThumbnail') return thumbs(k.youtubeThumbnail?.filename);
   if (choice === 'thumbnail') return thumbs(k.thumbnail);
+  if (choice === 'gallery') return k.flyer?.imageFile ? `/data/images/${encodeURIComponent(k.flyer.imageFile)}` : '';
   return '';
 }
 

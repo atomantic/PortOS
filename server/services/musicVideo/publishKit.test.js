@@ -392,6 +392,8 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit.flyer).toEqual({ title: 'EXAMPLE', tagline: 'Out now', url: '' });
     expect(project.publishKit).not.toHaveProperty('copyEditedAt');
     expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { image: 'elsewhere' } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { imageFile: '../secrets.png' } })).toThrow();
+    expect(validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { image: 'gallery', imageFile: 'art.png' } }).flyer.imageFile).toBe('art.png');
   });
 
   it('saves the draft inputs as they are edited without marking the posts hand-edited', async () => {

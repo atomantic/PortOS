@@ -1002,7 +1002,9 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   flyer: z.object({
     kicker: kitText(60), title: kitText(120), byline: kitText(120), tagline: kitText(300), scanLine: kitText(60), details: kitText(1200),
     url: z.union([z.string().url().max(500), z.literal('')]),
-    image: z.enum(['cover', 'youtubeThumbnail', 'thumbnail', 'none']),
+    image: z.enum(['cover', 'youtubeThumbnail', 'thumbnail', 'gallery', 'none']),
+    // A gallery image (data/images/<file>) for image: 'gallery'.
+    imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
     style: z.enum(['80s', 'clean']),
   }).partial().strict().optional(),
 }).strict();

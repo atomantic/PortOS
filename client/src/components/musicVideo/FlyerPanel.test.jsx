@@ -6,6 +6,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import FlyerPanel from './FlyerPanel.jsx';
+
+vi.mock('../imageGen/GalleryImagePicker', () => ({
+  default: ({ onSelect }) => <button type="button" onClick={() => onSelect({ filename: 'art.png' })}>Pick art.png</button>,
+}));
 import { buildFlyerHtml, resolveFlyer } from '../../lib/musicVideoFlyer.js';
 
 const project = (kit = {}) => ({ id: 'mv-1', name: 'Example Song', publishKit: kit });
@@ -51,6 +55,21 @@ describe('FlyerPanel defaults', () => {
     expect(screen.getByLabelText('Image')).toHaveValue('none');
     rerender(<FlyerPanel project={project({ coverArt: { filename: 'cover.jpg' } })} publishKit={publishKit} />);
     expect(screen.getByLabelText('Image')).toHaveValue('cover');
+  });
+});
+
+describe('FlyerPanel gallery image', () => {
+  it('saves a gallery image picked for the flyer and prints it', async () => {
+    const publishKit = hook();
+    render(<FlyerPanel project={project()} publishKit={publishKit} />);
+    fireEvent.change(screen.getByLabelText('Image'), { target: { value: 'gallery' } });
+    expect(publishKit.saveCopy).not.toHaveBeenCalled(); // nothing changes until an image is picked
+    fireEvent.click(screen.getByRole('button', { name: 'Pick art.png', hidden: true }));
+    expect(publishKit.saveCopy).toHaveBeenCalledWith({ flyer: { image: 'gallery', imageFile: 'art.png' } });
+    expect(screen.getByLabelText('Image')).toHaveValue('gallery');
+    expect(await screen.findByText('All changes saved')).toBeInTheDocument();
+    const flyer = resolveFlyer(project({ flyer: { image: 'gallery', imageFile: 'art.png' } }));
+    expect(buildFlyerHtml(flyer, { origin: 'https://host.example' })).toContain('src="https://host.example/data/images/art.png"');
   });
 });
 
