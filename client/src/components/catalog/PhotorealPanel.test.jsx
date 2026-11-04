@@ -70,6 +70,19 @@ describe('PhotorealPanel', () => {
     expect(onRendered).toHaveBeenCalledTimes(1);
   });
 
+  it('acts on a finish frame that lands before the status read on reopen', async () => {
+    const onRendered = vi.fn();
+    let answer;
+    getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    show({ onRendered });
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-6', state: 'failed', error: 'Out of memory', engine: 'cycles', shotIds: ['wide'] } }));
+    await act(async () => answer({ job: { id: 'pr-6', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() }, blendUrl: null, blenderVersion: '5.2.3' }));
+    expect((await import('../ui/Toast')).default.error).toHaveBeenCalledWith('Blender render failed: Out of memory');
+    expect(screen.getByRole('alert')).toHaveTextContent('Out of memory');
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-6', state: 'failed', error: 'Out of memory' } }));
+    expect((await import('../ui/Toast')).default.error).toHaveBeenCalledTimes(1);
+  });
+
   it('sets the newest render as the camera photo plate on the saved greybox', async () => {
     const onSaved = vi.fn();
     saveCatalogGreybox.mockResolvedValue({ id: 'plc-example', payload: {} });

@@ -56,9 +56,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [samples, setSamples] = useState(() => readPrefs()?.samples ?? null);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
-  // Jobs this panel watched run (or started); only their finish reloads or toasts.
-  const watched = useRef(new Set());
-  const startingRef = useRef(false);
+  // Finish frames already acted on; the server sends one per transition.
   const finished = useRef(new Set());
   const job = status?.job || null;
   const running = job?.state === 'running';
@@ -73,21 +71,18 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     getCatalogPhotoreal(record.id, { silent: true })
       .then((next) => {
         if (!live) return;
-        // A render still running from an earlier visit is ours to finish too.
-        if (next?.job?.state === 'running') watched.current.add(next.job.id);
         setStatus((cur) => (cur?.job ? { ...next, job: cur.job } : next));
       })
       .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
-    // Decided as each frame arrives, not in an effect, so a finish batched with the
-    // start response is still seen. Only a job this panel watched or is starting
-    // reloads or toasts; a finish that beats the start response counts as ours.
+    // The server emits a frame only when a job starts, finishes or fails, so every
+    // finish frame seen while the tab is open is news: act on it as it arrives,
+    // whatever order the start response or the status read land in.
     const onFrame = (frame) => {
       if (frame?.ingredientId !== record.id || !frame.job) return;
       const next = frame.job;
       setStatus((cur) => ({ ...(cur || {}), job: next }));
-      if (next.state === 'running') { watched.current.add(next.id); return; }
+      if (next.state === 'running' || finished.current.has(next.id)) return;
       finished.current.add(next.id);
-      if (!watched.current.delete(next.id) && !startingRef.current) return;
       if (next.state === 'done') {
         onRenderedRef.current?.();
         getCatalogPhotoreal(record.id, { silent: true })
@@ -122,13 +117,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const render = async () => {
     if (!chosen.length || running || starting) return;
     setStarting(true);
-    startingRef.current = true;
     const started = await startCatalogPhotorealRender(record.id, { shotIds: chosen, engine, samples: sampleValue }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
-    startingRef.current = false;
     setStarting(false);
-    // Already finished (its frame came first and was handled): nothing to watch.
-    if (started?.state === 'running' && !finished.current.has(started.id)) watched.current.add(started.id);
     // Keep a finish frame for this job that beat the response here.
     if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };
