@@ -56,6 +56,11 @@ const jobs = new Map();
 const projectExcerptRenders = admittedRenderMap('music-video-excerpt', { noun: 'music video draft render', link: (key) => `/music-video/${encodeURIComponent(key)}` });
 const PENDING = Symbol('mv-excerpt-render-pending');
 
+// Free the project's slot only while this job still holds it, so a late release can never drop a newer job's lock.
+const releaseExcerptLock = (projectId, jobId) => {
+  if (projectExcerptRenders.get(projectId) === jobId) projectExcerptRenders.delete(projectId);
+};
+
 export const attachExcerptRenderSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
 export function cancelExcerptRender(jobId) {
@@ -181,6 +186,8 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
       projectExcerptRenders.markUnsettled(projectId);
       return false;
     });
+    // Free the slot the moment the record is settled: a caller that sees the excerpt complete may start the next one at once.
+    releaseExcerptLock(projectId, jobId);
     closeJobAfterDelay(jobs, jobId);
     if (persisted) musicVideoEvents.emit('excerpt-render', { projectId, excerptId, status: patch.status });
     return persisted;
@@ -219,7 +226,7 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     await unlink(outputPath).catch(() => {});
     await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
     broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-  }).finally(() => projectExcerptRenders.delete(projectId));
+  }).finally(() => releaseExcerptLock(projectId, jobId));
   return { jobId, excerptId };
 }
 
@@ -372,6 +379,8 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
           projectExcerptRenders.markUnsettled(projectId);
           return false;
         });
+      // Free the slot the moment the record is settled (before scratch cleanup and the completion event).
+      releaseExcerptLock(projectId, jobId);
       if (composition) await removeCompositionScratch(jobId).catch((err) => {
         console.warn(`⚠️ Music-video excerpt render [${jobId.slice(4, 12)}] could not remove its overlay scratch: ${err.message}`);
       });
@@ -458,7 +467,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
           // back a stale `status: 'rendering'`.
           await finalize({ status: 'error', error: reason, filename: null, jobId: null });
           broadcastSse(job, { type: 'error', error: reason });
-          projectExcerptRenders.delete(projectId);
+          releaseExcerptLock(projectId, jobId);
         },
         onClose: async (code, signal) => {
           try {
@@ -504,7 +513,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
               broadcastSse(job, { type: 'error', error: 'Excerpt render finalize failed' });
             }
           } catch (err) { projectExcerptRenders.markUnsettled(projectId); throw err; }
-          finally { projectExcerptRenders.delete(projectId); }
+          finally { releaseExcerptLock(projectId, jobId); }
         },
       });
     };
@@ -540,7 +549,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
       log(`${canceled ? '🛑' : '❌'} Music-video excerpt render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(4, 12)}]: ${reason}`);
       await finalize({ status: canceled ? 'canceled' : 'error', error: canceled ? null : reason, filename: null, jobId: null });
       broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      projectExcerptRenders.delete(projectId);
+      releaseExcerptLock(projectId, jobId);
     });
 
     return { jobId, excerptId };
