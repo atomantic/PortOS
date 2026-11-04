@@ -30,6 +30,8 @@ describe('FlyerPanel', () => {
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clean', hidden: true }));
     expect(publishKit.saveCopy).toHaveBeenLastCalledWith({ flyer: { style: 'clean' } });
+    fireEvent.click(screen.getByRole('button', { name: '2 per page', hidden: true }));
+    expect(publishKit.saveCopy).toHaveBeenLastCalledWith({ flyer: { layout: 'half' } });
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
   });
 
@@ -86,7 +88,11 @@ describe('buildFlyerHtml', () => {
     expect(html).toContain('<h1>A &lt;b&gt;</h1>');
     expect(html).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).not.toContain('class="qr placeholder"');
-    expect(html).toContain('<body class="retro">'); // 80s look unless the director picks Clean
-    expect(buildFlyerHtml({ ...flyer, style: 'clean' })).not.toContain('class="retro"');
+    expect(html).toContain('<body class="retro">'); // 80s look, full page unless the director picks otherwise
+    expect(buildFlyerHtml({ ...flyer, style: 'clean' })).not.toContain('class="retro');
+    // 2 per page: the same flyer twice on one sheet with a cut line between.
+    const halves = buildFlyerHtml({ ...flyer, layout: 'half' });
+    expect(halves.match(/<main class="page half/g)).toHaveLength(2);
+    expect(halves).toContain('class="cut"');
   });
 });

@@ -1006,6 +1006,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
     // A gallery image (data/images/<file>) for image: 'gallery'.
     imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
     style: z.enum(['80s', 'clean']),
+    layout: z.enum(['full', 'half']),
   }).partial().strict().optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
