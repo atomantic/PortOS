@@ -13,6 +13,28 @@ const present = row => {
 };
 const missing = () => new ServerError('Production project not found', { status: 404, code: 'NOT_FOUND' });
 
+// Keep PostgreSQL's full timestamp precision in the token. node-postgres turns
+// timestamptz values into millisecond Date objects, which is not a safe keyset
+// boundary when two rows were inserted within the same millisecond.
+const encodePageCursor = ({ createdAt, id }) => Buffer.from(JSON.stringify({ createdAt, id })).toString('base64url');
+function decodePageCursor(cursor) {
+  if (!cursor) return null;
+  // Older clients sent a numeric offset. Resolve it once to a tuple, then
+  // return a keyset cursor so subsequent requests use stable boundaries.
+  if (/^(0|[1-9][0-9]{0,8})$/.test(cursor)) return { legacyOffset: Number(cursor) };
+  try {
+    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    const timestamp = value.createdAt;
+    if (typeof timestamp !== 'string'
+      || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(timestamp)
+      || !Number.isFinite(Date.parse(timestamp))
+      || typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 255) throw new Error('invalid cursor');
+    return value;
+  } catch {
+    throw new ServerError('Invalid page cursor', { status: 400, code: 'INVALID_CURSOR' });
+  }
+}
+
 export async function createProjectRecord(id, settings) {
   const { rows } = await query(`INSERT INTO code_animation_projects (id, title, data)
     VALUES ($1, $2, $3) RETURNING ${columns}`, [id, settings.manifest.title, settings]);
@@ -24,15 +46,27 @@ export async function getProjectRecord(id) {
   return present(rows[0]) || null;
 }
 
-export async function pageProjectRecords({ limit, offset }) {
+export async function pageProjectRecords({ limit, cursor }) {
+  let after = decodePageCursor(cursor);
+  if (after?.legacyOffset) {
+    const { rows } = await query(`SELECT created_at::text AS "createdAt", id FROM code_animation_projects
+      ORDER BY created_at DESC, id DESC LIMIT 1 OFFSET $1`, [after.legacyOffset - 1]);
+    if (!rows[0]) return { items: [], total: (await query('SELECT COUNT(*)::integer AS total FROM code_animation_projects')).rows[0].total, nextCursor: null };
+    after = rows[0];
+  }
   const [page, count] = await Promise.all([
     query(`SELECT id, title, accepted_revision_id AS "acceptedRevisionId",
-      candidate_revision_id AS "candidateRevisionId", created_at AS "createdAt", updated_at AS "updatedAt"
-      FROM code_animation_projects ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2`, [limit + 1, offset]),
+      candidate_revision_id AS "candidateRevisionId", created_at AS "createdAt", created_at::text AS "cursorCreatedAt",
+      updated_at AS "updatedAt" FROM code_animation_projects
+      WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1::timestamptz, $2::text))
+      ORDER BY created_at DESC, id DESC LIMIT $3`, [after?.createdAt || null, after?.id || null, limit + 1]),
     query('SELECT COUNT(*)::integer AS total FROM code_animation_projects'),
   ]);
-  return { items: page.rows.slice(0, limit), total: count.rows[0].total,
-    nextCursor: page.rows.length > limit ? String(offset + limit) : null };
+  const rows = page.rows.slice(0, limit);
+  const last = rows.at(-1);
+  const items = rows.map(({ cursorCreatedAt: _cursorCreatedAt, ...item }) => item);
+  return { items, total: count.rows[0].total,
+    nextCursor: page.rows.length > limit ? encodePageCursor({ createdAt: last.cursorCreatedAt, id: last.id }) : null };
 }
 
 export async function patchProjectRecord(id, patch) {
@@ -108,11 +142,22 @@ export async function getRevisionRecord(projectId, revisionId) {
   return rows[0]?.data || null;
 }
 
-export async function pageProjectHistory(projectId, { limit, offset }) {
+export async function pageProjectHistory(projectId, { limit, cursor }) {
+  let after = decodePageCursor(cursor);
+  if (after?.legacyOffset) {
+    const { rows } = await query(`SELECT created_at::text AS "createdAt", id FROM code_animation_project_runs
+      WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1 OFFSET $2`, [projectId, after.legacyOffset - 1]);
+    if (!rows[0]) return { items: [], nextCursor: null };
+    after = rows[0];
+  }
   const { rows } = await query(`SELECT id, status, revision_id AS "revisionId", data,
-    created_at AS "createdAt", completed_at AS "completedAt" FROM code_animation_project_runs
-    WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, [projectId, limit + 1, offset]);
-  return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? String(offset + limit) : null };
+    created_at AS "createdAt", created_at::text AS "cursorCreatedAt", completed_at AS "completedAt" FROM code_animation_project_runs
+    WHERE project_id = $1 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::text))
+    ORDER BY created_at DESC, id DESC LIMIT $4`, [projectId, after?.createdAt || null, after?.id || null, limit + 1]);
+  const items = rows.slice(0, limit);
+  const last = items.at(-1);
+  return { items: items.map(({ cursorCreatedAt: _cursorCreatedAt, ...item }) => item),
+    nextCursor: rows.length > limit ? encodePageCursor({ createdAt: last.cursorCreatedAt, id: last.id }) : null };
 }
 
 export async function interruptImports(projectId, activeIds) {

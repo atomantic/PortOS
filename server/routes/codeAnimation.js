@@ -235,11 +235,11 @@ router.delete('/jobs/:id', asyncHandler(async (req, res) => {
 
 const projectPageSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  cursor: z.string().regex(/^(0|[1-9][0-9]{0,8})$/).optional(),
+  cursor: z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/).optional(),
 }).strict();
 const projectPage = query => {
   const { limit, cursor } = validateRequest(projectPageSchema, query);
-  return { limit, offset: Number(cursor || 0) };
+  return { limit, cursor };
 };
 const revisionParamsSchema = exportParamsSchema.extend({ revisionId: z.string().uuid() });
 
