@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import StoryboardAnimatic, { clipTimeAt, shotAt } from './StoryboardAnimatic.jsx';
+import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
 
 const scenes = [
   { sceneId: 'b', label: 'Chorus', startSec: 10, endSec: 20, referenceImageId: 'frame-b.png' },
@@ -497,12 +498,18 @@ describe('StoryboardAnimatic clips', () => {
 });
 
 describe('StoryboardAnimatic film look', () => {
-  // Uniquely catches the animatic showing footage without the look the final render will apply,
-  // and an SVG filter over the PLAYING picture (re-run per video frame, it stalled a phone after #11215).
-  it('shows the exact look when paused, a light compositor-only look while playing, and nothing without one', () => {
+  // Uniquely catches an SVG filter over the PLAYING picture (it stalled a phone after #11215).
+  it('starts without the look, then shows the exact paused and lightweight playing versions when enabled', () => {
     const look = { preset: 'super8', defocus: 0.2, grain: 0.5, halation: 0.4, vignette: 0.3 };
+    globalThis.localStorage.setItem('portos-mv-animatic-look', 'on');
     const { container, rerender } = render(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: look }} audioUrl="/song.mp3" />);
     const audio = screen.getByLabelText('Song for the storyboard animatic');
+    const toggle = screen.getByRole('button', { name: 'Film look' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(container.querySelector('[data-film-look]')).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(globalThis.localStorage.getItem(PREVIEW_FILM_LOOK_KEY)).toBe('on');
     // Paused: the render's filter over the whole box.
     const exact = container.querySelector('figure [data-film-look="exact"]');
     expect(exact).toBeTruthy();
@@ -530,12 +537,11 @@ describe('StoryboardAnimatic film look', () => {
     fireEvent.pause(audio);
     expect(container.querySelector('figure [data-film-look="exact"]')).toBeTruthy();
     // The viewer can watch without the look; the choice is remembered.
-    const toggle = screen.getByRole('button', { name: 'Film look' });
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(toggle);
     expect(container.querySelector('[data-film-look]')).toBeNull();
     expect(toggle.getAttribute('aria-pressed')).toBe('false');
-    expect(globalThis.localStorage.getItem('portos-mv-animatic-look')).toBe('off');
+    expect(globalThis.localStorage.getItem(PREVIEW_FILM_LOOK_KEY)).toBe('off');
     fireEvent.click(toggle);
     expect(container.querySelector('figure [data-film-look="exact"]')).toBeTruthy();
     rerender(<StoryboardAnimatic project={{ id: 'p', scenes, filmLook: null }} audioUrl="/song.mp3" />);

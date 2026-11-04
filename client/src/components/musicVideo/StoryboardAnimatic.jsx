@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
-import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
-import { Captions, Clapperboard, Film, Scissors } from 'lucide-react';
+import { Captions, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview, mixMusicVideoColdOpenAudio, musicVideoColdOpenAudioUrl } from '../../services/apiMusicVideo.js';
 import { coldOpenPlan, songScenes } from '../../../../server/lib/musicVideoColdOpen.js';
@@ -17,6 +16,7 @@ import { endingParts } from '../../../../server/lib/musicVideoEnding.js';
 import EndingCanvas from './EndingCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
+import PreviewFilmLook, { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
 import PreviewVideo from './PreviewVideo.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
@@ -254,9 +254,6 @@ export function clipTimeAt(scene, t, clipSec = null, { early = false, fromSec = 
 const CLIP_PRELOAD_SHOTS = 2;
 // The song frame the film look's grain and drift follow; footage renders run at 24 fps.
 const ANIMATIC_FPS = 24;
-// Remembers, per viewer, that the animatic plays without the project's film look.
-const ANIMATIC_LOOK_KEY = 'portos-mv-animatic-look';
-
 /**
  * A shot's selected video clip, muted under the master song and kept in step
  * with it while its shot is `current`: it plays and pauses with the song, and a
@@ -601,13 +598,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const applied = useRef(null);
   const [time, setTime] = useState(0);
   const [lyricsOn, setLyricsOn] = useState(true);
-  // The look is the render's; a viewer whose phone struggles can watch without it.
-  const [lookOn, setLookOn] = useState(() => safeReadStorage(ANIMATIC_LOOK_KEY) !== 'off');
+  const [lookOn, toggleLook] = usePreviewFilmLook();
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
   const captureBasis = useRef(null);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
-  const toggleLook = () => setLookOn((on) => { safeWriteStorage(ANIMATIC_LOOK_KEY, on ? 'off' : 'on'); return !on; });
   // The song's shots; shots before the song play on the cold open's clock (useColdOpen).
   const scenes = useMemo(() => songScenes(project), [project]);
   useShotClock(audioRef, scenes, setTime);
@@ -817,17 +812,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             <Scissors size={14} aria-hidden="true" /> Ending
           </button>
         )}
-        {lookAvailable && (
-          <button
-            type="button"
-            onClick={toggleLook}
-            aria-pressed={lookOn}
-            title={lookOn ? 'Showing the project film look: a light version while playing, the exact render look when paused. Tap to watch without it.' : 'Film look hidden in the animatic; the render still applies it'}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${lookOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
-          >
-            <Film size={14} aria-hidden="true" /> Film look
-          </button>
-        )}
+        {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
         {lyricsAvailable && (
           <button
             type="button"
