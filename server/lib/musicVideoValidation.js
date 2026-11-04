@@ -998,6 +998,15 @@ export const musicVideoPublishCopyPatchSchema = z.object({
     include: z.object({ title: z.boolean(), lyrics: z.boolean(), spend: z.boolean(), chapters: z.boolean(), hashtags: z.boolean() }).partial().strict().optional(),
     length: z.enum(['short', 'full']).optional(),
   }).strict().optional(),
+  // The printable flyer's text (client/src/lib/musicVideoFlyer.js); `url` overrides the YouTube link the QR encodes, '' clears it.
+  flyer: z.object({
+    kicker: kitText(60), title: kitText(120), byline: kitText(120), tagline: kitText(300), scanLine: kitText(60), details: kitText(1200),
+    url: z.union([z.string().url().max(500), z.literal('')]),
+    image: z.enum(['cover', 'youtubeThumbnail', 'thumbnail', 'gallery', 'none']),
+    // A gallery image (data/images/<file>) for image: 'gallery'.
+    imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
+    style: z.enum(['80s', 'clean']),
+  }).partial().strict().optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),

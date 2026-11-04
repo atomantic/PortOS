@@ -290,6 +290,7 @@ export async function updatePublishKitCopy(projectId, patch, deps = {}) {
       }
       next.links = links;
     }
+    if (patch?.flyer && typeof patch.flyer === 'object') next.flyer = { ...(kit.flyer || {}), ...patch.flyer };
     if (patch?.draftOptions && typeof patch.draftOptions === 'object') {
       const prior = kit.draftOptions || {};
       next.draftOptions = {
