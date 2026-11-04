@@ -26,9 +26,9 @@ describe('production cleanup', () => {
       segments: { stale: [], unusedLooks: [] },
     });
     render(<CleanupStage board={{ project: { id: 'example-project' } }} />);
-    expect(await screen.findByText('3 renders · 1 KB on this device')).toBeInTheDocument();
-    expect(screen.getByText('2 video files are not on this device')).toBeInTheDocument();
-    expect(screen.getAllByText('Video file not on this device')).toHaveLength(2);
+    expect(await screen.findByText('3 renders · 1 KB on this PortOS server')).toBeInTheDocument();
+    expect(screen.getByText('2 video files are not on this PortOS server')).toBeInTheDocument();
+    expect(screen.getAllByText('Video file not on this PortOS server')).toHaveLength(2);
     expect(screen.getAllByText('Older final · 0 B')).toHaveLength(1);
   });
 
