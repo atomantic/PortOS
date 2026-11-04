@@ -107,7 +107,8 @@ const RETRO_CSS = `
 // Two 8.5×5.5 flyers stacked on one letter sheet: text and image on the left,
 // the QR as large as the half allows on the right, a dashed cut line between.
 const HALF_CSS = `
-.page.half { height: 5.45in; padding: 0.4in 0.45in; flex-direction: row; gap: 0.3in; align-items: stretch; }
+.page.half { height: 5.45in; padding: 0.4in 0.45in; gap: 0.1in; }
+.half .row { display: flex; gap: 0.3in; flex: 1 1 auto; }
 .half .info { display: flex; flex-direction: column; gap: 0.12in; flex: 1 1 auto; min-width: 0; }
 .half .kicker { font-size: 10pt; padding-bottom: 0.05in; }
 .half h1 { font-size: 38pt; }
@@ -117,15 +118,16 @@ const HALF_CSS = `
 .half .byline { font-size: 13pt; }
 .half .hero { max-height: none; }
 .half .tagline { font-size: 12pt; }
-.half .details { font-size: 9pt; }
-.half .scan { justify-content: center; padding: 0.14in; flex: 0 0 auto; align-self: center; }
+.half .details { font-size: 9pt; column-count: 2; column-gap: 0.3in; }
+.half .scan { padding: 0.14in; flex: 0 0 auto; }
+.half .qrslot { width: 3.5in; align-self: stretch; }
+.half.noimg .qrslot { width: 4.1in; }
 .half .text { padding: 0.06in 0.1in; border: 2pt solid #000; }
 .half .text h2 { font-size: 18pt; margin: 0 0 0.04in; }
 .half .url { font-size: 10pt; }
 .half .vhs { font-size: 8pt; margin: 0 0 0.04in; }
 .half .play { font-size: 8pt; margin-top: 0.04in; }
-.half .qr { width: 3.5in; height: 3.5in; }
-.half.noimg .qr { width: 4.1in; height: 4.1in; }
+
 .half .qr.placeholder { font-size: 11pt; }
 .cut { height: 0.1in; border-top: 1.5pt dashed #000; position: relative; font-size: 14pt; line-height: 0; padding-left: 0.2in; }
 `;
@@ -151,7 +153,7 @@ export function buildFlyerHtml(flyer, { origin = '', autoPrint = false } = {}) {
   const urlLine = f.qrUrl ? `<p class="url">${escapeHtml(displayUrl(f.qrUrl))}</p>` : '<p class="url muted">youtube link pending</p>';
   // The label beside the QR; on a half sheet it moves to the text column so the QR gets the whole right side.
   const label = `<div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>`;
-  const page = `<main class="page${half ? ' half' : ''}${image ? '' : ' noimg'}"><div class="info">
+  const page = `<main class="page${half ? ' half' : ''}${image ? '' : ' noimg'}">${half ? '<div class="row">' : ''}<div class="info">
 ${f.kicker ? `<p class="kicker">${escapeHtml(f.kicker)}</p>` : ''}
 ${f.title ? `<h1>${escapeHtml(f.title)}</h1>` : ''}
 ${retro ? '<div class="stripes" aria-hidden="true"><i></i><i></i><i></i></div>' : ''}
@@ -159,10 +161,10 @@ ${f.byline ? `<p class="byline">${escapeHtml(f.byline)}</p>` : ''}
 ${image ? `<div class="hero"><div class="frame"><img src="${escapeHtml(image)}" alt=""></div></div>` : ''}
 ${f.tagline ? `<p class="tagline">${lines(f.tagline)}</p>` : ''}
 ${half ? label : ''}
-${half && f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
 </div>
-<section class="scan">${half ? '' : label}${qr}</section>
-${!half && f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
+<section class="scan">${half ? '' : label}<div class="qrslot">${qr}</div></section>
+${half ? '</div>' : ''}
+${f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
 </main>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=816">
@@ -175,14 +177,14 @@ body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
 .page { width: 8.5in; height: 11in; padding: 0.55in; display: flex; flex-direction: column; gap: 0.22in; overflow: hidden; }
 .info { display: contents; }
 /* No image on a full page: the QR takes the room, stacked over its label. */
-.page.noimg:not(.half) { justify-content: space-between; }
 .page.noimg:not(.half) .scan { flex-direction: column-reverse; gap: 0.15in; }
-.page.noimg:not(.half) .scan .text { text-align: center; }
+.page.noimg:not(.half) .scan .text { text-align: center; flex: 0 0 auto; }
 .page.noimg:not(.half) { gap: 0.12in; padding: 0.4in 0.5in; }
 .page.noimg:not(.half) .scan { padding: 0.12in; }
 .page.noimg:not(.half) .text h2 { font-size: 24pt; margin: 0; }
 .page.noimg:not(.half) .vhs, .page.noimg:not(.half) .play { display: none; }
-.page.noimg:not(.half) .qr { width: 6.2in; height: 6.2in; }
+.page.noimg:not(.half) .scan { flex: 1 1 auto; min-height: 0; }
+.page.noimg:not(.half) .qrslot { flex: 1 1 auto; min-height: 0; align-self: stretch; }
 .kicker { margin: 0; font-size: 15pt; font-weight: 700; letter-spacing: 0.3em; text-transform: uppercase; border-bottom: 3pt solid #000; padding-bottom: 0.08in; }
 h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-weight: 900; font-size: 58pt; line-height: 0.95; text-transform: uppercase; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .byline { margin: 0; font-size: 20pt; font-weight: 700; }
@@ -196,7 +198,12 @@ h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
 .text h2 { margin: 0 0 0.08in; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif; font-size: 30pt; text-transform: uppercase; line-height: 1; }
 .url { margin: 0; font-family: "Courier New", Courier, monospace; font-size: 13pt; overflow-wrap: anywhere; }
 .muted { color: #555; }
+/* A slot that sizes its QR to whatever room the text leaves, capped per layout. */
+.qrslot { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
 .qr { width: 3.3in; height: 3.3in; flex: 0 0 auto; }
+.half .qrslot, .page.noimg .qrslot { container-type: size; }
+.half .qr, .page.noimg .qr { width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); }
+.page.noimg:not(.half) .qr { width: min(6.2in, 100cqw, 100cqh); height: min(6.2in, 100cqw, 100cqh); }
 .qr svg { width: 100%; height: 100%; display: block; }
 .qr.placeholder { border: 2pt dashed #000; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 13pt; font-weight: 700; text-transform: uppercase; line-height: 1.4; }
 .details { margin: 0; font-size: 12pt; line-height: 1.4; }
