@@ -44,6 +44,16 @@ describe('FlyerPanel', () => {
   });
 });
 
+describe('FlyerPanel defaults', () => {
+  it('picks up cover art built after the card mounted', () => {
+    const publishKit = hook();
+    const { rerender } = render(<FlyerPanel project={project()} publishKit={publishKit} />);
+    expect(screen.getByLabelText('Image')).toHaveValue('none');
+    rerender(<FlyerPanel project={project({ coverArt: { filename: 'cover.jpg' } })} publishKit={publishKit} />);
+    expect(screen.getByLabelText('Image')).toHaveValue('cover');
+  });
+});
+
 describe('buildFlyerHtml', () => {
   it('prints a QR for the custom link over the YouTube one and escapes the director\'s text', () => {
     const flyer = resolveFlyer(project({ links: { youtube: 'https://youtu.be/abc' }, flyer: { url: 'https://example.com/w', title: 'A <b>' } }), { youtubeUrl: 'https://youtu.be/abc' });

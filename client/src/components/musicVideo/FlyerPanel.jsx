@@ -35,7 +35,10 @@ export default function FlyerPanel({ project, publishKit }) {
   const kit = project?.publishKit || {};
   const youtubeUrl = releaseLinkUrl(kit, 'youtube');
   const saved = resolveFlyer(project, { youtubeUrl });
-  const [draft, setDraft] = useState(() => saved);
+  // Only what the director typed or picked here: untouched fields keep following
+  // the project (a cover built after this card mounted becomes the default image).
+  const [edits, setEdits] = useState({});
+  const draft = { ...saved, ...edits };
   const [saveState, setSaveState] = useState(null);
   const saveSeq = useRef(0);
   const [frameRef, frameWidth] = useContainerWidth();
@@ -44,7 +47,7 @@ export default function FlyerPanel({ project, publishKit }) {
   const urlTyped = draft.url.trim();
   const badUrl = !!urlTyped && !isHttp(urlTyped);
   // The preview shows what is typed; a half-typed link previews as no override.
-  const live = { ...draft, url: badUrl ? '' : urlTyped };
+  const live = { ...(kit.flyer || {}), ...edits, ...('url' in edits ? { url: badUrl ? '' : urlTyped } : {}) };
   const flyer = resolveFlyer({ ...project, publishKit: { ...kit, flyer: live } }, { youtubeUrl });
   const html = buildFlyerHtml(flyer, { origin: window.location.origin });
   const save = (patch) => {
@@ -52,7 +55,7 @@ export default function FlyerPanel({ project, publishKit }) {
     setSaveState('saving');
     return publishKit.saveCopy({ flyer: patch }).then((ok) => { if (seq === saveSeq.current) setSaveState(ok ? 'saved' : 'failed'); });
   };
-  const edit = (key, value) => setDraft((d) => ({ ...d, [key]: value }));
+  const edit = (key, value) => setEdits((e) => ({ ...e, [key]: value }));
   const commit = (key, value) => { if (value !== saved[key]) save({ [key]: value }); };
   const commitUrl = () => { if (!badUrl && urlTyped !== saved.url) save({ url: urlTyped }); };
   const print = () => {
