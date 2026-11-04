@@ -4,12 +4,12 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/catalogPhotoreal.js', () => ({
-  getPhotorealStatus: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
+  getPhotorealStatus: vi.fn(), openPhotorealBlend: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
 }));
 vi.mock('../services/catalogPhotorealLook.js', () => ({
   draftPhotorealLook: vi.fn(), previewPhotorealLookPrompt: vi.fn(), savePhotorealLook: vi.fn(),
 }));
-const { photorealBlendPath, startPhotorealRender } = await import('../services/catalogPhotoreal.js');
+const { openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalogPhotoreal.js');
 const { savePhotorealLook } = await import('../services/catalogPhotorealLook.js');
 const router = (await import('./catalog.js')).default;
 const app = express();
@@ -19,6 +19,17 @@ app.use(errorMiddleware);
 const base = '/api/catalog/ingredients/example-place/photoreal';
 
 describe('photoreal routes', () => {
+  // Catches the open route taking a caller-named file or executable.
+  it('opens the kept scene in Blender and takes no path or executable from the caller', async () => {
+    openPhotorealBlend.mockResolvedValue({ opened: true, blenderVersion: '5.2.3' });
+    const opened = await request(app).post(`${base}/open`).send({});
+    expect(opened.status).toBe(200);
+    expect(openPhotorealBlend).toHaveBeenCalledWith('example-place');
+    expect((await request(app).post(`${base}/open`).send({ path: '/etc/passwd' })).status).toBe(400);
+    expect((await request(app).post(`${base}/open`).send({ executable: '/bin/sh' })).status).toBe(400);
+    expect(openPhotorealBlend).toHaveBeenCalledTimes(1);
+  });
+
   it('starts a render from saved camera ids only, refusing scripts, paths and unknown engines', async () => {
     startPhotorealRender.mockResolvedValue({ id: 'pr-1', state: 'running' });
     const started = await request(app).post(`${base}/render`).send({ shotIds: ['wide'], engine: 'cycles', samples: 64 });

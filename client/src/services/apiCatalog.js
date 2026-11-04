@@ -343,6 +343,9 @@ export const saveCatalogPhotorealLook = (id, look, { source, ...options } = {}) 
 export const startCatalogPhotorealRender = (id, body, options) =>
   request(`/catalog/ingredients/${enc(id)}/photoreal/render`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+export const openCatalogPhotorealBlend = (id, options) =>
+  request(`/catalog/ingredients/${enc(id)}/photoreal/open`, { method: 'POST', body: '{}', ...options });
+
 export const refineCatalogDraft = (id, body, { preview = false, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/refine${preview ? '/compose' : ''}`, { method: 'POST', body: JSON.stringify(body), ...options });
 

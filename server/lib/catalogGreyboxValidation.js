@@ -45,6 +45,9 @@ export const catalogPhotorealRenderSchema = z.object({
   flythroughSeconds: z.number().finite().min(PHOTOREAL_FLYTHROUGH_SECONDS.MIN).max(PHOTOREAL_FLYTHROUGH_SECONDS.MAX).optional(),
 }).strict().refine((body) => !body.flythroughSeconds || body.shotIds.length >= 2, { message: 'a fly-through needs at least two cameras', path: ['shotIds'] });
 
+// Opening the kept scene in Blender takes no input: the file and executable are fixed.
+export const catalogPhotorealOpenSchema = z.object({}).strict();
+
 // Photoreal look: AI draft/preview reuse the greybox draft body; `look: null` clears it.
 export const catalogPhotorealLookDraftSchema = catalogGreyboxDraftSchema;
 export const catalogPhotorealLookSaveSchema = z.object({

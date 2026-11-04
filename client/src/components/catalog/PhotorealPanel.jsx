@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Aperture, Check, Download, Film, Loader2 } from 'lucide-react';
+import { Aperture, Box, Check, Download, Film, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import MediaImage from '../MediaImage';
 import PhotorealLookSection from './PhotorealLookSection';
-import { getCatalogPhotoreal, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { getCatalogPhotoreal, openCatalogPhotorealBlend, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { withShot } from '../../lib/greybox';
 import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formatDurationSec } from '../../utils/formatters';
@@ -61,6 +61,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [flySeconds, setFlySeconds] = useState(() => readPrefs()?.flySeconds ?? FLY_SECONDS.default);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
+  const [opening, setOpening] = useState(false);
   // Finish frames already acted on; the server sends one per transition.
   const finished = useRef(new Set());
   const job = status?.job || null;
@@ -163,6 +164,15 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };
 
+  const openInBlender = async () => {
+    if (opening) return;
+    setOpening(true);
+    const opened = await openCatalogPhotorealBlend(record.id, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not open Blender'); return null; });
+    setOpening(false);
+    if (opened) toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
+  };
+
   const setPlate = async (shot, mediaKey) => {
     if (!scene || platingShot || disabled) return;
     setPlatingShot(shot.id);
@@ -202,9 +212,16 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           <p className="text-xs text-gray-400">Builds this greybox in Blender, dresses it with the Look, and renders its saved cameras. Renders land here and can become a camera&apos;s photo plate.</p>
         </div>
         {status?.blendUrl && (
-          <a href={status.blendUrl} download className={actionButton}>
-            <Download size={16} aria-hidden="true" /> Download .blend
-          </a>
+          <div className="flex flex-wrap gap-2">
+            {!readOnly && (
+              <button type="button" onClick={openInBlender} disabled={opening} className={actionButton}>
+                {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
+              </button>
+            )}
+            <a href={status.blendUrl} download className={actionButton}>
+              <Download size={16} aria-hidden="true" /> Download .blend
+            </a>
+          </div>
         )}
       </div>
 

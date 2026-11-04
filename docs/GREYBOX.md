@@ -158,6 +158,9 @@ camera and replaces the camera's previous render unless that one is a photo plat
 **Download .blend** gives the latest built scene, with parts grouped by zone,
 landmarks and anchors as empties, and every saved camera, ready to dress in
 Blender.
+**Open in Blender** opens that scene in a new window of the checked Blender on
+the machine running PortOS (with scripts off, as in a render). The next render
+replaces the kept file, so use **File › Save As** to keep your edits.
 
 ### Dress it (Look)
 
