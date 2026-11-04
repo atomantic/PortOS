@@ -29,7 +29,7 @@ const shippedEntry = (overrides = {}) => ({
   repo: spec.shippedRepo,
   revision: spec.shippedRevision,
   runtime: 'ltx25',
-  steps: 8,
+  steps: 30,
   guidance: 3.0,
   ...overrides,
 });
@@ -97,7 +97,7 @@ describe('the default profile is a no-op', () => {
     const model = decorated();
     const profile = resolveVideoSpeedProfile({ model, profileId: SPEED_PROFILE_DEFAULT_ID, mode: 'text' });
     expect(resolveVideoSampler({ model, steps: undefined, guidanceScale: undefined, speedProfile: profile }))
-      .toEqual({ steps: 8, guidance: 3.0, stage2Steps: null });
+      .toEqual({ steps: 30, guidance: 3.0, stage2Steps: null });
   });
 });
 
@@ -178,7 +178,7 @@ describe('resolveVideoSampler precedence', () => {
 
   it('falls back to the registry defaults, treating 0/empty guidance as explicit', () => {
     expect(resolveVideoSampler({ model, steps: undefined, guidanceScale: undefined, speedProfile: null }))
-      .toEqual({ steps: 8, guidance: 3.0, stage2Steps: null });
+      .toEqual({ steps: 30, guidance: 3.0, stage2Steps: null });
     // guidance 0 is a real request (no CFG), not "unset" — the `!= null && !== ''`
     // check exists precisely so it isn't collapsed into the model default.
     expect(resolveVideoSampler({ model, steps: undefined, guidanceScale: 0, speedProfile: null }).guidance).toBe(0);

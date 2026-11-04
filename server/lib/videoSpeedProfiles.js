@@ -1,7 +1,7 @@
 /**
  * Video render speed profiles (issue #4875).
  *
- * A *speed profile* is a named, pre-validated sampler configuration a user can
+ * A *speed profile* is a named sampler configuration a user can
  * pick instead of hand-tuning steps and CFG: it swaps the whole schedule at
  * once (stage-1 / stage-2 step counts, guidance, and runtime acceleration
  * levers like TeaCache). Measured claims are separate from experimental profiles.
@@ -19,12 +19,12 @@
  *
  * ## Why the DEFAULT profile is a first-class entry rather than "absence"
  *
- * `SPEED_PROFILE_DEFAULT_ID` ('quality') is the shipped contract: the exact
- * sampler the model has always rendered with. It exists as a named option so
+ * `SPEED_PROFILE_DEFAULT_ID` ('quality') follows the model's current sampler
+ * defaults and any explicit request overrides. It exists as a named option so
  * the picker has something to show as selected, but it is deliberately a
  * NO-OP — `resolveVideoSpeedProfile` returns `null` for it, so a quality render
- * builds byte-identical spawn args to a render from before this feature
- * existed, and stamps no extra history fields. Absence and `'quality'` are the
+ * builds the same spawn args as one with no profile and stamps no extra
+ * history fields. Absence and `'quality'` are the
  * same request (`isDefaultSpeedProfile`), exactly as `'stock'` and absence are
  * the same request in lib/videoTextEncoders.js.
  *
@@ -131,17 +131,9 @@ export const VIDEO_SPEED_PROFILES = Object.freeze({
       Object.freeze({
         id: 'fast',
         name: 'Fast',
-        description: 'Validated 8+3-step two-stage schedule at CFG 1.0 with stage-1 TeaCache. Softer detail and weaker prompt adherence than Quality.',
-        // Deliberately conservative, and traceable to the two numbers this repo
-        // can actually cite: the step schedule measured ~30-35% off wall time
-        // (resolveT2vTwoStageOverride, i.e. ~1.4-1.5x), and the pin's own
-        // --teacache-thresh help documents ~1.2x at the calibrated default —
-        // ~1.7-1.85x combined, so ~35-45% off. NOT "2x": that would overstate
-        // the evidence, and on a pin without the TeaCache kwarg the cache half
-        // degrades away entirely (leaving only the ~30-35%). For a feature
-        // whose whole contract is an honest speed claim, the label is the last
-        // place to round up. Raise this only against an A/B measured on 2.5.
-        speedupLabel: '~35-45% faster',
+        description: '8+3-step two-stage schedule at CFG 1.0 with experimental TeaCache. Detail and prompt adherence may be reduced; TeaCache is not calibrated for LTX-2.5.',
+        // No numerical speed claim: the new 30-step quality baseline has not
+        // been benchmarked against this profile across representative shots.
         steps: 8,
         stage2Steps: 3,
         guidance: 1.0,
