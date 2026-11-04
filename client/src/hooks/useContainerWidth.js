@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // Track a container element's width via ResizeObserver. Returns [ref, width]
 // — attach the ref to the element you want to measure, read width on each
@@ -13,6 +13,17 @@ export default function useContainerWidth() {
   const ref = useRef(null);
   const observedRef = useRef({ el: null, ro: null });
   const [width, setWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el) {
+      const initial = Math.floor(el.getBoundingClientRect().width || el.clientWidth || 0);
+      if (initial > 0 && initial !== width) {
+        setWidth(initial);
+      }
+    }
+  });
+
   useEffect(() => {
     const el = ref.current;
     const observed = observedRef.current;

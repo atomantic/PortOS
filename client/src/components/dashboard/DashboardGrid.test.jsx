@@ -46,7 +46,7 @@ vi.mock('@dnd-kit/sortable', async () => {
 const DashboardGrid = (await import('./DashboardGrid.jsx')).default;
 const {
   reflowToOrder, synthesizeGrid, reconcileGrid, readingOrderIds,
-  packVertically, itemHeightPx, rowsToPx, pxToRows, stepGhost,
+  packVertically, itemHeightPx, rowsToPx, pxToRows, stepGhost, getColWidth,
 } = await import('./DashboardGrid.jsx');
 
 // jsdom has no ResizeObserver, and useContainerWidth (which decides mobile vs
@@ -144,6 +144,15 @@ describe('row ↔ pixel conversion', () => {
   it('never reports less than one row, even for a collapsed cell', () => {
     expect(pxToRows(0)).toBe(1);
     expect(pxToRows(-500)).toBe(1);
+  });
+});
+
+describe('getColWidth', () => {
+  it('never returns a negative column width when containerWidth is 0 or smaller than grid gaps', () => {
+    expect(getColWidth(0)).toBe(0);
+    expect(getColWidth(-100)).toBe(0);
+    expect(getColWidth(50)).toBe(0);
+    expect(getColWidth(1200)).toBeGreaterThan(0);
   });
 });
 

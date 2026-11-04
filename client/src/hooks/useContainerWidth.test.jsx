@@ -32,4 +32,18 @@ describe('useContainerWidth', () => {
     act(() => observers.at(-1).fire(1234.6));
     expect(measured.textContent).toBe('1234');
   });
+
+  it('measures initial container width synchronously on layout if element has dimensions', () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const orig = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = () => ({ width: 450.8, height: 100, top: 0, left: 0, right: 450.8, bottom: 100 });
+    try {
+      render(<Probe />);
+      act(() => screen.getByRole('button', { name: 'load' }).click());
+      const measured = screen.getByTestId('measured');
+      expect(measured.textContent).toBe('450');
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = orig;
+    }
+  });
 });

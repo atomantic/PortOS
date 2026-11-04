@@ -599,4 +599,23 @@ describe('Instances page connection drawers', () => {
     expect(screen.getByRole('dialog', { name: 'Add peer' })).toBeInTheDocument();
     expect(screen.getByLabelText('Peer address')).toHaveFocus();
   });
+
+  it('renders sync status sections with responsive single-column mobile grid', async () => {
+    api.getTailcatForwards.mockResolvedValue({ forwards: [] });
+    api.getTailcatServe.mockResolvedValue({ status: 'idle', live: false });
+    api.getInstances.mockResolvedValue({
+      self: { name: 'Home' },
+      peers: [],
+      syncStatus: {
+        local: { brainSeq: 10, memorySeq: 5, checksums: { brain: 'abc' } },
+        cursors: {},
+      },
+    });
+    renderUI(<MemoryRouter><Instances /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connection settings' }));
+    const brainText = await screen.findByText(/Brain seq: 10/);
+    const container = brainText.closest('.grid');
+    expect(container).toHaveClass('grid-cols-1');
+    expect(container).toHaveClass('sm:grid-cols-2');
+  });
 });

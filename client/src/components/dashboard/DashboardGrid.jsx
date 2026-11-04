@@ -130,8 +130,9 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function getColWidth(containerWidth) {
-  return (containerWidth - GAP_PX * (GRID_COLS - 1)) / GRID_COLS;
+export function getColWidth(containerWidth) {
+  if (containerWidth <= 0) return 0;
+  return Math.max(0, (containerWidth - GAP_PX * (GRID_COLS - 1)) / GRID_COLS);
 }
 
 // Reading order: `order`, then column as a tiebreak. This is the order the
@@ -618,7 +619,7 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
     setHeights((prev) => (prev[id] === px ? prev : { ...prev, [id]: px }));
   }, []);
 
-  const isMobile = containerWidth > 0 && containerWidth < MOBILE_BREAKPOINT_PX;
+  const isMobile = (containerWidth > 0 ? containerWidth : (typeof window !== 'undefined' ? window.innerWidth : 0)) < MOBILE_BREAKPOINT_PX;
   // The mobile/desktop seam is measured off the CONTAINER, so a caller that
   // wants to describe the active affordance has to be told — a CSS `sm:`
   // breakpoint reads the viewport and disagrees on a padded page.
@@ -928,7 +929,7 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
   }, [items, onChange]);
 
   const sortable = editable && isMobile;
-  const colWidth = isMobile ? 0 : getColWidth(containerWidth);
+  const colWidth = isMobile || !containerWidth ? 0 : getColWidth(containerWidth);
 
   return (
     // DndContext/SortableContext render no DOM of their own, so they can wrap
