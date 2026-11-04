@@ -498,6 +498,7 @@ export * from './goalFidelityFollowUp.js';
 export * from './interactiveShellResolver.js';
 export * from './killWithEscalation.js';
 export * from './npmGlobalBin.js';
+export * from './launchDetached.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './primaryCheckoutGuard.js';

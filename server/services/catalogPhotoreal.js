@@ -11,7 +11,6 @@
  * One render per place at a time; progress goes out as `catalog:photoreal` frames.
  */
 
-import { spawn } from '../lib/childProcess.js';
 import { access, readFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +18,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { H264_ENCODE_ARGS } from '../lib/ffmpeg.js';
+import { launchDetached } from '../lib/launchDetached.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
 import { resolvePhotorealLook } from '../lib/photorealLook.js';
 import {
@@ -39,13 +39,9 @@ const deps = {
   findFfmpeg: async () => (await import('../lib/ffmpeg.js')).findFfmpeg(),
   runFfmpeg: async (args) => (await import('../lib/ffmpeg.js')).runFfmpegProcess(args),
   saveVideo: async (path, name) => (await import('./videoUpload.js')).saveUploadedGalleryVideoFile(path, name),
-  // A detached GUI process: PortOS answers once it has started, and never waits on it.
-  launch: (executable, args) => new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { detached: true, stdio: 'ignore' });
-    child.once('error', reject);
-    child.once('spawn', () => { child.unref(); resolve(); });
-  }),
+  launch: (executable, args) => launchDetached(executable, args),
 };
+
 export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, overrides);
 
 // ingredientId → latest job. In memory: a render is a disposable process; the
