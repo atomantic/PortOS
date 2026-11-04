@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { GREYBOX_LIMITS, greyboxSceneSchema } from './greyboxScene.js';
 import { GREYBOX_INSTRUCTION_MAX, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
-import { PHOTOREAL_ENGINES, PHOTOREAL_MAX_SAMPLES } from './greyboxBlender.js';
+import { PHOTOREAL_ENGINES, PHOTOREAL_FLYTHROUGH_SECONDS, PHOTOREAL_MAX_SAMPLES } from './greyboxBlender.js';
 import { photorealLookSchema } from './photorealLook.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { emptyToNull } from './zodCompat.js';
@@ -41,7 +41,9 @@ export const catalogPhotorealRenderSchema = z.object({
     .refine((ids) => new Set(ids).size === ids.length, 'each camera once'),
   engine: z.enum(PHOTOREAL_ENGINES),
   samples: z.number().int().min(1).max(PHOTOREAL_MAX_SAMPLES).optional(),
-}).strict();
+  // A fly-through glides through shotIds in order and saves an MP4 to Media History.
+  flythroughSeconds: z.number().finite().min(PHOTOREAL_FLYTHROUGH_SECONDS.MIN).max(PHOTOREAL_FLYTHROUGH_SECONDS.MAX).optional(),
+}).strict().refine((body) => !body.flythroughSeconds || body.shotIds.length >= 2, { message: 'a fly-through needs at least two cameras', path: ['shotIds'] });
 
 // Photoreal look: AI draft/preview reuse the greybox draft body; `look: null` clears it.
 export const catalogPhotorealLookDraftSchema = catalogGreyboxDraftSchema;

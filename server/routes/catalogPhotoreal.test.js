@@ -29,6 +29,8 @@ describe('photoreal routes', () => {
       { shotIds: ['wide'], engine: 'workbench' },
       { shotIds: ['wide', 'wide'], engine: 'eevee' },
       { shotIds: [], engine: 'eevee' },
+      { shotIds: ['wide'], engine: 'eevee', flythroughSeconds: 8 },
+      { shotIds: ['wide', 'booth'], engine: 'eevee', flythroughSeconds: 600 },
     ]) expect((await request(app).post(`${base}/render`).send(body)).status).toBe(400);
     expect(startPhotorealRender).toHaveBeenCalledTimes(1);
   });

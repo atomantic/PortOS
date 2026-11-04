@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Aperture, Check, Download, Loader2 } from 'lucide-react';
+import { Aperture, Check, Download, Film, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import MediaImage from '../MediaImage';
@@ -18,6 +18,8 @@ const ENGINES = [
   { id: 'cycles', label: 'Cycles final', defaultSamples: 128, note: 'Path traced; minutes per camera.' },
 ];
 const MAX_SAMPLES = 1024;
+const FLY_FPS = 24;
+const FLY_SECONDS = { min: 2, max: 60, default: 8 };
 const PREFS_KEY = 'portos.photoreal.render';
 const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 
@@ -56,6 +58,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [selected, setSelected] = useState(() => new Set());
   const [engine, setEngine] = useState(() => readPrefs()?.engine || 'eevee');
   const [samples, setSamples] = useState(() => readPrefs()?.samples ?? null);
+  const [flySeconds, setFlySeconds] = useState(() => readPrefs()?.flySeconds ?? FLY_SECONDS.default);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
   // Finish frames already acted on; the server sends one per transition.
@@ -124,8 +127,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   }, [record.id]);
   useVisibilityEvent((state) => { if (state === 'visible') reconcileRef.current?.(); });
 
-  // Default to every camera until the user picks.
-  const chosen = selected.size ? [...selected].filter((id) => shots.some((s) => s.id === id)) : shots.map((s) => s.id);
+  // Default to every camera until the user picks; always in list order, which is
+  // also the order a fly-through visits them.
+  const chosen = shots.filter((s) => !selected.size || selected.has(s.id)).map((s) => s.id);
   const toggleShot = (id) => setSelected((cur) => {
     const base = cur.size ? new Set(cur) : new Set(shots.map((s) => s.id));
     if (base.has(id)) base.delete(id); else base.add(id);
@@ -134,18 +138,24 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const pickEngine = (id) => {
     setEngine(id);
     setSamples(null);
-    writePrefs({ engine: id, samples: null });
+    writePrefs({ engine: id, samples: null, flySeconds });
   };
   const changeSamples = (value) => {
     const next = Math.min(MAX_SAMPLES, Math.max(1, Math.round(Number(value) || 1)));
     setSamples(next);
-    writePrefs({ engine, samples: next });
+    writePrefs({ engine, samples: next, flySeconds });
+  };
+  const changeFlySeconds = (value) => {
+    const next = Math.min(FLY_SECONDS.max, Math.max(FLY_SECONDS.min, Math.round(Number(value) || FLY_SECONDS.min)));
+    setFlySeconds(next);
+    writePrefs({ engine, samples, flySeconds: next });
   };
 
-  const render = async () => {
-    if (!chosen.length || running || starting) return;
+  const render = async ({ flythrough = false } = {}) => {
+    if (chosen.length < (flythrough ? 2 : 1) || running || starting) return;
     setStarting(true);
-    const started = await startCatalogPhotorealRender(record.id, { shotIds: chosen, engine, samples: sampleValue }, { silent: true })
+    const body = { shotIds: chosen, engine, samples: sampleValue, ...(flythrough ? { flythroughSeconds: flySeconds } : {}) };
+    const started = await startCatalogPhotorealRender(record.id, body, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
     setStarting(false);
     if (started?.state === 'running') seenRunning.current.add(started.id);
@@ -264,14 +274,16 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={render} disabled={!chosen.length || running || starting}
+              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
               </button>
               {running && job?.startedAt && (
                 <span className="text-xs text-gray-400" role="status">
-                  {job.engine === 'cycles' ? 'Cycles' : 'EEVEE'} · {job.shotIds.length} camera{job.shotIds.length === 1 ? '' : 's'} · <Elapsed since={job.startedAt} />
+                  {job.engine === 'cycles' ? 'Cycles' : 'EEVEE'} · {job.flythroughSeconds
+                    ? `fly-through, ${job.flythroughSeconds}s (${job.flythroughSeconds * FLY_FPS} frames)`
+                    : `${job.shotIds.length} camera${job.shotIds.length === 1 ? '' : 's'}`} · <Elapsed since={job.startedAt} />
                 </span>
               )}
               {job?.state === 'done' && job.report && (
@@ -280,6 +292,37 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                 </span>
               )}
               {job?.state === 'failed' && <span className="text-xs text-red-400" role="alert">{job.error}</span>}
+            </div>
+          )}
+
+          {!readOnly && shots.length > 1 && (
+            <div className="rounded-lg border border-port-border bg-port-card p-3 space-y-2">
+              <h3 className="text-sm font-medium text-white">Fly-through</h3>
+              <p className="text-xs text-gray-400">
+                One camera glides through the chosen cameras in the order listed, with the same engine and samples. The MP4 is saved to Media History, where you can pick it as a video reference.
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <label htmlFor="photoreal-fly-seconds" className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                  Seconds
+                  <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} value={flySeconds} disabled={running}
+                    onChange={(event) => changeFlySeconds(event.target.value)}
+                    className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
+                </label>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting} className={actionButton}>
+                  <Film size={16} aria-hidden="true" /> Render fly-through ({flySeconds * FLY_FPS} frames)
+                </button>
+                {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}
+              </div>
+              {job?.state === 'done' && job.video && (
+                <div className="space-y-1.5">
+                  {/* a silent camera move has no caption track */}
+                  <video src={`/data/videos/${encodeURIComponent(job.video.filename)}`} controls muted playsInline loop
+                    className="w-full rounded bg-black" aria-label="Fly-through" />
+                  <Link to={`/media/history?preview=${encodeURIComponent(`video:${job.video.id}`)}`} className="text-xs text-port-accent hover:underline">
+                    Open in Media History
+                  </Link>
+                </div>
+              )}
             </div>
           )}
         </div>

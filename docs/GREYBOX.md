@@ -173,6 +173,19 @@ render uses it. With a look saved, the box edits it unless you choose to start
 over. The look never moves geometry; a rule for a part you later remove simply
 stops matching. **Remove look** goes back to flat zone colors and the sun.
 
+### Fly-through
+
+**Render fly-through** glides one camera through the ticked cameras in the order
+they are listed. It starts on the first camera's framing, eases through each
+camera's position, aim and lens, and ends on the last. It uses the chosen engine
+and samples at 24 fps, for 2 to 60 seconds (8 by default), so its cost is that
+many frames: EEVEE takes seconds per frame on a GPU, and Cycles about as long per
+frame as one camera's still. The frames become an H.264 MP4 saved to **Media
+History**, named after the Environment and its cameras. There it can be picked
+as a video reference for a video model. The tab plays the newest fly-through and
+links to it. A fly-through leaves the cameras' stills and photo plates alone.
+The kept `.blend` holds the animated **Fly-through** camera.
+
 ## Create or edit with AI
 
 Choose **Provider › model › effort**, or leave it at the active provider default.
