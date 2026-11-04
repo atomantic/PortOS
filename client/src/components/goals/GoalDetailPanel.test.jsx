@@ -134,7 +134,7 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
     expect(priorityBadge.className).not.toContain('inline-flex');
   });
 
-  it('renders zero-minute todo estimates with their unit instead of a bare zero text node', async () => {
+  it('omits zero-minute estimates while preserving nonzero estimates and their units', async () => {
     await renderPanel({
       ...baseGoal,
       todos: [
@@ -143,8 +143,8 @@ describe('GoalDetailPanel badge migration to <Pill>', () => {
       ],
     });
 
-    expect(screen.getByText('0m')).toBeTruthy();
     expect(screen.getByText('15m')).toBeTruthy();
+    expect(screen.queryByText('0m')).toBeNull();
     expect(screen.queryByText('0', { exact: true })).toBeNull();
   });
 });
