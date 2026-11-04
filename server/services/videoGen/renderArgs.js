@@ -448,6 +448,11 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
     '--cfg-scale', String(guidance),
   ];
   if (previewDir) args.push('--preview-dir', previewDir);
+  // The bridge otherwise enables TeaCache automatically in A2V and Extend.
+  // Its coefficients were calibrated for LTX-2.3, not the LTX-2.5 model.
+  if (model.runtime === 'ltx25' && (helperMode === 'a2v' || helperMode === 'extend')) {
+    args.push('--no-teacache');
+  }
   // LTX-2.5 packs ship Gemma 4 under text_encoder/. Passing the shared 2.3
   // Gemma 3 encoder would either fail load or silently condition on the wrong
   // model. The 2.3 runtime still needs the explicit shared encoder.

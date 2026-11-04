@@ -272,6 +272,12 @@ describe('customModelIdFromRepo', () => {
 });
 
 describe('buildCustomModelEntry', () => {
+  it('defaults added LTX-2.5 models to 30 guided steps while honoring an explicit sampler', () => {
+    const args = { repo: 'example/ltx-2.5', model: hf({}), classification: { kind: 'video', runtime: 'ltx25' } };
+    expect(buildCustomModelEntry(args)).toMatchObject({ steps: 30, guidance: 3 });
+    expect(buildCustomModelEntry({ ...args, steps: 8, guidance: 1 })).toMatchObject({ steps: 8, guidance: 1 });
+  });
+
   it('builds a video entry with runtime + user source + defaults', () => {
     const entry = buildCustomModelEntry({
       repo: 'notapalindrome/ltx23-mlx-av-q4',

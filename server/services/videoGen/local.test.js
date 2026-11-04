@@ -119,7 +119,7 @@ vi.mock('../../lib/mediaModels.js', async () => {
       id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', runtime: 'ltx25',
       repo: 'MrMofer/ltx-2.5-mlx-q8',
       revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
-      steps: 8, guidance: 3,
+      steps: 30, guidance: 3,
     },
     // bf16 LTX-2.x mlx_video model — LoRA-capable via the generate_av wrapper.
     { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta', runtime: 'mlx_video', repo: 'notapalindrome/ltx23-mlx-av', steps: 25, guidance: 3.0 },
@@ -1597,7 +1597,7 @@ describe('generateChainedVideo — continuation strategy (context window vs last
       expect(args).not.toContain('--speed-profile');
       expect(args).not.toContain('--teacache');
       // Every chunk on the model's own sampler — no seam.
-      expect(flagValue(args, '--steps')).toBe('8');
+      expect(flagValue(args, '--steps')).toBe('30');
       expect(flagValue(args, '--cfg-scale')).toBe('3');
     }
   });
@@ -1869,6 +1869,7 @@ describe('generateVideo — LTX audio-reactive conditioning', () => {
         && args.includes('a2v'),
     );
     expect(renderCall).toBeTruthy();
+    expect(renderCall[1]).not.toContain('--no-teacache');
     expect(renderCall[1]).toEqual(expect.arrayContaining([
       '--audio', '/mock/song.wav',
       '--audio-start', '42.5',
@@ -6081,6 +6082,28 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
 
   const valueAfter = (args, flag) => args[args.indexOf(flag) + 1];
 
+  it.each([
+    ['image', { mode: 'image', sourceImagePath: '/mock/first.png' }],
+    ['audio', { mode: 'a2v', sourceImagePath: '/mock/first.png', audioFilePath: '/mock/audio.wav' }],
+  ])('uses 30 guided first-stage steps for %s renders and honors an explicit override', async (name, input) => {
+    const defaults = await renderArgs({ jobId: `sp-default-${name}`, ...input });
+    expect(valueAfter(defaults, '--steps')).toBe('30');
+    expect(valueAfter(defaults, '--cfg-scale')).toBe('3');
+    expect(defaults).not.toContain('--stage2-steps');
+
+    const overridden = await renderArgs({ jobId: `sp-override-${name}`, ...input, steps: 8, guidanceScale: 2 });
+    expect(valueAfter(overridden, '--steps')).toBe('8');
+    expect(valueAfter(overridden, '--cfg-scale')).toBe('2');
+  });
+
+  it.each([
+    ['audio', { mode: 'a2v', audioFilePath: '/mock/audio.wav' }],
+    ['extend', { mode: 'extend', extendFromVideoPath: '/mock/source.mp4' }],
+  ])('disables uncalibrated LTX-2.5 TeaCache for quality %s renders', async (name, input) => {
+    const args = await renderArgs({ jobId: `sp-no-cache-${name}`, ...input });
+    expect(args).toContain('--no-teacache');
+  });
+
   it('threads the profile schedule and its levers into the helper argv', async () => {
     const args = await renderArgs({ jobId: 'sp-fast', mode: 'text', speedProfileId: 'fast' });
     expect(valueAfter(args, '--steps')).toBe('8');
@@ -6115,7 +6138,7 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
     expect(args.filter((a) => String(a).startsWith('--speed-profile')
       || String(a).startsWith('--teacache') || String(a).startsWith('--require-adapter'))).toEqual([]);
     expect(args).not.toContain('--stage2-steps');
-    expect(valueAfter(args, '--steps')).toBe('8');
+    expect(valueAfter(args, '--steps')).toBe('30');
     expect(valueAfter(args, '--cfg-scale')).toBe('3');
   });
 
@@ -6128,7 +6151,7 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
     });
     expect(args).not.toContain('--speed-profile');
     expect(args).not.toContain('--teacache');
-    expect(valueAfter(args, '--steps')).toBe('8');
+    expect(valueAfter(args, '--steps')).toBe('30');
     expect(valueAfter(args, '--cfg-scale')).toBe('3');
   });
 
@@ -6144,7 +6167,7 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
   it('declines an id no model offers', async () => {
     const args = await renderArgs({ jobId: 'sp-unknown-id', mode: 'text', speedProfileId: 'turbo' });
     expect(args).not.toContain('--speed-profile');
-    expect(valueAfter(args, '--steps')).toBe('8');
+    expect(valueAfter(args, '--steps')).toBe('30');
     expect(valueAfter(args, '--cfg-scale')).toBe('3');
   });
 

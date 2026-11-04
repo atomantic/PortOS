@@ -61,7 +61,7 @@
 
 import { MOSS_IMAGE_MODEL_ID } from './imageRuntimeRemedies.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, rmSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { randomUUID } from 'node:crypto';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
@@ -650,7 +650,7 @@ const DEFAULT_REGISTRY = {
         audioDurationDriven: true,
         frameStride: 8,
         maxNumFrames: 1017,
-        steps: 8,
+        steps: 30,
         guidance: 3.0,
       },
       // MiniMax H3 joint video+audio through PipeNetwork's pinned MLX port.
@@ -1946,6 +1946,12 @@ export const loadMediaModels = () => {
 export const reloadMediaModels = () => {
   cached = null;
   return loadMediaModels();
+};
+
+// A migration can update a registry after this module was loaded at boot.
+// Do not invalidate the running install when a migration targets another root.
+export const invalidateMediaModelsForPath = (path) => {
+  if (resolve(path) === resolve(REGISTRY_FILE)) cached = null;
 };
 
 // Registry mutators are synchronous, so checking this at their top refuses a

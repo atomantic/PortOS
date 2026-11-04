@@ -61,10 +61,14 @@ for error, specs in ((RuntimeError, []), (KeyboardInterrupt, [("example.safetens
         def generate_and_save(self, **kwargs):
             assert kwargs["prompt"] == "  A paper singer.  "
             assert kwargs["audio_path"] == "synthetic.wav"
+            assert kwargs["stage1_steps"] == 30 and kwargs["stage2_steps"] is None
+            assert kwargs["cfg_scale"] == 3.0
+            assert runner._A2V_TC_CONFIG["enable"] is False
             raise error("injected failure")
-    sys.argv = ["bridge", "--mode", "a2v", "--prompt", "  A paper singer.  ", "--model", "example", "--output", "example.mp4", "--audio", "synthetic.wav"]
+    sys.argv = ["bridge", "--mode", "a2v", "--prompt", "  A paper singer.  ", "--model", "example", "--output", "example.mp4", "--audio", "synthetic.wav", "--steps", "30", "--cfg-scale", "3", "--no-teacache"]
     args = runner.parse_args()
     args.user_lora_specs = specs
+    runner._A2V_TC_PATCH_OK = True
     restored = []
     statuses = []
     with patch.object(runner, "emit_status", side_effect=statuses.append), patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \
@@ -85,6 +89,31 @@ for error, specs in ((RuntimeError, []), (KeyboardInterrupt, [("example.safetens
     assert captured[0].dit is None and captured[0]._loaded is False
     assert "_pending_loras" not in captured[0].__dict__
     assert "_load_transformer_with_optional_streaming" not in captured[0].__dict__
+`);
+  });
+
+  it('passes guided image steps through to the two-stage pipeline', () => {
+    runPython(`${importRunner}
+from unittest.mock import patch
+class Pipeline:
+    def __init__(self, **kwargs): pass
+    def generate_and_save(self, **kwargs):
+        assert kwargs["stage1_steps"] == 30 and kwargs["stage2_steps"] is None
+        assert kwargs["cfg_scale"] == 3.0 and kwargs["image"] == "frame.png"
+        return "example.mp4"
+sys.argv = ["bridge", "--mode", "image", "--prompt", "a scene", "--model", "example", "--output", "example.mp4", "--image", "frame.png", "--steps", "30", "--cfg-scale", "3"]
+args = runner.parse_args()
+args.user_lora_specs = []
+with patch.object(runner, "_resolve_pipeline", return_value=Pipeline), \\
+     patch.object(runner, "configure_streaming_policy", return_value={"active": False}), \\
+     patch.object(runner, "_pipeline_optional_kwargs", return_value={}), \\
+     patch.object(runner, "_prefer_distilled_lora"), patch.object(runner, "_refuse_if_streaming_distilled_adapter_missing"), \\
+     patch.object(runner, "_apply_user_loras"), patch.object(runner, "bind_output_fps"), \\
+     patch.object(runner, "_two_stage_teacache_kwargs", return_value={}), \\
+     patch.object(runner, "_image_conditioning_kwargs", return_value={"image": "frame.png"}), \\
+     patch.object(runner, "_rate_kwargs", return_value={}), \\
+     patch.object(runner, "_run_with_ltx_stepwise_preview", side_effect=lambda pipe, args, run: run()):
+    assert runner.run_image(args) == "example.mp4"
 `);
   });
 
