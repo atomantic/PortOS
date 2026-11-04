@@ -71,20 +71,26 @@ export const loginRequired = (label, url) => new ServerError(`Sign in to ${label
 });
 
 /** A step the page never reached: say which, so a UI change is diagnosable. */
-export const stepFailed = (label, step, err) => new ServerError(`${label}: ${step} (${err?.message?.split('\n')[0] || 'timed out'})`, {
+// A timeout usually means the tab was hidden mid-step (the director switched tabs in the PortOS Browser).
+const timeoutHint = (err) => (/timeout/i.test(err?.message || '') ? '. Leave the PortOS Browser on the tab it opened while it fills, then Fill again' : '');
+export const stepFailed = (label, step, err) => new ServerError(`${label}: ${step} (${err?.message?.split('\n')[0] || 'timed out'})${timeoutHint(err)}`, {
   status: 502, code: 'PUBLISH_STEP_FAILED', context: { platform: label, step },
 });
 
-/** Run one named step, turning a Playwright timeout into a `stepFailed` naming it. */
 /**
- * Run one named step of a platform fill. `status` is what the director reads
- * while it runs (default: the step's name); the operation holding the browser
- * reports it through its `onStep`.
+ * Run one named step of a platform fill, turning a Playwright timeout into a
+ * `stepFailed` naming it. `status` is what the director reads while it runs
+ * (default: the step's name); the operation holding the browser reports it
+ * through its `onStep`. Its tab is brought to the front first: a background
+ * tab stops painting, so a click waiting for the element to settle stalls
+ * until it times out (LinkedIn and Facebook fills failed that way while the
+ * director used other tabs).
  */
 export async function step(label, name, fn, { status } = {}) {
   if (activeOperation) {
     activeOperation.status = status || name;
     try { activeOperation.onStep?.(activeOperation.status); } catch (err) { console.error(`❌ Publish step report failed: ${err.message}`); }
+    await activeOperation.focus?.()?.catch?.(() => {});
   }
   try {
     return await fn();

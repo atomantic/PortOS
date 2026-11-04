@@ -71,6 +71,11 @@ function pickVerticalCut(project, options) {
 
 /** The full video's public link: the recorded YouTube post, else the one the director gave the kit. */
 const fullVideoUrl = (kit) => releaseLinkUrl(kit, 'youtube');
+// The X story reply's image: any gallery image (data/images), else a kit video frame.
+const storyImageMedia = (options) => {
+  if (options.storyImageFile) return { dir: 'images', name: options.storyImageFile };
+  return options.storyImage ? { dir: 'videoThumbnails', name: options.storyImage } : null;
+};
 /** The Suno song a post links or plays: the director's pick, else the recorded Suno post, else the kit's song link. */
 export const publishSongUrl = (project, options) =>
   releaseLinkUrl(kitOf(project), 'suno', { songUrl: text(options?.songUrl) });
@@ -220,7 +225,7 @@ const BUILDERS = {
     const crossLinks = [...(songUrl(kit, options) ? ['suno'] : []), ...others.carried, ...(fullVideoUrl(kit) ? ['youtube'] : [])];
     const posts = [
       { text: hook, media: { dir: 'videos', name: clip } },
-      text(kit.copy?.x?.story) ? { text: text(kit.copy.x.story), media: options.storyImage ? { dir: 'videoThumbnails', name: options.storyImage } : null } : null,
+      text(kit.copy?.x?.story) ? { text: text(kit.copy.x.story), media: storyImageMedia(options) } : null,
       text(options.prompt) ? { text: text(options.prompt), media: null } : null,
       links ? { text: links, media: null } : null,
     ].filter(Boolean);

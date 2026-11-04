@@ -7,6 +7,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PublishPostingPanel, { PUBLISH_TARGETS } from './PublishPostingPanel.jsx';
 
+vi.mock('../imageGen/GalleryImagePicker', () => ({
+  default: ({ onSelect }) => <button type="button" onClick={() => onSelect({ filename: 'artwork.png' })}>Pick artwork.png</button>,
+}));
+
 // Publish cards and platform rows fold when done; open everything so a test sees the whole page.
 const expandAll = () => { for (let b = screen.queryAllByRole('button', { expanded: false }); b.length; b = screen.queryAllByRole('button', { expanded: false })) b.forEach((x) => fireEvent.click(x)); };
 
@@ -141,6 +145,16 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.click(within(picker).getByRole('radio', { name: 'No image' }));
     fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenLastCalledWith('x', {});
+    // Any gallery image (or an upload) instead of a frame; picking a frame again clears it.
+    fireEvent.click(within(picker).getByRole('button', { name: 'Gallery image…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick artwork.png' }));
+    expect(within(picker).getByRole('radio', { name: 'Gallery image' }).querySelector('img')).toHaveAttribute('src', '/data/images/artwork.png');
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', { storyImageFile: 'artwork.png' });
+    fireEvent.click(within(picker).getByRole('radio', { name: 'Video frame 1' }));
+    expect(within(picker).queryByRole('radio', { name: 'Gallery image' })).toBeNull();
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
+    expect(publishing.prepare).toHaveBeenLastCalledWith('x', { storyImage: 't1.jpg' });
   });
 
   it('lets the director pick which 9:16 cut a Shorts draft posts (#10150)', () => {

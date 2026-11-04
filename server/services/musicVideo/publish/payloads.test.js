@@ -122,6 +122,8 @@ describe('buildPublishPayload (#9282)', () => {
     expect(posts.map((p) => p.text)).toEqual(['Watch this', 'How it was made', 'the prompt', 'The song: https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc\nFull video: https://youtu.be/abc']);
     expect(posts[0].media).toEqual({ dir: 'videos', name: 'x.mp4' });
     expect(posts[1].media).toEqual({ dir: 'videoThumbnails', name: 'still.png' });
+    // A gallery image (the director's own artwork) wins over a video frame.
+    expect(buildPublishPayload('x', project(), { storyImage: 'still.png', storyImageFile: 'artwork.png' }).posts[1].media).toEqual({ dir: 'images', name: 'artwork.png' });
     expect(() => buildPublishPayload('x', project({ exports: [] }))).toThrow(/1080p/);
   });
 

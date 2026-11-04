@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
-import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, ImagePlus, Undo2 } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import { DISTROKID_GENRES, DISTROKID_REMEMBERED_OPTIONS, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
@@ -118,27 +119,47 @@ function FittedCutNotice({ project, cut, excerpts }) {
   );
 }
 
-/** The story reply's image, picked by sight: a tile per video frame plus "No image". */
-function StoryImagePicker({ idFor, thumbnails, value, onChange }) {
+/** The story reply's image, picked by sight: a tile per video frame, any gallery image (or an upload), plus "No image". */
+function StoryImagePicker({ idFor, thumbnails, frame, galleryFile, onFrame, onGallery }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const tile = (selected) => `relative rounded overflow-hidden border-2 aspect-video min-h-[44px] ${selected ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'}`;
   const mark = <span className="absolute top-1 right-1 rounded-full bg-port-accent text-white p-0.5" aria-hidden="true"><Check size={12} /></span>;
+  const none = !frame && !galleryFile;
   return (
     <div className="space-y-0.5 min-w-0">
       <span id={idFor('storyImage')} className="block text-[11px] text-port-text-muted">Image on the story reply (optional)</span>
       <div role="radiogroup" aria-labelledby={idFor('storyImage')} className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-        <button type="button" role="radio" aria-checked={!value} onClick={() => onChange('')}
-          className={`${tile(!value)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+        <button type="button" role="radio" aria-checked={none} onClick={() => onFrame('')}
+          className={`${tile(none)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
           <ImageOff size={14} aria-hidden="true" /> No image
-          {!value && mark}
+          {none && mark}
         </button>
-        {thumbnails.map((name, i) => (
-          <button key={name} type="button" role="radio" aria-checked={value === name} aria-label={`Video frame ${i + 1}`} title={name}
-            onClick={() => onChange(name)} className={tile(value === name)}>
-            <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
-            {value === name && mark}
+        {galleryFile ? (
+          <button type="button" role="radio" aria-checked="true" aria-label="Gallery image" title={galleryFile}
+            onClick={() => setPickerOpen(true)} className={tile(true)}>
+            <img src={`/data/images/${encodeURIComponent(galleryFile)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+            {mark}
           </button>
-        ))}
+        ) : null}
+        {thumbnails.map((name, i) => {
+          const selected = !galleryFile && frame === name;
+          return (
+            <button key={name} type="button" role="radio" aria-checked={selected} aria-label={`Video frame ${i + 1}`} title={name}
+              onClick={() => onFrame(name)} className={tile(selected)}>
+              <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+              {selected && mark}
+            </button>
+          );
+        })}
+        <button type="button" onClick={() => setPickerOpen(true)}
+          className={`${tile(false)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+          <ImagePlus size={14} aria-hidden="true" /> {galleryFile ? 'Other image…' : 'Gallery image…'}
+        </button>
       </div>
+      {pickerOpen && (
+        <GalleryImagePicker open allowUpload onClose={() => setPickerOpen(false)}
+          onSelect={(item) => { setPickerOpen(false); if (item?.filename) onGallery(item.filename); }} />
+      )}
     </div>
   );
 }
@@ -287,7 +308,10 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
     return (
       <div className="space-y-2">
         {area('prompt', 'Prompt reply (optional, e.g. the prompt that started it)')}
-        {kit.thumbnails?.length > 0 && <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails} value={options.storyImage || ''} onChange={(name) => setOption('storyImage', name)} />}
+        {/* A frame and a gallery image are one choice: picking either clears the other. */}
+        <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails || []} frame={options.storyImage || ''} galleryFile={options.storyImageFile || ''}
+          onFrame={(name) => { setOption('storyImageFile', ''); setOption('storyImage', name); }}
+          onGallery={(file) => { setOption('storyImage', ''); setOption('storyImageFile', file); }} />
       </div>
     );
   }

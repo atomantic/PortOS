@@ -138,7 +138,7 @@ function watchForPost(draft, adapter) {
   page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) check(); });
 }
 
-const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails };
+const DIRS = { videos: () => PATHS.videos, videoThumbnails: () => PATHS.videoThumbnails, images: () => PATHS.images };
 
 /** Resolve every `{ dir, name }` file ref in a payload to an existing absolute `path`. */
 function resolveFiles(value) {
@@ -244,10 +244,12 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     const what = holder.label ? `${holder.label} to finish` : 'another PortOS Browser task to finish';
     progress('queued', `Waiting for ${what}${holder.status ? ` (${holder.status})` : ''}`);
   }
+  let tab = null;
   return serialize(async () => {
     progress('filling', `Opening ${adapter.label} in the PortOS Browser`);
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
     const page = await context.newPage();
+    tab = page;
     try {
       await page.bringToFront();
       const summary = await adapter.prepare(page, payload);
@@ -270,7 +272,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       await browser.close().catch(() => {});
       throw err;
     }
-  }, { label: adapter.label, onStep: (status) => progress('filling', `${adapter.label}: ${status}`) });
+  }, { label: adapter.label, onStep: (status) => progress('filling', `${adapter.label}: ${status}`), focus: () => tab?.bringToFront() });
 }
 
 /**
@@ -358,9 +360,11 @@ export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
   const row = crossLinkBackfill(project.publishKit).find((r) => r.target === target);
   if (!row) throw new ServerError(`Record the ${adapter.label} post's link first`, { status: 422, code: 'PUBLISH_ASSET_MISSING' });
   if (!row.missing.length) throw new ServerError(`The ${adapter.label} post already links every other post`, { status: 409, code: 'PUBLISH_CROSS_LINKS_CURRENT' });
+  let tab = null;
   return serialize(async () => {
     const { browser, context } = await (deps.connect || connectPortosBrowser)();
     const page = await context.newPage();
+    tab = page;
     try {
       await page.bringToFront();
       const summary = await adapter.prepare(page, row);
@@ -373,7 +377,7 @@ export async function prepareCrossLinkEdit(projectId, target, deps = {}) {
     } finally {
       await browser.close().catch(() => {}); // disconnects; the tab stays open for the director
     }
-  });
+  }, { label: `${adapter.label} links edit`, focus: () => tab?.bringToFront() });
 }
 
 /** Undo a platform's "done": drop its post record (a mistaken mark, or a post taken down). */

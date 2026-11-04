@@ -1136,6 +1136,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   showLyrics: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
+  // A gallery image (data/images/<file>) for the story reply, in place of a video frame.
+  storyImageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
   cutId: z.string().min(1).max(100),
   // Fill a draft for a platform the release was already posted to.
   again: z.boolean(),

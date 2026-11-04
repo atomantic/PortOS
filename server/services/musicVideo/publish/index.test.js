@@ -178,7 +178,7 @@ describe('publish drafts (#9282)', () => {
   it('says what a fill waits on while another holds the PortOS Browser, and what each fill is doing', async () => {
     const first = await readyProject();
     const second = await readyProject();
-    const { connect } = fakeBrowser();
+    const { connect, pages } = fakeBrowser();
     let release;
     const held = new Promise((r) => { release = r; });
     const slow = adapter({ label: 'X thread', prepare: vi.fn(async () => {
@@ -196,9 +196,19 @@ describe('publish drafts (#9282)', () => {
       release();
       await Promise.all([holding, waiting]);
       expect(events.filter((e) => e.projectId === second).map((e) => e.state)).toEqual(['queued', 'filling']);
+      // Each step brings its own tab back to the front (a hidden tab stalls clicks).
+      expect(pages[0].bringToFront).toHaveBeenCalledTimes(2);
     } finally {
       musicVideoEvents.off('publish-draft', onEvent);
     }
+  });
+
+  it('tells the director to leave the tab in front when a step times out', async () => {
+    const id = await readyProject();
+    const { connect } = fakeBrowser();
+    const stalled = adapter({ label: 'Facebook', prepare: vi.fn(() => step('Facebook', 'open the post composer', async () => { throw new Error('locator.click: Timeout 60000ms exceeded.'); })) });
+    await expect(preparePublishDraft(id, 'stackerNews', {}, { connect, adapters: { stackerNews: stalled }, platforms }))
+      .rejects.toThrow('Facebook: open the post composer (locator.click: Timeout 60000ms exceeded.). Leave the PortOS Browser on the tab it opened while it fills, then Fill again');
   });
 
   it('closes the earlier draft when the same target is filled again, and discards on request', async () => {
