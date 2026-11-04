@@ -71,7 +71,12 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   useEffect(() => {
     let live = true;
     getCatalogPhotoreal(record.id, { silent: true })
-      .then((next) => { if (live) setStatus(next); })
+      .then((next) => {
+        if (!live) return;
+        // A render still running from an earlier visit is ours to finish too.
+        if (next?.job?.state === 'running') watched.current.add(next.job.id);
+        setStatus((cur) => (cur?.job ? { ...next, job: cur.job } : next));
+      })
       .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
     // Decided as each frame arrives, not in an effect, so a finish batched with the
     // start response is still seen. Only a job this panel watched or is starting

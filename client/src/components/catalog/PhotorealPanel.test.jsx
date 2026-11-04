@@ -61,6 +61,15 @@ describe('PhotorealPanel', () => {
     expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
   });
 
+  it('finishes a render still running from an earlier visit to the tab', async () => {
+    const onRendered = vi.fn();
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: { id: 'pr-5', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() }, blendUrl: null, blenderVersion: '5.2.3' });
+    show({ onRendered });
+    expect(await screen.findByRole('button', { name: /Rendering/ })).toBeDisabled();
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: { id: 'pr-5', state: 'done', engine: 'cycles', shotIds: ['wide'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } } }));
+    expect(onRendered).toHaveBeenCalledTimes(1);
+  });
+
   it('sets the newest render as the camera photo plate on the saved greybox', async () => {
     const onSaved = vi.fn();
     saveCatalogGreybox.mockResolvedValue({ id: 'plc-example', payload: {} });
