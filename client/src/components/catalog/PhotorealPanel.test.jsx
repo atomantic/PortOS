@@ -31,6 +31,15 @@ beforeEach(() => {
 });
 
 describe('PhotorealPanel', () => {
+  it('offers a visible Blender setup action when the runtime is not checked', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: null });
+    show();
+    expect(await screen.findByText('Blender not checked yet.')).toBeInTheDocument();
+    const setup = screen.getByRole('link', { name: 'Set up and check Blender' });
+    expect(setup).toHaveAttribute('href', '/code-animation/production#blender-execution');
+    expect(setup).toHaveClass('border', 'bg-port-accent/10');
+  });
+
   it('keeps every camera deselected when the last checked camera is unchecked', async () => {
     show();
     const wide = await screen.findByLabelText(/Wide/);

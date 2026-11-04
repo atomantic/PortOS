@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
 import { formatCount } from '../../utils/formatters';
@@ -7,6 +8,9 @@ const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:b
 
 /** Machine-level contained-execution status: fail-closed readiness, operator tool path, on-demand check. */
 export default function ProductionContainment({ rendererKind = null }) {
+  const { hash } = useLocation();
+  const sectionRef = useRef(null);
+  const summaryRef = useRef(null);
   const [execution, setExecution] = useState(null);
   const [open, setOpen] = useState(false);
   const [blenderPath, setBlenderPath] = useState('');
@@ -15,13 +19,20 @@ export default function ProductionContainment({ rendererKind = null }) {
   const [engine, setEngine] = useState('CYCLES');
   const [acknowledged, setAcknowledged] = useState(false);
   const blenderReady = execution?.lanes?.blender?.ready;
+  const executionLoaded = Boolean(execution);
   const blocking = rendererKind === 'blender' && blenderReady === false;
   useEffect(() => {
-    if (rendererKind !== 'blender') setOpen(false);
-  }, [rendererKind]);
+    if (rendererKind !== 'blender' && hash !== '#blender-execution') setOpen(false);
+  }, [rendererKind, hash]);
   useEffect(() => {
     if (blocking) setOpen(true);
   }, [blocking]);
+  useEffect(() => {
+    if (hash !== '#blender-execution' || !executionLoaded) return;
+    setOpen(true);
+    sectionRef.current?.scrollIntoView?.({ block: 'start' });
+    summaryRef.current?.focus({ preventScroll: true });
+  }, [hash, executionLoaded]);
   const apply = (next) => {
     if (!next) return;
     setExecution(next);
@@ -43,8 +54,8 @@ export default function ProductionContainment({ rendererKind = null }) {
   const { mechanism, lanes, probe: result } = execution;
   const dirty = blenderPath.trim() !== savedPath || mode !== (execution.executionMode || 'contained') || engine !== (execution.tools.blender.engine || 'CYCLES') || acknowledged !== (execution.executionMode === 'trusted-local');
   const shown = open || blocking;
-  return <details open={shown} onToggle={event => { if (blocking) { event.currentTarget.open = true; return; } setOpen(event.currentTarget.open); }} className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
-    <summary className="cursor-pointer text-base font-semibold">Blender execution <span className={lanes.blender.ready ? 'text-sm font-normal text-gray-400' : 'text-sm font-normal text-port-warning'}>{lanes.blender.ready ? 'Ready' : lanes.blender.reason}</span></summary>
+  return <details id="blender-execution" ref={sectionRef} open={shown} onToggle={event => { if (blocking) { event.currentTarget.open = true; return; } setOpen(event.currentTarget.open); }} className="space-y-3 rounded-xl border border-port-border bg-port-card p-4">
+    <summary ref={summaryRef} className="cursor-pointer text-base font-semibold">Blender execution <span className={lanes.blender.ready ? 'text-sm font-normal text-gray-400' : 'text-sm font-normal text-port-warning'}>{lanes.blender.ready ? 'Ready' : lanes.blender.reason}</span></summary>
     <p className="text-sm text-gray-400">Contained mode refuses execution when its sandbox cannot run Blender.</p>
     <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
       <p>Sandbox: {mechanism.supported ? mechanism.id : <span className="text-port-warning">{mechanism.reason}</span>}</p>
@@ -74,17 +85,18 @@ export default function ProductionContainment({ rendererKind = null }) {
     <div className="flex flex-wrap items-end gap-2">
       <div className="min-w-0 flex-1 basis-72">
         <label htmlFor="cap-blender-path" className="mb-1 block text-sm">Blender executable (operator-owned)</label>
-        <input id="cap-blender-path" disabled={saving || probing} value={blenderPath} onChange={event => setBlenderPath(event.target.value)} placeholder="/Applications/Blender.app/Contents/MacOS/Blender" className="w-full min-w-0 rounded border border-port-border bg-port-bg px-3 py-2 text-sm" />
+        <input id="cap-blender-path" disabled={saving || probing} value={blenderPath} onChange={event => setBlenderPath(event.target.value)} placeholder="Enter the Blender executable path" aria-describedby="cap-blender-path-help" className="w-full min-w-0 rounded border border-port-border bg-port-bg px-3 py-2 text-sm" />
+        <p id="cap-blender-path-help" className="mt-1 text-xs text-gray-400">macOS example: /Applications/Blender.app/Contents/MacOS/Blender</p>
       </div>
       <button type="button" className={buttonClass} disabled={!dirty || saving || probing || (mode === 'trusted-local' && !acknowledged)} onClick={save}>{saving ? 'Saving…' : 'Save tool'}</button>
-      <button type="button" className={buttonClass} disabled={dirty || saving || probing || (mode === 'contained' && !mechanism.supported)} onClick={probe}>{probing ? 'Checking execution…' : 'Run execution check'}</button>
+      <button type="button" className={buttonClass} disabled={!savedPath || dirty || saving || probing || (mode === 'contained' && !mechanism.supported)} onClick={probe}>{probing ? 'Checking execution…' : 'Run execution check'}</button>
     </div>
-    {execution.tools.blender.problem && savedPath && <p className="text-sm text-port-warning">{execution.tools.blender.problem}</p>}
+    {!savedPath && <p className="text-sm text-port-warning">{execution.tools.blender.problem ? `${execution.tools.blender.problem} ` : ''}Enter a Blender executable path and select Save tool before running the execution check.</p>}
     {result && <div role="status" className="space-y-1 text-sm">
-      <p>{result.refused || `${result.passed ? (result.contained === false ? 'Trusted-local supervision checked' : 'Containment proven') : 'Execution check failed'}: ${formatCount(result.checks.filter(check => check.passed).length)} of ${formatCount(result.checks.length)} checks`}</p>
+      <p>{result.refused || `${result.contained === false ? 'Supervision' : 'Containment'} checks ${result.passed ? 'passed' : 'failed'}: ${formatCount(result.checks.filter(check => check.passed).length)} of ${formatCount(result.checks.length)}`}</p>
+      <p className={result.tools?.blender?.passed ? 'text-gray-400' : 'text-port-warning'}>Blender test render: {result.tools?.blender ? (result.tools.blender.passed ? 'Passed' : 'Failed') : 'Not run'}.{result.tools?.blender ? ` ${result.tools.blender.detail}` : ''}</p>
       <ul className="space-y-1">
         {result.checks.map(check => <li key={check.id} className={check.passed ? 'text-gray-400' : 'text-port-error'}>{check.passed ? 'Pass' : 'Fail'} · {check.detail}</li>)}
-        {result.tools?.blender && <li className={result.tools.blender.passed ? 'text-gray-400' : 'text-port-warning'}>{result.tools.blender.detail}</li>}
       </ul>
     </div>}
   </details>;
