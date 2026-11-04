@@ -598,7 +598,7 @@ function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectio
   const overlayBase = nextInput();
   for (const overlay of overlays) inputs.push('-itsoffset', String(round3(overlay.startSec - startSec)), '-i', overlay.path);
   const filters = sectionFilters(index, own, preroll, 'v0', postroll);
-  const gradeFilter = musicVideoGradeFilter(grade, gradeSections([index]), { fps, offsetSec: startSec });
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections([index]), { fps, offsetSec: startSec, frame: { width: canonW, height: canonH } });
   const local = glitches.filter((g) => g.frame >= startFrame && g.frame < startFrame + frames).map((g) => ({ ...g, frame: g.frame - startFrame }));
   const glitchFilter = musicVideoTransitionFilter(local, { width: canonW, height: canonH });
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -772,10 +772,10 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
       const from = plan[postroll.index];
       // Each picture takes its own shot's grade over the wipe's frames (on song time, as the
       // finishing grade would), and the finishing grade skips them: the held frame keeps its look.
-      const gradeOver = (sceneId) => musicVideoGradeFilter(grade, [{ sceneId, startSec: postroll.cutFrame / fps, endSec: (postroll.cutFrame + postroll.frames) / fps }],
-        { fps, offsetSec: postroll.cutFrame / fps });
-      const heldGrade = gradeOver(from.c.sceneId);
-      const baseGrade = gradeOver(c.sceneId);
+      const gradeOver = (sceneId, key) => musicVideoGradeFilter(grade, [{ sceneId, startSec: postroll.cutFrame / fps, endSec: (postroll.cutFrame + postroll.frames) / fps }],
+        { fps, offsetSec: postroll.cutFrame / fps, frame: { width: canonW, height: canonH }, key });
+      const heldGrade = gradeOver(from.c.sceneId, `Held${i}`);
+      const baseGrade = gradeOver(c.sceneId, `Base${i}`);
       const held = `${sectionChain(from.c, postroll.input, { canonW, canonH, fps, frames: from.frames, frameGrid, beats })},`
         + `trim=start_frame=${Math.max(0, from.frames - 1)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=${postroll.frames},setpts=PTS-STARTPTS${heldGrade ? `,${heldGrade}` : ''}`;
       const filter = musicVideoWipeFilter(postroll, { width: canonW, height: canonH, fps, outgoing: `wpost${i}`, incoming: `wbase${i}`, out: `wiped${i}`, key: i });
@@ -820,7 +820,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
   const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`, postrolls.find((p) => p.into === i)));
-  const gradeFilter = musicVideoGradeFilter(grade, gradeSections(plan.map((_, i) => i)), { fps });
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections(plan.map((_, i) => i)), { fps, frame: { width: canonW, height: canonH } });
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');

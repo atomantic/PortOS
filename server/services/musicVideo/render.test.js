@@ -75,7 +75,7 @@ describe('buildMusicVideoFfmpegArgs', () => {
       grade: { preset: 'teal-night' }, overlays: [{ path: '/overlay.mov', startSec: 0 }], excerpt: { startSec: 1, endSec: 2 },
     });
     const graph = result.args[result.args.indexOf('-filter_complex') + 1];
-    expect(graph.indexOf('geq=')).toBeLessThan(graph.indexOf('overlay='));
+    expect(graph.indexOf('lut2=')).toBeLessThan(graph.indexOf('overlay='));
     expect(graph.indexOf('overlay=')).toBeLessThan(graph.indexOf('[outv]trim='));
     expect(graph).toContain("enable='gte(t,0)*lt(t,2)'");
   });
