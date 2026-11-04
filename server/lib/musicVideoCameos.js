@@ -111,13 +111,14 @@ export function musicVideoCameoCoverage(project) {
       ...(cameo.stillImageId ? [] : ['still']),
       ...(variantsMissing.length ? ['variant'] : []),
     ];
-    return { cameoId: cameo.cameoId, name: str(cameo.name), shots: linked.length, filled, needs };
+    return { cameoId: cameo.cameoId, name: str(cameo.name), shots: linked.length, filled, photos: (cameo.references || []).length, needs };
   });
   const count = (need) => cameos.filter((s) => s.needs.includes(need)).length;
   return {
     cameos,
     totals: {
       cameos: cameos.length,
+      photos: cameos.reduce((n, s) => n + s.photos, 0),
       linkedShots: cameos.reduce((n, s) => n + s.shots, 0),
       unlinked: cameos.filter((s) => !s.shots).length,
       research: count('research'), references: count('references'), still: count('still'), variant: count('variant'),
