@@ -53,7 +53,7 @@ describe('runCommitSessionLinkScan on a pull request', () => {
     const urls = [];
     const fetchImpl = async (url) => {
       urls.push(url);
-      if (url.endsWith('/pulls/7')) return { ok: true, json: async () => ({ body: description }) };
+      if (url.endsWith('/pulls/7')) return description === null ? { ok: false, status: 404 } : { ok: true, json: async () => ({ body: description }) };
       const page = Number(new URL(url).searchParams.get('page'));
       return { ok: true, json: async () => pages[page - 1] };
     };
@@ -70,17 +70,27 @@ describe('runCommitSessionLinkScan on a pull request', () => {
     const result = await runCommitSessionLinkScan({ env, fetchImpl });
     expect(result.code).toBe(1);
     expect(result.lines.join('\n')).toContain('"Last" contains chatgpt.com/share/');
-    expect(result.lines.join('\n')).not.toContain('pull request description');
-    expect(urls[1]).toBe(`https://api.github.com/repos/example/repo/compare/main...${'a'.repeat(40)}?per_page=100&page=1`);
-    expect(urls).toHaveLength(3);
+    expect(urls[0]).toBe(`https://api.github.com/repos/example/repo/compare/main...${'a'.repeat(40)}?per_page=100&page=1`);
+    expect(urls).toHaveLength(2);
   });
 
-  it('fails on a session link in the description a squash merge would copy to main', async () => {
-    const { fetchImpl } = respond([{ total_commits: 0, commits: [] }], `Summary\n\n${TRAILER}`);
+  it('never prints the session id from a link in a commit subject', async () => {
+    const { fetchImpl } = respond([{ total_commits: 1, commits: [{ sha: 'b'.repeat(40), commit: { message: 'Fix https://claude.ai/code/session_private-marker now' } }] }]);
     const result = await runCommitSessionLinkScan({ env, fetchImpl });
     expect(result.code).toBe(1);
+    expect(result.lines.join('\n')).toContain(`${'b'.repeat(10)} "Fix <session link> now" contains claude.ai/code/session`);
+    expect(result.lines.join('\n')).not.toContain('private-marker');
+  });
+
+  it('checks only the description under --description, the text a squash merge copies to main', async () => {
+    const dirty = respond([], `Summary\n\n${TRAILER}`);
+    const result = await runCommitSessionLinkScan({ argv: ['--description'], env, fetchImpl: dirty.fetchImpl });
+    expect(result.code).toBe(1);
     expect(result.lines.join('\n')).toContain('the pull request description contains claude.ai/code/session');
-    expect(result.lines.join('\n')).toContain('re-run this job');
+    expect(dirty.urls).toEqual(['https://api.github.com/repos/example/repo/pulls/7']);
+    // An edit that drops the link turns the same check green.
+    expect((await runCommitSessionLinkScan({ argv: ['--description'], env, fetchImpl: respond([]).fetchImpl })).code).toBe(0);
+    expect((await runCommitSessionLinkScan({ argv: ['--description'], env, fetchImpl: respond([], null).fetchImpl })).code).toBe(2);
   });
 
   it('refuses to pass when the commits cannot be read', async () => {
@@ -94,6 +104,13 @@ describe('runCommitSessionLinkScan on a pull request', () => {
     const impact = workflow.slice(workflow.indexOf('\n  impact:\n'), workflow.indexOf('\n  prompt-history:\n'));
     const step = impact.slice(impact.indexOf('- name: Refuse AI session links in commit messages'));
     expect(step).toContain('run: node scripts/ci-impact-diagnostics.js commit-messages -- node scripts/scan-commit-session-links.js');
-    for (const input of ['GITHUB_TOKEN:', 'CI_PR_NUMBER:', 'CI_DEFAULT_BRANCH:']) expect(step.split('\n      - name:')[0]).toContain(input);
+    for (const input of ['GITHUB_TOKEN:', 'CI_DEFAULT_BRANCH:']) expect(step.split('\n      - name:')[0]).toContain(input);
+  });
+
+  it('re-checks the description on every edit', () => {
+    const workflow = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'workflows', 'pr-description.yml'), 'utf8');
+    expect(workflow).toContain('types: [opened, edited, reopened, synchronize]');
+    expect(workflow).toContain('run: node scripts/scan-commit-session-links.js --description');
+    expect(workflow).toContain('CI_PR_NUMBER: ${{ github.event.pull_request.number }}');
   });
 });

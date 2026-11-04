@@ -113,12 +113,12 @@ jobs:
       # AGENTS.md bans AI conversation-session links from commit messages, and
       # main's history is permanent, so refuse them here. The depth-2 checkout
       # lacks the PR's commits; the script reads them from the compare API
-      # against the default branch, so commits already on main never count. It
-      # also reads the PR description live, since a squash merge copies it in.
+      # against the default branch, so commits already on main never count.
+      # The PR description is checked by pr-description.yml, which also runs
+      # on every description edit.
       - name: Refuse AI session links in commit messages
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
           CI_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: node scripts/ci-impact-diagnostics.js commit-messages -- node scripts/scan-commit-session-links.js
 
