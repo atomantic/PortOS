@@ -28,6 +28,9 @@ export const INVESTIGATION_HEADLINE_PREFIX = '[Auto] Investigate agent failure';
 // This is top-level task data (rather than nested metadata) because both the
 // shared producer and the agent-failure producer pass it to addTask().
 export const INVESTIGATION_TASK_DELIVERY = Object.freeze({
+  // Without this an outage, a quota or an already-merged fix cannot stand down:
+  // the commit criterion turns the honest no-change report into a respawn.
+  noChangeSuccess: true,
   useWorktree: true,
   openPR: true,
   prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
