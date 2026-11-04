@@ -195,23 +195,23 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, editing, setEditing
           </div>
         </button>
         {syncStatus?.local && (
-          <div className="mt-2 pt-2 border-t border-port-border/50 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
-            <span className="flex items-center gap-1.5">
-              <Brain size={12} /> Brain seq: {syncStatus.local.brainSeq}
+          <div className="mt-2 pt-2 border-t border-port-border/50 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
+            <span className="flex items-center gap-1.5 min-w-0 truncate">
+              <Brain size={12} className="shrink-0" /> <span className="truncate">Brain seq: {syncStatus.local.brainSeq}</span>
             </span>
-            <span className="flex items-center gap-1.5">
-              <Database size={12} /> Memory seq: {syncStatus.local.memorySeq}
+            <span className="flex items-center gap-1.5 min-w-0 truncate">
+              <Database size={12} className="shrink-0" /> <span className="truncate">Memory seq: {syncStatus.local.memorySeq}</span>
             </span>
             {SNAPSHOT_CATEGORIES.map(({ key, label, icon: Icon }) => {
                 const hasChecksum = !!syncStatus.local.checksums?.[key];
                 return (
-                  <span key={key} className="flex items-center gap-1.5">
-                    <Icon size={12} />
-                    <span>{label}:</span>
+                  <span key={key} className="flex items-center gap-1.5 min-w-0">
+                    <Icon size={12} className="shrink-0" />
+                    <span className="truncate">{label}:</span>
                     {hasChecksum ? (
-                      <CheckCircle2 size={11} className="text-port-success" />
+                      <CheckCircle2 size={11} className="text-port-success shrink-0" />
                     ) : (
-                      <Clock size={11} className="text-gray-600" />
+                      <Clock size={11} className="text-gray-600 shrink-0" />
                     )}
                   </span>
                 );
@@ -548,12 +548,12 @@ function SyncStatusBadge({ label, icon: Icon, localSeq, peerSeq, cursorSeq, peer
     + `they pulled ${peerCursorForUs ?? '?'} of our ${localSeq ?? '?'}`;
 
   return (
-    <div className="flex items-center gap-1.5 text-xs">
-      <Icon size={12} className="text-gray-500" />
-      <span className="text-gray-500">{label}:</span>
-      <span className="flex items-center gap-1" title={tooltip}>
-        <StateIcon size={11} className={iconClass} />
-        <span className={textClass}>{syncing ? 'syncing…' : text}</span>
+    <div className="flex items-center gap-1.5 text-xs min-w-0">
+      <Icon size={12} className="text-gray-500 shrink-0" />
+      <span className="text-gray-500 shrink-0">{label}:</span>
+      <span className="flex items-center gap-1 min-w-0" title={tooltip}>
+        <StateIcon size={11} className={`${iconClass} shrink-0`} />
+        <span className={`${textClass} truncate`}>{syncing ? 'syncing…' : text}</span>
       </span>
     </div>
   );
@@ -957,7 +957,7 @@ function SyncStatusSection({ peer, syncStatus, syncing = false }) {
           <span className="truncate">Last sync failed: {cursor.lastSyncError}</span>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5">
         {showBrain && (
           <SyncStatusBadge
             label="Brain"
