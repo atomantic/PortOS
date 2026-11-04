@@ -32,6 +32,10 @@ const DOWNLOAD_MAX_BYTES = 15 * 1024 * 1024;
 const MIN_EDGE_PX = 256;
 const MAX_EDGE_PX = 1536;
 const MAX_CANDIDATES = 12;
+// Without a stopping rule an agent on a rare subject hunts until RUN_TIMEOUT_MS,
+// and a print-mode CLI loses its whole answer when killed. Advisory, not enforced:
+// agy overshot it in a replay but still answered at half the run budget.
+const MAX_LOOKUPS = 20;
 // Wikimedia and other hosts refuse requests without a descriptive agent.
 const DOWNLOAD_HEADERS = { 'User-Agent': 'PortOS-research-seed/1.0 (reference photo import)', Accept: 'image/*' };
 
@@ -56,6 +60,9 @@ function researchSeedPrompt(subject, count) {
     '- Vary the angle between photos when you can (side, three-quarter, front).',
     '- Prefer openly licensed sources such as Wikimedia Commons, then reputable references (breed clubs, museums, manufacturers).',
     '- Give the direct URL of the image file itself (ending in .jpg, .jpeg, .png or .webp where possible) that downloads without a login, ideally 800 to 2000 pixels on the long side, and the URL of the page it appears on.',
+    '',
+    'PortOS downloads and checks every link you return and drops any that fail, so do not download, open or measure the images yourself. List spares instead.',
+    `Use at most ${MAX_LOOKUPS} searches and page fetches in total, then reply with what you have. A short list is a good answer for a rare subject, and an empty list is a good answer when you found nothing.`,
     '',
     `Reply with only this JSON, at most ${MAX_CANDIDATES} entries: {"images":[{"imageUrl":"<direct image file URL>","pageUrl":"<page URL>"}]}`,
   ].join('\n');

@@ -42,6 +42,16 @@ const settle = () => new Promise((resolve) => {
   musicVideoEvents.on('research-seed', on);
 });
 
+describe('Research and seed prompt', () => {
+  // Uniquely catches dropping the stopping rule: an agent on a rare subject then
+  // hunts and self-verifies until the run is killed, losing its whole answer.
+  it('bounds the agent and leaves checking the links to PortOS', async () => {
+    const { sentPrompt } = await startSceneResearch('mv-1', 's1', { subject: 'a rare dog', providerId: 'cli', preview: true });
+    expect(sentPrompt).toMatch(/at most \d+ searches and page fetches/);
+    expect(sentPrompt).toMatch(/do not download, open or measure/);
+  });
+});
+
 describe('Research and seed imports', () => {
   // Uniquely catches a non-image, a thumbnail, a private host, a placeholder or a non-http link landing on the shot.
   it('imports only real photos from http(s) links, through the private-host-blocking fetch, up to the count', async () => {
