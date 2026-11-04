@@ -22,6 +22,19 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Telegram forwarding settings', () => {
+  it('shows an inline retry instead of the configuration form when settings fail to load', async () => {
+    api.getSettings.mockRejectedValueOnce(new Error('Network unavailable'));
+    api.getTelegramStatus.mockResolvedValue({ connected: false });
+    render(<TelegramTab />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Telegram settings — Network unavailable');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('Integration Method')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Integration Method')).toBeInTheDocument();
+  });
+
   it('selects returned choices while retaining unknown saved keys across method switches', async () => {
     api.getTelegramStatus.mockResolvedValue({
       connected: true, forwardTypes: ['unknown_saved_type'], availableForwardTypes: choices
