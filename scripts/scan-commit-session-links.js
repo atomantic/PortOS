@@ -9,7 +9,9 @@
  * branch. Commits already on `main` are never this branch's to answer for.
  *
  * CI's checkout is a depth-2 merge ref, which does not hold the pull request's
- * commits, so the CI mode reads them from the compare API instead of git.
+ * commits, so the CI mode reads them from the compare API instead of git. CI
+ * also checks the pull request's description, read live: a squash merge
+ * writes it into main's commit message.
  * Comparing against the default branch rather than the PR base keeps a release
  * PR from answering for every `main` commit it promotes.
  *
@@ -39,58 +41,72 @@ const revParse = (rev, cwd) => {
   return result.status === 0 ? result.stdout.trim() || null : null;
 };
 
-/** Commits whose message carries a session link, with the matched link prefix (never the id). */
-export function findSessionLinks(commits) {
-  return commits.flatMap(({ sha, message }) => {
-    const match = SESSION_LINK.exec(message);
-    return match ? [{ sha, subject: message.split('\n', 1)[0], link: match[0] }] : [];
+/** Entries whose text carries a session link, with the matched link prefix (never the id). */
+export function findSessionLinks(entries) {
+  return entries.flatMap(({ label, text }) => {
+    const match = SESSION_LINK.exec(text);
+    return match ? [{ label, link: match[0] }] : [];
   });
 }
 
-/** This branch's own commits since `base`, oldest last. */
+const commitEntry = (sha, message) => ({ label: `${sha.slice(0, 10)} "${message.split('\n', 1)[0]}"`, text: message });
+
+/** This branch's own commits since `base`. */
 export function readBranchCommits(base, { cwd } = {}) {
   const out = execFileSync('git', ['log', `--format=%H${FIELD}%B${RECORD}`, `${base}..HEAD`], {
     cwd, encoding: 'utf8', maxBuffer: MAX_LOG_BYTES,
   });
   return out.split(RECORD).map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
     const [sha, message = ''] = record.split(FIELD);
-    return { sha, message };
+    return commitEntry(sha, message);
   });
 }
 
-/** The pull request's commits not yet on the default branch, from the compare API. */
-export async function readPullRequestCommits({ env = process.env, fetchImpl = fetch } = {}) {
+/**
+ * The pull request's commits not yet on the default branch, plus its current
+ * description: a squash merge builds main's commit message from the
+ * description, which is how most session links have reached main.
+ */
+export async function readPullRequestEntries({ env = process.env, fetchImpl = fetch } = {}) {
   const apiBase = resolveApiBase(env.GITHUB_API_URL);
   const repository = env.GITHUB_REPOSITORY;
   const head = env.PORTOS_CI_CANDIDATE_HEAD;
+  const number = env.CI_PR_NUMBER;
   const branch = env.CI_DEFAULT_BRANCH || 'main';
-  if (!apiBase || !repository || !head || !env.GITHUB_TOKEN) {
-    throw new Error('compare needs GITHUB_REPOSITORY, PORTOS_CI_CANDIDATE_HEAD, GITHUB_TOKEN and a valid GITHUB_API_URL');
+  if (!apiBase || !repository || !head || !/^\d+$/.test(number ?? '') || !env.GITHUB_TOKEN) {
+    throw new Error('needs GITHUB_REPOSITORY, PORTOS_CI_CANDIDATE_HEAD, CI_PR_NUMBER, GITHUB_TOKEN and a valid GITHUB_API_URL');
   }
-  const commits = [];
-  for (let page = 1; page <= MAX_COMPARE_PAGES; page += 1) {
-    const url = `${apiBase}/repos/${repository}/compare/${encodeURIComponent(branch)}...${encodeURIComponent(head)}?per_page=${COMPARE_PAGE_SIZE}&page=${page}`;
-    const response = await fetchImpl(url, {
+  const get = async (path) => {
+    const response = await fetchImpl(`${apiBase}/repos/${repository}/${path}`, {
       headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${env.GITHUB_TOKEN}`, 'X-GitHub-Api-Version': '2022-11-28' },
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) throw new Error(`compare ${branch}...${head.slice(0, 9)} answered HTTP ${response.status}`);
-    const body = await response.json();
+    if (!response.ok) throw new Error(`GET ${path.split('?')[0]} answered HTTP ${response.status}`);
+    return response.json();
+  };
+
+  const pull = await get(`pulls/${number}`);
+  const entries = [{ label: 'the pull request description', text: pull.body ?? '' }];
+  const compare = `compare/${encodeURIComponent(branch)}...${encodeURIComponent(head)}`;
+  for (let page = 1, commits = 0; page <= MAX_COMPARE_PAGES; page += 1) {
+    const body = await get(`${compare}?per_page=${COMPARE_PAGE_SIZE}&page=${page}`);
     const batch = Array.isArray(body.commits) ? body.commits : [];
-    commits.push(...batch.map((item) => ({ sha: item.sha, message: item.commit?.message ?? '' })));
-    if (commits.length >= (body.total_commits ?? 0) || batch.length === 0) return commits;
+    entries.push(...batch.map((item) => commitEntry(item.sha, item.commit?.message ?? '')));
+    commits += batch.length;
+    if (commits >= (body.total_commits ?? 0) || batch.length === 0) return entries;
   }
-  throw new Error(`compare ${branch}...${head.slice(0, 9)} has more than ${MAX_COMPARE_PAGES * COMPARE_PAGE_SIZE} commits`);
+  throw new Error(`${compare} has more than ${MAX_COMPARE_PAGES * COMPARE_PAGE_SIZE} commits`);
 }
 
 /** Run the check; returns the exit code and lines so the suite can read the verdict in-process. */
 export async function runCommitSessionLinkScan({ argv = [], env = process.env, cwd, fetchImpl } = {}) {
   const baseFlag = argv.indexOf('--base');
   const explicit = baseFlag === -1 ? null : argv[baseFlag + 1];
-  let commits;
+  const onPullRequest = !explicit && env.GITHUB_EVENT_NAME === 'pull_request';
+  let entries;
   try {
-    if (!explicit && env.GITHUB_EVENT_NAME === 'pull_request') {
-      commits = await readPullRequestCommits({ env, fetchImpl });
+    if (onPullRequest) {
+      entries = await readPullRequestEntries({ env, fetchImpl });
     } else {
       const base = (explicit ? [explicit] : ['origin/main', 'main']).map((ref) => revParse(ref, cwd)).find(Boolean);
       if (!base) {
@@ -98,22 +114,24 @@ export async function runCommitSessionLinkScan({ argv = [], env = process.env, c
           ? { code: 2, lines: [`❌ Commit-message scan could not resolve ${explicit}`] }
           : { code: 0, lines: ['⏭️  Commit-message scan skipped: no main branch to compare against'] };
       }
-      commits = readBranchCommits(base, { cwd });
+      entries = readBranchCommits(base, { cwd });
     }
   } catch (error) {
     return { code: 2, lines: [`❌ Commit-message scan could not read the branch's commits: ${error.message}`] };
   }
 
-  const findings = findSessionLinks(commits);
+  const findings = findSessionLinks(entries);
   if (findings.length === 0) {
-    return { code: 0, lines: [`✅ Commit-message scan clean: no AI session links in ${commits.length} branch commit(s)`] };
+    return { code: 0, lines: [`✅ Commit-message scan clean: no AI session links in ${entries.length} message(s)`] };
   }
   return {
     code: 1,
     lines: [
-      `❌ ${findings.length} commit message(s) link to an AI conversation session (AGENTS.md, Git Workflow):`,
-      ...findings.map(({ sha, subject, link }) => `   ${sha.slice(0, 10)} "${subject}" contains ${link}…`),
-      '   Reword those commits to drop the link (for example a Claude-Session: trailer), then push again.',
+      `❌ ${findings.length} message(s) link to an AI conversation session (AGENTS.md, Git Workflow):`,
+      ...findings.map(({ label, link }) => `   ${label} contains ${link}…`),
+      onPullRequest
+        ? '   Drop the link (for example a Claude-Session: trailer or a session footer), push or edit, then re-run this job.'
+        : '   Reword those commits to drop the link (for example a Claude-Session: trailer), then push again.',
     ],
   };
 }

@@ -28,7 +28,7 @@ describe('runCommitSessionLinkScan against a repository', () => {
 
       const clean = await runCommitSessionLinkScan({ argv: ['--base', 'main'], cwd: root, env: {} });
       expect(clean.code).toBe(0);
-      expect(clean.lines[0]).toContain('1 branch commit');
+      expect(clean.lines[0]).toContain('1 message(s)');
 
       const offender = commit('c.txt', `Add a feature\n\n${TRAILER}`);
       const dirty = await runCommitSessionLinkScan({ argv: ['--base', 'main'], cwd: root, env: {} });
@@ -47,12 +47,13 @@ describe('runCommitSessionLinkScan against a repository', () => {
 describe('runCommitSessionLinkScan on a pull request', () => {
   const env = {
     GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY: 'example/repo', GITHUB_TOKEN: 'token',
-    PORTOS_CI_CANDIDATE_HEAD: 'a'.repeat(40), CI_DEFAULT_BRANCH: 'main',
+    PORTOS_CI_CANDIDATE_HEAD: 'a'.repeat(40), CI_DEFAULT_BRANCH: 'main', CI_PR_NUMBER: '7',
   };
-  const respond = (pages) => {
+  const respond = (pages, description = 'Clean description') => {
     const urls = [];
     const fetchImpl = async (url) => {
       urls.push(url);
+      if (url.endsWith('/pulls/7')) return { ok: true, json: async () => ({ body: description }) };
       const page = Number(new URL(url).searchParams.get('page'));
       return { ok: true, json: async () => pages[page - 1] };
     };
@@ -69,8 +70,17 @@ describe('runCommitSessionLinkScan on a pull request', () => {
     const result = await runCommitSessionLinkScan({ env, fetchImpl });
     expect(result.code).toBe(1);
     expect(result.lines.join('\n')).toContain('"Last" contains chatgpt.com/share/');
-    expect(urls[0]).toBe(`https://api.github.com/repos/example/repo/compare/main...${'a'.repeat(40)}?per_page=100&page=1`);
-    expect(urls).toHaveLength(2);
+    expect(result.lines.join('\n')).not.toContain('pull request description');
+    expect(urls[1]).toBe(`https://api.github.com/repos/example/repo/compare/main...${'a'.repeat(40)}?per_page=100&page=1`);
+    expect(urls).toHaveLength(3);
+  });
+
+  it('fails on a session link in the description a squash merge would copy to main', async () => {
+    const { fetchImpl } = respond([{ total_commits: 0, commits: [] }], `Summary\n\n${TRAILER}`);
+    const result = await runCommitSessionLinkScan({ env, fetchImpl });
+    expect(result.code).toBe(1);
+    expect(result.lines.join('\n')).toContain('the pull request description contains claude.ai/code/session');
+    expect(result.lines.join('\n')).toContain('re-run this job');
   });
 
   it('refuses to pass when the commits cannot be read', async () => {
@@ -84,6 +94,6 @@ describe('runCommitSessionLinkScan on a pull request', () => {
     const impact = workflow.slice(workflow.indexOf('\n  impact:\n'), workflow.indexOf('\n  prompt-history:\n'));
     const step = impact.slice(impact.indexOf('- name: Refuse AI session links in commit messages'));
     expect(step).toContain('run: node scripts/ci-impact-diagnostics.js commit-messages -- node scripts/scan-commit-session-links.js');
-    for (const input of ['GITHUB_TOKEN:', 'CI_DEFAULT_BRANCH:']) expect(step.split('\n      - name:')[0]).toContain(input);
+    for (const input of ['GITHUB_TOKEN:', 'CI_PR_NUMBER:', 'CI_DEFAULT_BRANCH:']) expect(step.split('\n      - name:')[0]).toContain(input);
   });
 });

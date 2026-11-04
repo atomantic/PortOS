@@ -131,7 +131,9 @@ commit messages link to an AI conversation session (`claude.ai/code/session`,
 permanent, so this runs before merge. The depth-2 checkout does not hold the
 pull request's commits, so the script reads them from the compare API against
 the default branch: commits already on `main` never fail it, and a release PR
-does not answer for the `main` commits it promotes. Pregate runs the same check
+does not answer for the `main` commits it promotes. It also reads the pull
+request's description at run time, because a squash merge copies the description
+into `main`'s commit message; after editing a description, re-run the job. Pregate runs the same check
 over `<merge base>..HEAD` right after the hidden-content scan.
 
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
