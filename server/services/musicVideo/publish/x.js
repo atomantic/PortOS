@@ -52,7 +52,7 @@ export const xAdapter = {
       const button = document.querySelector(`${sc}[data-testid=tweetButton]`);
       const uploading = [...document.querySelectorAll(`${sc}[data-testid=attachments]`)].some((a) => /Uploading|Processing/i.test(a.innerText));
       return button && button.getAttribute('aria-disabled') !== 'true' && !uploading;
-    }, scope, { timeout: 600_000 }));
+    }, scope, { timeout: 600_000 }), { status: 'uploading the video to X (this can take a few minutes)' });
     const lengths = await page.evaluate(([n, sc]) => Array.from({ length: n }, (_, i) => document.querySelector(`${sc}[data-testid=tweetTextarea_${i}]`)?.innerText.length ?? 0), [payload.posts.length, scope]);
     return { account, posts: payload.posts.length, lengths };
   },

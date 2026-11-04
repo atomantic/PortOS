@@ -1007,6 +1007,9 @@ export const musicVideoPublishCopyPatchSchema = z.object({
     imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
     style: z.enum(['80s', 'clean']),
   }).partial().strict().optional(),
+  // What the director typed or picked on each platform's Publish row, saved as edited so a
+  // reload or another tab shows it again. Replaces that platform's saved answers.
+  postOptions: z.lazy(() => musicVideoPublishPostOptionsSchema).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),
@@ -1133,6 +1136,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   showLyrics: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
+  // A gallery image (data/images/<file>) for the story reply, in place of a video frame.
+  storyImageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
   cutId: z.string().min(1).max(100),
   // Fill a draft for a platform the release was already posted to.
   again: z.boolean(),
@@ -1157,6 +1162,13 @@ export const musicVideoPublishPrepareSchema = z.object({
   producerName: z.string().trim().min(1).max(100),
   previewStartSec: z.number().min(0).max(3600),
 }).partial().strict();
+// A row's answers are kept while half-typed (a link mid-edit), so values are checked by
+// type only here; Fill draft still validates them against the prepare schema.
+const postOptionValue = z.union([z.string().max(25000), z.boolean(), z.number().finite()]);
+const postOptionsEntry = z.object(Object.fromEntries(Object.keys(musicVideoPublishPrepareSchema.shape)
+  .filter((k) => k !== 'again').map((k) => [k, postOptionValue]))).partial().strict();
+export const musicVideoPublishPostOptionsSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS
+  .map((t) => [t, postOptionsEntry]))).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),

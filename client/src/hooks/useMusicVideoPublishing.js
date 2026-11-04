@@ -8,12 +8,13 @@ import {
   getMusicVideoPublishPlatforms,
   updateMusicVideoPublishPlatforms,
   recordMusicVideoPublishPost,
+  updateMusicVideoPublishCopy,
   removeMusicVideoPublishPost,
   setMusicVideoPublishCrossLinks,
   prepareMusicVideoCrossLinkEdit,
 } from '../services/apiMusicVideo.js';
 
-const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {} };
+const EMPTY_POSTING = { drafts: {}, busy: {}, errors: {}, progress: {} };
 
 /**
  * Music Video posting (#9282). `prepare` fills the post in the PortOS Browser
@@ -36,7 +37,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   if (selection.current.projectId !== projectId) selection.current = { projectId };
   const scope = selection.current;
   const [posting, setPosting] = useState({ ...EMPTY_POSTING, scope });
-  const { drafts, busy, errors } = posting.scope === scope ? posting : EMPTY_POSTING;
+  const { drafts, busy, errors, progress } = posting.scope === scope ? posting : EMPTY_POSTING;
   // `null` = not loaded yet or the read failed (`platformsError` says which);
   // `{}` = loaded with nothing turned on. A failed read must not read as "none on".
   const [platforms, setPlatforms] = useState(null);
@@ -83,6 +84,8 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .catch((err) => { if (!cancelled) setDraftsError({ scope, error: err || new Error('Failed') }); });
     const onDraft = (e) => {
       if (e?.projectId !== projectId) return;
+      // A fill still running: what it waits on or is doing (shown only while this tab's fill is busy).
+      if (e.state === 'queued' || e.state === 'filling') { setFor('progress', e.target, e.message || null); return; }
       if (e.state === 'posted') {
         if (e.project) replaceProjectRef.current?.(e.project);
         loadPlatforms();
@@ -114,7 +117,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     return prepareMusicVideoPublishDraft(projectId, target, options, { silent: true })
       .then((draft) => { setFor('drafts', target, draft); return draft; })
       .catch((err) => { setFor('drafts', target, null); fail(target, err); return null; })
-      .finally(() => setFor('busy', target, null));
+      .finally(() => { setFor('busy', target, null); setFor('progress', target, null); });
   };
 
   // What Fill draft would post with these options; null when the preview itself failed.
@@ -143,6 +146,13 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
       .catch(() => { loadPlatforms(); return null; });
   };
 
+  // Save what the director typed or picked on a platform's row, so a reload or
+  // another tab shows it again. `forProjectId` is the row's project: a row that
+  // flushes as it unmounts on a project switch still saves to its own project.
+  const savePostOptions = (forProjectId, target, answers) => updateMusicVideoPublishCopy(forProjectId, { postOptions: { [target]: answers } })
+    .then((res) => { if (res?.project?.id && res.project.id === selection.current.projectId) replaceProject?.(res.project); return true; })
+    .catch(() => false);
+
   const recordPost = (target, body) => recordMusicVideoPublishPost(projectId, target, body)
     .then((res) => { if (res?.project) replaceProject?.(res.project); loadPlatforms(); return res?.post || null; })
     .catch(() => null);
@@ -161,5 +171,5 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // null until the saved choice is known, so consumers never treat "unknown" as "none on".
   const enabledTargets = platforms ? Object.entries(platforms).filter(([, p]) => p?.enabled).map(([t]) => t) : null;
 
-  return { drafts, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, recordPost, removePost, setCrossLinks, prepareCrossLinks };
+  return { drafts, progress, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }
