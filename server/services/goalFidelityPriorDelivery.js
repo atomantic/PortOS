@@ -24,27 +24,19 @@
 
 import { execGit } from '../lib/execGit.js';
 import { toEpochMs } from '../lib/gitCommitProbe.js';
-import { getAgents } from './cosAgentLifecycle.js';
-import { getAgentsByDate } from './cosAgentIndex.js';
+import { getAgentsWithArchive } from './cosAgentHistory.js';
 
 // Finished runs leave `getAgents()` when live retention expires. Retries normally
 // follow within minutes, so a longer gap falls back to the ordinary review rather
 // than reading every archive bucket during finalization.
 const ARCHIVE_LOOKBACK_DAYS = 3;
-const DAY_MS = 86_400_000;
 const COMMIT_RE = /^[a-f0-9]{40,64}$/;
 const TRUNCATED_MARKER = '\n…[earlier delivery truncated]';
 const MAX_MESSAGE_CHARS = 2_000;
 
 async function earlierAttemptHeads(taskId, startedAt) {
-  const days = Array.from({ length: ARCHIVE_LOOKBACK_DAYS }, (_, back) =>
-    new Date(startedAt - back * DAY_MS).toISOString().slice(0, 10));
-  const lists = await Promise.all([
-    getAgents().catch(() => []),
-    ...days.map(day => getAgentsByDate(day, { repairSummaries: false }).catch(() => [])),
-  ]);
-  // A record can be resident and archived at once.
-  const attempts = new Map(lists.flat()
+  const agents = await getAgentsWithArchive({ endAt: startedAt, lookbackDays: ARCHIVE_LOOKBACK_DAYS });
+  const attempts = new Map(agents
     .filter(agent => agent?.taskId === taskId && toEpochMs(agent.startedAt) < startedAt)
     .map(agent => [agent.id, agent]));
   const ordered = [...attempts.values()].sort((a, b) => toEpochMs(a.startedAt) - toEpochMs(b.startedAt));
