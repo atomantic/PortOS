@@ -16,6 +16,10 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 import { resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const chrome = resolveTestChrome();
+// A CPU-loaded CI runner can take longer than the 20s production startup
+// deadline to bring Chrome up (#14847); the production default is unchanged.
+const priorStartupMs = process.env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS;
+process.env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS = '60000';
 
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('mv-overlay-text-') }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -27,7 +31,11 @@ const { importDocumentDirectory, importDocumentTemplate } = await import('./comp
 const { startOverlayTextCheck } = await import('./overlayTextService.js');
 const { productionReadiness } = await import('./productionReview.js');
 
-afterAll(() => cleanupTempDataRoots());
+afterAll(async () => {
+  if (priorStartupMs === undefined) delete process.env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS;
+  else process.env.PORTOS_COMPOSITION_BROWSER_STARTUP_MS = priorStartupMs;
+  await cleanupTempDataRoots();
+});
 
 const PAGE = `<!doctype html><html><head><style>
   html, body { margin: 0; background: #f3ead7; }

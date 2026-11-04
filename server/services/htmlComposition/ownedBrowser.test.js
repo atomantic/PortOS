@@ -16,7 +16,7 @@ vi.mock('node:fs/promises', async original => {
 });
 vi.mock('../../lib/childProcess.js', async original => ({ ...await original(), spawn: launch.spawn }));
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: '/synthetic/chrome' }) }));
-const { launchCompositionBrowser } = await import('./ownedBrowser.js');
+const { launchCompositionBrowser, resolveStartupMs } = await import('./ownedBrowser.js');
 const { drainBrowserProcessGroup, observeBrowserProcessGroup } = await import('./browserProcessGroup.js');
 
 let child;
@@ -164,10 +164,20 @@ describe('owned composition capture browser lifecycle', () => {
 
   it('cleans a child and profile after a bounded startup timeout without leaking stderr', async () => {
     startup = () => { child.emit('spawn'); child.stderr.write('private profile path and diagnostics'); };
-    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow('startup exceeded its deadline');
+    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(
+      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-devtools-endpoint, spawnMs=\d+\)$/,
+    );
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     await expect(access(profile)).rejects.toThrow();
     expect(child.stderr.listenerCount('data')).toBe(0);
+  });
+
+  it('names a browser that never produced output, and reads a startup override only when it is a positive integer', async () => {
+    startup = () => { child.emit('spawn'); };
+    await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(/phase=spawned-no-output/);
+    expect(resolveStartupMs({})).toBe(20000);
+    expect(resolveStartupMs({ PORTOS_COMPOSITION_BROWSER_STARTUP_MS: '60000' })).toBe(60000);
+    for (const bad of ['0', '-5', 'abc', '1.5', '']) expect(resolveStartupMs({ PORTOS_COMPOSITION_BROWSER_STARTUP_MS: bad })).toBe(20000);
   });
 
   it('settles a spawn failure without trying to signal a nonexistent process', async () => {
