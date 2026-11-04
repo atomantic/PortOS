@@ -78,6 +78,7 @@ import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes }
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { musicVideoEvents } from './events.js';
+import { listActiveRenders } from '../renderActivity.js';
 
 const prime = (id, composition = null) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition });
 const lastProc = () => h.procs.at(-1);
@@ -155,6 +156,32 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
     expect(excerpt(id, excerptId).status).toBe(status);
     expect(terminalFrames(jobId)[0].type).toBe(status);
+  });
+
+  it('frees the project slot before the completion event, so an immediate next render is admitted and keeps its own lock (#14862)', async () => {
+    const id = 'excerpt-immediate-restart';
+    prime(id);
+    const slotsHeld = () => listActiveRenders().filter((r) => r.kind === 'music-video-excerpt').length;
+    let heldAtEvent = null;
+    let next = null;
+    const onRender = () => {
+      heldAtEvent = slotsHeld();
+      next = startExcerptRender(id, { startSec: 0, endSec: 2 });
+    };
+    musicVideoEvents.on('excerpt-render', onRender);
+    const first = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(terminalFrames(first.jobId)).toHaveLength(1));
+    musicVideoEvents.off('excerpt-render', onRender);
+    expect(heldAtEvent).toBe(0);
+    const second = await next;
+    // The finishing job's trailing release must not drop the newer job's lock.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(slotsHeld()).toBe(1);
+    await expect(startExcerptRender(id, { startSec: 0, endSec: 2 })).rejects.toMatchObject({ code: 'EXCERPT_RENDER_IN_PROGRESS', context: { jobId: second.jobId } });
+    lastProc().emit('close', 1, null);
+    await vi.waitFor(() => expect(terminalFrames(second.jobId)).toHaveLength(1));
   });
 
   it('retains zero-exit success after a cancellation request', async () => {
