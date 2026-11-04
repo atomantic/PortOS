@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
+import { isCodexProvider } from '../../lib/providerModels.js';
 import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, findMusicVideoCameo } from '../../lib/musicVideoCameos.js';
 import { musicVideoEvents } from './events.js';
@@ -114,6 +115,17 @@ async function resolveResearchProvider({ providerId, model }, hasHostControl) {
   return { provider, selectedModel };
 }
 
+// The run's cwd is a fresh non-repository temp dir, which Codex refuses
+// ("Not inside a trusted directory") unless its repo check is skipped (#14837).
+// The flag is an `exec` option, so it goes right after `exec`.
+function withScratchDirTrust(provider) {
+  if (provider?.type !== PROVIDER_TYPES.CLI || !isCodexProvider(provider)) return provider;
+  const args = Array.isArray(provider.args) ? provider.args : [];
+  if (args.includes('--skip-git-repo-check')) return provider;
+  const at = args.indexOf('exec');
+  return { ...provider, args: at < 0 ? [...args, 'exec', '--skip-git-repo-check'] : [...args.slice(0, at + 1), '--skip-git-repo-check', ...args.slice(at + 1)] };
+}
+
 /**
  * Run the research agent for `subject` and import up to `count` photos into the
  * gallery. Resolves to `{ images: [{ imageId, sourceUrl, pageUrl, addedAt }], runId, providerId, model }`.
@@ -122,7 +134,7 @@ async function resolveResearchProvider({ providerId, model }, hasHostControl) {
 async function researchSubjectImages({ subject, count = RESEARCH_SEED_DEFAULT_COUNT, providerId, model, effort, executionOptions, hasHostControl = false, resolved = null }) {
   const { provider, selectedModel } = resolved || await resolveResearchProvider({ providerId, model }, hasHostControl);
   const cwd = await mkdtemp(join(tmpdir(), 'portos-research-'));
-  const result = await deps.run({ provider, model: selectedModel, effort: effort || undefined, executionOptions,
+  const result = await deps.run({ provider: withScratchDirTrust(provider), model: selectedModel, effort: effort || undefined, executionOptions,
     prompt: researchSeedPrompt(subject, count), source: 'music-video-research-seed', allowFallback: false, cwd, timeout: RUN_TIMEOUT_MS })
     .finally(() => rm(cwd, { recursive: true, force: true }).catch(() => {}));
   const candidates = parseResearchCandidates(result?.text);

@@ -19,6 +19,7 @@ vi.mock('./cameos.js', () => ({
   },
 }));
 
+const { buildCliArgs } = await import('../../lib/cliProviderArgs.js');
 const { deps, startCameoResearch, startSceneResearch } = await import('./researchSeed.js');
 const { musicVideoEvents } = await import('./events.js');
 
@@ -69,6 +70,29 @@ describe('Research and seed imports', () => {
     expect(deps.fetchImage).not.toHaveBeenCalledWith('https://example.com/three.jpg', expect.anything());
     // The agent sees only the director's subject plus PortOS's fixed instructions.
     expect(deps.run.mock.calls[0][0].prompt).toMatch(/^Search the web for real photographs of: Example Breed\n/);
+  });
+});
+
+describe('Research agent argv', () => {
+  // Uniquely catches Codex being launched in the non-repository temp cwd without
+  // its repo-check skip, which exits before any research (#14837).
+  it('lets Codex run in the scratch directory and leaves other agents unchanged', async () => {
+    const providers = {
+      codex: { id: 'codex', type: 'cli', command: 'codex', args: [], enabled: true },
+      claude: { id: 'claude', type: 'cli', command: 'claude', args: ['-p'], enabled: true },
+    };
+    deps.resolve = vi.fn(async ({ providerId }) => ({ provider: providers[providerId], selectedModel: null }));
+    const argv = {};
+    deps.run = vi.fn(async ({ provider, cwd }) => { argv[provider.id] = { args: buildCliArgs(provider), cwd }; return { text: answer([]) }; });
+    for (const providerId of ['codex', 'claude']) {
+      const settled = settle();
+      await startSceneResearch('mv-1', 's1', { subject: 'Example Breed', providerId }, { hasHostControl: true });
+      await settled;
+    }
+    expect(argv.codex.args.join(' ')).toMatch(/^exec --skip-git-repo-check .*-$/);
+    expect(argv.codex.cwd).toMatch(/portos-research-/);
+    expect(argv.claude.args).toEqual(buildCliArgs(providers.claude));
+    expect(argv.claude.args).not.toContain('--skip-git-repo-check');
   });
 });
 
