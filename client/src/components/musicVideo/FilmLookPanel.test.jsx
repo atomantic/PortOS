@@ -29,6 +29,8 @@ afterEach(cleanup);
 
 it('previews the look on the selected shot still, and on any other shot picked from the sample list', async () => {
   render(<Harness look={filmLookPreset('polaroid')} activeSceneId="b" />);
+  expect(screen.getByText('Turn on Film look in the composition or storyboard preview to see it while editing.')).toBeInTheDocument();
+  expect(screen.getByText('Applied to the final render')).toBeInTheDocument();
   const sample = screen.getByLabelText('Sample');
   expect(sample).toHaveValue('b');
   // Shots without a still cannot be sampled.
