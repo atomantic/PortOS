@@ -108,6 +108,7 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'scripts/direct-invocation-drift.test.js': 'scans every tracked .js file',
   'scripts/repo-scan-guards.test.js': 'scans every tracked test file',
   'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',
+  'server/lib/layering.test.js': 'scans every server/lib source for upward service imports',
   'server/lib/generatedManifests.test.js': 'scans scripts/generate-*.js and their sibling tests',
   'server/lib/index.test.js': 'enumerates the server/lib directory against its README and barrel',
   'server/logLevelConventions.test.js': 'scans the whole server tree',

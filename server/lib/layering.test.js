@@ -65,9 +65,8 @@ function libSourceFiles(dir = LIB_ROOT, prefix = '') {
   return out;
 }
 
-// Matches `from '../services/x.js'` / `from '../../services/x.js'` in both
-// static imports and dynamic `import(...)`, ignoring commented-out lines.
-const UPWARD_IMPORT = /from\s+['"](?:\.\.\/)+services\/|import\s*\(\s*['"](?:\.\.\/)+services\//;
+// Matches static named/re-export and side-effect imports, and dynamic import().
+const UPWARD_IMPORT = /from\s+['"](?:\.\.\/)+services\/|import\s*(?:\(\s*)?['"](?:\.\.\/)+services\//;
 
 const offenders = () => libSourceFiles()
   .filter(({ rel }) => !DYNAMIC_IMPORT_EXEMPT.has(rel))
