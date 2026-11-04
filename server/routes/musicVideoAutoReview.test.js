@@ -173,9 +173,24 @@ async function finishDraft(projectId, renders) {
   const outputPath = proc.args[proc.args.length - 1];
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, 'mp4');
-  proc.emit('spawn');
-  proc.emit('close', 0, null);
-  await settled(projectId, (p) => expect(p.excerpts.filter((e) => e.status === 'complete')).toHaveLength(renders));
+  const excerptId = (await projects.getProject(projectId)).excerpts.at(-1).id;
+  let completion = null;
+  const onRender = (event) => {
+    if (event.projectId === projectId && event.excerptId === excerptId) completion = event;
+  };
+  musicVideoEvents.on('excerpt-render', onRender);
+  try {
+    proc.emit('spawn');
+    proc.emit('close', 0, null);
+    // The row is readable before its publication lease settles. Only the
+    // terminal event confirms the slot is released for the next draft.
+    await settled(projectId, (p) => {
+      expect(completion).toMatchObject({ projectId, excerptId, status: 'complete' });
+      expect(p.excerpts.filter((e) => e.status === 'complete')).toHaveLength(renders);
+    });
+  } finally {
+    musicVideoEvents.off('excerpt-render', onRender);
+  }
 }
 
 // What the scene-video completion hook does when a regenerated clip lands.
