@@ -98,7 +98,11 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
 
   // Fetch duration estimates for progress indicators
   useEffect(() => {
-    api.getCosLearningDurations().then(setDurations).catch(() => {});
+    let active = true;
+    api.getCosLearningDurations().then(result => {
+      if (active) setDurations(result);
+    }).catch(() => {});
+    return () => { active = false; };
   }, []);
 
   const handleKill = async (agentId) => {
