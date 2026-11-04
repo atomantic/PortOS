@@ -1,7 +1,7 @@
 /** Real separate-repository fixtures for the public scheduled cleanup consumer. */
 // Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 vi.mock('../lib/checkoutRetirementAdmission.js', () => ({ withCheckoutPublication: (_repo, work) => work() }));
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, realpathSync } from 'fs';
 import { mkdir, open, readFile, rm, symlink, unlink, writeFile } from 'fs/promises';
 import { join, relative } from 'path';
@@ -10,6 +10,7 @@ import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } f
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
+import { createTestPhaseDiagnostics } from '../test/testPhaseDiagnostics.js';
 
 
 vi.mock('fs', async (importOriginal) => {
@@ -61,6 +62,9 @@ const NO_OWNERS = { claimOwners: { agents: [] } };
 let primary;
 let external;
 let initialHead;
+// Per-test phase evidence (quiet unless the test fails). Only the relative-pointer case
+// labels its steps; the reset phase times the shared sandbox setup it depends on.
+let phase;
 async function addTree(name, { committed = false, detached = false } = {}) {
   const path = join(PATHS.worktrees, name);
   await execGit(['worktree', 'add', ...(detached ? ['--detach'] : ['-b', name]), path, 'main'], external);
@@ -96,7 +100,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     await mkdir(PATHS.worktrees, { recursive: true });
     initialHead = (await execGit(['rev-parse', 'HEAD'], external)).stdout.trim();
   });
-  beforeEach(async () => {
+  beforeEach(async ({ onTestFailed }) => {
+    phase = createTestPhaseDiagnostics(onTestFailed);
     fault.command = null;
     fault.subcommand = null;
     fault.cwd = null;
@@ -105,14 +110,18 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     fault.aliasTarget = null;
     fault.registrationPath = null;
     fault.onGit = null;
-    await resetGitWorktreeSandbox(external, initialHead);
-    await rm(PATHS.worktrees, { recursive: true, force: true });
-    await mkdir(PATHS.worktrees, { recursive: true });
+    await phase('reset-sandbox', async () => {
+      await resetGitWorktreeSandbox(external, initialHead);
+      await rm(PATHS.worktrees, { recursive: true, force: true });
+      await mkdir(PATHS.worktrees, { recursive: true });
+    });
     // Retirement reads durable completion policy independently of the supplied
     // owner snapshot. Missing state is unknown, not a known-empty registry.
     await writeFile(join(PATHS.cos, 'state.json'), JSON.stringify({ agents: {} }));
     fault.calls = [];
   });
+  // Join fixture-owned work a timed-out test abandoned before its temp root is removed.
+  afterEach(async () => { await phase.settle(); });
   afterAll(cleanupTempDataRoots);
 
   it('retains dirty, unmerged, locked, detached, active, human and non-agent work while reclaiming merged clean work', async () => {
@@ -164,11 +173,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
   });
 
   it('resolves a relative .git pointer through Git rather than assuming an absolute parent path', async () => {
-    const path = await addTree('agent-relative');
-    const pointer = (await readFile(join(path, '.git'), 'utf8')).replace(/^gitdir: /, '').trim();
-    await rewriteGitPointer(path, `gitdir: ${relative(realpathSync(path), pointer)}\n`);
-    expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
-    expect(existsSync(path)).toBe(false);
+    const path = await phase('setup-worktree', () => addTree('agent-relative'));
+    await phase('rewrite-pointer', async () => {
+      const pointer = (await readFile(join(path, '.git'), 'utf8')).replace(/^gitdir: /, '').trim();
+      await rewriteGitPointer(path, `gitdir: ${relative(realpathSync(path), pointer)}\n`);
+    });
+    expect(await phase('cleanup-resolution', () => cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS))).toBe(1);
+    await phase('verify-removal', async () => expect(existsSync(path)).toBe(false));
   });
 
   it('retains recovery files when the parent repository disappears or the git pointer is unreadable', async () => {

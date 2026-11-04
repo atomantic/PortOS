@@ -13,6 +13,7 @@ import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
 import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
+import { createTestPhaseDiagnostics } from '../../../server/test/testPhaseDiagnostics.js';
 
 
 const PROJECT_WITH_CLIP = {
@@ -416,12 +417,14 @@ const openStage = async (stage, selectFirstScene = true) => {
   }
 };
 
-const openProject = async (project, stage = null) => {
+// `phase` optionally labels each step for failure evidence (testPhaseDiagnostics).
+const untracked = (_name, operation) => operation();
+const openProject = async (project, stage = null, phase = untracked) => {
   listMusicVideoProjects.mockResolvedValue([project]);
   renderMV();
-  await selectProject(project.id);
-  await screen.findByRole('heading', { level: 2, name: project.name });
-  if (stage) await openStage(stage);
+  await phase('select-project', () => selectProject(project.id));
+  await phase('project-heading', () => screen.findByRole('heading', { level: 2, name: project.name }));
+  if (stage) await phase('open-stage', () => openStage(stage));
 };
 
 // The header hides New project / Autonomous while a project is open, so step
@@ -2546,15 +2549,17 @@ describe('MusicVideo media lightbox (#3718)', () => {
     expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML).toMatch(/\/data\/images\/end1/);
   });
 
-  it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async () => {
-    await openProject(PROJECT_WITH_CLIP, 'produce');
+  it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async ({ onTestFailed }) => {
+    const phase = createTestPhaseDiagnostics(onTestFailed);
+    await openProject(PROJECT_WITH_CLIP, 'produce', phase);
     // Inline thumb keeps its own controls attribute for native play/pause.
     const inlineVideo = document.querySelector('video[src="/data/videos/h1.mp4"]');
     expect(inlineVideo).toBeTruthy();
     expect(inlineVideo.hasAttribute('controls')).toBe(true);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 clip full size' }));
-    const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    const expand = await phase('find-expand-control', () => screen.findByRole('button', { name: 'View scene 1 clip full size' }));
+    fireEvent.click(expand);
+    const dialog = await phase('viewer-dialog', () => screen.findByRole('dialog', { name: /Media viewer/i }));
     const lightboxVideo = dialog.querySelector('video');
     expect(lightboxVideo?.getAttribute('src')).toBe('/data/videos/h1.mp4');
   });
