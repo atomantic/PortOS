@@ -364,6 +364,58 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { await page.close(); }
   }, 90000);
 
+  // Catches a grade applied by whole-scene time: the outgoing picture under a wipe would
+  // take the incoming scene's look from the cut until the wipe has covered it (#14835).
+  it('keeps each picture of a wipe on its own scene grade in a full export and an excerpt', async () => {
+    await mkdir(PATHS.images, { recursive: true });
+    const names = ['grade-wipe-red.png', 'grade-wipe-blue.png', 'grade-wipe-green.png'];
+    const colors = ['#d02020', '#2040d0', '#20c020'];
+    await Promise.all(names.map(async (name, i) => writeFile(join(PATHS.images, name),
+      await sharp({ create: { width: 64, height: 36, channels: 3, background: colors[i] } }).png().toBuffer())));
+    const created = await projects.createProject({ name: 'Synthetic graded wipes' });
+    const still = (sceneId, startSec, image, extra = {}) => ({ sceneId, startSec, endSec: startSec + 1, visualLayer: 'still', stillMove: 'hold', referenceImageId: image, ...extra });
+    await projects.mutateProjectRecord(created.id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 3, sections: [] },
+      scenes: [
+        still('a', 0, names[0], { wipeOut: { style: 'iris', lengthSec: 0.5 } }),
+        still('b', 1, names[1], { wipeOut: { style: 'push-left', lengthSec: 0.5 } }),
+        still('c', 2, names[2]),
+      ],
+      composition: { ...current.composition, grade: { preset: 'neutral', grain: 0, sections: [{ sceneId: 'a', preset: 'monochrome' }, { sceneId: 'c', preset: 'monochrome' }] } },
+    } }));
+    await importDocumentTemplate(created.id);
+    const project = await projects.getProject(created.id);
+    await mkdir(PATHS.music, { recursive: true });
+    await mkdir(PATHS.videos, { recursive: true });
+    const audio = join(PATHS.music, 'graded-wipes.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=3', audio]);
+    const encode = async (name, windowStart, windowEnd) => {
+      const outputPath = join(PATHS.videos, name);
+      await encodeDocumentComposition({ project, plan: await prepareDocumentRender(project), jobId: name.replace('.mp4', ''), audioPath: audio, outputPath, windowStart, windowEnd });
+      const raw = execFileSync(ffmpeg, ['-v', 'error', '-i', outputPath, '-vf', 'scale=64:36', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-']);
+      return (frame, x, y = 18) => [...raw.subarray((frame * 64 * 36 + y * 64 + x) * 3, (frame * 64 * 36 + y * 64 + x) * 3 + 3)];
+    };
+    const chroma = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b);
+    const full = await encode('graded-wipes-full.mp4', 0, 3);
+    const excerpt = await encode('graded-wipes-excerpt.mp4', 28 / 24, 32 / 24);
+    // Monochrome into neutral: the iris opens blue over a held picture that stays gray.
+    for (const frame of [24, 28, 31]) {
+      expect(chroma(full(frame, 2))).toBeLessThan(24);
+      expect(full(frame, 32)[2]).toBeGreaterThan(full(frame, 32)[0] + 60);
+    }
+    for (let n = 0; n < 4; n++) {
+      expect(chroma(excerpt(n, 2))).toBeLessThan(24);
+      expect(excerpt(n, 32)[2]).toBeGreaterThan(excerpt(n, 32)[0] + 60);
+    }
+    // Neutral into monochrome: the outgoing picture keeps its color, the one pushing in is gray.
+    expect(full(52, 4)[2]).toBeGreaterThan(full(52, 4)[1] + 60);
+    expect(chroma(full(52, 60))).toBeLessThan(24);
+    // Past the wipes, each shot's own grade over the whole frame.
+    expect(chroma(full(23, 32))).toBeLessThan(24);
+    expect(full(40, 2)[2]).toBeGreaterThan(full(40, 2)[0] + 60);
+    expect(chroma(full(64, 32))).toBeLessThan(24);
+  }, 120000);
+
   // Catches a document drawing a wipe on other frames than its cut, losing the
   // held outgoing frame or the edge color, or the export and preview disagreeing.
   it('paints shape and move wipes from their cuts identically in preview, full export and a mid-wipe excerpt', async () => {

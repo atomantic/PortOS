@@ -472,6 +472,7 @@ export * from './execGit.js';
 export * from './gitMutationLifetime.js';
 export * from './windowsGitProcess.js';
 export * from './ffmpeg.js';
+export * from './ffmpegExpr.js';
 export * from './ffmpegFilterGraph.js';
 export * from './forgeAccessErrors.js';
 export * from './forkHead.js';

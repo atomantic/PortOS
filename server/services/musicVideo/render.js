@@ -66,6 +66,7 @@ import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { sumExpr } from '../../lib/ffmpegExpr.js';
 import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
@@ -539,7 +540,7 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
       : fitted(id);
     if (inputRefs.photos?.length && !sequence?.stacked) {
       const frame = `max(0,t*${fps}+${Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps)}+0.000001)`;
-      const step = sequence.switchFrames ? (sequence.switchFrames.map(f => `gte(${frame},${f})`).join('+') || '0') : `floor(${frame}/${sequence.intervalFrames})`;
+      const step = sequence.switchFrames ? (sumExpr(sequence.switchFrames.map(f => `gte(${frame},${f})`)) || '0') : `floor(${frame}/${sequence.intervalFrames})`;
       inputRefs.photos.forEach((photo, i) => {
         picture += `[seq${id}_${i}];${fitted(photo)}[photo${id}_${i}];[seq${id}_${i}][photo${id}_${i}]overlay=shortest=1:enable='eq(mod(${step},${sequence.imageIds.length}),${i + 1})'`;
       });

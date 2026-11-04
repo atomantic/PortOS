@@ -296,7 +296,10 @@ Both encoders use the same bounded RGB curves and deterministic, song-time
 frame-addressed grain. Composed footage is graded before typography, and
 excerpt trimming happens after grading. Document captures receive the same
 filter before encoding, with the excerpt offset and document frame rate, so
-section changes and grain stay on the song clock. Black/white endpoints are
+section changes and grain stay on the song clock. On a wipe between two sections
+with different looks, the encoder masks each wipe frame so the part still
+showing the outgoing scene takes that scene's look, lettering included; a wipe
+between sections with one look renders as if the mask did not exist. Black/white endpoints are
 preserved to keep document lettering readable. Source assets are unchanged;
 selecting a grade does not infer a look from references or invoke a provider.
 Saving the selection gates rendering until the server has accepted it.
