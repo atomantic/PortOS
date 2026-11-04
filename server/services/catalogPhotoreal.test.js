@@ -16,7 +16,8 @@ vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
 const { catalogEvents } = await import('./catalogEvents.js');
 afterAll(cleanupTempDataRoots);
-const { getPhotorealStatus, startPhotorealRender, __setPhotorealDepsForTests } = await import('./catalogPhotoreal.js');
+const { getPhotorealStatus, openPhotorealBlend, startPhotorealRender, __setPhotorealDepsForTests } = await import('./catalogPhotoreal.js');
+const { PATHS } = await import('../lib/fileUtils.js');
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const scene = {
@@ -158,5 +159,25 @@ describe('startPhotorealRender', () => {
     await startPhotorealRender(`plc-${seq}`, { shotIds: ['wide'], engine: 'eevee' });
     await expect(finished(`plc-${seq}`)).resolves.toMatchObject({ state: 'failed', error: expect.stringContaining('not a PNG') });
     expect(upload).not.toHaveBeenCalled();
+  });
+});
+
+describe('openPhotorealBlend', () => {
+  // Catches opening a scene that was never built, or launching anything but the checked Blender on the kept file.
+  it('opens the kept .blend in the checked Blender with scripts off, once a render has built it', async () => {
+    const launch = vi.fn(async () => {});
+    __setPhotorealDepsForTests({ resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3' }), launch });
+    const id = `plc-open-${seq}`;
+    await expect(openPhotorealBlend(id)).rejects.toMatchObject({ status: 404, code: 'PHOTOREAL_NO_BLEND' });
+    expect(launch).not.toHaveBeenCalled();
+
+    await mkdir(join(PATHS.data, 'photoreal-blends'), { recursive: true });
+    const path = join(PATHS.data, 'photoreal-blends', `${id}.blend`);
+    await writeFile(path, 'BLENDER');
+    await expect(openPhotorealBlend(id)).resolves.toEqual({ opened: true, blenderVersion: '5.2.3' });
+    expect(launch).toHaveBeenCalledWith('/opt/blender', ['--disable-autoexec', path]);
+
+    launch.mockRejectedValueOnce(new Error('spawn EACCES'));
+    await expect(openPhotorealBlend(id)).rejects.toMatchObject({ code: 'PHOTOREAL_OPEN_FAILED', message: expect.stringContaining('EACCES') });
   });
 });

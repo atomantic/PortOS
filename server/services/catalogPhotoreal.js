@@ -18,6 +18,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { H264_ENCODE_ARGS } from '../lib/ffmpeg.js';
+import { launchDetached } from '../lib/launchDetached.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
 import { resolvePhotorealLook } from '../lib/photorealLook.js';
 import {
@@ -38,7 +39,9 @@ const deps = {
   findFfmpeg: async () => (await import('../lib/ffmpeg.js')).findFfmpeg(),
   runFfmpeg: async (args) => (await import('../lib/ffmpeg.js')).runFfmpegProcess(args),
   saveVideo: async (path, name) => (await import('./videoUpload.js')).saveUploadedGalleryVideoFile(path, name),
+  launch: (executable, args) => launchDetached(executable, args),
 };
+
 export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, overrides);
 
 // ingredientId → latest job. In memory: a render is a disposable process; the
@@ -55,6 +58,22 @@ export async function photorealBlendPath(ingredientId) {
   if (!SAFE_ID.test(ingredientId)) return null;
   const path = blendPath(ingredientId);
   return access(path).then(() => path, () => null);
+}
+
+/**
+ * Open the kept `.blend` in the operator-checked Blender on this machine, as a
+ * normal window. The next render replaces that file, so keep edits with Save As.
+ */
+export async function openPhotorealBlend(ingredientId) {
+  const path = await photorealBlendPath(ingredientId);
+  if (!path) throw refuse('Render this place once first; that builds the Blender scene.', 'PHOTOREAL_NO_BLEND', 404);
+  const tool = await deps.resolveTool();
+  // The file is PortOS's own build; scripts stay off as in every render.
+  await deps.launch(tool.executable, ['--disable-autoexec', path]).catch((err) => {
+    throw refuse(`Blender did not start: ${err.message}`, 'PHOTOREAL_OPEN_FAILED', 500);
+  });
+  console.log(`🧊 Opened the photoreal scene for place ${ingredientId.slice(0, 12)} in Blender ${tool.version}`);
+  return { opened: true, blenderVersion: tool.version };
 }
 
 function publish(job) {

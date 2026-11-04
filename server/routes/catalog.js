@@ -1,4 +1,4 @@
-import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema } from '../lib/catalogGreyboxValidation.js';
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -67,7 +67,7 @@ import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
-import { getPhotorealStatus, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
+import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
 import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalogPhotorealLook.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
@@ -845,6 +845,12 @@ router.put('/ingredients/:id/photoreal/look', asyncHandler(async (req, res) => {
   projectToCanon(updated.id, updated).catch((err) => {
     console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
   });
+}));
+
+// Launches the operator-checked Blender on this host with the kept scene.
+router.post('/ingredients/:id/photoreal/open', asyncHandler(async (req, res) => {
+  validateRequest(catalogPhotorealOpenSchema, req.body || {});
+  res.json(await openPhotorealBlend(req.params.id));
 }));
 
 router.get('/ingredients/:id/photoreal/blend', asyncHandler(async (req, res) => {

@@ -2,12 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
-import { draftCatalogPhotorealLook, getCatalogPhotoreal, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { draftCatalogPhotorealLook, getCatalogPhotoreal, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
 vi.mock('../../services/apiCatalog', () => ({
-  getCatalogPhotoreal: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
+  getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
   draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
 }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
@@ -67,6 +67,13 @@ describe('PhotorealPanel', () => {
     // One camera is not a path.
     fireEvent.click(screen.getByLabelText(/Booth/));
     expect(fly).toBeDisabled();
+  });
+
+  it('opens the built scene in Blender from the tab', async () => {
+    openCatalogPhotorealBlend.mockResolvedValue({ opened: true, blenderVersion: '5.2.3' });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in Blender' }));
+    await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
   });
 
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
