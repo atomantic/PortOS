@@ -16,6 +16,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
+import { execGit } from '../../lib/execGit.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../lib/musicVideoConditioning.js';
@@ -122,6 +123,12 @@ async function resolveResearchProvider({ providerId, model }, hasHostControl) {
 async function researchSubjectImages({ subject, count = RESEARCH_SEED_DEFAULT_COUNT, providerId, model, effort, executionOptions, hasHostControl = false, resolved = null }) {
   const { provider, selectedModel } = resolved || await resolveResearchProvider({ providerId, model }, hasHostControl);
   const cwd = await mkdtemp(join(tmpdir(), 'portos-research-'));
+  // `codex exec` refuses a non-repository cwd unless the provider's args bypass
+  // or skip that check. Making the scratch its own git root satisfies it for
+  // every provider config. An agent that needs no repo can still run if this fails.
+  await execGit(['init', '--quiet'], cwd).catch((err) => {
+    console.warn(`⚠️ Research scratch git init failed: ${err.message}`);
+  });
   const result = await deps.run({ provider, model: selectedModel, effort: effort || undefined, executionOptions,
     prompt: researchSeedPrompt(subject, count), source: 'music-video-research-seed', allowFallback: false, cwd, timeout: RUN_TIMEOUT_MS })
     .finally(() => rm(cwd, { recursive: true, force: true }).catch(() => {}));

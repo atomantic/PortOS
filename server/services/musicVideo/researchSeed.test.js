@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import sharp from 'sharp';
+import { execGit } from '../../lib/execGit.js';
 
 const store = vi.hoisted(() => ({ project: null }));
 vi.mock('./projects.js', () => ({
@@ -69,6 +72,24 @@ describe('Research and seed imports', () => {
     expect(deps.fetchImage).not.toHaveBeenCalledWith('https://example.com/three.jpg', expect.anything());
     // The agent sees only the director's subject plus PortOS's fixed instructions.
     expect(deps.run.mock.calls[0][0].prompt).toMatch(/^Search the web for real photographs of: Example Breed\n/);
+  });
+
+  // Uniquely catches a non-repository scratch cwd, which `codex exec` refuses before it searches anything.
+  it('runs the agent in a scratch directory that is its own git root, and removes it afterwards', async () => {
+    let cwd;
+    let gitRoot;
+    let scratchRoot;
+    deps.run = vi.fn(async (args) => {
+      cwd = args.cwd;
+      scratchRoot = await realpath(cwd);
+      gitRoot = await realpath((await execGit(['rev-parse', '--show-toplevel'], cwd)).stdout.trim());
+      return { text: answer([]) };
+    });
+    const settled = settle();
+    await startSceneResearch('mv-1', 's1', { subject: 'Example Breed', providerId: 'codex' }, { hasHostControl: true });
+    await settled;
+    expect(gitRoot).toBe(scratchRoot);
+    expect(existsSync(cwd)).toBe(false);
   });
 });
 
