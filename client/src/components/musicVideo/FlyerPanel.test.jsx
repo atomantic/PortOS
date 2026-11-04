@@ -24,6 +24,9 @@ describe('FlyerPanel', () => {
     fireEvent.blur(title);
     expect(publishKit.saveCopy).toHaveBeenCalledWith({ flyer: { title: 'EXAMPLE SONG' } });
     expect(await screen.findByText('All changes saved')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clean', hidden: true }));
+    expect(publishKit.saveCopy).toHaveBeenLastCalledWith({ flyer: { style: 'clean' } });
+    expect(await screen.findByText('All changes saved')).toBeInTheDocument();
   });
 
   it('follows the recorded YouTube post, refuses a link without a scheme, and prints in a new tab', () => {
@@ -50,5 +53,7 @@ describe('buildFlyerHtml', () => {
     expect(html).toContain('<h1>A &lt;b&gt;</h1>');
     expect(html).toContain('aria-label="QR code for https://example.com/w"');
     expect(html).not.toContain('class="qr placeholder"');
+    expect(html).toContain('<body class="retro">'); // 80s look unless the director picks Clean
+    expect(buildFlyerHtml({ ...flyer, style: 'clean' })).not.toContain('class="retro"');
   });
 });

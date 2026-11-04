@@ -15,6 +15,12 @@ export const FLYER_IMAGE_CHOICES = Object.freeze([
   { id: 'none', label: 'No image' },
 ]);
 
+/** Page designs: '80s' (VHS label, stacked outline title, speed stripes) or 'clean' (plain modern type). */
+export const FLYER_STYLES = Object.freeze([
+  { id: '80s', label: '80s' },
+  { id: 'clean', label: 'Clean' },
+]);
+
 export const FLYER_TEXT_LIMITS = Object.freeze({ kicker: 60, title: 120, byline: 120, tagline: 300, scanLine: 60, details: 1200 });
 
 const str = (v) => (typeof v === 'string' ? v : '');
@@ -47,6 +53,7 @@ export function resolveFlyer(project, { youtubeUrl = '' } = {}) {
   const qrSource = isUrl(custom) ? 'custom' : (isUrl(youtube) ? 'youtube' : 'none');
   const image = FLYER_IMAGE_CHOICES.some((c) => c.id === saved.image) ? saved.image : defaultImageChoice(kit);
   return {
+    style: FLYER_STYLES.some((c) => c.id === saved.style) ? saved.style : '80s',
     kicker: pick('kicker', 'New music video'),
     title: pick('title', str(project?.name)),
     byline: pick('byline', ''),
@@ -60,6 +67,32 @@ export function resolveFlyer(project, { youtubeUrl = '' } = {}) {
     qrSource,
   };
 }
+
+// The 80s page in black ink only: stacked outline title, tapered speed stripes,
+// scanlines over the photo, a VHS cassette label around the QR.
+const RETRO_CSS = `
+.retro .kicker { font-family: "Courier New", Courier, monospace; letter-spacing: 0.25em; border-bottom: none; padding: 0; }
+.retro .kicker::before { content: "\\25B6\\00A0"; }
+.retro h1 { position: relative; font-style: italic; font-size: 66pt; letter-spacing: -0.02em; transform: skewX(-6deg); color: #fff; -webkit-text-stroke: 2.5pt #000; text-shadow: 3pt 3pt 0 #000, 6pt 6pt 0 #000; }
+.retro .stripes { display: flex; flex-direction: column; gap: 3pt; margin-top: -0.06in; }
+.retro .stripes i { display: block; background: #000; }
+.retro .stripes i:nth-child(1) { height: 9pt; }
+.retro .stripes i:nth-child(2) { height: 5pt; width: 88%; }
+.retro .stripes i:nth-child(3) { height: 2pt; width: 76%; }
+.retro .byline { font-family: "Courier New", Courier, monospace; text-transform: uppercase; letter-spacing: 0.15em; }
+.retro .hero { position: relative; border-width: 4pt; border-radius: 10pt; }
+.retro .hero::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(to bottom, rgba(0,0,0,0.16) 0 1.2pt, transparent 1.2pt 3.6pt); pointer-events: none; }
+.retro .tagline { font-family: "Courier New", Courier, monospace; font-size: 15pt; }
+.retro .scan { border-width: 4pt; border-radius: 10pt; background: repeating-linear-gradient(to bottom, #fff 0 15pt, #000 15pt 16pt); padding: 0.18in 0.22in; }
+.retro .scan .text { background: #fff; padding: 0.08in 0.1in; border: 2pt solid #000; }
+.retro .scan h2 { font-style: italic; }
+.retro .vhs { margin: 0 0 0.08in; font-family: "Courier New", Courier, monospace; font-size: 11pt; font-weight: 700; letter-spacing: 0.1em; }
+.retro .vhs b { background: #000; color: #fff; padding: 1pt 5pt; margin-right: 4pt; font-style: italic; }
+.retro .play { margin: 0.1in 0 0; font-family: "Courier New", Courier, monospace; font-size: 10pt; font-weight: 700; }
+.retro .qr { background: #fff; border: 2pt solid #000; }
+.retro .qr.placeholder { border-style: dashed; }
+.retro .details { font-family: "Courier New", Courier, monospace; font-size: 11pt; }
+`;
 
 const escapeHtml = (s) => str(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const lines = (s) => escapeHtml(s).split('\n').join('<br>');
@@ -77,6 +110,7 @@ export function buildFlyerHtml(flyer, { origin = '', autoPrint = false } = {}) {
   const qr = f.qrUrl
     ? `<div class="qr" role="img" aria-label="QR code for ${escapeHtml(f.qrUrl)}">${generateQrCodeSvg(f.qrUrl, { size: 240, ecc: 'Q' })}</div>`
     : '<div class="qr placeholder">QR code<br>goes here once<br>the YouTube link<br>is in</div>';
+  const retro = f.style !== 'clean';
   const urlLine = f.qrUrl ? `<p class="url">${escapeHtml(displayUrl(f.qrUrl))}</p>` : '<p class="url muted">youtube link pending</p>';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=816">
@@ -102,15 +136,16 @@ h1 { margin: 0; font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
 .qr svg { width: 100%; height: 100%; display: block; }
 .qr.placeholder { border: 2pt dashed #000; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 13pt; font-weight: 700; text-transform: uppercase; line-height: 1.4; }
 .details { margin: 0; font-size: 12pt; line-height: 1.4; }
-@media screen { body { background: #fff; } }
+${retro ? RETRO_CSS : ''}
 </style></head>
-<body><main class="page">
+<body${retro ? ' class="retro"' : ''}><main class="page">
 ${f.kicker ? `<p class="kicker">${escapeHtml(f.kicker)}</p>` : ''}
 ${f.title ? `<h1>${escapeHtml(f.title)}</h1>` : ''}
+${retro ? '<div class="stripes" aria-hidden="true"><i></i><i></i><i></i></div>' : ''}
 ${f.byline ? `<p class="byline">${escapeHtml(f.byline)}</p>` : ''}
 ${image ? `<div class="hero"><img src="${escapeHtml(image)}" alt=""></div>` : '<div class="hero" style="border:none"></div>'}
 ${f.tagline ? `<p class="tagline">${lines(f.tagline)}</p>` : ''}
-<section class="scan"><div class="text"><h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}</div>${qr}</section>
+<section class="scan"><div class="text">${retro ? '<p class="vhs" aria-hidden="true"><b>VHS</b> HI-FI STEREO · SP</p>' : ''}<h2>${escapeHtml(f.scanLine || 'Scan to watch')}</h2>${urlLine}${retro ? '<p class="play" aria-hidden="true">▶ PLAY &nbsp; ◀◀ REW &nbsp; ▶▶ FF</p>' : ''}</div>${qr}</section>
 ${f.details ? `<p class="details">${lines(f.details)}</p>` : ''}
 </main>${autoPrint ? `<script>
 (function () {
