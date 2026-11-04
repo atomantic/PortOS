@@ -2,6 +2,7 @@ import CastAndSetsCheckin from '../CastAndSetsCheckin.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
+import LinkedObjectReferences from '../LinkedObjectReferences.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import CameoRosterPanel from '../CameoRosterPanel.jsx';
 import { VideoCastLinksDisclosure } from '../VideoCastLinks.jsx';
@@ -56,6 +57,7 @@ export default function CastSetsStage({ board }) {
             projectId={project.id} universeId={project.concept?.universeId || null} onLinked={board.applyCastLinks} idPrefix={`mv-look-link-${project.id}`} />
         </div>
       )}
+      <LinkedObjectReferences key={`objects-${project.id}`} project={project} onSaveSpec={board.saveVisualSpec} disabled={locked} />
       <StageSection title="Visual guidance" summary={directionSummary(project)}>
         <LookReferencesPanel key={`look-${project.id}`} project={project}
           onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
