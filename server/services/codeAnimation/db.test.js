@@ -119,7 +119,14 @@ describe.skipIf(!ready)('Production persisted public boundary', () => {
     const legacyProjectPage = await get('/projects?limit=1&cursor=1');
     expect(legacyProjectPage.body.items[0].id).toBe(expectedProjects[1]);
     expect(legacyProjectPage.body.nextCursor).not.toBe('2');
-    expect((await get('/projects?limit=1&cursor=bm90LWpzb24')).status).toBe(400);
+    const extraFieldCursor = Buffer.from(JSON.stringify({
+      createdAt: '9000-01-01 00:00:00.123456+00', id: expectedProjects[0], legacyOffset: 1,
+    })).toString('base64url');
+    expect((await get(`/projects?limit=1&cursor=${extraFieldCursor}`)).body.items[0].id).toBe(expectedProjects[1]);
+    const invalidDateCursor = Buffer.from(JSON.stringify({
+      createdAt: '2026-02-31T00:00:00Z', id: expectedProjects[0], legacyOffset: 1,
+    })).toString('base64url');
+    expect((await get(`/projects?limit=1&cursor=${invalidDateCursor}`)).status).toBe(400);
     const insertedProjectId = randomUUID();
     await query(`INSERT INTO code_animation_projects (id, title, data, created_at) VALUES ($1, 'newer', '{}', '9001-01-01T00:00:00Z')`, [insertedProjectId]);
     ids.push(insertedProjectId);

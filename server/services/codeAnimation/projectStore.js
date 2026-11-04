@@ -17,6 +17,26 @@ const missing = () => new ServerError('Production project not found', { status: 
 // timestamptz values into millisecond Date objects, which is not a safe keyset
 // boundary when two rows were inserted within the same millisecond.
 const encodePageCursor = ({ createdAt, id }) => Buffer.from(JSON.stringify({ createdAt, id })).toString('base64url');
+function validCursorTimestamp(timestamp) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(timestamp);
+  if (!match) return false;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, zone] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year === 0 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+    || hour > 23 || minute > 59 || second > 59) return false;
+  if (zone !== 'Z') {
+    const offset = /[+-](\d{2})(?::?(\d{2}))?$/.exec(zone);
+    if (!offset || Number(offset[1]) > 15 || Number(offset[2] || 0) > 59) return false;
+  }
+  return Number.isFinite(Date.parse(timestamp));
+}
 function decodePageCursor(cursor) {
   if (!cursor) return null;
   // Older clients sent a numeric offset. Resolve it once to a tuple, then
@@ -25,11 +45,9 @@ function decodePageCursor(cursor) {
   try {
     const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
     const timestamp = value.createdAt;
-    if (typeof timestamp !== 'string'
-      || !/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(timestamp)
-      || !Number.isFinite(Date.parse(timestamp))
+    if (typeof timestamp !== 'string' || !validCursorTimestamp(timestamp)
       || typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 255) throw new Error('invalid cursor');
-    return value;
+    return { createdAt: timestamp, id: value.id };
   } catch {
     throw new ServerError('Invalid page cursor', { status: 400, code: 'INVALID_CURSOR' });
   }
