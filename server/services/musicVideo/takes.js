@@ -160,7 +160,7 @@ function appendToScene(project, scene, inputs, now) {
     if (!existing) takes = [...takes, take];
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    const selectable = take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
+    const selectable = input.autoSelect !== false && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
     const replaceFrame = input.replaceSelection === true && (input.kind === 'image' || input.kind === 'endImage');
     const selectionUnchanged = input.expectedSelection !== undefined && (next[field] || null) === input.expectedSelection;
     const repairDone = input.kind === 'image' && input.stillRepairAt && next.stillFixes?.pending === true

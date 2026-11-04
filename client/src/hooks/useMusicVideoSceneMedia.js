@@ -403,8 +403,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // Hosted performance shots use their own server-prepared song window, not
     // the Local cutaway's supplied-audio route.
     const hostedPerformance = performance && settings.backend === 'fal';
-    const songAudio = hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
-    const mode = audioReactiveSelected || songAudio ? 'a2v' : 'image';
+    const useLtxReferences = card?.ltxReferences === true && settings.backend === 'local' && !performance && !audioReactiveSelected;
+    const songAudio = useLtxReferences || hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
+    const mode = useLtxReferences ? 'ic-ingredients-25' : audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
       ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
@@ -433,7 +434,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           ? falFields || runwayFields
           : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
-            ? { modelId: settings.modelId || undefined, ...(target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
+            ? { modelId: settings.modelId || undefined,
+              ...(useLtxReferences ? { numFrames: Math.max(121, 1 + 8 * Math.ceil(((target?.numFrames || 121) - 1) / 8)),
+                icReferenceImageFiles: card.expectedClipReferenceFiles } : target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
@@ -457,6 +460,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         ...(hostedPerformance ? { songAudio: false } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
         ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles } : {}),
+        ...(Array.isArray(card?.expectedClipReferenceLabels) ? { expectedClipReferenceLabels: card.expectedClipReferenceLabels } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })

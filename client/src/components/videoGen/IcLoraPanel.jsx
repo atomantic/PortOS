@@ -124,7 +124,9 @@ export default function IcLoraPanel({
             <span className="text-[10px] text-gray-500">{referenceImageFiles.length}/{maxRefs}</span>
           </div>
           <p className="text-[10px] text-gray-500 leading-snug">
-            References pull from your gallery only. Each still is prepared at the render resolution before conditioning.
+            {spec.mode === 'ic-ingredients-25'
+              ? 'References are combined into one sheet. Use at least 121 frames and describe the sheet and the intended action in the prompt. Combining references with an opening frame is experimental.'
+              : 'References pull from your gallery only. Each still is prepared at the render resolution before conditioning.'}
           </p>
         </div>
       ) : referenceFile ? (
@@ -159,9 +161,10 @@ export default function IcLoraPanel({
         </>
       )}
 
-      {!imageKind && !referenceFile && !referenceVideoId && inFlightReferenceNames.length > 0 && (
+      {inFlightReferenceNames.length > 0
+        && (imageKind ? !referenceImageFiles.some(Boolean) : !referenceFile && !referenceVideoId) && (
         <p className="text-[10px] text-gray-500">
-          In-flight render is conditioned on {inFlightReferenceNames.join(', ')} — re-pick a reference to run a new one.
+          In-flight render is conditioned on {inFlightReferenceNames.join(', ')} — re-pick references to run a new one.
         </p>
       )}
 
@@ -181,7 +184,7 @@ export default function IcLoraPanel({
             className="w-full accent-port-accent"
           />
         </div>
-        <label htmlFor={skipId} className="flex items-center gap-2 text-[11px] text-gray-400 sm:mt-4">
+        {spec.mode !== 'ic-ingredients-25' && <label htmlFor={skipId} className="flex items-center gap-2 text-[11px] text-gray-400 sm:mt-4">
           <input
             id={skipId}
             type="checkbox"
@@ -190,7 +193,7 @@ export default function IcLoraPanel({
             className="accent-port-accent"
           />
           <span>Half-res preview (skip refine)</span>
-        </label>
+        </label>}
       </div>
 
       <p className="text-[10px] text-gray-500 leading-snug">
@@ -200,9 +203,9 @@ export default function IcLoraPanel({
 
       {weightStatus?.gated && !weightStatus.cached && (
         <p className="text-[10px] text-gray-500 leading-snug">
-          The official weight repo is gated. Download tries it first (accept its license and add an
-          HF token in Image Gen settings for that path) and falls back to the un-gated mirror
-          automatically, so no token is required.
+          {spec.mode === 'ic-ingredients-25'
+            ? 'The official weight is gated. Accept its terms on Hugging Face and add an HF token in Image Gen settings before downloading.'
+            : 'The official weight repo is gated. Download tries it first (accept its license and add an HF token in Image Gen settings for that path) and falls back to the un-gated mirror automatically, so no token is required.'}
         </p>
       )}
 

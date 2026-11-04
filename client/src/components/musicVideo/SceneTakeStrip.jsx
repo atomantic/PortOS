@@ -107,6 +107,9 @@ export default function SceneTakeStrip({
               {take.note && noteFor !== take.takeId && (
                 <p className="text-[10px] text-port-warning break-words">{take.note}</p>
               )}
+              {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
+                <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
+              )}
               <AssetReferenceActions assetId={take.assetId}
                 url={kind === 'video' ? null : takeThumbUrl(take)}
                 resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />

@@ -1193,6 +1193,21 @@ describe('useVideoGenForm — i2v reference mode (#4874)', () => {
     expect(result.current.imageStrength).toBe('');
   });
 
+  it('restores an LTX opening frame, or requires a missing upload to be explicitly cleared', async () => {
+    const { result } = render({ models: [LTX25], modelContext: { defaultModel: LTX25.id } });
+    await act(async () => { result.current.applyResumedParams({ modelId: LTX25.id, mode: 'ic-ingredients-25',
+      sourceImageFile: 'start.png', icReferenceImageFiles: ['rider.png'], numFrames: 121 }); });
+    expect(result.current.sourceImageFile).toBe('start.png');
+    expect(result.current.unavailableSourceImageName).toBe('');
+    await act(async () => { result.current.applyResumedParams({ modelId: LTX25.id, mode: 'ic-ingredients-25',
+      unavailableSourceImageName: 'upload.png', icReferenceImageFiles: ['rider.png'], numFrames: 121 }); });
+    expect(result.current.sourceImageFile).toBeFalsy();
+    expect(result.current.unavailableSourceImageName).toBe('upload.png');
+    expect(result.current.icLoraModeBlocked).toBe(true);
+    act(() => result.current.clearSourceImage());
+    expect(result.current.unavailableSourceImageName).toBe('');
+  });
+
   it('does NOT carry a remixed record\'s promise onto whatever image the user picks next', async () => {
     const result = await inImageMode();
     await act(async () => { result.current.setI2vReferenceMode('inspire'); });

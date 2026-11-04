@@ -85,6 +85,7 @@ export function useVideoGenForm({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [unavailableReferenceImageNames, setUnavailableReferenceImageNames] = useState([]);
+  const [unavailableSourceImageName, setUnavailableSourceImageName] = useState('');
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingAudioFilename = searchParams.get('audioFilename');
   const incomingPrompt = searchParams.get('prompt');
@@ -754,6 +755,7 @@ export function useVideoGenForm({
   const clearSourceImage = () => {
     setSourceImageFile(null);
     setSourceImageUpload(null);
+    setUnavailableSourceImageName('');
     dropSourceImageParam();
   };
   const clearLastImage = () => {
@@ -765,6 +767,7 @@ export function useVideoGenForm({
   // (req.files wins) while the preview shows the gallery image.
   const pickSourceImage = (filename) => {
     setSourceImageUpload(null);
+    setUnavailableSourceImageName('');
     dropSourceImageParam();
     setSourceImageFile(filename);
   };
@@ -773,6 +776,7 @@ export function useVideoGenForm({
   // upload.
   const uploadSourceImage = (file) => {
     if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
+    if (file) setUnavailableSourceImageName('');
     setSourceImageUpload(file);
   };
   const pickLastImage = (filename) => {
@@ -815,6 +819,7 @@ export function useVideoGenForm({
     pixelBudget: modelContext?.fflfLtx2PixelBudget,
     sourceImageFile,
     sourceImageUpload,
+    unavailableSourceImageName,
     width,
   });
 
@@ -918,14 +923,17 @@ export function useVideoGenForm({
     if (next !== 'fflf') { setKeyframesMode(false); setKeyframes([]); }
     const nextIcSpec = icLoraSpecForMode(next);
     if (nextIcSpec) {
-      // IC conditioning replaces the frame/extend inputs entirely, and chaining
-      // is rejected server-side (IC_LORA_CHUNKS_CONFLICT) — clear them so no
-      // stale value implies it's being used.
-      clearSourceImage();
+      // IC conditioning replaces extend inputs, while LTX 2.5 References can
+      // also use an opening frame. Chaining is rejected for every IC mode.
+      if (next !== 'ic-ingredients-25') clearSourceImage();
       clearLastImage();
       setExtendFromVideoId('');
       setChunks(1);
-      // Every IC mode takes a video, but NOT the same video: Control wants a
+      if (next === 'ic-ingredients-25') {
+        setNumFrames((current) => Math.max(121, 1 + 8 * Math.ceil(((Number(current) || 1) - 1) / 8)));
+        setIcSkipStage2(false);
+      }
+      // Control and Colorize take different reference videos: Control wants a
       // depth/pose/edge pass, Colorize wants a desaturated source. Carrying the
       // clip across two different IC modes would silently submit a control pass
       // as a "B&W clip to restore" and produce plausible garbage, so the
@@ -951,6 +959,7 @@ export function useVideoGenForm({
     setIcReferenceFile(null);
     setIcReferenceVideoId('');
     setIcReferenceNames([]);
+    setUnavailableSourceImageName('');
     if (next === 'text') {
       clearSourceImage();
       clearLastImage();
@@ -1190,6 +1199,7 @@ export function useVideoGenForm({
     setMode('text');
     setSourceImageFile(null);
     setSourceImageUpload(null);
+    setUnavailableSourceImageName('');
     setLastImageFile(null);
     setLastImageUpload(null);
     setExtendFromVideoId('');
@@ -1264,6 +1274,12 @@ export function useVideoGenForm({
     setStylePreset(null);
     setSelectedUniverse(null);
     if (p.prompt) setPrompt(p.prompt);
+    setUnavailableSourceImageName(p.mode === 'ic-ingredients-25' ? (p.unavailableSourceImageName || '') : '');
+    if (p.mode === 'ic-ingredients-25') {
+      setSourceImageFile(p.sourceImageFile || null);
+      setSourceImageUpload(null);
+      dropSourceImageParam();
+    }
     if (p.negativePrompt) setNegativePrompt(p.negativePrompt);
     if (p.modelId) setModelId(p.modelId);
     if (p.width) { setWidth(p.width); sizeManuallySetRef.current = true; }
@@ -1468,7 +1484,7 @@ export function useVideoGenForm({
     disableAudio, setDisableAudio,
     noMusic, setNoMusic,
     // Frames
-    sourceImageFile, sourceImageUpload, sourceUploadUrl,
+    sourceImageFile, sourceImageUpload, sourceUploadUrl, unavailableSourceImageName,
     pickSourceImage, uploadSourceImage, clearSourceImage,
     lastImageFile, lastImageUpload, lastUploadUrl,
     pickLastImage, uploadLastImage, clearLastImage, lastFrameIsAdvisory,

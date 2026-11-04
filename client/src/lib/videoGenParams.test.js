@@ -142,7 +142,7 @@ describe('constants', () => {
 
 describe('IC-LoRA remix modes (#3100)', () => {
   it('mirrors the server registry shape', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'ic-ingredients-25']);
     for (const spec of IC_LORA_MODES) {
       // The `ic-` prefix drives the download-id router in useModelDownloadStatus.
       expect(spec.mode.startsWith('ic-')).toBe(true);
@@ -181,7 +181,8 @@ describe('IC-LoRA remix modes (#3100)', () => {
   });
   it('requires the ltx2 runtime for IC modes', () => {
     for (const mode of IC_LORA_MODE_VALUES) {
-      expect(isModelAllowedForMode({ runtime: 'ltx2' }, mode)).toBe(true);
+      expect(isModelAllowedForMode({ runtime: 'ltx2' }, mode)).toBe(mode !== 'ic-ingredients-25');
+      expect(isModelAllowedForMode({ runtime: 'ltx25' }, mode)).toBe(mode === 'ic-ingredients-25');
       expect(isModelAllowedForMode({ runtime: 'mlx_video' }, mode)).toBe(false);
       expect(isModelAllowedForMode({ runtime: 'wan22' }, mode)).toBe(false);
     }

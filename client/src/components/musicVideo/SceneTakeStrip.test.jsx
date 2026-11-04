@@ -6,6 +6,13 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 const take = (takeId, assetId, extra = {}) => ({ takeId, kind: 'image', assetId, status: 'candidate', source: 'generated', ...extra });
 const scene = { sceneId: 's1', order: 0, referenceImageId: 'a.png', takes: [take('t1', 'a.png'), take('t2', 'b.png', { status: 'rejected' })] };
 
+it('flags a clip whose external cast guides cannot be tracked', () => {
+  const clip = { takeId: 'v1', kind: 'video', assetId: 'clip', status: 'candidate',
+    dependencies: { version: 1, references: [{ role: 'clipReferences', untrackedCastGuides: true }] } };
+  render(<SceneTakeStrip scene={{ ...scene, takes: [clip] }} kind="video" />);
+  expect(screen.getByText(/Cast guide changes are not tracked/)).toBeTruthy();
+});
+
 describe('rejecting a take versus marking it bad', () => {
   // Uniquely catches a take rejected from this shot reading as bad, or the Bad toggle not reaching the project-wide mark.
   it('shows a rejected take as not for this shot, and marks or clears bad on its own', () => {

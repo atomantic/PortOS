@@ -103,6 +103,9 @@ const hook = createMediaJobImageHook({
     // renderer places the take by it, so a later retime can't misalign lips.
     shotInstruction: await alignedShotInstruction(job.params?.shotInstruction, videoHistoryId),
     dependencies: job.params?.musicVideoDependencies ?? null,
+    // Cast guide catalog data is outside the project snapshot. Keep a take
+    // that used an untracked guide as a candidate until a director selects it.
+    autoSelect: !job.params?.musicVideoDependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides),
     // #10157: the estimate this clip was priced at; a revision-tagged job is
     // an auto-review generation, the rest are manual takes.
     costUsd: job.params?.musicVideoCostUsd ?? null,

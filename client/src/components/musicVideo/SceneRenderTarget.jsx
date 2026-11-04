@@ -208,7 +208,7 @@ function OptionSelect({ id, label, value, onChange, disabled, children }) {
 }
 
 export default function SceneRenderTarget({
-  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false,
+  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false, minFrames = null,
 }) {
   const runwayCatalog = useRunwayCatalog();
   const set = (patch) => {
@@ -220,6 +220,10 @@ export default function SceneRenderTarget({
   const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
   const localChoices = localModelChoices(models, performance);
   const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
+  const selectedFrames = minFrames && localModel
+    ? Math.max(minFrames, 1 + 8 * Math.ceil(((overrides.numFrames || minFrames) - 1) / 8))
+    : overrides?.numFrames;
+  const localFrameOptions = localModel ? frameOptionsForModel(localModel, selectedFrames).filter((frames) => !minFrames || frames >= minFrames) : [];
   const falModel = value.startsWith('fal:') ? getFalVideoModel(overrides.falModelId) : null;
   const runwayModel = value.startsWith('runway:') ? getRunwayVideoModel(overrides.runwayModelId) : null;
   const coversLabel = (sec) => (spanSec != null ? `${formatSec(sec)} · covers shot` : `${formatSec(sec)} · default`);
@@ -244,9 +248,9 @@ export default function SceneRenderTarget({
             {localChoices.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
           </OptionSelect>
           {localModel && !performance && (
-            <OptionSelect id={`${id}-length`} label="Clip length" value={overrides.numFrames || ''} disabled={disabled}
+            <OptionSelect id={`${id}-length`} label="Clip length" value={selectedFrames || ''} disabled={disabled}
               onChange={(frames) => set({ numFrames: Number(frames) || null })}>
-              {frameOptionsForModel(localModel).map((frames) => (
+              {localFrameOptions.map((frames) => (
                 <option key={frames} value={frames}>
                   {frames === coveringFrames(localModel, spanSec) ? coversLabel(frames / LOCAL_FPS) : formatSec(frames / LOCAL_FPS)}
                 </option>

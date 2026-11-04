@@ -197,13 +197,13 @@ function remoteVideoSubmission({
 }
 
 const attachesStartFrame = (mode, runtime, legacyFflf) => (
-  mode === 'image' || mode === 'a2v' || legacyFflf
+  mode === 'image' || mode === 'a2v' || mode === 'ic-ingredients-25' || legacyFflf
   || (mode === 'extend' && !isLtx2FamilyRuntime(runtime))
 );
 
 // The inline-upload half of the start frame: an extend on a non-LTX-2 runtime
 // reuses a stored file only, so it never carries an upload.
-const attachesStartUpload = (mode, legacyFflf) => mode === 'image' || mode === 'a2v' || legacyFflf;
+const attachesStartUpload = (mode, legacyFflf) => mode === 'image' || mode === 'a2v' || mode === 'ic-ingredients-25' || legacyFflf;
 
 // LTX-2 extends continue a prior render by id instead of a start frame.
 const attachesExtendSource = (mode, runtime) => mode === 'extend' && isLtx2FamilyRuntime(runtime);

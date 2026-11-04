@@ -996,3 +996,28 @@ describe('A2V user-LoRA stage admission on retries', () => {
     await expect(validateVideoRetryParams({ ...params, a2vLoraStageStrengths: [0, NaN] })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 });
+
+describe('LTX 2.5 reference sheet admission', () => {
+  beforeEach(() => {
+    listVideoModels.mockReturnValue([{ id: 'ltx25_mlx_q8', name: 'LTX 2.5', runtime: 'ltx25', defaultFrames: 121 }]);
+    defaultVideoModelId.mockReturnValue('ltx25_mlx_q8');
+  });
+  const request = { backend: 'local', modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25',
+    numFrames: 121, sourceImageFile: 'start.png', icReferenceImageFiles: ['renee.png'] };
+
+  it('preserves both the opening frame and an independent gallery reference', async () => {
+    const result = await prepare(request);
+    expect(result).toMatchObject({ mode: 'ic-ingredients-25', sourceImagePath: '/mock/images/start.png',
+      icReferencePaths: ['/mock/images/renee.png'] });
+  });
+
+  it('rejects a short render or a skipped refinement before staging', async () => {
+    await expect(prepare({ ...request, numFrames: 113 })).rejects.toMatchObject({ code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+    await expect(prepare({ ...request, icSkipStage2: true })).rejects.toMatchObject({ code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
+  });
+
+  it('rejects a 2.3 model for the 2.5 adapter', async () => {
+    listVideoModels.mockReturnValue([{ id: 'ltx2_unified', name: 'LTX 2.3', runtime: 'ltx2' }]);
+    await expect(prepare({ ...request, modelId: 'ltx2_unified' })).rejects.toMatchObject({ code: 'IC_LORA_REQUIRES_LTX2' });
+  });
+});

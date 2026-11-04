@@ -112,6 +112,15 @@ describe('AdvancedParamsPanel', () => {
     expect(screen.getByLabelText('Image Strength')).toBeTruthy();
   });
 
+  it('shows the opening frame strength used by LTX reference renders', () => {
+    const onImageStrengthChange = vi.fn();
+    renderPanel({ mode: 'ic-ingredients-25', imageStrength: '0.35', onImageStrengthChange });
+    const strength = screen.getByLabelText('Opening Frame Strength');
+    expect(strength.value).toBe('0.35');
+    fireEvent.change(strength, { target: { value: '0.8' } });
+    expect(onImageStrengthChange).toHaveBeenCalledWith('0.8');
+  });
+
   it('hides image strength for an ltx2 extend render', () => {
     const { unmount } = renderPanel({ mode: 'extend', currentModel: { runtime: 'ltx2', supportedModes: MLX_MODES } });
     expect(screen.queryByLabelText('Image Strength')).toBeNull();

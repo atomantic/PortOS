@@ -10,6 +10,10 @@ export async function applyProjectRenderPool(body) {
   const { getProject } = await import('./projects.js');
   const project = await getProject(body.musicVideo.projectId);
   if (project?.scenes?.some((s) => s.sceneId === body.musicVideo.sceneId && s.setReference?.greyboxShotId)) {
+    if (body.mode === 'ic-ingredients-25') {
+      throw new ServerError('Clear the greybox reference before using LTX reference images.',
+        { status: 400, code: 'MUSIC_VIDEO_GREYBOX_LTX_REFERENCES_UNSUPPORTED' });
+    }
     const { withMusicVideoGreyboxInput } = await import('./greyboxReferences.js');
     body = await withMusicVideoGreyboxInput(body, project);
   }

@@ -202,3 +202,26 @@ it('sends the clip card\'s expected reference files with the video request', asy
   expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['rider.png'] });
   cleanup();
 });
+
+it('sends LTX reference sheets separately from the opening frame on a shot', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', shotMode: 'cutaway', prompt: 'A rider turns', referenceImageId: 'start.png',
+    startSec: 0, endSec: 4, videoHistoryId: 'selected-video', takes: [] };
+  const project = { id: 'p-reference', scenes: [shot] };
+  const videoSettings = { settings: { backend: 'local', modelId: 'ltx25_mlx_q8' } };
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch: vi.fn() }));
+  generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
+  await act(async () => { await result.current.generateSceneVideo(shot, {
+    target: { numFrames: 123 },
+    card: { prompt: 'Reference sheet: Renee.\n\nGenerated video: A rider turns', ltxReferences: true,
+      songAudio: false, endFrame: false, expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] },
+  }); });
+  const payload = generateVideo.mock.calls.at(-1)[0];
+  expect(payload).toMatchObject({
+    modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25', numFrames: 129,
+    sourceImageFile: 'start.png', icReferenceImageFiles: ['renee.png'],
+  });
+  expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] });
+  expect(payload).not.toHaveProperty('lastImageFile');
+  cleanup();
+});

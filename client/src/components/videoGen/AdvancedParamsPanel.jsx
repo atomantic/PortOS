@@ -66,7 +66,7 @@ export default function AdvancedParamsPanel({
   const showChunks = mode !== 'a2v' && isModelAllowedForMode(currentModel, 'image');
   // ltx2 extend conditions on the source's latent rather than a single frame,
   // so image strength is meaningless for it.
-  const showImageStrength = mode === 'image' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));
+  const showImageStrength = mode === 'image' || mode === 'ic-ingredients-25' || (mode === 'extend' && !isLtx2FamilyRuntime(currentModel?.runtime));
   // The reference-mode promise (#4874) is an image-mode question only, and only
   // a runtime that carries per-image conditioning strength can keep anything but
   // the default. Rendering it read-only elsewhere would imply a choice that does
@@ -462,7 +462,7 @@ export default function AdvancedParamsPanel({
           {showImageStrength && (
             <div className="col-span-2 sm:col-span-3">
               <div className="flex items-center justify-between gap-3 mb-1">
-                <label htmlFor={fieldId('video-image-strength')} className="block text-xs font-medium text-gray-400">Image Strength</label>
+                <label htmlFor={fieldId('video-image-strength')} className="block text-xs font-medium text-gray-400">{mode === 'ic-ingredients-25' ? 'Opening Frame Strength' : 'Image Strength'}</label>
                 <span className="text-[11px] text-gray-500">{hasExplicitStrength || effectiveImageStrength != null ? String(displayedImageStrength) : '1.0'}</span>
               </div>
               <input
