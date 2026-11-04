@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -30,6 +30,24 @@ const flagFor = async (versionLine) => {
 
 describe('filterGraphViaFile flag selection', () => {
   beforeEach(() => mocks.execFile.mockReset());
+
+  // A long -vf (a document grade over many wipes) reaches the same argument caps.
+  it.each([
+    ['ffmpeg version 6.1.1 Copyright', '-filter_script:v'],
+    ['ffmpeg version 7.1 Copyright', '-/vf'],
+  ])('moves a long -vf graph into a file on %s', async (versionLine, expected) => {
+    vi.resetModules();
+    mocks.execFile.mockResolvedValue({ stdout: versionLine });
+    const { filterGraphViaFile } = await import('./ffmpegFilterGraph.js');
+    const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-graph-test-'));
+    try {
+      const { args, file } = await filterGraphViaFile('ffmpeg', ['-i', 'pipe:0', '-vf', LONG_GRAPH, 'out.mp4'], join(dir, 'g.txt'));
+      expect(args).toEqual(['-i', 'pipe:0', expected, file, 'out.mp4']);
+      expect(readFileSync(file, 'utf8')).toBe(LONG_GRAPH);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('keeps a short graph inline without probing ffmpeg', async () => {
     const { filterGraphViaFile } = await import('./ffmpegFilterGraph.js');

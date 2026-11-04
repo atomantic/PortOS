@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import {
-  MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
+  MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
 } from '../../lib/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, varySceneWipes } from './projectsLogic.js';
@@ -315,6 +315,16 @@ describe.skipIf(!ffmpeg)('film and camera effects on a cut in the final render',
 // Uniquely catches a long edit exceeding the cross-platform argument budget:
 // the graph must go by file and still render all 360 frames.
 describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
+  // Catches ffmpeg refusing the graph at filter init: one style's frames on 100+ cuts
+  // used to reach its expression depth limit through a flat a+b+c timeline.
+  it('accepts one glitch style on hundreds of cuts', () => {
+    const pieces = Array.from({ length: 300 }, (_, i) => ({ sceneId: `s${i}`, startFrame: i * 24, endFrame: (i + 1) * 24, transitionOut: 'vhs-rewind' }));
+    const filter = musicVideoTransitionFilter(transitionGlitchFrames(pieces), { width: W, height: H });
+    const graph = join(dir, 'many-cuts.txt');
+    writeFileSync(graph, filter);
+    run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=0.1,format=yuv420p`, '-/vf', graph, '-f', 'null', '-']);
+  });
+
   it('passes the filter graph to ffmpeg in a file and renders every frame', async () => {
     const deadline = performance.now() + LONG_EDIT_BUDGET_MS;
     const timings = [];

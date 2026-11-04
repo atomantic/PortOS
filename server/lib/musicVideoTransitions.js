@@ -16,6 +16,7 @@
  * of the frame's width or height, so a glitch reads the same at any size.
  */
 
+import { sumExpr } from './ffmpegExpr.js';
 import { IMAGE_EFFECT_GLITCH_STYLE, imageEffectChangeFrame, sceneImageEffect } from './musicVideoImageEffects.js';
 import { sceneWipe, wipeCuts } from './musicVideoWipes.js';
 import { sceneCutEffect } from './musicVideoCutEffects.js';
@@ -480,7 +481,7 @@ function framesExpr(frames) {
     if (run && f === run[1] + 1) run[1] = f;
     else runs.push([f, f]);
   }
-  return runs.map(([a, b]) => `between(n,${a},${b})`).join('+');
+  return sumExpr(runs.map(([a, b]) => `between(n,${a},${b})`));
 }
 
 /**

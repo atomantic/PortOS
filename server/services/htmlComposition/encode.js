@@ -6,6 +6,8 @@ import { availableParallelism, totalmem } from 'node:os';
 import { rm, writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { blurFrame } from './shutterBlur.js';
+import { sumExpr } from '../../lib/ffmpegExpr.js';
+import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { findFfmpeg, runFfmpegProcess, probeVideoDuration, vfrSyncArgs, H264_ENCODE_ARGS, AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, bt709TagFilter, planLoudnessMaster, reportMasteredLoudness } from '../../lib/ffmpeg.js';
 
 // Size the viewport for this format, then let the composition reframe itself
@@ -95,7 +97,8 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   // Pin the output cadence so ffmpeg cannot duplicate frames or shorten it.
   if (sub > 1) args.push('-r', String(fps));
   args.push('-frames:v', String(numFrames), '-t', String(durationSec), '-movflags', '+faststart', '-y', outputPath);
-  const proc = spawnProcess(ffmpeg, args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
+  const graph = await filterGraphViaFile(ffmpeg, args, `${outputPath}.filter.txt`);
+  const proc = spawnProcess(ffmpeg, graph.args, safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let currentFrame = null;
   const report = (phase, frame = currentFrame) => {
     currentFrame = frame;
@@ -234,6 +237,7 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
     stop('cleanup requested');
     // Wait for close, not just the first error, before deleting partial output.
     if (!exited) await new Promise(resolve => proc.once('close', resolve));
+    if (graph.file) await rm(graph.file, { force: true }).catch(() => {});
   }
 }
 
@@ -267,8 +271,8 @@ function planSegments(numFrames, workers) {
 
 // A video-only (silent) capture of `contract`, split across `workers` pages.
 // `page` draws the first segment; `openPage(signal)` opens each further one
-// and the segment closes it. `videoFilterAt(offsetSec)` builds a segment's
-// filter on song time. One segment is exactly `encodeComposition`.
+// and the segment closes it. `videoFilterAt(offsetSec, durationSec)` builds a
+// segment's filter on song time. One segment is exactly `encodeComposition`.
 // A worker whose browser stalls closes it and continues on a fresh one from
 // the frame it was on (#10839). When that replaces `page` itself, `page` is
 // closed and the result carries `pageReplaced: true`.
@@ -294,7 +298,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
   if (segments.length === 1) {
     const slot = replaceable(page, signal);
     try {
-      const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec), reopenPage: slot.reopen, onRetry });
+      const result = await encode(page, contract, outputPath, { signal, onProgress, offsetSec, videoFilter: videoFilterAt(offsetSec, durationSec), reopenPage: slot.reopen, onRetry });
       return pageReplaced ? { ...result, pageReplaced } : result;
     } finally {
       await released(slot);
@@ -318,7 +322,7 @@ export async function encodeCompositionSegments(page, contract, outputPath, { op
         slot.page ??= await openPage(controller.signal);
         const at = offsetSec + start / fps;
         const result = await encode(slot.page, { ...contract, durationSec: frames / fps }, parts[i], {
-          signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at),
+          signal: controller.signal, offsetSec: at, continuous: start > 0, followed: i < segments.length - 1, videoFilter: videoFilterAt(at, frames / fps),
           reopenPage: slot.reopen, onRetry: onRetry && (detail => onRetry({ ...detail, segment: i })),
           onProgress: (_fraction, detail) => {
             done[i] = detail?.frame ?? 0;
@@ -464,7 +468,7 @@ export async function encodeFileContactSheetAtTimes(videoPath, outputPath, times
   // dedup means the tile gets one fewer real frame than requested (a padded
   // cell), never a duplicate or an out-of-order one.
   const indices = [...new Set(times.map((t) => Math.max(0, Math.round(t * fps))))];
-  const selectExpr = indices.map((i) => `eq(n,${i})`).join('+');
+  const selectExpr = sumExpr(indices.map((i) => `eq(n,${i})`));
   const result = await runFfmpegProcess({
     bin: ffmpeg,
     args: ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf',

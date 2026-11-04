@@ -23,6 +23,7 @@
  * largest value, so at the end it covers the whole frame. Move wipes place the
  * two pictures with a translate, scale and turn per frame.
  */
+import { sumExpr } from './ffmpegExpr.js';
 
 export const MUSIC_VIDEO_WIPE_GROUPS = Object.freeze({
   shapes: Object.freeze(['iris', 'star', 'heart', 'diamond', 'paw', 'bone']),
@@ -354,6 +355,65 @@ function wipeMaskGrid(width, height) {
   return { columns, rows: Math.max(9, Math.round((columns * height) / width)) };
 }
 
+// A move layer's coverage as an ffmpeg expression, 1 where its picture lands on the pixel.
+function layerInsideExpr(l, e) {
+  const shows = isNum(l.show) ? (l.show ? '' : '0*') : `${e(l.show)}*`;
+  const { su, sv } = layerSourceNodes(l);
+  return `${shows}gte(${e(su)},0)*lt(${e(su)},1)*gte(${e(sv)},0)*lt(${e(sv)},1)`;
+}
+
+// The source position a move layer samples, as expression trees: `layerSource` over a frame.
+function layerSourceNodes(l) {
+  const dx = mul(sub(sub('u', 0.5), l.tx), 'a');
+  const dy = sub(sub('v', 0.5), l.ty);
+  return {
+    su: add(div(div(add(mul(dx, cos(l.rot)), mul(dy, sin(l.rot))), l.sx), 'a'), 0.5),
+    sv: add(div(sub(mul(dy, cos(l.rot)), mul(dx, sin(l.rot))), l.sy), 0.5),
+  };
+}
+
+/**
+ * Masks over a captured timeline whose wipes are already painted, as one
+ * filter chain with no input: white where a wipe frame still shows the outgoing
+ * picture, black everywhere else. `spans` are `[{ wipe, first, last }]`: `wipe`
+ * as `scenes[].wipe` carries it (`style`, `frames`, `cutFrame` on `wipeFps`,
+ * `color`), drawn on capture frames `first..last` of a capture starting at song
+ * time `offsetSec`. One `geq` picks the wipe by a binary search on the frame, so the
+ * graph stays a handful of filters however many wipes an edit has. The chain stops
+ * one black frame after the last span, and `maskedmerge` repeats that frame until
+ * the capture ends: the encoder's `-frames:v` ends the output, not this stream.
+ */
+export function musicVideoWipeHeldMask(spans, { width, height, fps, offsetSec = 0, wipeFps = fps }) {
+  const aspect = width / height;
+  const { columns, rows } = wipeMaskGrid(width, height);
+  const heldExpr = ({ wipe }) => {
+    const definition = wipeDefinition(wipe.style, aspect);
+    const e = (node) => wipeNodeExpr(node, { u: '((X+0.5)/W)', v: '((Y+0.5)/H)', a: literal(aspect), p: 'ld(0)' });
+    // The frame the page drew, as it picks it: floor(t * fps + 1e-6) on the wipe's clock.
+    const p = `st(0,(floor((T+${offsetSec})*${wipeFps}+0.000001)-${wipe.cutFrame}+1)/${wipe.frames + 1});`;
+    if (definition.kind === 'level') {
+      const thr = `(ld(0)*${literal(definition.top)})`;
+      return `${p}255*gte(${e(definition.level)},${definition.edged && wipe.color ? `(${thr}*${EDGE_GROWTH}+${EDGE_BASE})` : thr})`;
+    }
+    // Layers run bottom first: an outgoing layer shows, an incoming one covers.
+    const held = definition.layers.reduce((shown, l) => {
+      const inside = layerInsideExpr(l, e);
+      return l.src === 'out' ? `max(${shown},${inside})` : `${shown}*(1-${inside})`;
+    }, '0');
+    return `${p}255*${held}`;
+  };
+  const ordered = [...spans].sort((a, b) => a.first - b.first);
+  const pick = (list) => {
+    if (list.length === 1) return heldExpr(list[0]);
+    const half = list.length >> 1;
+    return `if(lt(N,${list[half].first}),${pick(list.slice(0, half))},${pick(list.slice(half))})`;
+  };
+  const enable = sumExpr(ordered.map(({ first, last }) => `between(n,${first},${last})`));
+  const length = ordered.at(-1).last + 2;
+  // lut pins the off-wipe frames to 0: `color`'s black may land on video-range 16, which would leak the held stream.
+  return `color=c=black:s=${columns}x${rows}:r=${fps},trim=end_frame=${length},format=gray,lut=y=0,geq=lum='${pick(ordered)}':enable='${enable}',scale=${width}:${height}:flags=bilinear:in_range=pc:out_range=pc,format=gbrp`;
+}
+
 /**
  * The filters that lay a wipe over the start of the incoming shot, as
  * filter_complex entries. `outgoing` is the outgoing shot's last frame held for
@@ -400,13 +460,8 @@ export function musicVideoWipeFilter(wipe, { width, height, fps, outgoing, incom
   let base = id('k');
   definition.layers.forEach((l, n) => {
     const source = l.src === 'in' ? `[${id('ib')}]${span},` : `[${outgoing}]${span},`;
-    const shows = isNum(l.show) ? (l.show ? '' : '0*') : `${e(l.show)}*`;
-    const dx = mul(sub(sub('u', 0.5), l.tx), 'a');
-    const dy = sub(sub('v', 0.5), l.ty);
-    const su = add(div(div(add(mul(dx, cos(l.rot)), mul(dy, sin(l.rot))), l.sx), 'a'), 0.5);
-    const sv = add(div(sub(mul(dy, cos(l.rot)), mul(dx, sin(l.rot))), l.sy), 0.5);
-    const inside = `${shows}gte(${e(su)},0)*lt(${e(su)},1)*gte(${e(sv)},0)*lt(${e(sv)},1)`;
-    filters.push(grid('gray', `255*${inside}`, id(`m${n}`)));
+    const { su, sv } = layerSourceNodes(l);
+    filters.push(grid('gray', `255*${layerInsideExpr(l, e)}`, id(`m${n}`)));
     const identity = l.tx === 0 && l.ty === 0 && l.sx === 1 && l.sy === 1 && l.rot === 0;
     if (identity) {
       filters.push(`${source}format=yuv420p,setsar=1[${id(`l${n}`)}]`);

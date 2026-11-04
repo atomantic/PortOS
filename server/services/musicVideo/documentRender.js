@@ -648,7 +648,9 @@ export async function encodeDocumentComposition({
     // A stalled worker browser restarts and redraws its frame (#10839).
     const encoded = await encodeCompositionSegments(page, { ...target, durationSec: window.durationSec }, silent, {
       openPage, encode: encodeComposition,
-      videoFilterAt: (offsetSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, { fps: target.fps, offsetSec }),
+      videoFilterAt: (offsetSec, durationSec) => musicVideoGradeFilter(project.composition?.grade, data.scenes, {
+        fps: target.fps, offsetSec, durationSec, frame: { width: target.width, height: target.height }, wipeFps: plan.clock.fps,
+      }),
       signal, offsetSec: window.startSec, onProgress: (fraction) => onProgress?.(fraction * 0.95),
       onRetry: ({ frame, attempt, segment, error }) => console.warn(`⚠️ Music-video composition render [${String(jobId).slice(0, 8)}] ${segment == null ? '' : `worker ${segment + 1} `}restarting its browser at song frame ${frame} (retry ${attempt}): ${error.message}`),
     });
