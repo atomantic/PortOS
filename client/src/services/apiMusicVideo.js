@@ -168,6 +168,9 @@ export const reorderMusicVideoScenes = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/reorder`, {
     method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
   });
+// A non-repeating run of wipes on the cuts out of `count` shots from `fromSceneId` → { scenes, updatedAt }.
+export const varyMusicVideoWipes = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/vary-wipes`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const previewMusicVideoPacingRecut = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/pacing-recut`, options);
 export const recutMusicVideoToPacing = (id, revision, options = {}) =>

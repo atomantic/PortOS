@@ -1,7 +1,9 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
-import { glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
+import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
@@ -69,6 +71,7 @@ const documentImageEffect = (scene, media) => {
 
 const hasSelectedGlitches = (project) => (project?.scenes || []).some(scene =>
   scene?.transitionIn || scene?.transitionOut || scene?.glitches?.length || scene?.imageEffect === 'end-glitch');
+const hasSelectedWipes = (project) => (project?.scenes || []).some(scene => scene?.wipeIn || scene?.wipeOut);
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
 export const documentAspect = musicVideoAspect;
@@ -83,6 +86,7 @@ export const documentAspect = musicVideoAspect;
 export function documentRenderInitScripts(project) {
   return [
     ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
+    ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : []),
     ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
     ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
@@ -226,6 +230,12 @@ function sceneLyricAnchor(project, scene) {
 export function buildDocumentData(project, { media = new Map(), frame, clock, songDurationSec, generated = false }) {
   const song = musicVideoSongDocument(project);
   const analysis = project?.audioAnalysis || {};
+  // Each cut's wipe, on the scene it runs into (from that scene's first frame).
+  const wipeInto = new Map(sceneWipeCuts(project?.scenes || [], clock.fps, {
+    endSec: songDurationSec, planned: plannedTransitions(project?.productionReview?.draft?.storyboard),
+  }).map((cut) => [cut.toSceneId, {
+    style: cut.style, frames: cut.frames, lengthSec: round3(cut.frames / clock.fps), cutFrame: cut.cutFrame, fromSceneId: cut.fromSceneId, color: cut.color ? `#${cut.color}` : null,
+  }]));
   const scenes = (Array.isArray(project?.scenes) ? project.scenes : [])
     .filter((scene) => scene?.sceneId)
     .slice()
@@ -257,6 +267,8 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         ...(scene.lyricAnchor?.cueId ? { lyricAnchor: sceneLyricAnchor(project, scene) } : {}),
         visualIntent: typeof scene.visualIntent === 'string' ? scene.visualIntent : null,
         direction: sceneDirection(project, scene.sceneId),
+        // musicVideoWipes.js: a wipe from the previous scene over this one's first `frames` frames.
+        wipe: wipeInto.get(scene.sceneId) || null,
         // #14821: the roster cameo the shot shows, so a page can label a placeholder until its still exists.
         ...documentSceneCameo(project, scene),
         media: m ? {
@@ -426,7 +438,8 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
     page = await openComposition(staged.directory, {
       signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
       initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntime(project?.titleCard),
-        ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : [])],
+        ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
+        ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : [])],
       previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,
     });
     signal?.throwIfAborted();

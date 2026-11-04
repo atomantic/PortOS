@@ -141,7 +141,7 @@ export default function SceneCard({
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
-  storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null,
+  storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
   const detailsRef = useRef(null);
 
@@ -369,8 +369,9 @@ export default function SceneCard({
         </ShotEditorGroup>
       )}
       <ShotEditorGroup title="Transitions & effects" summary={effectsSummary} testId="shot-group-effects">
-        {/* A VHS glitch riding on the cut into or out of this shot; never moves the cut. */}
-        <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} />
+        {/* A glitch or a wipe on the cut into or out of this shot; never moves the cut. */}
+        <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} isLast={!!isLast}
+          onVaryWipes={onVaryWipes ? (count) => onVaryWipes(scene.sceneId, count) : null} />
         {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
         <SceneCutEffect fieldId={fieldId} scene={scene} isLast={!!isLast} onChange={applyPatch} planned={planned.get(scene.sceneId)} />
         {/* Glitches at moments inside the shot, set and moved on a slider; they add no time. */}

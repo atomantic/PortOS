@@ -66,6 +66,7 @@ import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
 import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
@@ -583,18 +584,20 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
 // are the ones the whole-film render draws there. `segment` is `{ index,
 // maxFrames?, tagFilter? }`; `overlays` here are this window's captures, each
 // with its absolute song `startSec`.
-function buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
+function buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput }) {
   const index = segment.index;
   if (!Number.isInteger(index) || !plan[index]) throw new Error(`buildMusicVideoFfmpegArgs: no section ${index}`);
-  const { c, frames, startSec, endSec } = plan[index];
+  const { c, frames, startSec } = plan[index];
   const startFrame = sectionFrame(startSec);
   const own = addInput(c);
   const preroll = prerolls.find((p) => p.index === index);
   if (preroll) preroll.input = addInput(preroll.clip);
+  const postroll = postrolls.find((p) => p.into === index);
+  if (postroll) postroll.input = addInput(postroll.clip);
   const overlayBase = nextInput();
   for (const overlay of overlays) inputs.push('-itsoffset', String(round3(overlay.startSec - startSec)), '-i', overlay.path);
-  const filters = sectionFilters(index, own, preroll, 'v0');
-  const gradeFilter = musicVideoGradeFilter(grade, [{ sceneId: c.sceneId, startSec, endSec }], { fps, offsetSec: startSec });
+  const filters = sectionFilters(index, own, preroll, 'v0', postroll);
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections([index]), { fps, offsetSec: startSec });
   const local = glitches.filter((g) => g.frame >= startFrame && g.frame < startFrame + frames).map((g) => ({ ...g, frame: g.frame - startFrame }));
   const glitchFilter = musicVideoTransitionFilter(local, { width: canonW, height: canonH });
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');
@@ -744,17 +747,50 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
     ...fades.filter((f) => f.index === i - 1 && f.inFrames > 0).map((f) => `,fade=t=in:s=0:n=${f.inFrames}`),
     ...fades.filter((f) => f.index === i).map((f) => `,fade=t=out:s=${Math.max(0, frames - f.outFrames)}:n=${f.outFrames}`),
   ].join('');
-  // One section's chain, ending on `out`; an incoming cut effect lays the next shot's preroll over its end.
-  const sectionFilters = (i, input, preroll, out) => {
+  // A wipe (musicVideoWipes.js) plays over the start of the incoming shot, the outgoing
+  // shot's last frame held under it: that frame is read again from the outgoing
+  // shot's own input and chain, so a segment render draws it without the other segment.
+  const wipes = wipeCuts(plan.map(({ c, startSec, endSec }) => ({
+    sceneId: c.sceneId, startFrame: sectionFrame(startSec), endFrame: sectionFrame(endSec),
+    partner: !!c.intercutOf, wipeIn: c.wipeIn, wipeOut: c.wipeOut, transitionOut: c.transitionOut, cutEffect: c.cutEffect,
+  })), { fps });
+  const postrolls = wipes.map((wipe) => ({ ...wipe, into: wipe.index + 1, clip: plan[wipe.index].c }));
+  // The finishing grade's windows, starting a wiped shot after its wipe (graded in its own chain).
+  const gradeSections = (indexes) => indexes.map((i) => {
+    const { c, startSec, endSec } = plan[i];
+    const wipe = postrolls.find((p) => p.into === i);
+    return { sceneId: c.sceneId, startSec: wipe ? Math.max(startSec, (wipe.cutFrame + wipe.frames) / fps) : startSec, endSec };
+  });
+  // One section's chain, ending on `out`: a wipe in lays the outgoing shot's held frame over its
+  // start, and an incoming cut effect lays the next shot's preroll over its end.
+  const sectionFilters = (i, input, preroll, out, postroll = null) => {
     const { c, frames, startSec } = plan[i];
-    const head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid, beats })}${fadeChain(i, frames)}`;
-    if (!preroll) return [`${head}[${out}]`];
+    let head = `${sectionChain(c, input, { canonW, canonH, fps, frames, frameGrid, beats })}${fadeChain(i, frames)}`;
+    const wiped = [];
+    if (postroll) {
+      const from = plan[postroll.index];
+      // Each picture takes its own shot's grade over the wipe's frames (on song time, as the
+      // finishing grade would), and the finishing grade skips them: the held frame keeps its look.
+      const gradeOver = (sceneId) => musicVideoGradeFilter(grade, [{ sceneId, startSec: postroll.cutFrame / fps, endSec: (postroll.cutFrame + postroll.frames) / fps }],
+        { fps, offsetSec: postroll.cutFrame / fps });
+      const heldGrade = gradeOver(from.c.sceneId);
+      const baseGrade = gradeOver(c.sceneId);
+      const held = `${sectionChain(from.c, postroll.input, { canonW, canonH, fps, frames: from.frames, frameGrid, beats })},`
+        + `trim=start_frame=${Math.max(0, from.frames - 1)},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=${postroll.frames},setpts=PTS-STARTPTS${heldGrade ? `,${heldGrade}` : ''}`;
+      const filter = musicVideoWipeFilter(postroll, { width: canonW, height: canonH, fps, outgoing: `wpost${i}`, incoming: `wbase${i}`, out: `wiped${i}`, key: i });
+      if (filter) {
+        wiped.push(`${head}${baseGrade ? `,${baseGrade},format=yuv420p` : ''}[wbase${i}]`, `${held}[wpost${i}]`, ...filter);
+        head = `[wiped${i}]null`;
+      }
+    }
+    if (!preroll) return [...wiped, `${head}[${out}]`];
     const start = sectionFrame(startSec);
     const pad = Math.max(0, frames - preroll.windowFrames);
     const shown = preroll.incoming.map(([a, b]) => `between(n,${a - start},${b - start - 1})`).join('+');
     // A dissolve fades the incoming clip in across its window, fully in on the cut.
     const fadeIn = preroll.style === 'dissolve' ? `format=yuva420p,fade=t=in:s=0:n=${preroll.windowFrames + 1}:alpha=1,` : '';
     return [
+      ...wiped,
       `${head}[vraw${i}]`,
       `${sectionChain(preroll.clip, preroll.input, { canonW, canonH, fps, frames: preroll.windowFrames, frameGrid, beats })}[pre${i}]`,
       `[pre${i}]${fadeIn}tpad=start=${pad}:color=black,setpts=N/(${fps}*TB)[prepad${i}]`,
@@ -764,7 +800,7 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   // Cut transitions repaint a few frames around their cuts, under the typography, and add no time.
   const pieces = plan.map(({ c, startSec, endSec }) => ({
     sceneId: c.sceneId, startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps),
-    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, effect: c.effect, effectAtSec: c.effectAtSec,
+    partner: !!c.intercutOf, transitionIn: c.transitionIn, transitionOut: c.transitionOut, wipeOut: c.wipeOut, effect: c.effect, effectAtSec: c.effectAtSec,
     shotGlitches: c.shotGlitches,
   }));
   // A still's glitch to its end frame paints with the same frames.
@@ -772,17 +808,18 @@ export function buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioD
   const glitches = mergeGlitchFrames(transitionGlitchFrames(pieces), imageEffectGlitchFrames(pieces, fps), shotGlitchFrames(pieces, fps));
 
   if (segment) {
-    return buildSegmentArgs(segment, { plan, prerolls, addInput, sectionFilters, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
+    return buildSegmentArgs(segment, { plan, prerolls, postrolls, addInput, sectionFilters, gradeSections, glitches, overlays, outputPath, grade, canonW, canonH, fps, sectionFrame, inputs, nextInput: () => nextInput });
   }
 
   for (const { c } of plan) sectionInputs.push(addInput(c));
   for (const preroll of prerolls) preroll.input = addInput(preroll.clip);
+  for (const postroll of postrolls) postroll.input = addInput(postroll.clip);
   const audioIdx = nextInput; // master audio follows the section inputs
   inputs.push('-i', audioPath);
   for (const overlay of overlays) inputs.push('-itsoffset', String(overlay.startSec), '-i', overlay.path);
 
-  const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`));
-  const gradeFilter = musicVideoGradeFilter(grade, plan.map(({ c, startSec, endSec }) => ({ sceneId: c.sceneId, startSec, endSec })), { fps });
+  const filters = plan.flatMap((_, i) => sectionFilters(i, sectionInputs[i], prerolls.find((p) => p.index === i), `v${i}`, postrolls.find((p) => p.into === i)));
+  const gradeFilter = musicVideoGradeFilter(grade, gradeSections(plan.map((_, i) => i)), { fps });
   const glitchFilter = musicVideoTransitionFilter(glitches, { width: canonW, height: canonH });
   const cutLabel = overlays.length > 0 ? 'cut0' : 'outv';
   const finishing = [gradeFilter, glitchFilter].filter(Boolean).join(',');

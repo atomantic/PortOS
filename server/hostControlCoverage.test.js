@@ -934,6 +934,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/scenes/:sceneId/takes/reject-unused', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes/use', RECORDS],
   ['POST /api/music-video/:id/scenes/reorder', RECORDS],
+  ['POST /api/music-video/:id/scenes/vary-wipes', RECORDS],
   ['POST /api/music-video/:id/shots/:sceneId/render/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/:id/song-revision', RECORDS],
   ['POST /api/music-video/:id/song-revision/cancel', REDUCES_EXECUTION],

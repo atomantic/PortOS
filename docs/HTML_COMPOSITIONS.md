@@ -502,10 +502,25 @@ song frame. The layered template blends the end image using
 `imageEffectState(spec, shotFrame / fps, { fps })` from
 `musicVideoImageEffects.js`, then paints a matching effect frame with
 `globalThis.__portosMusicVideoGlitch(canvas, params, frame)`. PortOS installs
-that painter in the sandbox when the edit has selected glitches. Custom
-documents that implement these selected effects can declare support with
-`// portos-selected-effects: 1` in `engine.js` or
-`<!-- portos-selected-effects: 1 -->` in `index.html`.
+that painter in the sandbox when the edit has selected glitches.
+
+A wipe on a cut (`server/lib/musicVideoWipes.js`: shape, pattern and move
+wipes) arrives on the scene it runs into as `scenes[].wipe = { style, frames,
+lengthSec, cutFrame, fromSceneId, color }`, with `color` as `#rrggbb` or null.
+It adds no time: from `cutFrame` the incoming scene's clock runs as usual, and
+for `frames` frames the outgoing scene's last frame, held, gives way to it.
+When the edit has wipes PortOS installs
+`globalThis.__portosMusicVideoWipe(ctx, { outgoing, incoming, style, index,
+frames, color, width, height })`, which draws wipe frame `index` from two
+drawables already fitted to the frame. It is the same definition the final
+render's ffmpeg filter and the storyboard animatic paint, so a document that
+calls it shows the chosen wipe with no code of its own. A cut carries a glitch
+or a wipe, never both (the outgoing shot's choice wins).
+
+Custom documents declare which selected effects they implement with
+`// portos-selected-effects: N` in `engine.js` or
+`<!-- portos-selected-effects: N -->` in `index.html`: level 1 covers cut
+glitches, end-image effects and in-shot glitches; level 2 adds wipes.
 
 An older document that does not declare this support is refused when selected
 effects need it, rather than silently omitting them. In **Document source**,

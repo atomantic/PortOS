@@ -106,6 +106,8 @@ export function musicVideoOutroStats(project, { collectionItems = [] } = {}) {
     if (scene?.shotMode === 'performance') lipSyncs += 1;
     if (scene?.transitionIn) transitions += 1;
     if (scene?.transitionOut) transitions += 1;
+    if (scene?.wipeIn) transitions += 1;
+    if (scene?.wipeOut) transitions += 1;
     if (scene?.imageEffect) imageEffects += 1;
     if (scene?.camera?.move) cameraMoves += 1;
   }

@@ -1144,6 +1144,8 @@ describe('create-schema parity', () => {
     filmLook: { preset: 'vhs' },
     transitionIn: 'vhs-glitch',
     transitionOut: 'vhs-glitch',
+    wipeIn: { style: 'iris', lengthSec: 0.5, color: '#ff00aa' },
+    wipeOut: { style: 'push-left' },
     glitches: [{ atSec: 0.5, style: 'vhs-glitch' }],
     cutEffect: { style: 'dissolve' },
     imageEffect: 'end-fade',
