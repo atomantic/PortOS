@@ -42,7 +42,7 @@ const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durat
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
-    s.referenceImageId, s.photoSequence, s.direction?.medium])]);
+    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook])]);
 const shotEffectsVersion = (project) => {
   const key = shotEffectsKey(project);
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
@@ -115,8 +115,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [lookOn, toggleLook] = usePreviewFilmLook();
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
-  const filmLook = !lyrics && lookOn ? (project.filmLook ?? null) : null;
-  const lookAvailable = !lyrics && !isFilmLookNeutral(project.filmLook);
+  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook));
+  const filmLook = !lyrics && lookOn ? (project.filmLook ?? (shotLookAvailable ? { preset: 'none' } : null)) : null;
+  const lookAvailable = !lyrics && (!isFilmLookNeutral(project.filmLook) || shotLookAvailable);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
   const request = useMemo(() => {

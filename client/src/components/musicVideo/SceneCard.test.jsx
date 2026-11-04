@@ -1221,3 +1221,21 @@ it('explains why a greybox shot cannot use LTX reference images', () => {
   expect(screen.getByLabelText(/Use LTX reference images/)).toBeDisabled();
   expect(screen.getByText(/Clear the greybox reference to use LTX reference images/)).toBeTruthy();
 });
+
+
+it('lets a document shot opt out of the video look and return to inheritance', async () => {
+  const onSave = vi.fn();
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 5, visualLayer: 'code', takes: [] });
+    return <SceneCard scene={scene} index={0} expanded layered documentComposition
+      project={{ id: 'mv-document', composition: { mode: 'document' }, filmLook: { preset: 'vhs' }, scenes: [scene] }}
+      onEditLocal={(_id, patch) => setScene(current => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+  render(<Harness />);
+  fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'none' } });
+  await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', expect.objectContaining({ filmLook: expect.objectContaining({ preset: 'none' }) })));
+  expect(screen.getByLabelText('Film look').value).toBe('none');
+  fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
+  await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', { filmLook: null }));
+  expect(screen.queryByRole('button', { name: 'Render shot' })).toBeNull();
+});
