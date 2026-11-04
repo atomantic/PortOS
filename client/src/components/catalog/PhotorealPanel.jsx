@@ -9,6 +9,7 @@ import { withShot } from '../../lib/greybox';
 import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formatDurationSec } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
+import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 
 const ENGINES = [
@@ -66,35 +67,61 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const onRenderedRef = useRef(onRendered);
   onRenderedRef.current = onRendered;
 
+  // Ids seen running here, so a reconnect read can tell a finish it missed.
+  const seenRunning = useRef(new Set());
+  const reconcileRef = useRef(null);
+
   useEffect(() => {
     let live = true;
-    getCatalogPhotoreal(record.id, { silent: true })
-      .then((next) => {
-        if (!live) return;
-        setStatus((cur) => (cur?.job ? { ...next, job: cur.job } : next));
-      })
-      .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
-    // The server emits a frame only when a job starts, finishes or fails, so every
-    // finish frame seen while the tab is open is news: act on it as it arrives,
-    // whatever order the start response or the status read land in.
-    const onFrame = (frame) => {
-      if (frame?.ingredientId !== record.id || !frame.job) return;
-      const next = frame.job;
-      setStatus((cur) => ({ ...(cur || {}), job: next }));
-      if (next.state === 'running' || finished.current.has(next.id)) return;
+    const refreshStatus = () => getCatalogPhotoreal(record.id, { silent: true })
+      .then((fresh) => { if (live) setStatus((cur) => ({ ...fresh, job: cur?.job || fresh.job })); })
+      .catch(() => {});
+    // The server emits a frame only when a job starts, finishes or fails, so a
+    // finish seen while the tab is open is news: act on it once, whatever order
+    // the start response, status read or a reconnect read land in.
+    const settle = (next) => {
+      if (next.state === 'running') { seenRunning.current.add(next.id); return; }
+      if (finished.current.has(next.id)) return;
       finished.current.add(next.id);
       if (next.state === 'done') {
         onRenderedRef.current?.();
-        getCatalogPhotoreal(record.id, { silent: true })
-          .then((fresh) => { if (live) setStatus((cur) => ({ ...fresh, job: cur?.job || fresh.job })); })
-          .catch(() => {});
+        refreshStatus();
       } else if (next.state === 'failed') {
         toast.error(`Blender render failed: ${next.error || 'unknown error'}`);
       }
     };
+    getCatalogPhotoreal(record.id, { silent: true })
+      .then((next) => {
+        if (!live) return;
+        if (next?.job?.state === 'running') seenRunning.current.add(next.job.id);
+        setStatus((cur) => (cur?.job ? { ...next, job: cur.job } : next));
+      })
+      .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
+    const onFrame = (frame) => {
+      if (frame?.ingredientId !== record.id || !frame.job) return;
+      setStatus((cur) => ({ ...(cur || {}), job: frame.job }));
+      settle(frame.job);
+    };
+    // A sleeping laptop or dropped socket can miss the one finish frame: re-read
+    // the server's job and settle a render this tab saw running.
+    reconcileRef.current = () => getCatalogPhotoreal(record.id, { silent: true })
+      .then((fresh) => {
+        if (!live) return;
+        setStatus(fresh);
+        if (fresh?.job && seenRunning.current.has(fresh.job.id)) settle(fresh.job);
+      })
+      .catch(() => {});
+    const onConnect = () => reconcileRef.current?.();
     socket.on('catalog:photoreal', onFrame);
-    return () => { live = false; socket.off('catalog:photoreal', onFrame); };
+    socket.on('connect', onConnect);
+    return () => {
+      live = false;
+      reconcileRef.current = null;
+      socket.off('catalog:photoreal', onFrame);
+      socket.off('connect', onConnect);
+    };
   }, [record.id]);
+  useVisibilityEvent((state) => { if (state === 'visible') reconcileRef.current?.(); });
 
   // Default to every camera until the user picks.
   const chosen = selected.size ? [...selected].filter((id) => shots.some((s) => s.id === id)) : shots.map((s) => s.id);
@@ -120,6 +147,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     const started = await startCatalogPhotorealRender(record.id, { shotIds: chosen, engine, samples: sampleValue }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
     setStarting(false);
+    if (started?.state === 'running') seenRunning.current.add(started.id);
     // Keep a finish frame for this job that beat the response here.
     if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };

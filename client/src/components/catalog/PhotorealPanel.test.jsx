@@ -83,6 +83,18 @@ describe('PhotorealPanel', () => {
     expect((await import('../ui/Toast')).default.error).toHaveBeenCalledTimes(1);
   });
 
+  it('settles a render whose finish frame was missed while the socket was down', async () => {
+    const onRendered = vi.fn();
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: { id: 'pr-7', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() }, blendUrl: null, blenderVersion: '5.2.3' });
+    show({ onRendered });
+    expect(await screen.findByRole('button', { name: /Rendering/ })).toBeDisabled();
+    getCatalogPhotoreal.mockResolvedValue({ job: { id: 'pr-7', state: 'done', engine: 'cycles', shotIds: ['wide'], report: { version: '5.2.3', device: 'GPU', backend: 'METAL' } }, blendUrl: '/api/catalog/ingredients/plc-example/photoreal/blend', blenderVersion: '5.2.3' });
+    await act(async () => handlers.get('connect')());
+    expect(onRendered).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: /Download .blend/ })).toBeInTheDocument();
+  });
+
   it('sets the newest render as the camera photo plate on the saved greybox', async () => {
     const onSaved = vi.fn();
     saveCatalogGreybox.mockResolvedValue({ id: 'plc-example', payload: {} });
