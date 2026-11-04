@@ -241,6 +241,61 @@ it('narrows a shared basename to tests that can mean the changed copy, and keeps
   }
 });
 
+it('looks tests up by source basename from one indexed read, with git grep semantics (#14866)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-reference-index-'));
+  const trace = join(root, '..', `${root.split('/').pop()}.git-trace`);
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const sources = {
+    unique: 'server/lib/uniqueHelper.js',
+    punctuated: 'server/lib/file-name.v2.js',
+    python: 'scripts/render_clip.py',
+    orphan: 'server/lib/neverNamed.js',
+  };
+  const tests = {
+    testVariant: ['server/lib/uniqueHelper.test.js', "readFileSync(join(lib, 'uniqueHelper.js'));\n"],
+    specVariant: ['client/src/mirror.spec.jsx', 'const mirrored = "uniqueHelper.js";\n'],
+    nestedTestDir: ['server/x.test.d/helper.js', "'file-name.v2.js'\n"],
+    punctuated: ['server/lib/punctuated.test.js', "path.join('lib', 'file-name.v2.js')\n"],
+    python: ['scripts/render.test.js', "readFileSync('scripts/render_clip.py', 'utf8');\n"],
+    // Names that only look similar: wrong boundary on either side, or another extension.
+    prefixed: ['server/lib/prefixed.test.js', "'myuniqueHelper.js' 'uniqueHelper.json' 'file-name_v2.js' 'file-name.v2xjs'\n"],
+    notATest: ['server/lib/uniqueHelper.notes.js', "'uniqueHelper.js'\n"],
+  };
+  try {
+    git('init', '-q');
+    for (const path of Object.values(sources)) write(path, 'export const value = 1;\n');
+    for (const [path, body] of Object.values(tests)) write(path, body);
+    git('add', '--all');
+
+    writeFileSync(trace, '');
+    process.env.GIT_TRACE = trace;
+    let pathContractTests;
+    try {
+      ({ pathContractTests } = collectPlanInputs({
+        baseSha: 'HEAD', changedFiles: Object.values(sources), cwd: root,
+      }));
+    } finally {
+      delete process.env.GIT_TRACE;
+    }
+
+    expect(pathContractTests).toEqual({
+      [sources.unique]: [tests.specVariant[0], tests.testVariant[0]],
+      [sources.punctuated]: [tests.nestedTestDir[0], tests.punctuated[0]].sort(),
+      [sources.python]: [tests.python[0]],
+      [sources.orphan]: [],
+    });
+    // Four changed sources, zero per-source repository scans.
+    expect(readFileSync(trace, 'utf8')).not.toMatch(/\bgit grep\b|built-in: git grep/);
+  } finally {
+    rmSync(trace, { force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('builds the same plan from an explicit working-tree override as from the equivalent commit', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-override-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
