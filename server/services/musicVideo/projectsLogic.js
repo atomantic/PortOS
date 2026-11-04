@@ -1275,7 +1275,8 @@ function joinScenes(project, idx, { keep, backend }) {
   const scenes = project.scenes || [];
   const [first, second] = [scenes[idx], scenes[idx + 1]];
   const [kept, removed] = keep === 'first' ? [first, second] : [second, first];
-  if (project.composition?.mode === 'document') {
+  // Only a manifest-sourced storyboard owns the shot order; a Board-sourced document project merges here.
+  if (project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document') {
     throw new ServerError("This video's shot order comes from its composition document — merge the shots in the shot manifest instead.", { status: 400, code: 'MUSIC_VIDEO_MERGE_DOCUMENT' });
   }
   const lane = backend || project.videoSettings?.backend || null;

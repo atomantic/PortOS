@@ -332,6 +332,7 @@ export default function BoardStage({ board }) {
               shotNumbers={numbers}
               layered={layered}
               documentComposition={project.composition?.mode === 'document'}
+              manifestOwnsShots={project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document'}
             />
           ))}
         </fieldset>
