@@ -47,6 +47,7 @@ const PEER_SURFACE = 'Peer endpoint in PEER_API_SURFACE (lib/apiAccessPolicy.js)
 const AUTH_SESSION = 'Authentication session lifecycle; auth.js and authGate.js own its policy.';
 const READ_ONLY_EXTERNAL = 'Runs a read-only query (a gh GET or repo analysis) and caches the result; changes no external state.';
 const CONFIGURED_INFERENCE = 'Runs an already-configured provider or local runtime on a fixed prompt (providers #8721, local-llm #8798).';
+const ASSET_DATA = 'Downloads a validated image asset from a fixed CC0 host into PortOS data; installs and runs nothing.';
 const MODEL_DATA = 'Downloads, verifies or removes model weights, or selects a built-in backend; installs no executable (local-llm #8798).';
 const MANAGED_INSTALL = 'Installs a fixed, allowlisted package set into a PortOS-managed venv with an interpreter PortOS picks; no caller-chosen executable (#9015).';
 const PIPELINE_DETERMINISTIC = 'Deterministic Pipeline route that never reaches the staged runner (#10068).';
@@ -246,6 +247,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/ingredient-merges/:id/recover', RECORDS],
   ['POST /api/catalog/ingredients', RECORDS],
   ['POST /api/catalog/ingredients/:id/fork', RECORDS],
+  ['POST /api/catalog/photoreal/textures/:id/install', ASSET_DATA],
   ['POST /api/catalog/ingredients/:id/refine/compose', READ_OVER_POST],
   ['POST /api/catalog/ingredients/:id/media/refine/compose', READ_OVER_POST],
   ['POST /api/catalog/ingredients/:id/design/spread/compose', READ_OVER_POST],

@@ -70,7 +70,8 @@ export async function draftPhotorealLook(ingredientId, { instruction, providerId
   const result = await deps.runPrompt({ provider, model: selectedModel, effort: effort || undefined, prompt: sentPrompt, source: 'catalog-photoreal-look' });
   let look;
   try {
-    look = parsePhotorealLookAnswer(result?.text, scene);
+    // The textures stay the user's: a draft (even "start over") keeps them.
+    look = { ...parsePhotorealLookAnswer(result?.text, scene), textures: resolvePhotorealLook(place.payload)?.textures ?? {} };
   } catch (err) {
     throw refuse(`${err.message} Try again, or pick another model.`, 'PHOTOREAL_LOOK_UNREADABLE', 422);
   }

@@ -3,6 +3,7 @@ import { Check, Loader2, Sparkles, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
+import PhotorealTexturesSection from './PhotorealTexturesSection';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { draftCatalogPhotorealLook, previewCatalogPhotorealLookPrompt, saveCatalogPhotorealLook } from '../../services/apiCatalog';
 import { formatPercent } from '../../utils/formatters';
@@ -89,12 +90,20 @@ export default function PhotorealLookSection({ record, scene, readOnly = false, 
     if (res) setDraft(res);
   });
   const apply = () => run('apply', async () => {
-    if (await persist(draft.look, 'refine')) {
+    // Texture picks made after the draft was generated win; the model never sets them.
+    if (await persist({ ...draft.look, textures: saved?.textures ?? {} }, 'refine')) {
       setDraft(null);
       setInstruction('');
       toast.success('Look saved; render to see it');
     }
   });
+  // A texture download and its save hold the whole card, so Apply or Remove
+  // can't land in between and be overwritten by the picker's save.
+  const textureBusy = (on) => {
+    inFlight.current = on;
+    setBusy(on ? 'texture' : '');
+    onBusyChange?.(on);
+  };
   const clear = () => run('clear', async () => {
     if (await persist(null)) setConfirmClear(false);
   });
@@ -108,6 +117,10 @@ export default function PhotorealLookSection({ record, scene, readOnly = false, 
           : <button type="button" className="text-xs text-gray-400 hover:text-white underline min-h-[32px]" onClick={() => setConfirmClear(true)} disabled={blocked}>Remove look</button>)}
       </div>
       {saved ? <LookSummary look={saved} scene={scene} /> : <p className="text-xs text-gray-400">No look yet: renders use flat zone colors and a daylight sun.</p>}
+      {saved && (
+        <PhotorealTexturesSection record={record} look={saved} readOnly={readOnly} disabled={disabled || (!!busy && busy !== 'texture')}
+          onBusyChange={textureBusy} onSaved={onSaved} />
+      )}
 
       {draft && (
         <div role="status" className="rounded-lg border border-port-accent/50 bg-port-accent/10 p-3 space-y-3">

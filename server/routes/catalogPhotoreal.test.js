@@ -9,7 +9,11 @@ vi.mock('../services/catalogPhotoreal.js', () => ({
 vi.mock('../services/catalogPhotorealLook.js', () => ({
   draftPhotorealLook: vi.fn(), previewPhotorealLookPrompt: vi.fn(), savePhotorealLook: vi.fn(),
 }));
+vi.mock('../services/photorealTextures.js', () => ({
+  installTexture: vi.fn(), listInstalledTextures: vi.fn(), searchTextures: vi.fn(),
+}));
 const { openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalogPhotoreal.js');
+const { installTexture, searchTextures } = await import('../services/photorealTextures.js');
 const { savePhotorealLook } = await import('../services/catalogPhotorealLook.js');
 const router = (await import('./catalog.js')).default;
 const app = express();
@@ -19,6 +23,19 @@ app.use(errorMiddleware);
 const base = '/api/catalog/ingredients/example-place/photoreal';
 
 describe('photoreal routes', () => {
+  // Catches a texture id that could name a path outside the texture folder.
+  it('searches and installs CC0 textures only by preset and slug id', async () => {
+    searchTextures.mockResolvedValue([{ id: 'oak_planks' }]);
+    installTexture.mockResolvedValue({ id: 'oak_planks' });
+    const found = await request(app).get('/api/catalog/photoreal/textures/search?preset=wood-floor&q=oak');
+    expect(found.body).toEqual({ results: [{ id: 'oak_planks' }] });
+    expect(searchTextures).toHaveBeenCalledWith({ preset: 'wood-floor', query: 'oak' });
+    expect((await request(app).get('/api/catalog/photoreal/textures/search?preset=mirror')).status).toBe(400);
+    expect((await request(app).post('/api/catalog/photoreal/textures/oak_planks/install').send({})).status).toBe(200);
+    expect((await request(app).post('/api/catalog/photoreal/textures/..%2Fetc/install').send({})).status).toBe(400);
+    expect(installTexture).toHaveBeenCalledTimes(1);
+  });
+
   // Catches the open route taking a caller-named file or executable.
   it('opens the kept scene in Blender and takes no path or executable from the caller', async () => {
     openPhotorealBlend.mockResolvedValue({ opened: true, blenderVersion: '5.2.3' });

@@ -40,6 +40,16 @@ describe('photoreal look drafts', () => {
     expect(runPrompt.mock.calls[0][0].prompt).toContain('Current look (JSON)');
   });
 
+  it('keeps the user\'s photo textures through a draft, even from scratch, and never shows them to the model', async () => {
+    db.getIngredient.mockResolvedValue(place({ photoreal: { ...look, textures: { 'wood-floor': 'example_planks', 'future-preset': 'x' } } }));
+    runPrompt.mockResolvedValue({ text: JSON.stringify({ ...look, textures: { 'wood-floor': 'model_pick' } }) });
+    const draft = await draftPhotorealLook('plc-1', { instruction: 'start over', useCurrent: false });
+    expect(draft.look.textures).toEqual({ 'wood-floor': 'example_planks' });
+    await draftPhotorealLook('plc-1', { instruction: 'warmer' });
+    expect(runPrompt.mock.calls[1][0].prompt).toContain('Current look (JSON)');
+    expect(runPrompt.mock.calls[1][0].prompt).not.toContain('example_planks');
+  });
+
   it('refuses a place without a parts greybox before calling a provider', async () => {
     db.getIngredient.mockResolvedValue(place({ greybox: { ...scene, source: 'glb' } }));
     await expect(draftPhotorealLook('plc-1', { instruction: 'dress it' })).rejects.toMatchObject({ code: 'GREYBOX_NOT_RENDERABLE' });

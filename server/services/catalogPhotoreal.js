@@ -41,6 +41,7 @@ const deps = {
   runFfmpeg: async (args) => (await import('../lib/ffmpeg.js')).runFfmpegProcess(args),
   saveVideo: async (path, name) => (await import('./videoUpload.js')).saveUploadedGalleryVideoFile(path, name),
   launch: (executable, args) => launchDetached(executable, args),
+  stageTextures: async (textures) => (await import('./photorealTextures.js')).stagePhotorealTextures(textures),
 };
 
 export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, overrides);
@@ -199,7 +200,10 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
 
 async function runRender({ place, scene, tool, job, samples }) {
   // The look dresses parts by id; a rule for a part since removed just matches nothing.
-  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look: resolvePhotorealLook(place.payload), flythroughSeconds: job.flythroughSeconds, useGpu: tool.executionMode !== 'contained' });
+  const look = resolvePhotorealLook(place.payload);
+  const textures = await deps.stageTextures(look?.textures);
+  if (textures.missing.length) console.log(`⏭️ Photoreal render for place ${place.id.slice(0, 12)}: textures not on this machine, rendering procedurally: ${textures.missing.join(', ')}`);
+  const config = { ...greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look, flythroughSeconds: job.flythroughSeconds, useGpu: tool.executionMode !== 'contained' }), textures: textures.job };
   const fly = config.flythrough;
   let report = null;
   const outputs = {};
@@ -211,7 +215,7 @@ async function runRender({ place, scene, tool, job, samples }) {
     const run = await tool.worker({
       tool: { executable: tool.executable, argv: (entry) => ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', entry] },
       workspaceRoot: join(PATHS.data, WORKSPACES), entrypoint: 'greybox-blender.py',
-      files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }],
+      files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }, ...textures.files],
       limits: { wallSeconds, diskBytes: (fly ? 16 : 4) * 1024 ** 3, memoryBytes: 24 * 1024 ** 3 },
       onOutput: async (directory, files) => {
         const sizes = new Map(files.map((f) => [f.path, f.bytes]));

@@ -80,6 +80,7 @@ describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () 
     materials: [],
     lights: [{ id: 'key', type: 'point', position: [0, 3, 0], color: '#ffffff', watts: 100, size: 0.25, spotDegrees: 45 }],
     atmosphere: { haze: 0.2, worldColor: '#0d0d10', worldStrength: 0.3, exposure: 0, sun: false },
+    textures: { 'wood-floor': 'example_planks' },
   };
 
   async function makeLinkedPlace(universeId) {
