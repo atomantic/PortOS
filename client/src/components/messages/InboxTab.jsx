@@ -460,7 +460,7 @@ export default function InboxTab({ accounts }) {
     );
   }
 
-  const toolbarBtn = 'flex items-center justify-center gap-1 px-2.5 sm:px-3 py-2 rounded-lg text-sm whitespace-nowrap transition-colors disabled:opacity-50 shrink-0';
+  const toolbarBtn = 'flex items-center justify-center gap-1 px-2.5 sm:px-3 py-2 pointer-coarse:min-h-11 pointer-coarse:px-3.5 rounded-lg text-sm whitespace-nowrap transition-colors disabled:opacity-50 shrink-0';
 
   return (
     <div className="space-y-4 min-w-0">
@@ -474,14 +474,14 @@ export default function InboxTab({ accounts }) {
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search messages..."
               aria-label="Search messages"
-              className="w-full pl-9 pr-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+              className="w-full pl-9 pr-3 py-2 pointer-coarse:min-h-11 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
             />
           </div>
           <select
             aria-label="Account"
             value={selectedAccount}
             onChange={(e) => setSelectedAccount(e.target.value)}
-            className="max-w-[40%] sm:max-w-[12rem] min-w-0 px-2 sm:px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
+            className="max-w-[40%] sm:max-w-[12rem] min-w-0 px-2 sm:px-3 py-2 pointer-coarse:min-h-11 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
           >
             <option value="">All accounts</option>
             {accountList.map(a => (
