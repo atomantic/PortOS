@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
 import { draftCatalogPhotorealLook, getCatalogPhotoreal, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
+import { copyToClipboard } from '../../lib/clipboard';
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
@@ -10,6 +12,10 @@ vi.mock('../../services/apiCatalog', () => ({
   getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
   draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
 }));
+vi.mock('../../services/apiCodeAnimation', () => ({
+  findCodeAnimationBlender: vi.fn(), getCodeAnimationExecution: vi.fn(), probeCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(),
+}));
+vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt={props.alt} src={props.src} /> }));
@@ -20,6 +26,12 @@ const greybox = {
 };
 const record = { id: 'plc-example', payload: { greybox } };
 const render1 = { mediaKey: 'wide-render.png', kind: 'reference', role: 'photoreal:wide', caption: 'Example Rink: Wide', createdAt: '2026-01-02' };
+const blenderPath = '/Applications/Example.app/Contents/MacOS/Blender';
+const execution = (ready = true) => ({
+  platform: 'darwin', mechanism: { id: 'macos-seatbelt', supported: true }, executionMode: 'contained', probe: null,
+  tools: { blender: { executable: ready ? blenderPath : null, engine: 'CYCLES', problem: ready ? null : 'Not configured.' } },
+  lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: ready ? { ready: true, reason: null } : { ready: false, reason: 'Blender: Not configured.' } },
+});
 
 const show = (props = {}) => render(<MemoryRouter><PhotorealPanel record={record} media={[render1]} {...props} /></MemoryRouter>);
 
@@ -28,16 +40,141 @@ beforeEach(() => {
   try { localStorage.clear(); } catch { /* storage unavailable */ }
   previewCatalogPhotorealLookPrompt.mockResolvedValue({ sentPrompt: 'composed', promptAdditions: [] });
   getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: '/api/catalog/ingredients/plc-example/photoreal/blend', blenderVersion: '5.2.3' });
+  getCodeAnimationExecution.mockResolvedValue(execution());
+  findCodeAnimationBlender.mockResolvedValue({ candidates: [] });
 });
 
 describe('PhotorealPanel', () => {
-  it('offers a visible Blender setup action when the runtime is not checked', async () => {
+  it('lets an installed Blender be selected, saved and checked inline before rendering', async () => {
     getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: null });
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    findCodeAnimationBlender.mockResolvedValue({ candidates: [{ executable: blenderPath, version: '5.2.3' }] });
+    const saved = { ...execution(false), tools: { blender: { executable: blenderPath, engine: 'CYCLES', problem: null } },
+      lanes: { ...execution(false).lanes, blender: { ready: false, reason: 'Run the execution check.' } } };
+    updateCodeAnimationExecutionTools.mockResolvedValue(saved);
+    probeCodeAnimationExecution.mockResolvedValue(execution());
     show();
-    expect(await screen.findByText('Blender not checked yet.')).toBeInTheDocument();
-    const setup = screen.getByRole('link', { name: 'Set up and check Blender' });
-    expect(setup).toHaveAttribute('href', '/code-animation/production#blender-execution');
-    expect(setup).toHaveClass('border', 'bg-port-accent/10');
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Select Blender 5.2.3' }));
+    expect(screen.getByLabelText('Blender executable')).toHaveValue(blenderPath);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    await waitFor(() => expect(updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: {
+      executable: blenderPath, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false,
+    } }, { silent: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check Blender' }));
+    await waitFor(() => expect(probeCodeAnimationExecution).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
+  it('reopens inline setup when readiness changes before a render request', async () => {
+    getCodeAnimationExecution.mockResolvedValueOnce(execution()).mockResolvedValueOnce(execution(false));
+    startCatalogPhotorealRender.mockRejectedValueOnce(Object.assign(new Error('Blender: Not configured.'), { code: 'CODE_ANIMATION_BLENDER_NOT_READY' }));
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Render 2 cameras' }));
+    expect(await screen.findByText(/Select an installed Blender or enter its path/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+  });
+
+  it('keeps setup stable during a rejected render and explains that it must be retried', async () => {
+    let rejectRender;
+    startCatalogPhotorealRender.mockImplementation(() => new Promise((_resolve, reject) => { rejectRender = reject; }));
+    show();
+    const renderButton = screen.getByRole('button', { name: 'Render 2 cameras' });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    const field = screen.getByLabelText('Blender executable');
+    fireEvent.click(renderButton);
+    await waitFor(() => expect(rejectRender).toBeTypeOf('function'));
+    expect(field).toBeDisabled();
+    await act(async () => rejectRender(Object.assign(new Error('The check changed.'), { code: 'CODE_ANIMATION_BLENDER_NOT_READY' })));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check the setup, then try again.');
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    expect(screen.getByLabelText('Blender executable')).toHaveValue(blenderPath);
+  });
+
+  it('explains when the selected camera engine has not been checked', async () => {
+    show();
+    expect(await screen.findByText(/Blender was checked with Cycles CPU; EEVEE GPU has not been checked/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Blender setup' }));
+    expect(screen.getByLabelText('Render engine')).toHaveValue('CYCLES');
+    fireEvent.click(screen.getByRole('button', { name: 'Cycles final' }));
+    expect(screen.queryByText(/EEVEE GPU has not been checked/)).not.toBeInTheDocument();
+  });
+
+  it('asks for a check when Blender is already saved but not ready', async () => {
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(false), tools: { blender: { executable: blenderPath, engine: 'CYCLES', problem: null } } });
+    show();
+    expect(await screen.findByText('Blender is saved. Select Check Blender before rendering.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check Blender' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save Blender' })).toBeDisabled();
+  });
+
+  it('does not render with unsaved or in-flight Blender settings', async () => {
+    show();
+    const renderButton = screen.getByRole('button', { name: 'Render 2 cameras' });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    const field = screen.getByLabelText('Blender executable');
+    fireEvent.change(field, { target: { value: '/Applications/Another.app/Contents/MacOS/Blender' } });
+    await waitFor(() => expect(renderButton).toBeDisabled());
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Save the changes, then check Blender before rendering.')).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: blenderPath } });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.change(field, { target: { value: '/Applications/Another.app/Contents/MacOS/Blender' } });
+    let finishSave;
+    updateCodeAnimationExecutionTools.mockImplementation(() => new Promise(resolve => { finishSave = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    expect(renderButton).toBeDisabled();
+    expect(screen.getByText('Saving Blender…')).toBeInTheDocument();
+    await act(async () => finishSave({ ...execution(false), tools: { blender: { executable: '/Applications/Another.app/Contents/MacOS/Blender', engine: 'CYCLES', problem: null } } }));
+    expect(renderButton).toBeDisabled();
+    expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
+    expect(screen.getByText('Blender is saved. Select Check Blender before rendering.')).toBeInTheDocument();
+    probeCodeAnimationExecution.mockResolvedValue(execution());
+    fireEvent.click(screen.getByRole('button', { name: 'Check Blender' }));
+    await waitFor(() => expect(renderButton).toBeEnabled());
+  });
+
+  it('offers manual path entry when automatic discovery fails', async () => {
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    findCodeAnimationBlender.mockRejectedValue(new Error('Search unavailable'));
+    show();
+    expect(await screen.findByText(/Could not search for Blender: Search unavailable/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Blender executable')).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Download Blender' })).toHaveAttribute('href', 'https://www.blender.org/download/');
+  });
+
+  it('offers installation guidance and manual setup on other platforms', async () => {
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(false), platform: 'linux' });
+    show();
+    expect(await screen.findByText(/enter its executable path\./)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download Blender' })).toHaveAttribute('href', 'https://www.blender.org/download/');
+    expect(findCodeAnimationBlender).not.toHaveBeenCalled();
+  });
+
+  it('shows a save error beside the setup without losing the entered path', async () => {
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    updateCodeAnimationExecutionTools.mockRejectedValue(new Error('The executable was not found.'));
+    show();
+    const field = await screen.findByLabelText('Blender executable');
+    fireEvent.change(field, { target: { value: blenderPath } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The executable was not found.');
+    expect(field).toHaveValue(blenderPath);
+    expect(probeCodeAnimationExecution).not.toHaveBeenCalled();
+  });
+
+  it('lets the user retry a failed Blender status read inline', async () => {
+    getCodeAnimationExecution.mockRejectedValueOnce(new Error('Server unavailable')).mockResolvedValueOnce(execution(false));
+    show();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Blender executable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
   });
 
   it('keeps every camera deselected when the last checked camera is unchecked', async () => {
@@ -100,10 +237,23 @@ describe('PhotorealPanel', () => {
     expect(fly).toBeDisabled();
   });
 
+  it('offers inline FFmpeg setup steps when a fly-through cannot start', async () => {
+    startCatalogPhotorealRender.mockRejectedValueOnce(Object.assign(new Error('FFmpeg is missing.'), { code: 'FFMPEG_MISSING' }));
+    show();
+    const fly = screen.getByRole('button', { name: /Render fly-through/ });
+    await waitFor(() => expect(fly).toBeEnabled());
+    fireEvent.click(fly);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Fly-throughs need FFmpeg');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy install command' }));
+    expect(copyToClipboard).toHaveBeenCalledWith('brew install ffmpeg', 'Install command copied');
+    expect(screen.getByRole('link', { name: 'FFmpeg install options' })).toHaveAttribute('href', 'https://ffmpeg.org/download.html');
+  });
+
   it('opens the built scene in Blender from the tab', async () => {
     openCatalogPhotorealBlend.mockResolvedValue({ opened: true, blenderVersion: '5.2.3' });
     show();
-    fireEvent.click(await screen.findByRole('button', { name: 'Open in Blender' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Blender' }));
     await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
   });
 

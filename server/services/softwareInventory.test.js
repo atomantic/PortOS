@@ -1,5 +1,8 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { __testing, getSoftwareInventory } from './softwareInventory.js';
+import { __testing, getInstalledBlenderCandidates, getSoftwareInventory } from './softwareInventory.js';
 
 const { blenderRow, browserRow, condaRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
 
@@ -13,6 +16,22 @@ const runtime = (overrides = {}) => ({
 });
 
 describe('getSoftwareInventory', () => {
+  it('finds installed macOS Blender apps from bundle metadata without launching them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'blender-discovery-'));
+    try {
+      const contents = join(root, 'Blender.app', 'Contents');
+      await mkdir(join(contents, 'MacOS'), { recursive: true });
+      await writeFile(join(contents, 'Info.plist'), '<key>CFBundleShortVersionString</key><string>5.2.3</string>');
+      await writeFile(join(contents, 'MacOS', 'Blender'), 'not an executable');
+      expect(await getInstalledBlenderCandidates({ platform: 'darwin', roots: [root] })).toEqual([
+        { executable: join(contents, 'MacOS', 'Blender'), version: '5.2.3' },
+      ]);
+      expect(await getInstalledBlenderCandidates({ platform: 'linux', roots: [root] })).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps healthy rows when one probe throws and another hangs', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const collectors = [

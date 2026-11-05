@@ -2,6 +2,7 @@
  * Code Animation production execution capability (#9388).
  *
  *   GET  /api/code-animation/execution         platform mechanism, tools, lane readiness, last check
+ *   GET  /api/code-animation/execution/blender-candidates   installed Blender apps (host control)
  *   PUT  /api/code-animation/execution/tools   operator-owned installed-tool paths (host control)
  *   POST /api/code-animation/execution/probe   run the adversarial containment check (host control)
  *
@@ -20,6 +21,11 @@ const router = Router();
 
 router.get('/', asyncHandler(async (_req, res) => {
   res.json(await getCodeAnimationExecution());
+}));
+
+router.get('/blender-candidates', asyncHandler(async (_req, res) => {
+  const { getInstalledBlenderCandidates } = await import('../services/softwareInventory.js');
+  res.json({ candidates: await getInstalledBlenderCandidates() });
 }));
 
 router.put('/tools', asyncHandler(async (req, res) => {
