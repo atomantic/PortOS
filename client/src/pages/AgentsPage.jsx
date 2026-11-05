@@ -7,6 +7,7 @@ import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import { formatCount, formatDateTime, formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const AGENT_EVENTS = [];
 
@@ -16,10 +17,11 @@ export function AgentsPage() {
   const mounted = useMounted();
 
   const loadAgents = useCallback(() => api.getAgents({ silent: true }), []);
-  const { data, loading, refetch, updateData } = useSocketResource(loadAgents, {
+  const { data, loading, error, refetch, updateData } = useSocketResource(loadAgents, {
     namespace: 'agent-processes', events: AGENT_EVENTS,
   });
   const agents = data ?? [];
+  const initialLoadFailed = data === null && error;
 
   useEffect(() => {
     const onSnapshot = frame => {
@@ -76,6 +78,11 @@ export function AgentsPage() {
       />
       <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
       <div className="space-y-4 lg:space-y-6">
+
+      {initialLoadFailed ? (
+        <ListLoadError what="AI agents" error={error} onRetry={refetch} />
+      ) : <>
+      {error && <ListLoadError what="AI agents" error={error} onRetry={refetch} />}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
@@ -365,6 +372,7 @@ export function AgentsPage() {
         </table>
         </div>
       </div>
+      </>}
     </div>
       </div>
     </div>
