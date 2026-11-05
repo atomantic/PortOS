@@ -428,7 +428,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   },
   'catalog:photoreal-scene': {
     direction: 'server-to-client',
-    summary: 'A photoreal Blender scene was built without rendering; refresh the matching place status.',
+    summary: 'A photoreal scene build started or settled; refresh the matching place status.',
     payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' } }, required: ['ingredientId'], additionalProperties: false },
   },
   'catalog:primitive-changed': {

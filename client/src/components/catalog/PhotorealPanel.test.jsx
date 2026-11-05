@@ -404,6 +404,48 @@ describe('PhotorealPanel', () => {
     expect(screen.queryByRole('button', { name: 'Building scene…' })).not.toBeInTheDocument();
   });
 
+  it('uses a successful initial status if a newer refresh fails', async () => {
+    let finishInitial;
+    getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
+      .mockRejectedValueOnce(new Error('Network unavailable'));
+    show();
+    await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    await act(async () => finishInitial({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Retry status' })).not.toBeInTheDocument();
+  });
+
+  it('offers a retry when the scene status cannot be loaded', async () => {
+    getCatalogPhotoreal.mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('keeps a newer running-render frame when a reconnect status arrives late', async () => {
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }));
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: {
+      id: 'pr-running', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString(),
+    } }));
+    await act(async () => finishReconnect({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    expect(screen.getByText(/current render will replace this scene/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+  });
+
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
     show();
     const seconds = await screen.findByLabelText('Seconds');
