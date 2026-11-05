@@ -3,6 +3,7 @@ import useContainerWidth from '../../hooks/useContainerWidth';
 import * as api from '../../services/api';
 import { formatUsd } from '../../utils/formatters';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
+import UsageCoverageNotice from './UsageCoverageNotice';
 import { seriesColors } from '../../lib/usageChartColors';
 
 const RANGES = [
@@ -45,7 +46,7 @@ const UNPIN_SLOP_PX = 14;
  * total); tap a pin to remove it. The legend reads the newest pin, else today.
  * Hand-drawn SVG.
  */
-export default function RollingCostCard({ coverage, fleetRevision }) {
+export default function RollingCostCard({ fleetRevision, onReconcile, reconciling }) {
   const [range, setRange] = useState(() => {
     const saved = safeReadStorage(RANGE_KEY);
     return RANGES.some((r) => r.id === saved) ? saved : DEFAULT_RANGE;
@@ -179,7 +180,7 @@ export default function RollingCostCard({ coverage, fleetRevision }) {
         </div>
       </div>
 
-      {(data?.pricingIncomplete || coverage?.classificationUnreported?.length > 0 || coverage?.missingInstances?.length > 0 || coverage?.transcriptUnreported?.length > 0) && <p className="text-xs text-port-warning">Partial chart: some instance history or pricing classifications are unavailable.</p>}
+      <UsageCoverageNotice coverage={data?.coverage} pricingIncomplete={data?.pricingIncomplete} onReconcile={onReconcile} reconciling={reconciling} />
 
       <div className="flex gap-1" role="group" aria-label="Chart range">
         {RANGES.map((r) => (

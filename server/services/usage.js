@@ -1036,7 +1036,7 @@ function usageRowCost(modelId, counts, rates, free) {
   return tokens + premium + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 
-export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null, totalSessions = null, totalMessages = null, providerClasses = undefined, additionalSources = [] } = {}) {
+export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null, totalSessions = null, totalMessages = null, providerClasses = undefined, additionalSources = [], includeObservations = false } = {}) {
   const configById = new Map((providers || []).map((p) => [p.id, p]));
   const agg = new Map(); // providerId -> { name, sessions, messages, tokensIn, tokensOut, byModel: Map }
   let breakdownSince = null;
@@ -1059,16 +1059,29 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
         billing,
         ...emptyUsageCounters(),
         source: null,
-        byModel: new Map()
+        byModel: new Map(),
+        observations: { from: null, to: null, resolutions: new Set(), hasUndatedUsage: false },
       });
     }
     return agg.get(key);
   };
 
+  const observe = (provider, period) => {
+    if (!includeObservations) return;
+    const observed = provider.observations;
+    if (!period) { observed.hasUndatedUsage = true; return; }
+    const monthly = period.length === 7;
+    const first = monthly ? `${period}-01` : period;
+    const last = monthly ? new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).toISOString().slice(0, 10) : period;
+    if (!observed.from || first < observed.from) observed.from = first;
+    if (!observed.to || last > observed.to) observed.to = last;
+    observed.resolutions.add(monthly ? 'month' : 'day');
+  };
+
   // Fold a bucket's provider/model splits and any residual flat legacy counts.
   // Monthly rollups can contain both shapes when their source month straddled
   // the provider-breakdown rollout.
-  const foldBucket = (bucket, classes) => {
+  const foldBucket = (bucket, classes, period) => {
     let representedSessions = 0;
     let representedMessages = 0;
     let representedTokensIn = 0;
@@ -1077,6 +1090,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       const normalized = normalizeProvider(pid, pDay.name);
       const p = ensureAggregate(normalized.id, normalized.name, classes);
       addUsageCounters(p, pDay);
+      if (hasUsageCounts(pDay)) observe(p, period);
       // A bucket with counts but no `source` predates the field — those counts
       // are estimates, so fold it in as such rather than leaving the row
       // unlabeled and letting the UI imply it was measured.
@@ -1105,6 +1119,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     const residualTokensOut = Math.max(0, bucketTokensOut - representedTokensOut);
     if (residualSessions || residualMessages || residualTokensIn || residualTokensOut) {
       const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME, classes);
+      observe(legacy, period);
       legacy.sessions += residualSessions;
       legacy.messages += residualMessages;
       legacy.tokensIn += residualTokensIn;
@@ -1138,13 +1153,13 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       }
       if (fromMonth && month < fromMonth) continue;
       if (toMonth && month > toMonth) continue;
-      if (bucket) foldBucket(bucket, source.providerClasses);
+      if (bucket) foldBucket(bucket, source.providerClasses, month);
     }
     for (const [date, day] of Object.entries(source.dailyActivity || {})) {
       if (day?.byProvider && (!breakdownSince || date < breakdownSince)) breakdownSince = date;
       if (from && date < from) continue;
       if (to && date > to) continue;
-      if (day) foldBucket(day, source.providerClasses);
+      if (day) foldBucket(day, source.providerClasses, date);
     }
     if (source.totalTokens || source.totalSessions != null || source.totalMessages != null) {
       const after = representedCounters();
@@ -1154,6 +1169,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       const residualMessages = Math.max(0, (source.totalMessages || 0) - (after.messages - before.messages));
       if (residualIn || residualOut || residualSessions || residualMessages) {
         const legacy = ensureAggregate(LEGACY_PROVIDER_ID, LEGACY_PROVIDER_NAME, source.providerClasses);
+        observe(legacy, null);
         legacy.tokensIn += residualIn;
         legacy.tokensOut += residualOut;
         legacy.sessions += residualSessions;
@@ -1247,6 +1263,12 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
       // provider-id → config map. Null for a row no plan covers.
       family,
       classificationKnown: known,
+      ...(includeObservations ? { observations: {
+        from: p.observations.from, to: p.observations.to,
+        hasUndatedUsage: p.observations.hasUndatedUsage,
+        resolution: p.observations.resolutions.size === 0 ? 'undated'
+          : p.observations.resolutions.size > 1 || p.observations.hasUndatedUsage ? 'mixed' : [...p.observations.resolutions][0],
+      } } : {}),
       ...pickUsageCounters(p),
       source: p.source || 'estimate',
       estimatedCost: known ? roundCents(providerCost) : null,

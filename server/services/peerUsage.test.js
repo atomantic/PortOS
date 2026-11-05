@@ -633,6 +633,81 @@ describe('fleet report', () => {
     expect(result.report.providers.find((row) => !row.classificationKnown)).toMatchObject({ estimatedCost: null, tokensOut: 4000 });
   });
 
+  it('identifies only affected origins without borrowing classification from a matching provider id', async () => {
+    await applyUsageRemote({ instances: {
+      old: peerEntry({ instanceId: 'old', name: 'Old peer', providerClasses: null }),
+      configured: peerEntry({ instanceId: 'configured', providerClasses: {} }),
+      free: peerEntry({ instanceId: 'free', providerClasses: { anthropic: { free: true, family: null } } }),
+    } });
+    const providers = [{ id: 'anthropic', type: 'api' }];
+    const result = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30', providers });
+    expect(result.coverage.range).toEqual({ from: '2026-08-30', to: '2026-08-30' });
+    expect(result.coverage.classificationGaps).toHaveLength(2);
+    expect(result.coverage.classificationGaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ instanceId: 'old', instanceName: 'Old peer', self: false,
+        capturedAt: '2026-08-30T09:00:00.000Z', providerId: 'anthropic', providerName: 'Anthropic',
+        models: ['claude-opus-5'], tokens: 4500, sessions: 2,
+        from: '2026-08-30', to: '2026-08-30', resolution: 'day', hasUndatedUsage: false,
+        reason: 'classification-not-reported' }),
+      expect.objectContaining({ instanceId: 'configured', reason: 'provider-not-configured' }),
+    ]));
+    expect((await getFleetUsage({ from: '2026-09-01', to: '2026-09-30', providers })).coverage.classificationGaps).toEqual([]);
+    const local = await getFleetUsage({ from: '2026-08-30', to: '2026-08-30' });
+    expect(local.coverage.classificationGaps.find((row) => row.self)).toMatchObject({
+      instanceId: 'inst-self', reason: 'provider-not-configured', tokens: 1500,
+    });
+  });
+
+  it('distinguishes month buckets, mixed resolutions and undated legacy residuals', async () => {
+    const bucket = usageFixture().dailyActivity['2026-08-30'];
+    localUsage = { dailyActivity: { '2026-08-30': bucket }, monthlyActivity: { '2026-07': bucket },
+      totalTokens: { input: 1000, output: 2100 }, totalSessions: 4, totalMessages: 10 };
+    const month = await getFleetUsage({ from: '2026-07-01', to: '2026-07-31' });
+    expect(month.coverage.classificationGaps).toEqual([expect.objectContaining({
+      providerId: 'anthropic', from: '2026-07-01', to: '2026-07-31', resolution: 'month', tokens: 1500,
+    })]);
+    expect((await getFleetUsage({ from: '2026-07-10', to: '2026-07-20' })).coverage.classificationGaps).toEqual([]);
+    const all = await getFleetUsage();
+    expect(all.coverage.classificationGaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: 'anthropic', resolution: 'mixed', from: '2026-07-01', to: '2026-08-30', tokens: 3000 }),
+      expect.objectContaining({ providerId: 'legacy', reason: 'legacy-unattributed', resolution: 'undated',
+        hasUndatedUsage: true, from: null, to: null, tokens: 100 }),
+    ]));
+  });
+
+  it('reports rolling coverage for the contributing window including the preceding 29 days', async () => {
+    localUsage = usageFixture({ day: '2026-07-06' });
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ providerClasses: null,
+      usage: buildUsageDigest(usageFixture({ day: '2026-07-05' }), { now: new Date('2026-09-01T12:00:00Z') }) }) } });
+    const result = await getFleetRollingCost({ range: '1m', now: new Date('2026-09-01T12:00:00Z') });
+    expect(result.points[0].date).toBe('2026-08-03');
+    expect(result.coverage.range).toEqual({ from: '2026-07-05', to: '2026-09-01' });
+    expect(result.coverage.classificationGaps).toHaveLength(2);
+    expect(result.coverage.classificationGaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ self: true, from: '2026-07-06', reason: 'provider-not-configured' }),
+      expect.objectContaining({ instanceId: 'inst-peer', from: '2026-07-05', reason: 'classification-not-reported' }),
+    ]));
+    expect((await getFleetUsage({ from: '2026-08-01', to: '2026-08-31' })).coverage.classificationGaps).toEqual([]);
+    const later = await getFleetRollingCost({ range: '1m', now: new Date('2026-09-03T12:00:00Z') });
+    expect(later.coverage.classificationGaps).toEqual([]);
+    configuredPeers = [{ instanceId: 'missing', name: 'Missing machine', directions: ['inbound'], syncCategories: { usage: true } }];
+    expect((await getFleetRollingCost({ range: '1m', now: new Date('2026-09-03T12:00:00Z') })).coverage.missingInstances).toContain('Missing machine');
+  });
+
+  it('describes rolling month buckets without inventing daily precision or including unused rollups', async () => {
+    const bucket = usageFixture().dailyActivity['2026-08-30'];
+    localUsage = { dailyActivity: {}, monthlyActivity: { '2026-07': bucket, '2026-06': bucket } };
+    const now = new Date('2026-09-01T12:00:00Z');
+    const result = await getFleetRollingCost({ range: '1m', now });
+    expect(result.coverage.classificationGaps).toEqual([expect.objectContaining({
+      providerId: 'anthropic', resolution: 'month', from: '2026-07-01', to: '2026-07-31', tokens: 1500,
+    })]);
+    localUsage = { ...localUsage, lastUpdated: '2026-09-01T12:00:00Z', dailyActivity: Object.fromEntries(
+      Array.from({ length: 31 }, (_, i) => [`2026-07-${String(i + 1).padStart(2, '0')}`, {}])),
+    };
+    expect((await getFleetRollingCost({ range: '1m', now })).coverage.classificationGaps).toEqual([]);
+  });
+
   it('keeps external transcript usage and empty months in the selected monthly chart', async () => {
     await applyUsageRemote({ instances: { 'inst-peer': peerEntry({
       claudeCode: { updatedAt: '2026-09-30T12:00:00Z', days: { '2026-09-15': { 'claude-opus-5': { output: 1000 } } } },

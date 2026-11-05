@@ -1018,7 +1018,10 @@ function InternalUsageMetrics({ onBillingSaved }) {
   }, { errorMessage: 'Failed to start historical usage reconciliation' });
 
   useEffect(() => {
-    if (backfill?.status === 'complete') fetchUsage();
+    if (backfill?.status === 'complete' || backfill?.status === 'error') {
+      setFleetRevision((value) => value + 1);
+      fetchUsage();
+    }
   }, [backfill, fetchUsage]);
 
 
@@ -1076,8 +1079,8 @@ function InternalUsageMetrics({ onBillingSaved }) {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
-      <RollingCostCard coverage={usage.coverage} fleetRevision={fleetRevision} />
-      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} />
+      <RollingCostCard fleetRevision={fleetRevision} onReconcile={startBackfill} reconciling={startingBackfill || backfill?.status === 'running'} />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} onReconcile={startBackfill} reconciling={startingBackfill || backfill?.status === 'running'} />
       {reportControls}
       {usage.coverage && (
         <div className="text-xs text-gray-400 space-y-1" role="status">
@@ -1100,7 +1103,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes this machine’s recorded history but makes no provider calls. It cannot repair peer classifications or restore deleted transcripts; use the chart’s coverage details for those gaps.
           </p>
           {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
