@@ -107,7 +107,7 @@ beforeEach(async () => {
   const source = fixture.state.agents['agent-original'];
   const rows = await captureCompletedCheckouts(source, { success: true, strict: true });
   source.metadata.completedCheckouts = rows;
-  source.metadata.checkoutCapture = { status: 'captured', targets: rows, unknown: false };
+  source.metadata.checkoutCapture = { status: 'captured' };
   source.status = 'completed'; source.completedAt = new Date().toISOString();
   source.result = { success: false, resumed: true, resumedTaskId: 'release-task' };
   fixture.state.agents['agent-successor'] = { id: 'agent-successor', taskId: 'release-task', status: 'running',
@@ -254,7 +254,7 @@ for (const mode of ['resume', 'retry', 'orphan', 'orphan-sentinel']) test(`recov
   source.metadata.checkoutSeeds = await captureCheckoutSeeds(source, { allowUncreated: false });
   const rows = await captureCompletedCheckouts(source, { success: true, strict: true });
   source.metadata.completedCheckouts = rows;
-  source.metadata.checkoutCapture = { status: 'captured', targets: rows, unknown: false };
+  source.metadata.checkoutCapture = { status: 'captured' };
   source.status = 'completed'; source.completedAt = new Date().toISOString();
   if (mode === 'retry') source.result = { success: false, deliveryRecoveryOwned: true,
     taskOutcome: { status: 'incomplete', reason: 'Interrupted after publication' } };
@@ -313,6 +313,10 @@ for (const [name, reason, change] of [
   ['active original', 'candidate-successor-lineage-unverified', source => { source.status = 'running'; }],
   ['changed terminal head', 'candidate-terminal-receipt-unverified', async () => { await git(['commit', '--allow-empty', '-m', 'changed candidate'], checkout); }],
   ['missing terminal head receipt', 'candidate-terminal-receipt-unverified', source => { delete source.metadata.checkoutCapture; }],
+  ['missing successful capture rows', 'candidate-terminal-receipt-unverified', source => { delete source.metadata.completedCheckouts; }],
+  ['foreign successful capture row', 'candidate-terminal-receipt-unverified', source => { source.metadata.completedCheckouts[0].agentId = 'agent-other'; }],
+  ['post-completion capture row', 'candidate-terminal-receipt-unverified', source => { source.metadata.completedCheckouts[0].capturedAt = new Date(Date.parse(source.completedAt) + 1000).toISOString(); }],
+  ['explicit empty pending targets', 'candidate-terminal-receipt-unverified', source => { source.metadata.checkoutCapture = { status: 'pending', targets: [], unknown: true }; }],
   ['unseeded without contemporaneous proof', 'candidate-contemporaneous-lineage-missing', source => { delete source.metadata.checkoutSeeds; delete source.metadata.completedCheckouts; }],
   ['unseeded conflicting generation', 'candidate-generation-changed', source => { delete source.metadata.checkoutSeeds; source.metadata.completedCheckouts[0].incarnation.pointer.ino = '999999'; }],
   ['unsettled detached processes', 'candidate-processes-active', () => { fixture.processHold = 'candidate-processes-active'; }],

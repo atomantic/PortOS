@@ -181,6 +181,11 @@ export async function captureSeededCompletionCheckouts(agent, { preterminal = fa
   const bound = boundCheckoutBranches(agent.metadata);
   const seeds = agent.metadata?.checkoutSeeds?.filter(seed => Array.isArray(bound) && bound.includes(seed.branch));
   if (!Array.isArray(seeds) || !seeds.length) return null;
+  // A successful terminal capture stores its observations in completedCheckouts;
+  // targets belongs to the pending-capture path. Both are server-owned receipts.
+  // Never replace an explicit pending target list with a different observation.
+  const terminalRows = agent.metadata?.checkoutCapture?.targets
+    ?? (agent.metadata?.checkoutCapture?.status === 'captured' ? agent.metadata?.completedCheckouts : null);
   const receipts = [];
   for (const seed of seeds) {
     if (!checkoutSeedSchema.safeParse(seed).success || seed.agentId !== agent.id || seed.startedAt !== agent.startedAt
@@ -193,7 +198,7 @@ export async function captureSeededCompletionCheckouts(agent, { preterminal = fa
     // Normal replay requires the head observed during execution. Explicit
     // retirement review can instead bind a currently merged head to the exact
     // original seed; this is a current observation, never a backdated capture.
-    const terminal = agent.metadata?.checkoutCapture?.targets?.find(row => row.agentId === agent.id
+    const terminal = terminalRows?.find(row => completedCheckoutReceiptValid(agent, row) && row.agentId === agent.id
       && row.startedAt === agent.startedAt && row.repoPath === seed.repoPath && row.branch === seed.branch
       && row.path === seed.path && same(row.incarnation, seed.incarnation)
       && Number.isFinite(Date.parse(row.capturedAt)) && Date.parse(row.capturedAt) >= Date.parse(agent.startedAt)
