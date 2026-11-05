@@ -150,6 +150,21 @@ describe('Catalog page', () => {
     });
   });
 
+  it('keeps category filters and source clear controls touch-friendly on coarse pointers', async () => {
+    renderCatalog('/catalog?scrap=cat-scrap-1');
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+
+    const allFilter = screen.getByRole('button', { name: /^All/i });
+    const characterFilter = screen.getByRole('button', { name: /^Character/i });
+    const clearSource = screen.getByRole('button', { name: 'Clear' });
+    expect(allFilter.className).toContain('pointer-coarse:min-h-11');
+    expect(characterFilter.className).toContain('pointer-coarse:min-h-11');
+    expect(allFilter.className).toContain('sm:py-1.5');
+    expect(characterFilter.className).toContain('sm:py-1.5');
+    expect(clearSource.className).toContain('pointer-coarse:min-h-11');
+    expect(clearSource.className).toContain('pointer-coarse:min-w-11');
+  });
+
   it('debounces search input into the list fetch', async () => {
     vi.useFakeTimers();
     renderCatalog();
