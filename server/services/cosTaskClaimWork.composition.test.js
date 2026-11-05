@@ -101,6 +101,19 @@ describe('assembled forge claim prompts', () => {
     }
   });
 
+  it.each(['github', 'gitlab'])('resumes %s failed CI on the existing claim without bypassing an unsafe blocker', async tracker => {
+    state.tracker = tracker;
+    const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'review-then-merge' });
+    const prompt = renderAgent(claim, true);
+    expect(prompt).toContain('do not create a second PR/MR');
+    expect(prompt).toContain('inspect the failing job logs');
+    expect(prompt).toContain('Filing a follow-up alone is not an attempt');
+    expect(prompt).toContain('recovery is unsafe');
+    expect(prompt).toContain('Respect configured retry budgets');
+    expect(prompt).toContain('exact current head');
+    expect(prompt).toContain('complete the authorized merge');
+  });
+
   it('creates and verifies a GitLab draft explicitly', async () => {
     state.tracker = 'gitlab';
     const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'draft' });

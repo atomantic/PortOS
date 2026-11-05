@@ -147,3 +147,6 @@ PROMPT_VERSIONS['branch-cleanup'] = 4; // v4: align merged-branch worktree dispo
 PROMPT_VERSIONS['claim-issue'] = 58; // v58: GitHub required-CI wait distinguishes late check registration from an empty requirement set via rulesets + classic protection (#14873)
 PROMPT_VERSIONS['plan-task'] = 30; // v30: same late-registration rule for the required-CI wait (#14873)
 PROMPT_VERSIONS['plan-task-claim'] = 7; // v7: same late-registration rule for the required-CI wait (#14873)
+
+PROMPT_VERSIONS['claim-issue'] = 59; // v59: investigate and attempt bounded recovery of failed required CI (#15032).
+PROMPT_VERSIONS['claim-issue-gitlab'] = 51; // v51: same failed-CI recovery contract (#15032).

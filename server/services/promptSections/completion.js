@@ -597,7 +597,7 @@ export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePat
     '',
     'Those markers belong to this task. The `in-progress` label, an assignee that is this account, and the existing branch and worktree are the claim you are finishing. The Target Issue Constraint and Phase 1 rule that say to exit when the issue is already in progress or already checked out on that branch do not apply to them. Finish the work in this worktree.',
     '',
-    `Stay in \`${worktreePath}\` on \`${branchName}\`. Skip creating another worktree. Continue at the first phase that is not already done and ship it.`,
+    `Stay in \`${worktreePath}\` on \`${branchName}\`. Skip creating another worktree. Find this claim’s existing PR/MR and continue at the first unfinished phase; do not create a second PR/MR. Inspect failed required-check logs and make a feasible bounded diagnostic or recovery attempt before a hold. Preserve genuine unavailable prerequisites and exhausted budgets as incomplete or blocked. Once current-head required checks and reviews pass, complete the authorized merge.`,
     '',
     'Stop without taking the work when a different human left a clear active claim comment, or the issue is closed or parked for a human (`needs-input`, `blocked`). A contributor\'s claim is not this relaunch.',
   ].join('\n');
