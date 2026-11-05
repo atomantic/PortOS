@@ -23,8 +23,8 @@
 import { createHash } from 'crypto';
 
 export const SUPERCOLLIDER_VERSION = '3.14.1';
-/** Bump with any change to the recipe's pinned inputs (its test checks the Dockerfile agrees). */
-export const SUPERCOLLIDER_RUNTIME_VERSION = `${SUPERCOLLIDER_VERSION}-portos.1`;
+/** Bump with any change to the recipe's pinned inputs. */
+export const SUPERCOLLIDER_RUNTIME_VERSION = `${SUPERCOLLIDER_VERSION}-portos.2`;
 /** Bump when the containment policy or synthetic probe changes meaning; the fingerprint below also catches unbumped edits. */
 export const SUPERCOLLIDER_POLICY_VERSION = 1;
 
