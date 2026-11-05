@@ -111,7 +111,7 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
         <button
           type="button"
           onClick={() => setExpanded((value) => !value)}
-          className="flex items-center gap-1.5 flex-1 text-left group"
+          className="flex items-center gap-1.5 flex-1 text-left group py-1.5 pointer-coarse:min-h-11"
           aria-expanded={expanded}
         >
           {expanded ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}
@@ -125,7 +125,7 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
           type="button"
           onClick={runCheck}
           disabled={running}
-          className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 pointer-coarse:min-h-11 pointer-coarse:px-3 transition-colors disabled:opacity-50"
           title="Compare every brain record with this peer — on demand, not part of the sync cycle"
         >
           <RefreshCw size={10} className={running ? 'animate-spin' : ''} />

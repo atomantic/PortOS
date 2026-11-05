@@ -719,7 +719,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
     <div className="mt-2 pt-2 border-t border-port-border/50">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 w-full text-left group"
+        className="flex items-center gap-1.5 w-full text-left group py-1.5 pointer-coarse:min-h-11"
       >
         {expanded ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}
         <RefreshCcw size={12} className={enabledCount > 0 ? 'text-port-accent' : 'text-gray-500'} />
@@ -1205,7 +1205,7 @@ function ProbeDiagnostics({ peer, probing, onProbe }) {
           type="button"
           onClick={onProbe}
           disabled={probing}
-          className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:text-white disabled:opacity-50 border border-port-accent/40 rounded px-2 py-1 transition-colors"
+          className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:text-white disabled:opacity-50 border border-port-accent/40 rounded px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3 transition-colors"
           title="Force an immediate health/details probe"
         >
           <RefreshCw size={11} className={probing ? 'animate-spin' : ''} />
