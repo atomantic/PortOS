@@ -19,12 +19,14 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
-  PEER_SUBSCRIBABLE_KINDS: Object.freeze(['universe', 'series', 'mediaCollection', 'fableLoom']),
+  PEER_SUBSCRIBABLE_KINDS: Object.freeze(['universe', 'series', 'mediaCollection', 'fableLoom', 'author']),
 }));
 
 vi.mock('../services/sharing/integrity.js', () => ({
   buildLocalManifest: vi.fn(),
   getPeerIntegrity: vi.fn(),
+  PEER_MANIFEST_VERSION: 1,
+  isLegacyManifestKind: (kind) => ['universe', 'series', 'mediaCollection', 'fableLoom'].includes(kind),
 }));
 
 vi.mock('../services/sharing/sidecarSync.js', () => ({
@@ -568,7 +570,7 @@ describe('peer-sync routes', () => {
       const res = await request(buildApp())
         .get('/api/peer-sync/manifest?kind=mediaCollection');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ records });
+      expect(res.body).toEqual({ manifestVersion: 1, records });
       expect(integritySvc.buildLocalManifest).toHaveBeenCalledWith('mediaCollection');
     });
 
@@ -924,6 +926,22 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(403);
       expect(integritySvc.buildLocalManifest).not.toHaveBeenCalled();
       expect(authorizePeerPull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordKind: 'series' }));
+    });
+
+    it('enforces category authorization for newly populated inventories', async () => {
+      vi.mocked(authorizePeerPull).mockRejectedValueOnce(
+        Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
+      );
+      expect((await request(buildApp()).get('/api/peer-sync/manifest?kind=author')).status).toBe(403);
+      expect(integritySvc.buildLocalManifest).not.toHaveBeenCalled();
+      expect(authorizePeerPull).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        recordKind: 'author', alwaysEnforce: true, allowOperator: true,
+      }));
+      expect((await request(buildApp()).get('/api/peer-sync/manifest?kind=author')).status).toBe(200);
+      await request(buildApp()).get('/api/peer-sync/manifest?kind=series');
+      expect(authorizePeerPull).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+        recordKind: 'series', alwaysEnforce: false, allowOperator: false,
+      }));
     });
 
     it('gates the CoS agent archive bytes, not just the manifest listing', async () => {

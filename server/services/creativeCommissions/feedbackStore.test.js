@@ -45,6 +45,7 @@ const {
   listFeedbackByCommissionIds,
   getCommissionFeedbackForSync,
   listCommissionFeedbackForSync,
+  listCommissionFeedbackForIntegrity,
   listCommissionFeedbackIdsForSync,
   mergeCommissionFeedbackFromSync,
   pruneTombstonedCommissionFeedback,
@@ -116,6 +117,16 @@ describe('recordFeedback + hydration', () => {
 });
 
 describe('federation facades', () => {
+  it('includes deleted feedback in the integrity inventory without exposing its note', async () => {
+    const live = await recordFeedback({ commissionId: 'c1', runId: 'run-A', rating: 'up', note: 'private note' });
+    const deleted = await recordFeedback({ commissionId: 'c1', runId: 'run-B', rating: 'down' });
+    await deleteCommissionFeedback(deleted.id);
+    expect(await listCommissionFeedbackForIntegrity()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: live.id, deleted: false }),
+      expect.objectContaining({ id: deleted.id, deleted: true }),
+    ]));
+    expect((await listCommissionFeedbackForIntegrity()).find((r) => r.id === live.id)).not.toHaveProperty('note');
+  });
   it('merges an incoming remote reaction (LWW) and exposes it for sync', async () => {
     const remote = { id: 'cfeedback-run-Z', commissionId: 'c9', runId: 'run-Z', rating: 'up', note: 'peer', at: '2026-05-05T00:00:00.000Z', updatedAt: '2026-05-05T00:00:00.000Z' };
     const res = await mergeCommissionFeedbackFromSync([remote], { source: { via: 'sync', peerId: 'peer-a' } });

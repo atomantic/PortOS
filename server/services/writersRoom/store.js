@@ -106,16 +106,16 @@ function makeFileBackend() {
   // the whole library — the pre-#1017 file behavior. Re-throw anything else
   // (permission errors, EIO): masking those would hide a real outage behind a
   // plausible-looking short count.
-  const loadLiveManifests = async () => {
+  const loadLiveManifests = async ({ includeDeleted = false, strict = false } = {}) => {
     const ids = await listWorkIds();
     const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
-      if (err?.code === 'CORRUPTED_MANIFEST') {
+      if (!strict && err?.code === 'CORRUPTED_MANIFEST') {
         console.warn(`⚠️ wr: dropped work ${id} from listing — corrupted manifest`);
         return null;
       }
       throw err;
     })));
-    return manifests.filter((m) => m != null && m.deleted !== true);
+    return manifests.filter((m) => m != null && (includeDeleted || m.deleted !== true));
   };
 
   // Shared LWW merge for a body-less record array (folders/exercises) — mirrors
@@ -167,7 +167,7 @@ function makeFileBackend() {
     // folders. A soft-deleted folder (tombstone) stays in folders.json so its
     // deletion federates; live reads filter it out, mirroring the PG backend's
     // `WHERE deleted = FALSE`.
-    listFolders: async () => (await loadFolders()).filter((f) => f.deleted !== true),
+    listFolders: async ({ includeDeleted = false } = {}) => (await loadFolders()).filter((f) => includeDeleted || f.deleted !== true),
     readFolder: async (id, { includeDeleted = false } = {}) => {
       const folder = (await loadFolders()).find((f) => f.id === id) ?? null;
       if (!folder) return null;
@@ -196,7 +196,7 @@ function makeFileBackend() {
       mergeBodylessArray(loadFolders, saveFolders, WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord, remoteFolders, source),
     pruneTombstonedFolders: async (olderThanMs) => pruneTombstonedArray(loadFolders, saveFolders, olderThanMs),
     // exercises (same body-less tombstone-aware contract as folders).
-    listExercises: async () => (await loadExercises()).filter((e) => e.deleted !== true),
+    listExercises: async ({ includeDeleted = false } = {}) => (await loadExercises()).filter((e) => includeDeleted || e.deleted !== true),
     readExercise: async (id, { includeDeleted = false } = {}) => {
       const exercise = (await loadExercises()).find((e) => e.id === id) ?? null;
       if (!exercise) return null;
@@ -331,14 +331,14 @@ export function _resetWritersRoomStore() {
 export function writersRoomStore() {
   return {
     getBackendName: () => facade.getBackendName(),
-    listFolders: async () => (await getBackend()).listFolders(),
+    listFolders: async (opts) => (await getBackend()).listFolders(opts),
     readFolder: async (id, opts) => (await getBackend()).readFolder(id, opts),
     listFolderIds: async (opts) => (await getBackend()).listFolderIds(opts),
     writeFolder: async (folder) => (await getBackend()).writeFolder(folder),
     deleteFolder: async (id) => (await getBackend()).deleteFolder(id),
     mergeFoldersFromSync: async (remoteFolders, opts) => (await getBackend()).mergeFoldersFromSync(remoteFolders, opts),
     pruneTombstonedFolders: async (olderThanMs) => (await getBackend()).pruneTombstonedFolders(olderThanMs),
-    listExercises: async () => (await getBackend()).listExercises(),
+    listExercises: async (opts) => (await getBackend()).listExercises(opts),
     readExercise: async (id, opts) => (await getBackend()).readExercise(id, opts),
     listExerciseIds: async (opts) => (await getBackend()).listExerciseIds(opts),
     writeExercise: async (exercise) => (await getBackend()).writeExercise(exercise),
@@ -346,7 +346,7 @@ export function writersRoomStore() {
     pruneTombstonedExercises: async (olderThanMs) => (await getBackend()).pruneTombstonedExercises(olderThanMs),
     readWork: async (id, opts) => (await getBackend()).readWork(id, opts),
     listWorkIds: async (opts) => (await getBackend()).listWorkIds(opts),
-    listWorks: async () => (await getBackend()).listWorks(),
+    listWorks: async (opts) => (await getBackend()).listWorks(opts),
     listOrderedWorkIds: async () => (await getBackend()).listOrderedWorkIds(),
     readWorksPage: async (ids) => (await getBackend()).readWorksPage(ids),
     countWorks: async () => (await getBackend()).countWorks(),

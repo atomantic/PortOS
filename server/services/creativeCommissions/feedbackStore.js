@@ -75,7 +75,7 @@ function makeFileBackend(dir) {
       if (!rec) return null;
       return includeDeleted || notDeleted(rec) ? rec : null;
     },
-    listRaw: async () => (await cs.loadAll()).filter(notDeleted),
+    listRaw: async ({ includeDeleted = false } = {}) => (await cs.loadAll()).filter((r) => includeDeleted || notDeleted(r)),
     listRawByCommission: async (commissionId) =>
       (await cs.loadAll()).filter((r) => notDeleted(r) && r?.commissionId === commissionId),
     listIds: async ({ includeDeleted = false } = {}) =>
@@ -125,7 +125,7 @@ function createFacade(dir) {
     type: TYPE,
     getBackendName,
     readRaw: async (id, opts) => (await getBackend()).readRaw(id, opts),
-    listRaw: async () => (await getBackend()).listRaw(),
+    listRaw: async (opts) => (await getBackend()).listRaw(opts),
     listRawByCommission: async (id) => (await getBackend()).listRawByCommission(id),
     listIds: async (opts) => (await getBackend()).listIds(opts),
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
@@ -263,6 +263,12 @@ export async function listCommissionFeedbackForSync() {
     .map(sanitizeCommissionFeedbackForSync)
     .filter(Boolean)
     .map((r) => ({ id: r.id, updatedAt: r.updatedAt }));
+}
+
+export async function listCommissionFeedbackForIntegrity() {
+  const raw = await feedbackStore().listRaw({ includeDeleted: true });
+  return raw.map(sanitizeCommissionFeedbackForSync).filter(Boolean)
+    .map(({ id, updatedAt, deleted }) => ({ id, updatedAt, deleted }));
 }
 
 /** Every feedback id — live only by default, or all (incl. tombstones) for the sweep. */

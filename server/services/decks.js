@@ -544,6 +544,27 @@ export async function listDecksForSync() {
   return rows.map((r) => ({ id: r.id, updatedAt: isoOrNull(r.updated_at) }));
 }
 
+/** Bulk inventory for on-demand integrity, including live card image references. */
+export async function listDecksForIntegrity() {
+  await ensureSchema();
+  const { rows } = await query("SELECT id, name, updated_at, deleted, definition->'samples' AS samples FROM decks");
+  const liveIds = rows.filter((row) => row.deleted !== true).map((row) => row.id);
+  const cardRows = liveIds.length
+    ? (await query(`SELECT deck_id, jsonb_build_object('imageRefs', definition->'imageRefs',
+        'primaryImageRef', definition->'primaryImageRef') AS definition
+        FROM deck_cards WHERE deck_id = ANY($1::uuid[])`, [liveIds])).rows
+    : [];
+  const cardsByDeck = Map.groupBy(cardRows, (row) => row.deck_id);
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    updatedAt: isoOrNull(row.updated_at),
+    deleted: row.deleted === true,
+    samples: row.samples,
+    cards: (cardsByDeck.get(row.id) || []).map((card) => card.definition),
+  }));
+}
+
 /** Deck ids — live only by default, or all (incl. tombstones) for the sweep. */
 export async function listDeckIdsForSync({ includeDeleted = false } = {}) {
   await ensureSchema();

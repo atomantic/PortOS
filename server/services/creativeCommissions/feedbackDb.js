@@ -38,9 +38,9 @@ export async function readRaw(id, { includeDeleted = false } = {}) {
 }
 
 /** Every LIVE feedback record's raw `data` JSONB, oldest reaction first. */
-export async function listRaw() {
+export async function listRaw({ includeDeleted = false } = {}) {
   const { rows } = await query(
-    `SELECT data FROM commission_feedback WHERE deleted = FALSE ORDER BY created_at ASC, id ASC`,
+    `SELECT data FROM commission_feedback ${includeDeleted ? '' : 'WHERE deleted = FALSE'} ORDER BY created_at ASC, id ASC`,
   );
   return rows.map((r) => r.data);
 }

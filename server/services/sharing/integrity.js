@@ -16,6 +16,20 @@ import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
 import { listLooms } from '../fableLoom/index.js';
+import { listAuthors } from '../authors/index.js';
+import { listArtists } from '../artists/index.js';
+import { listAlbums } from '../albums/index.js';
+import { listTracks } from '../tracks/index.js';
+import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
+import { listBoards } from '../moodBoard/index.js';
+import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.js';
+import {
+  listWorksForIntegrity, listFoldersForIntegrity, listExercisesForIntegrity, buildWorkBodyManifest,
+} from '../writersRoom/sync.js';
+import { listCommissionFeedbackForIntegrity } from '../creativeCommissions/feedbackStore.js';
+import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
+import { listDecksForIntegrity } from '../decks.js';
+import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { getPeers } from '../instances.js';
 import { assetIntegrityForRecord } from './peerSync.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -23,12 +37,30 @@ import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 
 const PEER_INTEGRITY_TIMEOUT_MS = 15_000;
 const PEER_INTEGRITY_MAX_BYTES = 16 * 1024 * 1024;
+// Older peers accepted every kind but only built inventories for these four.
+const LEGACY_MANIFEST_KINDS = new Set(['mediaCollection', 'universe', 'series', 'fableLoom']);
+export const PEER_MANIFEST_VERSION = 1;
+export const isLegacyManifestKind = (kind) => LEGACY_MANIFEST_KINDS.has(kind);
 
 async function recordsForKind(kind) {
   if (kind === 'mediaCollection') return listCollections({ includeDeleted: true });
   if (kind === 'universe') return listUniverses({ includeDeleted: true });
   if (kind === 'series') return listSeries({ includeDeleted: true });
   if (kind === 'fableLoom') return listLooms({ includeDeleted: true });
+  if (kind === 'author') return listAuthors({ includeDeleted: true });
+  if (kind === 'artist') return listArtists({ includeDeleted: true });
+  if (kind === 'album') return listAlbums({ includeDeleted: true });
+  if (kind === 'track') return listTracks({ includeDeleted: true });
+  if (kind === 'creativeDirectorProject') return listCreativeDirectorProjects({ includeDeleted: true });
+  if (kind === 'moodBoard') return listBoards({ includeDeleted: true });
+  if (kind === 'musicVideoProject') return listMusicVideoProjects({ includeDeleted: true });
+  if (kind === 'writersRoomWork') return listWorksForIntegrity();
+  if (kind === 'writersRoomFolder') return listFoldersForIntegrity();
+  if (kind === 'writersRoomExercise') return listExercisesForIntegrity();
+  if (kind === 'commissionFeedback') return listCommissionFeedbackForIntegrity();
+  if (kind === 'creativeCommission') return listCommissionsForIntegrity();
+  if (kind === 'deck') return listDecksForIntegrity();
+  if (kind === 'storyboard') return listStoryboardsForIntegrity();
   return [];
 }
 
@@ -37,7 +69,7 @@ async function recordsForKind(kind) {
  * One row per record: `{ id, name, updatedAt, deleted, assetHashes }`.
  * Includes tombstoned records so deletes surface correctly in the diff.
  *
- * @param {'universe'|'series'|'mediaCollection'|'fableLoom'} kind
+ * @param {string} kind a subscribable record kind
  * @returns {Promise<Array>}
  */
 export async function buildLocalManifest(kind) {
@@ -49,19 +81,26 @@ export async function buildLocalManifest(kind) {
   const out = [];
   for (const r of records) {
     const deleted = r.deleted === true;
-    const assetIntegrity = deleted
+    // Live ephemeral records are local-only; their tombstones still propagate.
+    if (r.ephemeral === true && !deleted) continue;
+    const assetIntegrity = deleted || kind === 'writersRoomWork'
       ? { assetHashes: [], metadataMissing: false }
       : await assetIntegrityForRecord(kind, r);
+    let workAssets = [];
+    if (!deleted && kind === 'writersRoomWork') {
+      const { buildWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
+      workAssets = [...await buildWorkBodyManifest(r), ...await buildWorkBibleManifest(r)];
+    }
     out.push({
       id: r.id,
-      name: r.name,
+      name: r.name ?? r.title,
       updatedAt: r.updatedAt,
       deleted,
       // Tombstones never need asset hashes: computeRecordIntegrity only
       // compares assetHashes when BOTH sides are live (and drops
       // deleted-vs-deleted pairs entirely). Hashing a deleted record's
       // still-on-disk assets is pure wasted file I/O.
-      assetHashes: assetIntegrity.assetHashes,
+      assetHashes: [...assetIntegrity.assetHashes, ...workAssets.map((asset) => asset.sha256)].sort(),
       metadataMissing: assetIntegrity.metadataMissing,
     });
   }
@@ -100,11 +139,16 @@ export async function getPeerIntegrity({ peerId, kind }) {
     maxBytes: PEER_INTEGRITY_MAX_BYTES,
   }).catch(() => null);
   if (!body) return { available: false, reason: 'fetch-failed', records: [] };
+  if (!Array.isArray(body.records)) return { available: false, reason: 'fetch-failed', records: [] };
+  if (!isLegacyManifestKind(kind) &&
+      (typeof body.manifestVersion !== 'number' || body.manifestVersion < PEER_MANIFEST_VERSION)) {
+    return { available: false, reason: 'peer-too-old', records: [] };
+  }
   // The peer response is untrusted — computeRecordIntegrity assumes every entry
   // is a non-null object with a string `id` (it reads `r.id` and keys a Map on
   // it). A hostile/malformed manifest (nulls, scalars, id-less objects) would
   // otherwise throw and 500 this endpoint, so filter to well-formed rows first.
-  const remote = (Array.isArray(body?.records) ? body.records : []).filter(
+  const remote = body.records.filter(
     (r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id,
   );
 
