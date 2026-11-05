@@ -1,0 +1,64 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const project = {
+  id: 'p', concept: { prompt: 'Two teens', subjects: [{ kind: 'character', name: 'Renee' }] },
+  cameras: [{ id: 'vhs', name: 'VHS', kind: 'in-world', rule: 'Kevin owns it' }],
+  scenes: [{ sceneId: 'a', label: 'Shot 1', startSec: 0, endSec: 2, framePrompt: 'Frame A', prompt: 'Motion A', shotSheet: { emotion: 'Scared' } }, { sceneId: 'b', label: 'Shot 2', startSec: 2, endSec: 4 }],
+};
+vi.mock('./requireProject.js', () => ({ requireProject: vi.fn(async () => project) }));
+const { proposeShotSheet, __setShotSheetDepsForTests } = await import('./shotSheetProposals.js');
+const { shotSheetProposeSchema } = await import('../../lib/musicVideoStoryValidation.js');
+const { mergeShotSheetBackfill } = await import('../../lib/musicVideoShotSheet.js');
+
+const provider = { id: 'prov', enabled: true, type: 'api' };
+const run = vi.fn();
+const base = { providerId: 'prov', sceneIds: ['a'] };
+beforeEach(() => { vi.clearAllMocks(); __setShotSheetDepsForTests({ resolve: async () => ({ provider, selectedModel: 'm' }), run }); });
+
+describe('proposeShotSheet', () => {
+  // Catches the visible prompt preview actually calling a provider, or hiding what it would send (#11315).
+  it('previews what would be sent without calling the provider', async () => {
+    const result = await proposeShotSheet('p', { ...base, direction: 'to-prompts', preview: true, instruction: 'Darker' });
+    expect(run).not.toHaveBeenCalled();
+    expect(result.promptAdditions.map((entry) => entry.id)).toContain('shot-sheet-direction');
+    for (const text of ['Frame A', 'Scared', 'Kevin owns it', 'Darker']) expect(result.sentPrompt).toContain(text);
+  });
+  // Catches AI ticking Checked, inventing a camera, or proposing for a shot nobody asked about.
+  it('drops Checked, an unknown camera and unasked shots from a backfill', async () => {
+    run.mockResolvedValue({ text: JSON.stringify({ shots: [
+      { sceneId: 'a', sheet: { cameraId: 'drone', location: 'Street' } },
+      { sceneId: 'b', sheet: { location: 'Mall' } },
+    ] }) });
+    const { shots } = await proposeShotSheet('p', { ...base, direction: 'from-prompts' });
+    expect(shots).toEqual([{ sceneId: 'a', sheet: { location: 'Street' } }]);
+    run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', sheet: { checked: true, location: 'Street', cameraId: 'vhs' } }] }) });
+    const again = await proposeShotSheet('p', { ...base, direction: 'from-prompts' });
+    expect(again.shots).toEqual([{ sceneId: 'a', sheet: { location: 'Street', cameraId: 'vhs' } }]);
+  });
+  // Catches a prompt proposal losing a field, and a shot with no prompts counting as a proposal.
+  it('returns prompt proposals and leaves out empty ones', async () => {
+    run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', prompt: 'New motion' }, { sceneId: 'a' }] }) });
+    const { shots } = await proposeShotSheet('p', { ...base, direction: 'to-prompts' });
+    expect(shots).toEqual([{ sceneId: 'a', prompt: 'New motion' }]);
+  });
+  // Catches a stale client asking about a deleted shot, or unusable output reaching the review.
+  it('refuses a missing shot and an unreadable reply', async () => {
+    await expect(proposeShotSheet('p', { ...base, sceneIds: ['gone'], direction: 'to-prompts' })).rejects.toMatchObject({ status: 409 });
+    run.mockResolvedValue({ text: 'not json' });
+    await expect(proposeShotSheet('p', { ...base, direction: 'to-prompts' })).rejects.toMatchObject({ status: 502 });
+  });
+});
+
+describe('shot sheet AI limits', () => {
+  // Catches one request carrying a whole video.
+  it('refuses an oversized batch', () => {
+    const sceneIds = Array.from({ length: 16 }, (_, at) => `s${at}`);
+    expect(shotSheetProposeSchema.safeParse({ providerId: 'p', direction: 'to-prompts', sceneIds }).success).toBe(false);
+  });
+  // Catches a backfill overwriting anything the director set, including Checked.
+  it('fills only empty columns', () => {
+    const { sheet, filled } = mergeShotSheetBackfill({ emotion: 'Mine', characters: [] }, { emotion: 'AI', characters: ['Renee'], checked: true, location: 'Mall' });
+    expect(sheet).toEqual({ emotion: 'Mine', characters: ['Renee'], location: 'Mall' });
+    expect(filled).toEqual(['characters', 'location']);
+  });
+});

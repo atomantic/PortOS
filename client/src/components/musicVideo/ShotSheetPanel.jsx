@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import StageSection from './StageSection.jsx';
+import ShotSheetAi from './ShotSheetAi.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -209,6 +210,8 @@ export default function ShotSheetPanel({ board }) {
   const [uncheckedOnly, setUncheckedOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiApplying, setAiApplying] = useState(false);
   const rows = useMemo(() => shotSheetRows(project).map((row, at, all) => ({ ...row, problems: shotSheetProblems(row, all[at - 1]) })), [project]);
   const options = useMemo(() => ['view', 'location', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
   const cast = useMemo(() => shotSheetCast(project), [project]);
@@ -265,6 +268,19 @@ export default function ShotSheetPanel({ board }) {
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
       ))}
+      <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
+        {aiOpen ? 'Hide AI help' : 'AI help'}
+      </button>
+      {aiOpen && (
+        <ShotSheetAi project={project} rows={listed} disabled={locked}
+          onApplyingChange={setAiApplying}
+          // Saved before it shows, so a failed shot stays a pending proposal that Apply can retry.
+          onApply={async (sceneId, patch) => {
+            const saved = await saveScene(sceneId, patch);
+            if (saved) editSceneLocal(sceneId, patch);
+            return saved;
+          }} />
+      )}
       <div className="max-h-[85vh] overflow-auto rounded border border-port-border">
         <table className="w-full min-w-[78rem] border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-port-card text-xs text-port-text-muted">
@@ -275,7 +291,7 @@ export default function ShotSheetPanel({ board }) {
           </thead>
           <tbody className="divide-y divide-port-border">
             {listed.map((row) => (
-              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked} onEdit={editSheet} onOpen={onEditShot} />
+              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked || aiApplying} onEdit={editSheet} onOpen={onEditShot} />
             ))}
           </tbody>
         </table>

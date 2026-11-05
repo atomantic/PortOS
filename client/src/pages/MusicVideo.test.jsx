@@ -78,6 +78,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
   updateMusicVideoScene: vi.fn(),
+  proposeMusicVideoShotSheet: vi.fn(),
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
@@ -233,9 +234,10 @@ vi.mock('../services/apiSystem.js', () => ({
 vi.mock('../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(async () => []),
 }));
+const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '' }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
-    providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
+    providers: [], selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
   }),
 }));
@@ -312,7 +314,7 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
-  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene, moveMusicVideoSceneStart,
+  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoFestivalPacket,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
@@ -1917,6 +1919,29 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     Object.defineProperty(legacyPlayers[0], 'duration', { configurable: true, value: 5 });
     fireEvent.loadedMetadata(legacyPlayers[0]);
     expect(screen.queryByRole('alert')).toBeNull(); // legacy shots still loop to fill their span
+  });
+});
+
+describe('MusicVideo shot sheet AI help', () => {
+  afterEach(() => { providerModelsState.selectedProviderId = ''; });
+
+  // Catches the page's scene edit rebuilding from a captured project, so each applied shot undoes the one before it.
+  it('shows every applied shot after Apply saves several in one pass', async () => {
+    providerModelsState.selectedProviderId = 'p1';
+    const scenes = ['s1', 's2'].map((sceneId, order) => ({ sceneId, order, label: `Shot ${order + 1}`, prompt: 'Old motion', framePrompt: 'Old frame', shotSheet: { checked: true } }));
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 's1', prompt: 'New A' }, { sceneId: 's2', prompt: 'New B' }] });
+    updateMusicVideoScene.mockResolvedValue({});
+    await openProject({ ...PROJECT_WITH_CLIP, scenes }, 'produce');
+    fireEvent.click(screen.getByText('Shot sheet'));
+    fireEvent.click(screen.getByLabelText('Show prompts'));
+    fireEvent.click(screen.getByRole('button', { name: 'AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: /Propose prompts from sheet \(2 checked\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply 2 selected' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply 2 selected' })).toBeNull());
+    expect(updateMusicVideoScene).toHaveBeenCalledTimes(2);
+    const motion = (name) => within(screen.getAllByRole('button', { name }).map((button) => button.closest('tr')).find(Boolean)).getByText('Motion:').parentElement.textContent;
+    expect(motion('Open Shot 1')).toContain('New A');
+    expect(motion('Open Shot 2')).toContain('New B');
   });
 });
 

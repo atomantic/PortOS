@@ -1093,7 +1093,8 @@ function ProjectWorkspace({
 
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
-    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
+    // Reads the current project: shot sheet Apply calls this repeatedly from one retained closure.
+    patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
   const saveScene = (sceneId, patch) => {
     return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })

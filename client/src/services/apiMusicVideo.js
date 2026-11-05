@@ -49,6 +49,10 @@ export const saveMusicVideoStorySummary = (id, body, options = {}) => request(`/
 export const proposeMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Ask AI about a batch of shots, in either direction. Body: { providerId, model?, effort?, executionOptions?, direction, sceneIds, instruction?, preview? }. Nothing is saved.
+export const proposeMusicVideoShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/shot-sheet/propose`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // Draft the Cast guide, Environment guide and Visual language from the story summary.
 // Body: { providerId, model?, effort?, executionOptions?, instruction?, preview? }. Nothing is saved.
 export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
