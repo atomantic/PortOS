@@ -963,7 +963,7 @@ function IngredientEditor() {
           <button type="button" onClick={() => { applyDetails(externalDetails); setExternalDetails(null); }}
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
-        <CatalogRedesign key={record.id} id="catalog-redesign" open={redesignOpen} ingredient={record} payload={payload}
+        <CatalogRedesign key={`redesign-${record.id}`} id="catalog-redesign" open={redesignOpen} ingredient={record} payload={payload}
           disabled={identityReadOnly || payload.locked === true || saving || lookSaving || characterActionBusy || !!externalDetails}
           onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
 
