@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
@@ -50,7 +51,7 @@ export default function DigitalTwin() {
     return { status, settings };
   }, []);
 
-  const { data, loading, refetch, updateData } = useSocketResource(fetchData, {
+  const { data, loading, error, refetch, updateData } = useSocketResource(fetchData, {
     events: SNAPSHOT_EVENTS,
     compare: sameJsonShape,
   });
@@ -178,7 +179,9 @@ export default function DigitalTwin() {
         {/* Reserve the section's card stack while its lazy chunk loads — the
             wrapper already owns the padding and the scroll (#4147). */}
         <Suspense fallback={<PageSkeleton header="none" label="Loading digital twin section" cards={3} sidebar={false} />}>
-          {renderTabContent()}
+          {error && !data
+            ? <ListLoadError what="digital twin" error={error} onRetry={refetch} />
+            : renderTabContent()}
         </Suspense>
       </div>
     </div>
