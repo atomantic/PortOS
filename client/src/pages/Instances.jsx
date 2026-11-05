@@ -1053,7 +1053,7 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
         {suggestion && suggestion !== value && (
           <button
             onClick={applySuggestion}
-            className="text-[10px] text-port-accent hover:text-port-accent/80 underline"
+            className="text-[10px] text-port-accent hover:text-port-accent/80 underline pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center"
             title={`Use detected DNS: ${suggestion}`}
           >
             use {suggestion}
@@ -1085,7 +1085,7 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
       )}
       <button
         onClick={startEdit}
-        className="text-[10px] text-gray-500 hover:text-white underline"
+        className="text-[10px] text-gray-500 hover:text-white underline pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center"
         title={suggestion ? `Auto-detected: ${suggestion}` : 'Set a Tailscale DNS name for HTTPS'}
       >
         {peer.host ? 'edit' : (suggestion ? `use ${suggestion}` : 'set DNS')}
@@ -1094,7 +1094,7 @@ function PeerHostEditor({ peer, onRefresh, tailnetInfo }) {
         <button
           onClick={clearHost}
           disabled={saving}
-          className="text-[10px] text-gray-500 hover:text-white underline disabled:opacity-50"
+          className="text-[10px] text-gray-500 hover:text-white underline disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center"
           title="Switch this hop back to http://<ip>"
         >
           use IP only
@@ -1167,7 +1167,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
         <button onClick={save} disabled={saving || !password} aria-label="Save credentials" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-port-success hover:text-port-success/80 disabled:opacity-50"><Check size={14} /></button>
         <button onClick={() => setEditing(false)} aria-label="Cancel" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white"><X size={14} /></button>
         {hasAuth && (
-          <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50">remove</button>
+          <button onClick={clear} disabled={saving} className="text-[10px] text-gray-500 hover:text-port-error underline disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center">remove</button>
         )}
       </div>
     );
@@ -1186,7 +1186,7 @@ function PeerAuthEditor({ peer, onRefresh }) {
       ) : null}
       <button
         onClick={startEdit}
-        className={`text-[10px] underline ${peer.authRequired && !hasAuth ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-500 hover:text-white'}`}
+        className={`text-[10px] underline pointer-coarse:min-h-11 pointer-coarse:px-2 pointer-coarse:inline-flex pointer-coarse:items-center ${peer.authRequired && !hasAuth ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-500 hover:text-white'}`}
         title="Set an HTTP Basic username/password for a peer behind an auth proxy"
       >
         {hasAuth ? 'edit credential' : 'set credential'}
