@@ -165,11 +165,30 @@ describe('owned composition capture browser lifecycle', () => {
   it('cleans a child and profile after a bounded startup timeout without leaking stderr', async () => {
     startup = () => { child.emit('spawn'); child.stderr.write('private profile path and diagnostics'); };
     await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(
-      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-devtools-endpoint, spawnMs=\d+\)$/,
+      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-devtools-endpoint, spawnMs=\d+, group=(?:unavailable|not-requested)\)$/,
     );
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     await expect(access(profile)).rejects.toThrow();
     expect(child.stderr.listenerCount('data')).toBe(0);
+  });
+
+  it('reports the owned group snapshot on startup timeout without waiting for diagnostics', async () => {
+    startup = () => { child.emit('spawn'); };
+    vi.mocked(observeBrowserProcessGroup).mockResolvedValueOnce('leader:uninterruptible|parent:same|group:same');
+    const error = await launchCompositionBrowser({ startupMs: 40 }).catch(caught => caught);
+    expect(error.message).toContain('group=leader:uninterruptible|parent:same|group:same');
+    expect(observeBrowserProcessGroup).toHaveBeenCalledWith(child.pid, 500);
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('does not delay timeout or cleanup when the group observation does not settle', async () => {
+    startup = () => { child.emit('spawn'); };
+    vi.mocked(observeBrowserProcessGroup).mockReturnValueOnce(new Promise(() => {}));
+    const error = await launchCompositionBrowser({ startupMs: 40 }).catch(caught => caught);
+    expect(error.message).toContain('group=pending');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
   });
 
   it('names a browser that never produced output, and honors a startup override only when it is a positive integer', async () => {
