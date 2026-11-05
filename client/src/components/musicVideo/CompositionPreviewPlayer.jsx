@@ -10,6 +10,7 @@ import FrameStepper from './FrameStepper.jsx';
 import PreviewFilmLook, { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import toast from '../ui/Toast';
 import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
+import { sceneShotName } from '../../lib/musicVideoStages.js';
 
 const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -362,6 +363,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
   const shotIndex = shotNav ? shotSteps(project.scenes, t).index : 0;
+  const activeShot = shotIndex ? project.scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec)[shotIndex - 1] : null;
   const failed = preview.status === 'error' || preview.status === 'unavailable' || !!audioError;
   const timeLabel = failed
     ? 'Preview unavailable'
@@ -411,7 +413,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           onSeek={stopPlayback}
           disabled={!preview.ready || failed}
           capture={preview.captureFrame}
-          label={[project.name, shotIndex ? `Shot ${shotIndex}` : null].filter(Boolean).join(' · ')}
+          label={[project.name, activeShot ? sceneShotName(activeShot, { number: shotIndex }) : null].filter(Boolean).join(' · ')}
           keys
         />
       )}

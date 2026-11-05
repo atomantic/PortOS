@@ -5,6 +5,7 @@ import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 import StoryboardAnimatic from './StoryboardAnimatic.jsx';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
+import { sceneShotName } from '../../lib/musicVideoStages.js';
 
 // A rendered file (the final render or a draft excerpt). Its clock starts at
 // the clip's own start, so a seek to song time `t` lands at `t - startSec` and
@@ -32,6 +33,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   const range = { startSec, endSec: source.endSec ?? null };
   const songTime = startSec + time;
   const shot = shotSteps(scenes, songTime, range).index;
+  const activeShot = shot ? scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec)[shot - 1] : null;
   const stepFrame = (t) => {
     videoRef.current?.pause?.();
     seekTo(t - startSec);
@@ -67,7 +69,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         onSeek={stepFrame}
         maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
         capture={() => captureMediaFrame(videoRef.current)}
-        label={[projectName, shot ? `Shot ${shot}` : null].filter(Boolean).join(' · ')}
+        label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
         keys
       />
     </div>
