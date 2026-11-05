@@ -1317,6 +1317,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   // /api/usage
   ['DELETE /api/usage', REMOVES_RECORD],
   ['POST /api/usage/backfill', IN_PROCESS_COMPUTE],
+  ['POST /api/usage/backfill/preview', IN_PROCESS_COMPUTE],
+  ['POST /api/usage/backfill/preview/cancel', IN_PROCESS_COMPUTE],
   ['PUT /api/usage/fleet-billing', RECORDS],
   ['POST /api/usage/messages', CLIENT_TELEMETRY],
   ['POST /api/usage/session', CLIENT_TELEMETRY],

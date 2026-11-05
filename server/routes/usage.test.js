@@ -50,7 +50,9 @@ vi.mock('../services/claudeCodeUsage.js', () => ({
 
 vi.mock('../services/usageBackfill.js', () => ({
   getHistoricalUsageBackfillStatus: vi.fn(),
-  startHistoricalUsageBackfill: vi.fn()
+  startHistoricalUsageBackfill: vi.fn(),
+  startCodexUsagePreview: vi.fn(() => ({ status: 'running', mode: 'preview' })),
+  cancelCodexUsagePreview: vi.fn(async () => ({ status: 'cancelled' }))
 }));
 
 import * as usage from '../services/usage.js';
@@ -565,5 +567,25 @@ describe('usage routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(usage.resetUsage).toHaveBeenCalled();
+  });
+});
+
+
+describe('bounded Codex preview route', () => {
+  it('requires a real bounded date range and never starts legacy repair', async () => {
+    const app = buildApp();
+    const { startCodexUsagePreview } = await import('../services/usageBackfill.js');
+    vi.clearAllMocks();
+    for (const body of [{}, { from: '2026-02-30', to: '2026-03-01' }, { from: '2026-03-02', to: '2026-03-01' }, { from: '2024-01-01', to: '2026-01-01' }, { from: '2026-01-01', to: '2026-01-02', home: '/example/home' }]) {
+      const response = await request(app).post('/api/usage/backfill/preview').send(body);
+      expect(response.status).toBe(400);
+    }
+    expect(startCodexUsagePreview).not.toHaveBeenCalled();
+    const response = await request(app).post('/api/usage/backfill/preview').send({ from: '2026-01-01', to: '2026-01-02' });
+    expect(response.status).toBe(202);
+    expect(startCodexUsagePreview).toHaveBeenCalledWith({ from: '2026-01-01', to: '2026-01-02' });
+    expect(startHistoricalUsageBackfill).not.toHaveBeenCalled();
+    expect((await request(app).post('/api/usage/backfill/preview/cancel').send({})).status).toBe(400);
+    expect((await request(app).post('/api/usage/backfill/preview/cancel').send({ jobId: '12345678-1234-4234-8234-123456789abc' })).status).toBe(200);
   });
 });

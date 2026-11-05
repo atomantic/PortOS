@@ -63,3 +63,9 @@ and `missingUsage: null` are intentional. The preview cannot establish what a
 prior run already attributed to the live ledger, and must not be treated as a
 backfill amount. Reader integration and provable ledger application are separate
 work under #15030 and #15031.
+
+## Usage page preview
+
+The Usage page includes **Preview Codex history before repair** beside the existing historical reconciliation controls. Enter an inclusive UTC date interval (at most 366 days), then choose **Preview sources**. The scan runs in the existing background worker and can be cancelled without changing recorded usage. Source coverage, conflicting copies, observed counters and unknown ledger overlap are shown separately. This preview does not invoke the existing **Reconcile now** repair action.
+
+The preview is inspection only. No apply action is offered: recovered counters, legacy run timestamps and standalone scan watermarks do not establish exact previous attribution. Even newer cumulative high-water markers do not reconstruct historical per-model/day contributions. Issue #15031 remains open for evidence-bound repair, source/ledger revision validation and an explicit apply flow once a positive adjustment can be proved. Do not infer missing usage by subtracting arbitrary aggregate totals or by treating absent markers as proof.
