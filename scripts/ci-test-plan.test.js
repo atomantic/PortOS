@@ -1245,6 +1245,20 @@ describe('CI test impact planner', () => {
   });
 
   describe('explicit text fixture ownership', () => {
+    it('selects the snapshot verifier test for its script, pins and signed fixtures', () => {
+      const owner = 'server/lib/superColliderSnapshot.test.js';
+      const inputs = [
+        'docker/supercollider/verify-snapshot.sh',
+        'docker/supercollider/debian-inrelease.sha256',
+        'server/test/fixtures/supercollider-snapshot/older-trixie-updates.InRelease',
+      ];
+      for (const input of inputs) {
+        const plan = buildCiTestPlan([input], { trackedFiles: [...TRACKED, owner, ...inputs] });
+        expect(plan.full, input).toBe(false);
+        expect(plan.server.files, input).toContain(owner);
+      }
+    });
+
     it('selects the review-loop snapshot owner and always-run guards without full CI', () => {
       const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT], { trackedFiles: REVIEW_LOOP_TRACKED });
 
