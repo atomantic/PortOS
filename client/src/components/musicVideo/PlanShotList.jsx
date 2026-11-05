@@ -10,8 +10,8 @@ const FILTERS = [['all', 'All'], ['fix', 'Needs a fix']];
 
 /**
  * The timing check on Shots: every shot in song order, read rather than watched —
- * its start and length, its storyboard panel (else its frame), the lyric it was
- * planned on, its action and camera, and each storyboard problem on its own
+ * its name (as on its card), start and length, its storyboard panel (else its frame),
+ * the lyric it was planned on, its action and camera, and each storyboard problem on its own
  * row; untimed shots follow, unnumbered. A row opens that shot's card, where
  * it is fixed and made. Shots before the song (the cold open) lead the list with
  * their length and sound. `?shots=fix` narrows the list to the shots with a problem.
@@ -62,9 +62,9 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
         </div>
       )}
       <ol className="min-w-0 space-y-1.5">
-        {listed.map(({ scene, number, coldOpen, durationSec, lyric, action, camera, flags }) => (
+        {listed.map(({ scene, name, number, coldOpen, durationSec, lyric, action, camera, flags }) => (
           <li key={scene.sceneId}>
-            <button type="button" onClick={() => onOpenShot(scene.sceneId)} aria-label={`Edit ${coldOpen ? `cold open shot ${coldOpen}` : number ? `Shot ${number}` : `untimed shot ${scene.label || scene.sceneId}`}`}
+            <button type="button" onClick={() => onOpenShot(scene.sceneId)} aria-label={`Edit ${number || coldOpen ? name : `untimed shot ${name}`}`}
               className={`grid w-full min-w-0 grid-cols-[3.75rem_4.5rem_minmax(0,1fr)_1rem] items-center gap-2 rounded border p-1.5 text-left ${flags.length ? 'border-port-warning bg-port-warning/5' : 'border-port-border bg-port-card'}`}>
               <span className="text-xs tabular-nums text-port-text-muted">
                 <span className="block font-medium text-port-text">{coldOpen ? 'Before song' : number ? formatTimecode(scene.startSec) : 'Untimed'}</span>
@@ -74,7 +74,7 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
               <ScenePoster scene={scene} src={musicVideoImageSrc(scene.panelArt) || scenePosterSrc(scene)} className="aspect-video w-full rounded" iconSize={16} />
               <span className="min-w-0">
                 <span className={`block truncate text-sm ${lyric && !coldOpen ? 'italic text-port-text' : 'text-port-text-muted'}`}>{coldOpen ? preMusicSoundSummary(scene.preMusic) : lyric ? `“${lyric}”` : 'Instrumental'}</span>
-                <span className="block truncate text-xs text-port-text-muted">{[coldOpen ? `Cold open ${coldOpen}` : number ? `Shot ${number}` : scene.label, camera, action].filter(Boolean).join(' · ')}</span>
+                <span className="block truncate text-xs text-port-text-muted">{[name, camera, action].filter(Boolean).join(' · ')}</span>
                 {flags.map((text) => (
                   <span key={text} className="flex items-start gap-1 text-xs text-port-warning"><AlertTriangle size={12} aria-hidden="true" className="mt-0.5 shrink-0" />{text}</span>
                 ))}

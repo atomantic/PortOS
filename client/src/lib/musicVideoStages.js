@@ -16,6 +16,7 @@ import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoRevie
 import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
+import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -834,14 +835,30 @@ const COVERAGE_TEXT = {
   'early-end': (c) => `Ends ${gapSec(c)} before the song does, ${spanText(c.startSec, c.endSec)}`,
 };
 
+// A label that is itself a shot number ("Shot 14", "Shot 14 · 2/3"). Its position
+// stops matching once an earlier shot is deleted, so showing both reads as two numbers.
+const numberedLabel = (scene) => /^(shot|scene)\s+\d/i.test(scene?.label || '');
+
+/** The one name a shot goes by on the Shots list, the board and its card. */
+export function sceneShotName(scene, { number = null, coldOpen = null } = {}) {
+  const place = coldOpen ? `Cold open ${coldOpen}` : number && !numberedLabel(scene) ? `Shot ${number}` : null;
+  return [place, scene.label || scene.sectionLabel].filter(Boolean).join(' · ') || `Scene ${(scene.order ?? 0) + 1}`;
+}
+
+/** A checklist row's short button to a shot's card, numbered as that card is. */
+function checklistShotLabel(scenes, sceneId) {
+  const at = scenes.findIndex((scene) => scene.sceneId === sceneId);
+  if (at < 0) return 'Shot';
+  return numberedLabel(scenes[at]) ? scenes[at].label : `Shot ${at + 1}`;
+}
+
 /**
  * The Shot coverage and Shot details rows name each shot they are about (a
  * button to its card) and say what is wrong with it, in place of the generic
  * sentence or count.
  */
 function namedShots(item, readiness, scenes) {
-  const number = (sceneId) => scenes.findIndex((scene) => scene.sceneId === sceneId) + 1;
-  const label = (sceneId) => (number(sceneId) > 0 ? `Shot ${number(sceneId)}` : 'Shot');
+  const label = (sceneId) => checklistShotLabel(scenes, sceneId);
   const byShot = (entries, text) => [...entries.reduce((map, entry) => map.set(entry.sceneId,
     [...(map.get(entry.sceneId) || []), text(entry)]), new Map())].map(([sceneId, lines]) => ({ sceneId, label: label(sceneId), text: lines.join(' · ') }));
   const coverage = readiness?.storyboard?.coverage;
@@ -890,12 +907,11 @@ const quoted = (lines) => (lines.length ? lines.map((line) => `“${line}”`).j
 function lyricAnchorItem(readiness, scenes) {
   const flagged = readiness?.storyboard?.lyricAnchors;
   if (!flagged?.length || readiness?.storyboard?.approved) return null;
-  const number = (sceneId) => scenes.findIndex((scene) => scene.sceneId === sceneId) + 1;
   return {
     id: 'board-anchors', label: 'Lyric anchors', done: false,
     detail: 'These shots are anchored to lyrics other than the ones sung over them.',
     shots: flagged.map(({ sceneId, sung, anchored }) => ({
-      sceneId, label: number(sceneId) > 0 ? `Shot ${number(sceneId)}` : 'Shot',
+      sceneId, label: checklistShotLabel(scenes, sceneId),
       text: `Sung: ${quoted(sung)} · anchored: ${quoted(anchored)}`,
     })),
     action: { label: 'Anchor to the sung lyrics', run: 'sync-lyric-anchors' },
@@ -904,11 +920,16 @@ function lyricAnchorItem(readiness, scenes) {
 
 /**
  * Plan's shot list: every shot in song order (untimed ones last, `number` null)
- * with what the timing check reads —
- * its span, the lyric it was planned on, its storyboard action and camera (a
- * director's draft row, else the row derived from the scene) — and each problem
- * the storyboard readiness names for it (`flags`, one sentence each). Lyric
- * anchors drop out once the storyboard is approved, as on the checklist.
+ * with what the timing check reads — its name, its span, the lyric it was
+ * planned on, its action and camera, and each problem the storyboard readiness
+ * names for it (`flags`, one sentence each). Lyric anchors drop out once the
+ * storyboard is approved, as on the checklist.
+ *
+ * A storyboard row describes a shot only when its action is on no other shot's
+ * row: a split copies the parent's row onto every piece and later rewrites of
+ * the pieces' prompts leave those copies behind. Projects already hold such
+ * copies with nothing marking them, so the shared text is the only signal. The
+ * shot then reads from its sheet's action, else its own prompt.
  */
 export function planShotRows(project, readiness = project?.productionReadiness) {
   const storyboard = readiness?.storyboard || {};
@@ -920,6 +941,11 @@ export function planShotRows(project, readiness = project?.productionReadiness) 
     for (const { sceneId, sung, anchored } of storyboard.lyricAnchors || []) flag(sceneId, `Sung ${quoted(sung)}, anchored to ${quoted(anchored)}`);
   }
   const rows = new Map((storyboard.shots || []).map((row) => [row.sceneId, row]));
+  const actionUses = new Map();
+  for (const scene of project?.scenes || []) {
+    const action = rows.get(scene?.sceneId)?.action?.trim();
+    if (action) actionUses.set(action, (actionUses.get(action) || 0) + 1);
+  }
   // Untimed shots (a new scene before its timing is set) follow the timed ones, unnumbered, so their problems stay visible.
   // Shots before the song (the cold open) lead, in play order, numbered on their own (`coldOpen`).
   const coldOpen = coldOpenScenes(project);
@@ -928,14 +954,17 @@ export function planShotRows(project, readiness = project?.productionReadiness) 
   const untimed = scenes.filter((scene) => scene && !Number.isFinite(scene.startSec));
   return [...coldOpen, ...timed, ...untimed]
     .map((scene, at) => {
-      const row = rows.get(scene.sceneId);
+      const drafted = rows.get(scene.sceneId);
+      const row = actionUses.get(drafted?.action?.trim()) > 1 ? null : drafted;
       const i = at - coldOpen.length;
+      const number = i >= 0 && i < timed.length ? i + 1 : null;
+      const coldOpenNumber = i < 0 ? at + 1 : null;
       return {
-        scene, number: i >= 0 && i < timed.length ? i + 1 : null,
-        ...(i < 0 ? { coldOpen: at + 1, durationSec: normalizePreMusic(scene.preMusic).durationSec } : {}),
+        scene, number, name: sceneShotName(scene, { number, coldOpen: coldOpenNumber }),
+        ...(coldOpenNumber ? { coldOpen: coldOpenNumber, durationSec: normalizePreMusic(scene.preMusic).durationSec } : {}),
         lyric: typeof scene.lyricText === 'string' ? scene.lyricText.trim() : '',
-        action: row?.action || scene.visualIntent || scene.prompt || '',
-        camera: row?.camera || '',
+        action: row?.action?.trim() || scene.shotSheet?.action?.trim() || scene.prompt?.trim() || scene.visualIntent?.trim() || scene.framePrompt?.trim() || '',
+        camera: row?.camera || shotCameraLabel(scene.camera) || scene.direction?.camera || '',
         flags: flags.get(scene.sceneId) || [],
       };
     });

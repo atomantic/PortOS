@@ -56,6 +56,7 @@ import { shotEffectLabel, shotEffects } from '../../lib/musicVideoShotEffects.js
 import SceneGlitches from './SceneGlitches.jsx';
 import { PreMusicSound, PreMusicTiming } from './ScenePreMusic.jsx';
 import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.js';
+import { sceneShotName } from '../../lib/musicVideoStages.js';
 import SceneLyricType from './SceneLyricType.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -135,7 +136,7 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 }
 
 export default function SceneCard({
-  scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
+  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
@@ -494,7 +495,7 @@ export default function SceneCard({
         <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {[shotNumber ? `Shot ${shotNumber}` : null, scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`}
+            {shotName || sceneShotName(scene)}
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
