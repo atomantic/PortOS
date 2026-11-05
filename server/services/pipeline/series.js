@@ -25,6 +25,7 @@ import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/e
 import { CHECK_SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { DIAGNOSIS_MAX_FILED } from './seriesAutopilot/diagnosisCore.js';
@@ -1312,9 +1313,7 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
         // mergeUniversesFromSync for the contract.
         return;
       } else {
-        const localTs = local.updatedAt || '';
-        const remoteTs = sanitized.updatedAt || '';
-        if (remoteTs > localTs) {
+        if (compareNewerWins(sanitized.updatedAt, local.updatedAt)) {
           // Hierarchy invariant on the sync path: an older peer (or a peer that
           // cleared the link before the rule shipped) can push a newer series
           // payload with universeId:null. updateSeries refuses to unlink, but
