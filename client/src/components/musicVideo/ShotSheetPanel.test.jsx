@@ -120,6 +120,17 @@ describe('ShotSheetPanel', () => {
     expect(color(bar.getByRole('button', { name: /VHS · Renee/ }))).toBe(color(bar.getByRole('button', { name: /VHS · Kevin/ })));
   });
 
+  // Catches the storyboard sketch standing in for the selected render, which the warning beside it describes.
+  it('shows the selected frame ahead of the storyboard sketch', () => {
+    const board = boardFor();
+    Object.assign(board.project.scenes[1], { referenceImageId: 'selected.png', panelArt: 'storyboard.png' });
+    const { container } = render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const images = [...container.querySelectorAll('img')].map((image) => image.getAttribute('src'));
+    expect(images.some((src) => src.includes('selected.png'))).toBe(true);
+    expect(images.some((src) => src.includes('storyboard.png'))).toBe(false);
+  });
+
   // Catches a camera edit not persisting to the project.
   it('adds a camera to the project', () => {
     const board = boardFor();

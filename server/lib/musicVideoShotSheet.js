@@ -35,8 +35,8 @@ export function normalizeShotSheet(sheet) {
  * Whether the shot's selected frame was rendered from an earlier wording of its
  * frame prompt, so the picture no longer shows what the prompt says. A frame
  * with no recorded prompt (imported, or older than prompt recording) can't be
- * judged and reads as current. Takes record the composed prompt, which leads
- * with or contains the shot's own text, so this looks for that text within it.
+ * judged and reads as current. Takes record the composed prompt, which contains
+ * the shot's own text whole, so any edit to that text shows.
  */
 export function selectedFrameOutdated(scene) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
@@ -44,7 +44,7 @@ export function selectedFrameOutdated(scene) {
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
     .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
   if (typeof take?.prompt !== 'string' || !take.prompt) return false;
-  return !take.prompt.includes(framePrompt.slice(0, 120));
+  return !take.prompt.includes(framePrompt);
 }
 
 /** The sheet's rows: timed shots in song order, then untimed ones, each with its sung lyric, camera and frame state. */

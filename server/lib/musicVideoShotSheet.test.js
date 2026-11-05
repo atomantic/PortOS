@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
-import { applySceneUpdate, applyProjectPatch } from '../services/musicVideo/projectsLogic.js';
+import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
 const scene = (over = {}) => ({ sceneId: 's1', framePrompt: 'Renee rides away at dusk', referenceImageId: 'a.png', takes: [], ...over });
 const take = (prompt) => ({ kind: 'image', assetId: 'a.png', prompt });
@@ -10,6 +10,11 @@ describe('selectedFrameOutdated', () => {
   // Catches the check missing a frame rendered before the prompt was rewritten.
   it('flags a frame whose recorded prompt no longer holds the shot\'s frame prompt', () => {
     expect(selectedFrameOutdated(scene({ takes: [take('Renee and Kevin stop at the curb')] }))).toBe(true);
+  });
+  // Catches an edit late in a long prompt going unnoticed.
+  it('flags a change after the prompt\u2019s opening', () => {
+    const opening = 'Renee and Kevin ride down a long curved suburban street at dusk past lawns, sprinklers and porch lights just clicking on one by one. ';
+    expect(selectedFrameOutdated(scene({ framePrompt: `${opening}Kevin holds the camera.`, takes: [take(`${opening}Renee holds the camera.`)] }))).toBe(true);
   });
   // Catches a false alarm when the render composed extra text around the shot's own prompt.
   it('reads as current when the composed prompt contains the shot\'s text', () => {
@@ -55,6 +60,15 @@ describe('shot sheet storage', () => {
     expect(updated.prompt).toBe('keep me');
     expect(updated.framePrompt).toBe('keep me too');
     expect(musicVideoSceneUpdateSchema.safeParse({ shotSheet: { unknown: 'x' } }).success).toBe(false);
+  });
+  // Catches a re-plan silently erasing the director's plan on a shot it keeps.
+  it('keeps a saved sheet when a re-plan reuses the shot', () => {
+    const start = { id: 'p', scenes: [{ sceneId: 's1', startSec: 0, endSec: 6, prompt: 'old' }] };
+    const { project } = applySceneUpdate(start, 's1', { shotSheet: { emotion: 'Scared', checked: true } });
+    const { project: replanned } = replaceScenes(project, [{ startSec: 0, endSec: 6, prompt: 'new' }]);
+    expect(replanned.scenes[0].sceneId).toBe('s1');
+    expect(replanned.scenes[0].prompt).toBe('new');
+    expect(replanned.scenes[0].shotSheet).toEqual({ emotion: 'Scared', checked: true });
   });
   // Catches the project patch dropping the camera list.
   it('saves the project\'s cameras', () => {
