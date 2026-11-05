@@ -1138,6 +1138,15 @@ export default function Layout() {
             <ThemeModeToggle />
             <ThemeSwitcher position="below" />
             <VoiceToggleButton />
+            <NotificationDropdown
+              position="below"
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAsRead={markAsRead}
+              onMarkAllAsRead={markAllAsRead}
+              onRemove={removeNotification}
+              onClearAll={clearAll}
+            />
           </div>
         </header>
 

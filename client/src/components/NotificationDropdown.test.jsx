@@ -105,6 +105,17 @@ describe('NotificationDropdown', () => {
       const anchored = classes.filter((c) => /^(sm:|md:|lg:)?(absolute|inset|left|right|top|bottom)(-|$)/.test(c));
       expect(anchored).toEqual([]);
     });
+
+    it('supports position="below" for topbar placements', () => {
+      renderDropdown({ position: 'below' });
+      const panel = openPanel();
+
+      expect(panel.parentElement).toBe(document.body);
+      expect(panel.className).toContain('fixed');
+      expect(panel.style.left).not.toBe('');
+      expect(panel.style.top).not.toBe('');
+      expect(panel.style.width).not.toBe('');
+    });
   });
 
   describe('accessibility semantics', () => {
