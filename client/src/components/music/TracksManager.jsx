@@ -83,6 +83,7 @@ export default function TracksManager() {
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState(null);
   const [library, setLibrary] = useState([]);
+  const libraryRequest = useRef(0);
   const [albums, setAlbums] = useState([]);
   // The render shown in the detail/remix modal, and the seed passed to the gen
   // panel when remixing (nonce bumps per click so re-remixing the same take
@@ -147,7 +148,11 @@ export default function TracksManager() {
   // old render's id to the wrong track.
   const resetTrackViewState = () => {
     cancelDelete();
+    libraryRequest.current += 1;
     setLibraryOpen(false);
+    setLibraryLoading(false);
+    setLibraryError(null);
+    setLibrary([]);
     setModalRender(null);
     setRemix(null);
     setChiptuneRemix(null);
@@ -322,22 +327,23 @@ export default function TracksManager() {
   const openLibrary = async () => {
     if (!requireSaved()) return;
     const targetId = persisted.id;
+    const request = ++libraryRequest.current;
+    const current = () => request === libraryRequest.current && selectedIdRef.current === targetId;
     setLibraryOpen(true);
     setLibraryLoading(true);
     setLibraryError(null);
-    try {
-      const res = await listMusicLibrary({ silent: true });
-      if (selectedIdRef.current !== targetId) return;
+    await listMusicLibrary({ silent: true }).then((res) => {
+      if (!current()) return;
       setLibrary(Array.isArray(res?.tracks) ? res.tracks : []);
-    } catch (err) {
-      if (selectedIdRef.current !== targetId) return;
+    }).catch((err) => {
+      if (!current()) return;
       setLibraryError(err);
       setLibrary([]);
-    } finally {
-      if (selectedIdRef.current === targetId) {
+    }).finally(() => {
+      if (current()) {
         setLibraryLoading(false);
       }
-    }
+    });
   };
 
   const attachFromLibrary = async (filename) => {

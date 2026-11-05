@@ -1,4 +1,4 @@
-import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -499,6 +499,33 @@ describe('<TracksManager> music library picker', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+  });
+
+  it('releases a pending library read on track switch and ignores it after returning to the same track', async () => {
+    listTracks.mockResolvedValue([TRACK, { ...TRACK, id: 'track-2', title: 'Second Song' }]);
+    let finishOld;
+    let finishCurrent;
+    listMusicLibrary
+      .mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishCurrent = resolve; }));
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+    fireEvent.click(screen.getByRole('button', { name: /from library/i }));
+    expect(screen.getByRole('button', { name: /from library/i })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Second Song/ }));
+    await screen.findByDisplayValue('Second Song');
+    expect(screen.getByRole('button', { name: /from library/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /Example Song/ }));
+    await screen.findByDisplayValue('Example Song');
+    fireEvent.click(screen.getByRole('button', { name: /from library/i }));
+
+    await act(async () => finishOld({ tracks: [{ filename: 'old.mp3', label: 'Stale library result' }] }));
+    expect(screen.getByRole('button', { name: /from library/i })).toBeDisabled();
+    expect(screen.queryByText('Stale library result')).toBeNull();
+    await act(async () => finishCurrent({ tracks: [{ filename: 'current.mp3', label: 'Current library result' }] }));
+    expect(await screen.findByText('Current library result')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /from library/i })).toBeEnabled();
   });
 
   it('shows an error row with Retry when listing library fails, instead of claiming empty', async () => {
