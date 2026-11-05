@@ -9,7 +9,12 @@ describe('ConfirmButtonPair', () => {
     render(<ConfirmButtonPair />);
     const confirm = screen.getByRole('button', { name: 'Delete' });
     expect(confirm.className).toContain('bg-port-error/20');
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    for (const button of [confirm, cancel]) {
+      expect(button.className).toContain('pointer-coarse:min-h-11');
+      expect(button.className).toContain('pointer-coarse:min-w-11');
+      expect(button.className).toContain('pointer-coarse:justify-center');
+    }
     // No prompt span when prompt is omitted.
     expect(screen.queryByText('Delete?')).toBeNull();
   });
