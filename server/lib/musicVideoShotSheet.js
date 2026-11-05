@@ -117,12 +117,12 @@ export const SHOT_SHEET_MAP_BARS = [
  * into a stretch, with its span and shot count, for reading how the story moves
  * over the song. Shots with no value form their own stretches (`value: ''`).
  */
-export function shotSheetStretches(rows, valueOf) {
+export function shotSheetStretches(rows, readValue) {
   const stretches = [];
   for (const row of rows) {
     const { scene } = row;
     if (!Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)) continue;
-    const value = valueOf(row);
+    const value = readValue(row);
     const last = stretches.at(-1);
     if (last?.value === value) { last.endSec = scene.endSec; last.shots += 1; }
     else stretches.push({ value, startSec: scene.startSec, endSec: scene.endSec, shots: 1 });
