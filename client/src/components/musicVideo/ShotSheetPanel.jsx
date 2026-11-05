@@ -4,6 +4,7 @@ import StageSection from './StageSection.jsx';
 import ScenePoster from './ScenePoster.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
+import { uuidv4 } from '../../lib/uuid.js';
 import {
   SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, normalizeShotSheet, shotSheetCast, shotSheetRows,
 } from '../../../../server/lib/musicVideoShotSheet.js';
@@ -23,7 +24,7 @@ function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength 
 function CameraList({ project, disabled, onChange }) {
   const cameras = project.cameras || [];
   const patch = (id, change) => onChange(cameras.map((camera) => (camera.id === id ? { ...camera, ...change } : camera)));
-  const add = () => onChange([...cameras, { id: `cam-${crypto.randomUUID().slice(0, 8)}`, name: `Camera ${cameras.length + 1}`, kind: 'in-world' }]);
+  const add = () => onChange([...cameras, { id: `cam-${uuidv4().slice(0, 8)}`, name: `Camera ${cameras.length + 1}`, kind: 'in-world' }]);
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-1.5">
       <legend className="text-xs font-medium">Cameras in this video</legend>
@@ -41,7 +42,7 @@ function CameraList({ project, disabled, onChange }) {
           <input key={`r-${camera.rule || ''}`} aria-label={`${camera.name} rule`} placeholder="How it behaves in the story" defaultValue={camera.rule || ''} maxLength={1000} className={inputCls}
             onBlur={(event) => { if (event.target.value.trim() !== (camera.rule || '')) patch(camera.id, { rule: event.target.value.trim() }); }} />
           <button type="button" aria-label={`Remove ${camera.name}`} onClick={() => onChange(cameras.filter((entry) => entry.id !== camera.id))}
-            className="flex min-h-[44px] items-center justify-center rounded border border-port-border text-port-text-muted sm:min-h-0">
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted">
             <Trash2 size={14} aria-hidden="true" />
           </button>
         </div>
