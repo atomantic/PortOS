@@ -29,6 +29,7 @@ import {
   setInteractiveScanState
 } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
+import { diffRunRecord } from '../lib/agentRunReconcile.js';
 
 /**
  * Attribute Claude Code, Codex, Grok and Antigravity sessions that PortOS never
@@ -88,6 +89,17 @@ function subtractWindows(from, to, windows) {
   return pieces.filter(([a, b]) => b >= a);
 }
 
+/** Merge overlapping coverage before parsing, so retries never count a slice twice. */
+function mergeIntervals(intervals) {
+  const merged = [];
+  for (const [from, to] of intervals.filter(([a, b]) => a <= b).sort((a, b) => a[0] - b[0])) {
+    const last = merged.at(-1);
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
+  return merged;
+}
+
 /** Pure: split an inclusive interval at UTC midnights → `[{ day, from, to }]`. */
 function splitByUtcDay(from, to) {
   const out = [];
@@ -101,21 +113,32 @@ function splitByUtcDay(from, to) {
 }
 
 /** Every PortOS run's `[start, end]` (slack applied) by workspace, for runs touching `[from, now]`. */
-async function loadRunWindows(runsDir, from, now, pick = () => true) {
+async function loadRunWindows(runsDir, from, now, pick = () => true, projections = new Map(), unresolved = [], observed = new Set()) {
   const byCwd = new Map();
   for (const name of await listSubdirs(runsDir)) {
     const dir = join(runsDir, name);
-    // A run directory untouched since before the window cannot overlap it.
+    // Directory mtime cannot rule out an unfinished run: its metadata file
+    // can change without touching the directory, or remain stale after death.
     const info = await stat(dir).catch(() => null);
-    if (!info || info.mtimeMs < from - DAY_MS) continue;
-    const metadata = await readJSONFile(join(dir, 'metadata.json'), null);
+    if (!info) continue;
+    const metadata = await readJSONFile(join(dir, 'metadata.json'), null, { strict: true });
     const start = Date.parse(metadata?.startTime || '');
     if (!metadata?.workspacePath || Number.isNaN(start) || !pick(metadata)) continue;
-    // No endTime yet: the run is still going, so its window is open-ended.
-    const end = Date.parse(metadata.endTime || '');
+    observed.add(metadata.id || name);
+    // Only a lifecycle observation can bound a missing endTime. Absence from
+    // an in-memory registry after restart does not establish when a run ended.
+    let end = Date.parse(metadata.endTime || '');
+    if (Number.isNaN(end)) {
+      const diff = diffRunRecord(projections.get(metadata.id || name), metadata);
+      const observedEnd = Date.parse(diff?.finding === 'record-open' ? diff.detail.ledgerEndedAt : '');
+      if (Number.isFinite(observedEnd) && observedEnd >= start) end = observedEnd;
+      else unresolved.push({ runId: metadata.id || name, workspacePath: metadata.workspacePath, from: start - WINDOW_SLACK_MS, to: now });
+    }
+    if (Number.isFinite(end) && end + WINDOW_SLACK_MS < from) continue;
     const window = [start - WINDOW_SLACK_MS, (Number.isNaN(end) ? now : end) + WINDOW_SLACK_MS];
     if (!byCwd.has(metadata.workspacePath)) byCwd.set(metadata.workspacePath, []);
     byCwd.get(metadata.workspacePath).push(window);
+    await yieldToEventLoop();
   }
   return byCwd;
 }
@@ -329,16 +352,39 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
     // empty and re-bill 35 days. Only consulted until usage.json holds the state.
     const state = await getInteractiveScanState()
       ?? await readJSONFile(INTERACTIVE_SCAN_FILE, { watermarks: {} }, { strict: true });
+    if (state?.coverageVersion != null && state.coverageVersion !== 1) throw new Error('Unsupported interactive usage coverage version');
     const watermarks = { ...(state?.watermarks || {}) };
+    const deferred = structuredClone(state?.deferred || {});
     const to = now - SETTLE_MS;
     // Not caught: a provider-list failure must surface, not read as "none configured".
     const providerList = providers ?? await import('./providers.js').then((m) => m.listProviders());
     const summary = { families: {} };
-    const byCwd = await loadRunWindows(runsDir, now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS, now);
+    const { getRunProjections, MAX_READ_LIMIT } = await import('./agentRunEventLog.js');
+    const projections = new Map((await getRunProjections({ limit: MAX_READ_LIMIT })).map((run) => [run.id, run]));
+    const unresolved = [];
+    const observed = new Set();
+    const priorDeferred = Object.values(deferred).flat();
+    const coverageFrom = Math.min(now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS, ...priorDeferred.map((window) => window.from));
+    const byCwd = await loadRunWindows(runsDir, coverageFrom, now, undefined, projections, unresolved, observed);
+    // Removing a run record is not evidence of its historical ownership. Keep
+    // previously held regions recoverable until an authoritative bound exists.
+    const missing = new Map();
+    for (const old of priorDeferred) {
+      if (observed.has(old.runId)) continue;
+      const key = JSON.stringify([old.runId, old.workspacePath]);
+      const previous = missing.get(key);
+      missing.set(key, { ...old, from: Math.min(old.from, previous?.from ?? old.from), to: now });
+    }
+    for (const window of missing.values()) {
+      unresolved.push(window);
+      if (!byCwd.has(window.workspacePath)) byCwd.set(window.workspacePath, []);
+      byCwd.get(window.workspacePath).push([window.from, now + WINDOW_SLACK_MS]);
+    }
+    summary.unresolved = unresolved;
 
     let sidechainRepairedAt = state?.sidechainRepairedAt ?? null;
     // Snapshot handed to each commit: the state as it would stand once that write lands.
-    const snapshot = () => ({ watermarks: { ...watermarks }, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
+    const snapshot = () => ({ coverageVersion: 1, watermarks: { ...watermarks }, deferred: structuredClone(deferred), unresolved, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
     if (!sidechainRepairedAt && resolveFamilyProvider(providerList, 'claude')) {
       // Process start, not `now`: a run reconciled after boot already ran the fixed reader.
       const cutoff = now - process.uptime() * 1000;
@@ -355,12 +401,37 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
     for (const family of FAMILIES) {
       if (!resolveFamilyProvider(providerList, family)) continue;
       const from = watermarks[family] != null ? watermarks[family] + 1 : now - FIRST_SCAN_LOOKBACK_DAYS * DAY_MS;
-      if (to < from) continue;
+      const pending = deferred[family] || [];
+      const scanFrom = Math.min(from, ...pending.map((window) => window.from));
+      if (to < scanFrom) continue;
+      // Pending regions were excluded from the same atomic count/cursor write.
+      // Replay only those regions for their workspace; other sessions keep the
+      // normal watermark even while one run's ownership remains unknown.
+      const matches = (window, cwd) => !cwd || cwdMatches(cwd, window.workspacePath);
+      const regionsOf = (lo, hi, cwd) => mergeIntervals([
+        [Math.max(lo, from), hi],
+        ...pending.filter((window) => matches(window, cwd)).map((window) => [Math.max(lo, window.from), Math.min(hi, window.to)])
+      ]).flatMap(([a, b]) => subtractWindows(a, b, windowsFor(byCwd, cwd)));
+      const nextPending = unresolved.flatMap((window) => [
+        { ...window, from: Math.max(from, window.from), to: Math.min(to, window.to) },
+        ...pending.filter((old) => cwdMatches(old.workspacePath, window.workspacePath) || cwdMatches(window.workspacePath, old.workspacePath))
+          .map((old) => ({ ...window,
+            workspacePath: cwdMatches(old.workspacePath, window.workspacePath) ? old.workspacePath : window.workspacePath,
+            from: Math.max(old.from, window.from), to: Math.min(old.to, window.to)
+          }))
+      ].filter((window) => window.from <= window.to));
+      // Compact successive scan intervals for each owner/workspace pair.
+      const grouped = new Map();
+      for (const window of nextPending) {
+        const key = JSON.stringify([window.runId, window.workspacePath]);
+        if (!grouped.has(key)) grouped.set(key, { window, intervals: [] });
+        grouped.get(key).intervals.push([window.from, window.to]);
+      }
 
       const perDay = new Map();
       const seen = new Set();
-      for (const session of await listSessions(family, home, from)) {
-        for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, from, to, byCwd, seen)) {
+      for (const session of await listSessions(family, home, scanFrom)) {
+        for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, scanFrom, to, byCwd, seen, regionsOf)) {
           if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [], sources: new Set() });
           const dayTotals = perDay.get(day);
           addBuckets(dayTotals, buckets);
@@ -396,6 +467,8 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       }
       // The family's watermark commits in the same write as its counts.
       watermarks[family] = to;
+      deferred[family] = [...grouped.values()].flatMap(({ window, intervals }) =>
+        mergeIntervals(intervals).map(([from, to]) => ({ ...window, from, to })));
       if (corrections.length) {
         await applyHistoricalUsageCorrections(corrections, { interactiveScan: snapshot() });
         // The watermark, not these ids, prevents re-billing — don't leave a key per scan behind.
