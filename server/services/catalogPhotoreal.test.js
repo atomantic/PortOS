@@ -96,6 +96,7 @@ describe('startPhotorealRender', () => {
     expect(db.detachMedia.mock.calls).toEqual([[record.id, 'stale-booth.png', 'reference']]);
     await expect(getPhotorealStatus(record.id)).resolves.toMatchObject({
       blendUrl: `/api/catalog/ingredients/${record.id}/photoreal/blend`, blenderVersion: '5.2.3', job: { state: 'done' },
+      files: { blend: join(PATHS.data, 'photoreal-blends', `${record.id}.blend`), renders: PATHS.images },
     });
   });
 
