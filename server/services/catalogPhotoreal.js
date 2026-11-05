@@ -104,15 +104,17 @@ async function buildPhotorealScene(ingredientId, tool) {
   const existing = await photorealBlendPath(ingredientId);
   if (existing) return existing;
   const destination = blendPath(ingredientId);
-  const config = greyboxBlenderJob(scene, {
+  const look = resolvePhotorealLook(place.payload);
+  const textures = await deps.stageTextures(look?.textures);
+  const config = { ...greyboxBlenderJob(scene, {
     shotIds: scene.shots.slice(0, 1).map((shot) => shot.id), engine: 'cycles', useGpu: false,
-    look: resolvePhotorealLook(place.payload), sceneOnly: true,
-  });
+    look, sceneOnly: true,
+  }), textures: textures.job };
   let saved = false;
   const run = await maintenance.run('composition', 'Photoreal scene build', () => tool.worker({
     tool: { executable: tool.executable, argv: (entry) => ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', entry] },
     workspaceRoot: join(PATHS.data, WORKSPACES), entrypoint: 'greybox-blender.py',
-    files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }],
+    files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }, ...textures.files],
     limits: { wallSeconds: 300, diskBytes: 4 * 1024 ** 3, memoryBytes: 8 * 1024 ** 3 },
     onOutput: async (directory, files) => {
       const sizes = new Map(files.map((file) => [file.path, file.bytes]));
