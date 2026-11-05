@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Pencil, SkipBack, SkipForward } from 'lucide-react';
+import { ChevronFirst, Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
 import { isPreMusicShot } from '../../../../server/lib/musicVideoColdOpen.js';
 
@@ -56,14 +56,16 @@ function shotOnScreen(scenes, t) {
 const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text disabled:opacity-40 sm:min-h-[28px] sm:min-w-[28px]';
 
 /**
- * Back and Next buttons that jump the player to a shot's start, with the shot
- * number between them. `onSeek(songSec)` moves the player and leaves it playing
+ * A Start button (the song's start, or the excerpt's), then Back and Next
+ * buttons that jump the player to a shot's start, with the shot number between
+ * them. `onSeek(songSec)` moves the player and leaves it playing
  * or paused as it was. `keys` also binds the left and right arrows on the page.
  * With `onEditShot(sceneId)`, an Edit shot button opens the shot on screen.
  */
 export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, range = null, disabled = false, keys = false, className = '' }) {
   const { back, next, index, count } = shotSteps(scenes, time, range);
   const onScreen = shotOnScreen(scenes, time);
+  const start = range?.startSec ?? 0;
   const latest = useRef({ back, next, onSeek, disabled });
   latest.current = { back, next, onSeek, disabled };
   useEffect(() => {
@@ -84,6 +86,9 @@ export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, r
   if (!count) return null;
   return (
     <div className={`flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-port-text-muted ${className}`}>
+      <button type="button" onClick={() => onSeek(start)} disabled={disabled || time <= start + ON_START_SEC} aria-label="Jump to start" title="Jump to start" className={buttonCls}>
+        <ChevronFirst size={14} aria-hidden="true" />
+      </button>
       <button type="button" onClick={() => onSeek(back)} disabled={disabled || back == null} aria-label="Previous shot" title="Previous shot" className={buttonCls}>
         <SkipBack size={14} aria-hidden="true" />
       </button>
