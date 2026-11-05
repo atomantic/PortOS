@@ -30,7 +30,7 @@ export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).pa
  * With `flythroughSeconds`, one camera glides through `shotIds` in order and
  * the script writes numbered frames instead of one still per camera.
  */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu = true } = {}) {
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu } = {}) {
   return {
     look,
     flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,

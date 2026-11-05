@@ -93,8 +93,9 @@ export async function probeBlenderRender({ executable, fingerprint }, workspaceR
       evidence = { ...parsed.data, imageSha256: createHash('sha256').update(bytes).digest('hex') };
     },
   }).catch(() => ({ status: 'failed', reason: 'probe-or-output-failed', processGroupClear: false }));
-  const passed = run.status === 'completed' && run.processGroupClear === true && !invalidOutput && Boolean(evidence);
-  const failure = passed ? null : run.status === 'completed' && run.processGroupClear === true
+  const workerClean = run.status === 'completed' && run.processGroupClear === true;
+  const passed = workerClean && !invalidOutput && Boolean(evidence);
+  const failure = passed ? null : workerClean
     ? 'Blender finished, but its output failed validation.'
     : codeAnimationWorkerFailure(run);
   const gpuNotice = !passed && executionMode === 'contained' && engine !== 'CYCLES' ? ` ${CONTAINED_BLENDER_GPU_NOTICE}` : '';

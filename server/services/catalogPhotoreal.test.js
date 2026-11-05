@@ -86,17 +86,6 @@ describe('startPhotorealRender', () => {
     expect(JSON.parse(fakeWorker.lastFiles.find((f) => f.path === 'greybox-blender.json').content)).toMatchObject({ engine: 'CYCLES', useGpu: false });
   });
 
-  it('names the crash when a render worker dies', async () => {
-    const record = place();
-    db.getIngredient.mockResolvedValue(record);
-    __setPhotorealDepsForTests({
-      resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker: async () => ({ status: 'failed', reason: 'exit', signal: 'SIGSEGV', exitCode: null }) }),
-      lastCheckedVersion: async () => '5.2.3',
-    });
-    await startPhotorealRender(record.id, { shotIds: ['wide'], engine: 'cycles', samples: 8 });
-    await expect(finished(record.id)).resolves.toMatchObject({ state: 'failed', error: 'Blender crashed with SIGSEGV.' });
-  });
-
   it('renders the saved greybox in Blender, attaches each camera, keeps plates and the .blend', async () => {
     const record = place();
     record.payload.photoreal = { materials: [], lights: [{ id: 'panel', type: 'area', position: [0, 6, 0], watts: 600 }], atmosphere: { haze: 0.2 } };

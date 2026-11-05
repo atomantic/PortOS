@@ -26,7 +26,7 @@ async function fixture(change = {}) {
   const worker = vi.fn(async options => {
     if (change.canceled) { options.signal.throwIfAborted(); }
     if (!change.failed) await options.onOutput(directory, Object.entries(output).filter(([name]) => name !== change.missing).map(([path, bytes]) => ({ path, bytes: bytes.length })));
-    return { status: change.failed ? 'failed' : 'completed', processGroupClear: !change.failed, durationMs: 10 };
+    return { status: change.failed ? 'failed' : 'completed', signal: change.signal ?? null, processGroupClear: !change.failed, durationMs: 10 };
   });
   const resolveRuntime = vi.fn(async () => ({ executable: '/example/Blender', worker, provenance }));
   const retain = vi.fn(async (_project, _run, name, bytes) => ({ relativePath: name, bytes: bytes.length, sha256: 'synthetic' }));
@@ -66,6 +66,10 @@ describe('Blender production artifact boundary', () => {
     const { options, deps } = await fixture(change);
     await expect(renderBlenderSequence(options, deps)).rejects.toThrow();
     expect(deps.retain).not.toHaveBeenCalled();
+  });
+  it('names the crash when the render worker dies', async () => {
+    const { options, deps } = await fixture({ failed: true, signal: 'SIGSEGV' });
+    await expect(renderBlenderSequence(options, deps)).rejects.toThrow('Blender crashed with SIGSEGV. No render accepted.');
   });
   it('refuses a scene file that is not a .blend', async () => {
     const { options, deps } = await fixture({ blend: Buffer.from('not a blend') });

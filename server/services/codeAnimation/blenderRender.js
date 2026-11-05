@@ -12,6 +12,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { writeRunArtifact } from './projectFiles.js';
 import { resolveBlenderExecution } from './execution.js';
 import { BLENDER_DRIVER } from './blenderDriver.js';
+import { codeAnimationWorkerFailure } from '../../lib/codeAnimationContainment.js';
 
 // Blender 5 compresses saved scenes with zstd by default; older saves start with the plain magic.
 const BLEND_ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
@@ -112,7 +113,8 @@ export async function renderBlenderSequence({ revision, runtime, projectId, runI
     },
   });
   signal?.throwIfAborted();
-  if (run.status !== 'completed' || !run.processGroupClear || !report) throw fail(`Blender worker ${run.reason || run.status}; no render accepted`);
+  if (run.status !== 'completed') throw fail(`${codeAnimationWorkerFailure(run)} No render accepted.`);
+  if (!run.processGroupClear || !report) throw fail('Blender finished without a clean process group or report; no render accepted');
   // A save during native execution revokes publication as well as the next
   // spawn. Retained artifacts remain evidence from the old binding only.
   await resolveRuntime(revision.manifest.renderer, runtime);

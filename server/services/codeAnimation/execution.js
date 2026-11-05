@@ -91,7 +91,7 @@ function blenderLane(mechanism, blender) {
     || evidence.executionMode !== blender.executionMode || evidence.engine !== blender.engine) {
     return { ready: false, reason: 'The Blender executable, engine or execution mode changed since the last check.' };
   }
-  if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode.${evidence.failure ? ` ${evidence.failure}` : ''}` };
+  if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode. ${evidence.failure}` };
   return { ready: true, reason: null };
 }
 

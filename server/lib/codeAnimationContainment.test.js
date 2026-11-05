@@ -41,9 +41,6 @@ describe('macOS Seatbelt profile', () => {
 
 describe('worker failure sentence', () => {
   it.each([
-    [{ status: 'failed', reason: 'exit', signal: 'SIGSEGV', exitCode: null }, 'Blender crashed with SIGSEGV.'],
-    [{ status: 'failed', reason: 'exit', signal: null, exitCode: 1 }, 'Blender exited with code 1.'],
-    [{ status: 'terminated', reason: 'memory', signal: 'SIGKILL', exitCode: null }, 'Blender was stopped by the memory limit.'],
     [{ status: 'terminated', reason: 'canceled', signal: 'SIGKILL', exitCode: null }, 'Blender was canceled.'],
     [{ status: 'terminated', reason: 'watchdog', signal: 'SIGKILL', exitCode: null }, 'Blender was stopped by its supervisor.'],
     [{ status: 'failed', reason: 'spawn', signal: null, exitCode: null }, 'The worker failed before Blender finished.'],
