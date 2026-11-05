@@ -342,6 +342,8 @@ def apply_look(look):
         data.color = srgb(spec['color'])[:3]
         if kind == 'SPOT':
             data.spot_size = math.radians(spec['spotDegrees'])
+            # A stage wash fades out at its rim; Blender's default 0.15 draws a hard disc.
+            data.spot_blend = 0.8
             data.shadow_soft_size = spec['size']
         elif kind == 'AREA':
             data.shape = 'SQUARE'
