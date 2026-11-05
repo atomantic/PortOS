@@ -122,6 +122,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     let live = true;
     let request = 0;
     let jobFrames = 0;
+    let lastJobFrame = null;
     let reconcileNeeded = false;
     let activeRequest = null;
     let statusTimer = null;
@@ -167,8 +168,10 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           reconcileNeeded = false;
           if (!newerJobFrame && fresh?.job?.state === 'running') seenRunning.current.add(fresh.job.id);
           setStatus((cur) => ({ ...fresh, job: ((!reconcileJob && kind === 'refresh') || newerJobFrame) ? cur?.job || fresh.job : fresh.job }));
-          if (reconcileJob && !newerJobFrame) {
-            if (fresh?.job && seenRunning.current.has(fresh.job.id)) settle(fresh.job);
+          if (reconcileJob && fresh?.job && seenRunning.current.has(fresh.job.id)) {
+            // A newer frame owns the visible job, but an older, different job
+            // may still need its missed completion handled once.
+            if (!newerJobFrame || lastJobFrame?.id !== fresh.job.id) settle(fresh.job);
           }
         })
         .catch(() => {
@@ -185,6 +188,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     const onFrame = (frame) => {
       if (frame?.ingredientId !== record.id || !frame.job) return;
       jobFrames += 1;
+      lastJobFrame = frame.job;
       setStatus((cur) => ({ ...(cur || {}), job: frame.job }));
       settle(frame.job);
     };

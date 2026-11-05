@@ -494,6 +494,27 @@ describe('PhotorealPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
   });
 
+  it.each(['done', 'failed'])('settles a missed %s render while keeping a newer render visible', async (state) => {
+    const oldRunning = { id: 'pr-old', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    const oldDone = { ...oldRunning, state, ...(state === 'failed' ? { error: 'Render failed.' } : {}) };
+    const newRunning = { ...oldRunning, id: 'pr-new' };
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: oldRunning, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }))
+      .mockResolvedValue({ job: newRunning, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    const onRendered = vi.fn();
+    show({ onRendered });
+    expect(await screen.findByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: newRunning }));
+    await act(async () => finishReconnect({ job: oldDone, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    if (state === 'done') await waitFor(() => expect(onRendered).toHaveBeenCalledOnce());
+    else expect((await import('../ui/Toast')).default.error).toHaveBeenCalledWith('Blender render failed: Render failed.');
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    expect(screen.getByText(/current render will replace this scene/)).toBeInTheDocument();
+  });
+
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
     show();
     const seconds = await screen.findByLabelText('Seconds');
