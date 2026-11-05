@@ -119,6 +119,30 @@ describe('useSyncIntegrity — no syncing peers', () => {
 });
 
 describe('useSyncIntegrity — worst-case status reduction', () => {
+  it('surfaces a timestamp tie as unknown without hiding a known asset mismatch on another peer', async () => {
+    fetchSyncIntegrity
+      .mockResolvedValueOnce({ available: true, records: [{ id: 'r', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' }] })
+      .mockResolvedValueOnce({ available: true, records: [{ id: 'r', status: 'assets-missing' }] });
+    const { result } = renderWithPeers('universe', [PEER_A, PEER_B]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.statusById.get('r')).toBe('assets-missing');
+    expect(result.current.byPeer.get('r')).toContainEqual(expect.objectContaining({ status: 'unknown', reason: 'timestamp-tie' }));
+  });
+
+  it('does not report parity when the only peer has an unverified timestamp tie', async () => {
+    fetchSyncIntegrity.mockResolvedValue({ available: true, records: [{ id: 'r', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' }] });
+    const { result } = renderWithPeers('universe', [PEER_A]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.statusById.get('r')).toBe('unknown');
+  });
+
+  it('keeps a known asset mismatch even if an unknown assessment is also present', async () => {
+    fetchSyncIntegrity.mockResolvedValue({ available: true, records: [{ id: 'r', status: 'assets-missing', assessment: 'unknown' }] });
+    const { result } = renderWithPeers('universe', [PEER_A]);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.statusById.get('r')).toBe('assets-missing');
+  });
+
   it('reduces diverged + in-parity → diverged for the same recordId', async () => {
     const recId = 'rec-1';
     fetchSyncIntegrity

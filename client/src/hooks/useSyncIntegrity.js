@@ -19,7 +19,8 @@ const KIND_TO_CATEGORY = Object.freeze({
  * but the associated files are absent, which is the most disruptive to users.
  * `diverged` means content differs (could overwrite in either direction).
  * `local-only` / `peer-only` mean one side is missing the record entirely.
- * `in-parity` is the healthy terminal state.
+ * `unknown` means the comparison could not establish parity; `in-parity` is
+ * the healthy terminal state.
  */
 const STATUS_RANK = [
   'assets-missing',
@@ -27,6 +28,7 @@ const STATUS_RANK = [
   'peer-only',
   'local-only',
   'metadata-missing',
+  'unknown',
   'in-parity',
 ];
 
@@ -35,9 +37,9 @@ function worstStatus(a, b) {
   if (!b) return a;
   const ra = STATUS_RANK.indexOf(a);
   const rb = STATUS_RANK.indexOf(b);
-  // Unknown statuses (indexOf → -1) are treated as maximally bad.
-  const ea = ra === -1 ? -1 : ra;
-  const eb = rb === -1 ? -1 : rb;
+  // A newer server status is unverified, but must not hide a known mismatch.
+  const ea = ra === -1 ? STATUS_RANK.indexOf('unknown') : ra;
+  const eb = rb === -1 ? STATUS_RANK.indexOf('unknown') : rb;
   return ea <= eb ? a : b;
 }
 
@@ -73,7 +75,7 @@ function worstStatus(a, b) {
  *   of silently rendering nothing.
  *
  * Status precedence (worst → best): assets-missing, diverged, peer-only,
- * local-only, in-parity. A record absent from every peer response is not
+ * local-only, metadata-missing, unknown, in-parity. A record absent from every peer response is not
  * included in `statusById` — callers may treat absence as "unknown / no peers".
  */
 /**
@@ -189,11 +191,14 @@ export function useSyncIntegrity(kind, { peers: peersProp } = {}) {
         }
         anyAvailable = true;
         for (const rec of data.records ?? []) {
+          // The server keeps the old status as a conservative fallback for
+          // older clients; the added assessment states what is actually known.
+          const status = rec.status === 'diverged' && rec.assessment === 'unknown' ? 'unknown' : rec.status;
           const existing = newStatusById.get(rec.id);
-          newStatusById.set(rec.id, worstStatus(existing, rec.status));
+          newStatusById.set(rec.id, worstStatus(existing, status));
 
           const entries = newByPeer.get(rec.id) ?? [];
-          entries.push({ peerId: peer.instanceId, peerName: peer.name ?? peer.instanceId, status: rec.status });
+          entries.push({ peerId: peer.instanceId, peerName: peer.name ?? peer.instanceId, status, ...(rec.reason ? { reason: rec.reason } : {}) });
           newByPeer.set(rec.id, entries);
         }
       }

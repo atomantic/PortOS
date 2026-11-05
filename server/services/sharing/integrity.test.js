@@ -325,4 +325,18 @@ describe('getPeerIntegrity', () => {
     const result = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
     expect(result).toEqual({ available: false, reason: 'fetch-failed', records: [] });
   });
+
+  it('reports differently formatted tied clocks as unverified at the integrity boundary', async () => {
+    vi.mocked(getPeers).mockResolvedValue([makePeer('peer-x')]);
+    vi.mocked(listCollections).mockResolvedValue([makeCollection({ updatedAt: '2026-05-23T00:00:00Z' })]);
+    vi.mocked(assetIntegrityForRecord).mockResolvedValue({ assetHashes: [], metadataMissing: false });
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ records: [{ id: 'col-1', updatedAt: '2026-05-23T00:00:00.000Z', assetHashes: [] }] }),
+    });
+    expect(await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' })).toMatchObject({
+      available: true,
+      records: [{ id: 'col-1', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' }],
+    });
+  });
 });

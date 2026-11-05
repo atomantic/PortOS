@@ -182,6 +182,7 @@ const emptyCounts = () => ({
   [INTEGRITY_STATUS.LOCAL_ONLY]: 0,
   [INTEGRITY_STATUS.PEER_ONLY]: 0,
   [INTEGRITY_STATUS.DIVERGED]: 0,
+  [INTEGRITY_STATUS.UNKNOWN]: 0,
 });
 
 const addCounts = (into, from) => {
@@ -197,7 +198,8 @@ const addCounts = (into, from) => {
  * `people` record that happened to share an id. Diffing per type also gives the
  * UI its breakdown for free.
  *
- * Returns `{ summary, byType }`, where `byType` lists only the records that are
+ * Returns `{ summary, byType }`, where `unknown` is a subset of the legacy
+ * `diverged` count (not an additional set to sum). `byType` lists records that are
  * NOT in parity — the actionable set. A type in full parity is still reported
  * (with its counts) so "checked and clean" is distinguishable from "not checked".
  */
@@ -216,7 +218,12 @@ export function diffBrainManifests(localByType, remoteByType) {
     for (const row of rows) {
       counts.total += 1;
       if (counts[row.status] !== undefined) counts[row.status] += 1;
-      if (row.status !== INTEGRITY_STATUS.IN_PARITY) records.push({ id: row.id, status: row.status });
+      // Unknown assessments are a subset of the legacy `diverged` count so an
+      // older UI retains its conservative warning instead of showing green.
+      if (row.assessment === INTEGRITY_STATUS.UNKNOWN) counts[INTEGRITY_STATUS.UNKNOWN] += 1;
+      if (row.status !== INTEGRITY_STATUS.IN_PARITY) {
+        records.push({ id: row.id, status: row.status, ...(row.assessment ? { assessment: row.assessment, reason: row.reason } : {}) });
+      }
     }
     addCounts(summary, counts);
     byType.push({ type, counts, records });
@@ -230,9 +237,9 @@ export function diffBrainManifests(localByType, remoteByType) {
  *
  * This is the signal the manifest cannot produce: two peers can hold the same
  * ids with the same `updatedAt` and still differ in a record BODY (a partial
- * write, a field an older peer's schema dropped on apply). `match: false` with
- * zero divergent records in the manifest diff means exactly that — worth
- * surfacing rather than reporting a clean bill of health.
+ * write, a field an older peer's schema dropped on apply). Even with zero
+ * divergent manifest rows, `match: false` is worth surfacing: it can also
+ * reflect differences between tombstones omitted by the manifest diff.
  *
  * A peer too old to serve `/reconcile/checksum` yields `peer: null,
  * match: null` — unknown, never a false "diverged".
@@ -366,7 +373,7 @@ export async function runBrainParityCheck({ peerId } = {}) {
       await saveReports(stored);
     }
     const detail = report.available
-      ? `${report.summary[INTEGRITY_STATUS.LOCAL_ONLY]} local-only, ${report.summary[INTEGRITY_STATUS.PEER_ONLY]} peer-only, ${report.summary[INTEGRITY_STATUS.DIVERGED]} diverged`
+      ? `${report.summary[INTEGRITY_STATUS.LOCAL_ONLY]} local-only, ${report.summary[INTEGRITY_STATUS.PEER_ONLY]} peer-only, ${report.summary[INTEGRITY_STATUS.DIVERGED] - report.summary[INTEGRITY_STATUS.UNKNOWN]} diverged, ${report.summary[INTEGRITY_STATUS.UNKNOWN]} unverified`
       : report.reason;
     console.log(`🧠🔍 Brain parity vs ${peer.name || peer.id}: ${detail}`);
   }
