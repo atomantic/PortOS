@@ -71,8 +71,13 @@ describe('SuperCollider recipe pins', () => {
     const sha = dockerfile.match(/ARG SC_SOURCE_SHA256=([0-9a-f]{64})\n/)?.[1];
     expect(sha).toBeTruthy();
     expect(recipeFile('NOTICE.md')).toContain(sha);
-    expect(dockerfile).toMatch(/ARG DEBIAN_IMAGE=debian:[\w.-]+@sha256:[0-9a-f]{64}\n/);
-    expect(dockerfile).toMatch(/ARG DEBIAN_SNAPSHOT=\d{8}T\d{6}Z\n/);
+    const imageTag = dockerfile.match(/ARG DEBIAN_IMAGE=debian:(trixie-(\d{8})-slim)@sha256:[0-9a-f]{64}\n/);
+    const snapshot = dockerfile.match(/ARG DEBIAN_SNAPSHOT=(\d{8}T\d{6}Z)\n/);
+    expect(imageTag).toBeTruthy();
+    expect(snapshot).toBeTruthy();
+    expect(snapshot[1].startsWith(imageTag[2])).toBe(true);
+    expect(recipeFile('NOTICE.md')).toContain(`debian:${imageTag[1]}`);
+    expect(recipeFile('NOTICE.md')).toContain(snapshot[1]);
     expect(dockerfile).toContain('sha256sum -c');
     expect(recipeFile('sclang_conf.yaml')).toMatch(/excludeDefaultPaths: true/);
   });
