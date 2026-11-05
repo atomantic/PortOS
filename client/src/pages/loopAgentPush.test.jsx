@@ -93,3 +93,36 @@ it('renders agent snapshots without API polls and drops an older HTTP response',
   await visibility('hidden'); await visibility('visible');
   expect(api.getAgents).toHaveBeenCalledTimes(3);
 });
+
+it('shows a retryable error instead of an empty process list when the first read fails', async () => {
+  api.getAgents.mockRejectedValueOnce(new Error('agents offline'));
+  render(<AgentsPage />);
+  await flush();
+
+  expect(screen.getByRole('alert')).toHaveTextContent('Could not load AI agents — agents offline');
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  expect(screen.queryByText('Processes')).not.toBeInTheDocument();
+  expect(screen.queryByText('No AI agents currently running')).not.toBeInTheDocument();
+
+  api.getAgents.mockResolvedValueOnce([]);
+  await flush(() => screen.getByRole('button', { name: 'Retry' }).click());
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByText('Processes')).toBeInTheDocument();
+  expect(screen.getByText('0')).toBeInTheDocument();
+  expect(screen.getAllByText('No AI agents currently running')).toHaveLength(2);
+});
+
+it('keeps loaded agent rows visible and offers retry after a refresh fails', async () => {
+  api.getAgents.mockResolvedValueOnce([agent]);
+  render(<AgentsPage />);
+  await flush();
+  expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
+  expect(screen.getAllByRole('button', { name: 'Kill' }).length).toBeGreaterThan(0);
+
+  api.getAgents.mockRejectedValueOnce(new Error('refresh offline'));
+  await flush(() => socket.receive('connect'));
+  expect(screen.getByRole('alert')).toHaveTextContent('refresh offline');
+  expect(screen.getAllByText('example agent').length).toBeGreaterThan(0);
+  expect(screen.getAllByRole('button', { name: 'Kill' }).length).toBeGreaterThan(0);
+  expect(screen.queryByText('No AI agents currently running')).not.toBeInTheDocument();
+});
