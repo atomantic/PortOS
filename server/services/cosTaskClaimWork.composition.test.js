@@ -113,7 +113,7 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('recovery is unsafe');
     expect(prompt).toContain('Respect configured retry budgets');
     expect(prompt).toContain('exact current head');
-    expect(prompt).toContain('continue to the authorized merge');
+    expect(prompt).toContain('Continue to the authorized merge when they pass.');
     expect(prompt).toContain('replace `CI_VERIFIED_HEAD` with that full verified SHA');
   });
 
