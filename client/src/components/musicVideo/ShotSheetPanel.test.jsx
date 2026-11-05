@@ -89,6 +89,23 @@ describe('ShotSheetPanel', () => {
     expect(container.querySelector('#mv-sheet-emotion option[value="Contemplative"]')).not.toBeNull();
   });
 
+  // Catches the route not following the sheet, or a stretch not narrowing the list.
+  it('shows the route from each shot\u2019s location and filters to a tapped stretch', () => {
+    const board = boardFor();
+    board.project.scenes[0].shotSheet.location = 'Street';
+    board.project.scenes[1].shotSheet = { location: 'Dead mall' };
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const route = screen.getByRole('group', { name: 'Route by time' });
+    const mall = within(route).getByRole('button', { name: /^Dead mall, 0:02/ });
+    expect(mall.style.flex).toContain('2');
+    fireEvent.click(mall);
+    expect(mall).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
+    fireEvent.click(mall);
+    expect(screen.getByRole('button', { name: 'Open Shot 1' })).toBeInTheDocument();
+  });
+
   // Catches a camera edit not persisting to the project.
   it('adds a camera to the project', () => {
     const board = boardFor();

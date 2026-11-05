@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRoute, shotSheetRows } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch } from '../services/musicVideo/projectsLogic.js';
 
@@ -95,6 +95,20 @@ describe('shotSheetOptions', () => {
     const project = { concept: { subjects: [{ kind: 'place', name: 'Mall' }, { kind: 'character', name: 'Renee' }] }, scenes: [{ shotSheet: { location: 'Mall' } }, { shotSheet: { location: 'Field' } }, { shotSheet: { emotion: 'Scared' } }] };
     expect(shotSheetOptions(project, 'location')).toEqual(['Mall', 'Field']);
     expect(shotSheetOptions(project, 'emotion').filter((value) => value === 'Scared')).toHaveLength(1);
+  });
+});
+
+describe('shotSheetRoute', () => {
+  const row = (startSec, endSec, location) => ({ scene: { startSec, endSec }, sheet: location ? { location } : {} });
+  // Catches a return to an earlier place merging with its first visit, or an untimed shot stretching the route.
+  it('joins consecutive shots by location and keeps a return as its own stretch', () => {
+    const rows = [row(0, 2, 'Street'), row(2, 4, ' Street '), row(4, 6, 'Mall'), row(6, 8), row(8, 9, 'Street'), { scene: {}, sheet: { location: 'Field' } }];
+    expect(shotSheetRoute(rows)).toEqual([
+      { location: 'Street', startSec: 0, endSec: 4, shots: 2 },
+      { location: 'Mall', startSec: 4, endSec: 6, shots: 1 },
+      { location: '', startSec: 6, endSec: 8, shots: 1 },
+      { location: 'Street', startSec: 8, endSec: 9, shots: 1 },
+    ]);
   });
 });
 

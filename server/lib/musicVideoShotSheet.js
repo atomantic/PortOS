@@ -103,6 +103,23 @@ export function shotSheetProblems(row, previous = null) {
   return problems;
 }
 
+/**
+ * The video's route: consecutive timed shots in one location joined into a
+ * stretch, with its span and shot count, for reading where the story goes over
+ * the song. Shots with no location form their own stretches (`location: ''`).
+ */
+export function shotSheetRoute(rows) {
+  const stretches = [];
+  for (const { scene, sheet } of rows) {
+    if (!Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)) continue;
+    const location = sheet.location?.trim() || '';
+    const last = stretches.at(-1);
+    if (last?.location === location) { last.endSec = scene.endSec; last.shots += 1; }
+    else stretches.push({ location, startSec: scene.startSec, endSec: scene.endSec, shots: 1 });
+  }
+  return stretches;
+}
+
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */
 export function shotSheetCast(project) {
   return (project?.concept?.subjects || [])
