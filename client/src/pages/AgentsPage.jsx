@@ -132,7 +132,7 @@ export function AgentsPage() {
                 <button
                   onClick={() => handleKill(agent.pid)}
                   disabled={killing[agent.pid]}
-                  className="shrink-0 px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
+                  className="shrink-0 px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
                 >
                   <XCircle size={14} className={killing[agent.pid] ? 'animate-pulse' : ''} />
                   Kill
@@ -151,7 +151,7 @@ export function AgentsPage() {
               </div>
               <button
                 onClick={() => toggleExpand(agent.pid)}
-                className="mt-2 text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                className="mt-2 pointer-coarse:min-h-11 inline-flex items-center text-xs text-gray-500 hover:text-white gap-1"
               >
                 <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
                 {expandedPid === agent.pid ? 'Hide details' : 'Show details'}
