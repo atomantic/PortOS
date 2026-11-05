@@ -38,7 +38,7 @@ export function normalizeShotSheet(sheet) {
  * judged and reads as current. Takes record the composed prompt, which contains
  * the shot's own text whole, so any edit to that text shows.
  */
-export function selectedFrameOutdated(scene) {
+function selectedFrameOutdated(scene) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   if (!framePrompt || !scene?.referenceImageId) return false;
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
