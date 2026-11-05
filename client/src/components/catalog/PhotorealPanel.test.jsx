@@ -473,6 +473,27 @@ describe('PhotorealPanel', () => {
     expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
   });
 
+  it('reconciles a missed render failure when a scene event interrupts reconnect', async () => {
+    const running = { id: 'pr-old', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    const failed = { ...running, state: 'failed', error: 'Render stopped.' };
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: running, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }))
+      .mockResolvedValueOnce({ job: failed, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true })
+      .mockResolvedValue({ job: failed, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByText('Render stopped.')).toBeInTheDocument();
+    expect((await import('../ui/Toast')).default.error).toHaveBeenCalledWith('Blender render failed: Render stopped.');
+    await act(async () => finishReconnect({ job: running, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: false }));
+    expect(screen.getByText('Render stopped.')).toBeInTheDocument();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
     show();
     const seconds = await screen.findByLabelText('Seconds');

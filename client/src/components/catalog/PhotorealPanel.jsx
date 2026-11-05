@@ -122,6 +122,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     let live = true;
     let request = 0;
     let jobFrames = 0;
+    let reconcileNeeded = false;
     let activeRequest = null;
     let statusTimer = null;
     const cancelStatus = () => {
@@ -148,6 +149,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     const loadStatus = (kind) => {
       const sequence = ++request;
       const framesAtStart = jobFrames;
+      if (kind === 'reconcile') reconcileNeeded = true;
       cancelStatus();
       const controller = new AbortController();
       activeRequest = controller;
@@ -161,9 +163,11 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           setStatusRefreshing(false);
           setStatusError('');
           const newerJobFrame = framesAtStart !== jobFrames;
+          const reconcileJob = reconcileNeeded;
+          reconcileNeeded = false;
           if (!newerJobFrame && fresh?.job?.state === 'running') seenRunning.current.add(fresh.job.id);
-          setStatus((cur) => ({ ...fresh, job: (kind === 'refresh' || newerJobFrame) ? cur?.job || fresh.job : fresh.job }));
-          if (kind === 'reconcile' && !newerJobFrame) {
+          setStatus((cur) => ({ ...fresh, job: ((!reconcileJob && kind === 'refresh') || newerJobFrame) ? cur?.job || fresh.job : fresh.job }));
+          if (reconcileJob && !newerJobFrame) {
             if (fresh?.job && seenRunning.current.has(fresh.job.id)) settle(fresh.job);
           }
         })
