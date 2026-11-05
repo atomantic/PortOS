@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
 import { findEnabledByRole } from '../../test/enabledBarrier.js';
@@ -8,6 +8,7 @@ import { findEnabledByRole } from '../../test/enabledBarrier.js';
 // the network. The socket resource fetches once on mount.
 const listQueueMediaJobs = vi.fn();
 const cancelMediaJob = vi.fn();
+const deleteFailedCanceledMediaJobs = vi.fn();
 const retryMediaJob = vi.fn();
 const resumeMediaVideoHold = vi.fn();
 const listMediaVideoHolds = vi.fn();
@@ -16,11 +17,15 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
   cancelMediaJob: (...a) => cancelMediaJob(...a),
   cancelQueuedMediaJobs: vi.fn(),
   deleteMediaJob: vi.fn(),
+  deleteFailedCanceledMediaJobs: (...a) => deleteFailedCanceledMediaJobs(...a),
   retryMediaJob: (...a) => retryMediaJob(...a),
   runMediaJobNow: vi.fn(),
   resumeMediaVideoHold: (...a) => resumeMediaVideoHold(...a),
   listMediaVideoHolds: (...a) => listMediaVideoHolds(...a),
 }));
+
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const getVideoGenStatus = vi.fn();
 const getTopazJobStatus = vi.fn();
@@ -78,6 +83,10 @@ const trainingJob = {
 beforeEach(() => {
   listQueueMediaJobs.mockReset();
   cancelMediaJob.mockReset().mockResolvedValue({ ok: true, status: 'canceling' });
+  deleteFailedCanceledMediaJobs.mockReset();
+  toast.mockClear();
+  toast.success.mockClear();
+  toast.error.mockClear();
   listMediaVideoHolds.mockReset().mockResolvedValue([]);
   resumeMediaVideoHold.mockReset();
   listLoraTrainingCheckpoints.mockReset();
@@ -121,7 +130,7 @@ const failedLocalJob = {
 // Failed/canceled jobs live in the collapsed "recent" reel — expand it so the
 // JobRow (and its Edit-and-retry control) renders.
 async function expandReel(user) {
-  const toggle = await screen.findByText(/Show failed \/ canceled/);
+  const toggle = await screen.findByText(/Show (?:completed \/ )?failed \/ canceled/);
   await user.click(toggle);
 }
 
@@ -269,6 +278,150 @@ describe('MediaJobsQueue — cancellation state', () => {
     expect(await screen.findByText('canceled')).toBeInTheDocument();
     expect(screen.queryByText('cancelling…')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MediaJobsQueue — clearing failed and canceled jobs', () => {
+  it('keeps keyboard focus in the confirmation and restores it when canceled', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'failed-job', kind: 'image', status: 'failed', params: {} }]);
+    render(<MediaJobsQueue kind="image" />);
+    const trigger = await screen.findByRole('button', { name: 'Clear failed / canceled' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const confirmation = screen.getByRole('group', { name: 'Confirm clearing failed and canceled jobs' });
+    expect(confirmation.parentElement).toHaveFocus();
+    await user.tab();
+    expect(within(confirmation).getByRole('button', { name: 'Remove all' })).toHaveFocus();
+    await user.tab();
+    expect(within(confirmation).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Clear failed / canceled' })).toHaveFocus();
+    expect(deleteFailedCanceledMediaJobs).not.toHaveBeenCalled();
+  });
+
+  it.each(['image', 'video', 'video-upscale'])('confirms and clears %s history, keeping active and protected jobs', async (kind) => {
+    const user = userEvent.setup();
+    const job = (id, status) => ({ id, kind, status, params: { prompt: `Example ${id}` } });
+    const running = job('running-job', 'running');
+    const failed = job('failed-job', 'failed');
+    const canceled = job('canceled-job', 'canceled');
+    const protectedJob = { ...job('protected-job', 'failed'), result: kind === 'video-upscale' ? { topazUncertain: true } : undefined };
+    const completed = kind === 'video-upscale' ? [job('completed-job', 'completed')] : [];
+    let snapshot = [running, failed, canceled, protectedJob, ...completed];
+    listQueueMediaJobs.mockImplementation(() => Promise.resolve(snapshot));
+    let resolveDelete;
+    deleteFailedCanceledMediaJobs.mockImplementation(() => new Promise((resolve) => { resolveDelete = resolve; }));
+
+    render(<MediaJobsQueue kind={kind} allowClearFailed />);
+    await expandReel(user);
+    await user.click(screen.getByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(within(screen.getByRole('group', { name: 'Confirm clearing failed and canceled jobs' })).getByRole('button', { name: 'Cancel' }));
+    expect(deleteFailedCanceledMediaJobs).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(deleteFailedCanceledMediaJobs).toHaveBeenCalledWith(kind, { silent: true });
+    expect(screen.getByRole('button', { name: 'Removing…' })).toBeDisabled();
+
+    snapshot = [running, protectedJob, ...completed];
+    const readsBeforeEvent = listQueueMediaJobs.mock.calls.length;
+    act(() => emitSocket('media-jobs:changed', {}));
+    expect(listQueueMediaJobs).toHaveBeenCalledTimes(readsBeforeEvent);
+    await act(async () => resolveDelete({ deletedIds: ['failed-job', 'canceled-job', 'older-job'], skipped: 1 }));
+    expect(toast.error).toHaveBeenCalledWith('Removed 3 jobs; 1 could not be removed. Retry or review them individually.');
+    await waitFor(() => expect(screen.queryByText(/Example failed-job/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/Example canceled-job/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Example running-job/)).toBeInTheDocument();
+    expect(screen.getByText(/Example protected-job/)).toBeInTheDocument();
+    if (completed.length) expect(screen.getByText(/Example completed-job/)).toBeInTheDocument();
+    await waitFor(() => expect(listQueueMediaJobs).toHaveBeenCalledTimes(readsBeforeEvent + 1));
+  });
+
+  it('hides the action on an empty queue and keeps failed jobs visible after a request error', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValueOnce([]);
+    const { unmount } = render(<MediaJobsQueue kind="image" />);
+    await screen.findByText('No image renders queued.');
+    expect(screen.queryByRole('button', { name: 'Clear failed / canceled' })).not.toBeInTheDocument();
+    unmount();
+
+    listQueueMediaJobs.mockResolvedValue([{ id: 'failed-job', kind: 'image', status: 'failed', params: { prompt: 'Example failure' } }]);
+    deleteFailedCanceledMediaJobs.mockRejectedValue(new Error('Queue storage unavailable'));
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(screen.getByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue storage unavailable'));
+    expect(screen.getByText(/Example failure/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear failed / canceled' })).toBeInTheDocument();
+  });
+
+  it('reconciles a stale collapsed queue when nothing remains', async () => {
+    const user = userEvent.setup();
+    const failed = { id: 'failed-job', kind: 'image', status: 'failed', params: { prompt: 'Example failure' } };
+    let snapshot = [failed];
+    listQueueMediaJobs.mockImplementation(() => Promise.resolve(snapshot));
+    deleteFailedCanceledMediaJobs.mockImplementation(async () => {
+      snapshot = [];
+      return { deletedIds: [], skipped: 0 };
+    });
+    render(<MediaJobsQueue kind="image" />);
+    await user.click(await screen.findByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(toast).toHaveBeenCalledWith('No failed or canceled jobs to remove');
+    expect(await screen.findByText('No image renders queued.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear failed / canceled' })).not.toBeInTheDocument();
+  });
+
+  it('updates the empty state after clearing a collapsed queue', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'failed-job', kind: 'image', status: 'failed', params: {} }]);
+    deleteFailedCanceledMediaJobs.mockResolvedValue({ deletedIds: ['failed-job'], skipped: 0 });
+    render(<MediaJobsQueue kind="image" />);
+    await user.click(await screen.findByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(await screen.findByText('No image renders queued.')).toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith('Removed 1 failed or canceled job');
+  });
+
+  it('keeps a recoverable Topaz result available after a bulk clear skips it', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'topaz-recovery', kind: 'video-upscale', status: 'failed',
+      params: { mode: 'topaz' }, result: { topazRecoveryAvailable: true } }]);
+    deleteFailedCanceledMediaJobs.mockResolvedValue({ deletedIds: [], skipped: 1 });
+    render(<MediaJobsQueue kind="video-upscale" allowClearFailed />);
+    await expandReel(user);
+    expect(screen.getByRole('button', { name: 'Retrieve Topaz result' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Removed 0 jobs; 1 could not be removed. Retry or review them individually.'));
+    expect(screen.getByRole('button', { name: 'Retrieve Topaz result' })).toBeInTheDocument();
+  });
+
+  it('reports a separate queue warning after a successful clear', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'failed-job', kind: 'image', status: 'failed', params: {} }]);
+    deleteFailedCanceledMediaJobs.mockResolvedValue({ deletedIds: ['failed-job'], skipped: 0,
+      warning: 'Another queue update could not finish. Check the queue.' });
+    render(<MediaJobsQueue kind="image" />);
+    await user.click(await screen.findByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(await screen.findByText('No image renders queued.')).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith('Removed 1 job. Another queue update could not finish. Check the queue.');
+  });
+
+  it('can clear older upscale failures when the visible reel contains only completed jobs', async () => {
+    const user = userEvent.setup();
+    listQueueMediaJobs.mockResolvedValue([{ id: 'completed-job', kind: 'video-upscale', status: 'completed', params: {} }]);
+    deleteFailedCanceledMediaJobs.mockResolvedValue({ deletedIds: ['older-failed-job'], skipped: 0 });
+    render(<MediaJobsQueue kind="video-upscale" allowClearFailed />);
+    expect(await screen.findByText(/Show completed \/ failed \/ canceled/)).toBeInTheDocument();
+    expect(screen.getByText('0 active • 1 completed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear failed / canceled' }));
+    await user.click(screen.getByRole('button', { name: 'Remove all' }));
+    expect(deleteFailedCanceledMediaJobs).toHaveBeenCalledWith('video-upscale', { silent: true });
+    expect(toast.success).toHaveBeenCalledWith('Removed 1 failed or canceled job');
+    expect(screen.getByText('0 active • 1 completed')).toBeInTheDocument();
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { naturalUniverseVisualProfile } from '../lib/universeVisualProfile.js';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 import { validateVideoRetryParams } from '../services/videoGen/prepareParams.js';
 
 // Stub the queue so we control which jobs exist for the retry endpoint without
@@ -15,6 +15,7 @@ const stubs = {
   cancelQueuedJobs: vi.fn(async () => ({ canceled: 0 })),
   runJobNow: vi.fn(() => ({ ok: false, code: 'NOT_FOUND' })),
   removeArchivedJob: vi.fn((id) => jobStore.delete(id)),
+  removeFailedCanceledJobs: vi.fn(async () => ({ deletedIds: ['old-job'], skipped: 1 })),
   resumeVideoHold: vi.fn(),
   listVideoHolds: vi.fn(() => []),
   listQueueJobs: vi.fn(() => []),
@@ -32,6 +33,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   cancelQueuedJobs: (...args) => stubs.cancelQueuedJobs(...args),
   runJobNow: (...args) => stubs.runJobNow(...args),
   removeArchivedJob: (...args) => stubs.removeArchivedJob(...args),
+  removeFailedCanceledJobs: (...args) => stubs.removeFailedCanceledJobs(...args),
   resumeVideoHold: (...args) => stubs.resumeVideoHold(...args),
   listVideoHolds: (...args) => stubs.listVideoHolds(...args),
 }));
@@ -697,6 +699,33 @@ describe('mediaJobs routes', () => {
     const r = await request(makeApp()).post('/api/media-jobs/nope/run-now').send({});
     expect(r.status).toBe(404);
     expect(r.body.code).toBe('NOT_FOUND');
+  });
+
+  it('DELETE /failed-canceled requires an image, video or upscale kind and returns the prune result', async () => {
+    const app = makeApp();
+    const result = await request(app).delete('/api/media-jobs/failed-canceled?kind=image');
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ deletedIds: ['old-job'], skipped: 1 });
+    expect(stubs.removeFailedCanceledJobs).toHaveBeenCalledWith({ kind: 'image' });
+    const video = await request(app).delete('/api/media-jobs/failed-canceled?kind=video');
+    expect(video.status).toBe(200);
+    expect(stubs.removeFailedCanceledJobs).toHaveBeenCalledWith({ kind: 'video' });
+    const upscale = await request(app).delete('/api/media-jobs/failed-canceled?kind=video-upscale');
+    expect(upscale.status).toBe(200);
+    expect(stubs.removeFailedCanceledJobs).toHaveBeenCalledWith({ kind: 'video-upscale' });
+    for (const query of ['', '?kind=training', '?kind=invalid']) {
+      expect((await request(app).delete(`/api/media-jobs/failed-canceled${query}`)).status).toBe(400);
+    }
+    expect(stubs.removeFailedCanceledJobs).toHaveBeenCalledTimes(3);
+  });
+
+  it('DELETE /failed-canceled reports a queue storage failure', async () => {
+    stubs.removeFailedCanceledJobs.mockRejectedValueOnce(new ServerError('Queue storage unavailable', {
+      status: 503, code: 'MEDIA_QUEUE_PERSIST_FAILED',
+    }));
+    const response = await request(makeApp()).delete('/api/media-jobs/failed-canceled?kind=image');
+    expect(response.status).toBe(503);
+    expect(response.body).toMatchObject({ code: 'MEDIA_QUEUE_PERSIST_FAILED', error: 'Queue storage unavailable' });
   });
 
   it('DELETE /:id removes a terminal job from the archive', async () => {

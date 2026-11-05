@@ -1,13 +1,14 @@
 import A2vLoraStageControls from '../videoGen/A2vLoraStageControls';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStages';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, Cpu, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
-import { listQueueMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
+import { listQueueMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, deleteFailedCanceledMediaJobs, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel, mediaJobLane, isCloudVideoMode } from '../../lib/imageGenBackends';
 import { ANTIGRAVITY_CONFIGURED_DEFAULT, effortLevelsForProvider, isConfiguredDefaultModel } from '../../utils/providers';
@@ -18,7 +19,7 @@ import {
 } from '../../lib/videoReferenceModes';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { formatTimeOfDaySeconds } from '../../utils/formatters';
+import { formatCount, formatTimeOfDaySeconds } from '../../utils/formatters';
 import { getVideoGenStatus, getVideoHistoryItem, getTopazJobStatus, cancelTopazRemoteJob, recoverTopazJob } from '../../services/apiImageVideo.js';
 import { listLorasFull } from '../../services/api';
 import ModelSelect from '../ModelSelect';
@@ -141,9 +142,19 @@ function modelLabel(params, renderer) {
 // user can watch in-flight jobs (and cancel them) without leaving the page.
 // Completed jobs are excluded from the recent reel — those render as preview
 // cards on the gen page already, so listing them here is duplicate noise.
-export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' }) {
+export default function MediaJobsQueue({ kind, recentLimit = 10, className = '', allowClearFailed = kind === 'image' || kind === 'video' }) {
   const [showRecent, setShowRecent] = useState(false);
   const [resumingHold, setResumingHold] = useState(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [exitingJobs, setExitingJobs] = useState([]);
+  const clearInFlight = useRef(false);
+  const deferredQueueEvent = useRef(false);
+  const pendingExits = useRef(new Set());
+  const queueRef = useRef(null);
+  const clearControlsRef = useRef(null);
+  const clearButtonRef = useRef(null);
+  const restoreClearFocus = useRef(false);
   const { data, loading, error, refetch: fetchJobs, updateData } = useSocketResource(async () => {
     const [jobs, holds] = await Promise.all([
       listQueueMediaJobs({ ...(kind ? { kind } : {}), limit: recentLimit }),
@@ -151,7 +162,15 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     ]);
     if (!Array.isArray(jobs) || !Array.isArray(holds)) throw new Error('Invalid queue snapshot');
     return { jobs, holds };
-  }, { events: QUEUE_EVENTS, resourceKey: JSON.stringify([kind, recentLimit]) });
+  }, {
+    events: QUEUE_EVENTS,
+    resourceKey: JSON.stringify([kind, recentLimit]),
+    matchesEvent: () => {
+      if (!clearInFlight.current) return true;
+      deferredQueueEvent.current = true;
+      return false;
+    },
+  });
   const jobs = data?.jobs ?? [];
   const holds = data?.holds ?? [];
   const hasSnapshot = data !== null;
@@ -241,6 +260,73 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       setJobs((prev) => prev.filter((j) => j.id !== id));
     })
     .catch((err) => toast.error(err?.message || 'Delete failed'));
+
+  const finishClear = () => {
+    if (clearControlsRef.current?.contains(document.activeElement)) queueRef.current?.focus({ preventScroll: true });
+    clearInFlight.current = false;
+    setClearing(false);
+    setConfirmClear(false);
+    if (deferredQueueEvent.current) {
+      deferredQueueEvent.current = false;
+      fetchJobs();
+    }
+  };
+
+  useEffect(() => {
+    if (!confirmClear && restoreClearFocus.current) {
+      restoreClearFocus.current = false;
+      (clearButtonRef.current || queueRef.current)?.focus({ preventScroll: true });
+    }
+  }, [confirmClear]);
+
+  const handleClearFailed = () => {
+    if (clearInFlight.current) return;
+    clearInFlight.current = true;
+    setClearing(true);
+    // Invalidate any read that began before the delete request.
+    setJobs((previous) => previous);
+    deleteFailedCanceledMediaJobs(kind, { silent: true })
+      .then(({ deletedIds, skipped, warning }) => {
+        const deleted = new Set(deletedIds);
+        const exiting = showRecent
+          ? recent.flatMap((job, index) => deleted.has(job.id) ? [{ job, index }] : [])
+          : [];
+        pendingExits.current = new Set(exiting.map(({ job }) => job.id));
+        setExitingJobs(exiting);
+        setJobs((previous) => previous.filter((job) => !deleted.has(job.id)));
+        if (skipped || warning) {
+          const skippedNote = skipped ? `; ${formatCount(skipped)} could not be removed. Retry or review them individually.` : '.';
+          toast.error(`Removed ${formatCount(deleted.size)} job${deleted.size === 1 ? '' : 's'}${skippedNote}${warning ? ` ${warning}` : ''}`);
+        } else if (deleted.size) {
+          toast.success(`Removed ${formatCount(deleted.size)} failed or canceled job${deleted.size === 1 ? '' : 's'}`);
+        } else {
+          toast('No failed or canceled jobs to remove');
+        }
+        // An empty result can mean another view already removed the snapshot.
+        if (!deleted.size) deferredQueueEvent.current = true;
+        if (!exiting.length) finishClear();
+      })
+      .catch((err) => {
+        toast.error(err?.message || 'Could not remove failed or canceled jobs');
+        finishClear();
+      });
+  };
+
+  const finishExit = (id) => {
+    pendingExits.current.delete(id);
+    setExitingJobs((previous) => previous.filter(({ job }) => job.id !== id));
+    if (!pendingExits.current.size) finishClear();
+  };
+
+  const displayedRecent = [...recent];
+  for (const entry of exitingJobs) displayedRecent.splice(Math.min(entry.index, displayedRecent.length), 0, entry.job);
+  // Completed upscales can fill the bounded reel while older failures remain.
+  const canClearFailed = allowClearFailed && (kind === 'video-upscale'
+    ? recent.length > 0
+    : recent.some((job) => job.status === 'failed' || job.status === 'canceled'));
+  useEffect(() => {
+    if (!clearing && !canClearFailed) setConfirmClear(false);
+  }, [clearing, canClearFailed]);
   const KIND_LABEL = { image: 'Image', video: 'Video', 'video-upscale': 'Upscale', training: 'Training' };
   const headerLabel = kind
     ? `${KIND_LABEL[kind] || ''} ${kind === 'training' ? 'Queue' : kind === 'video' ? 'Render Queues' : 'Render Queue'}`.trim()
@@ -259,7 +345,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   };
 
   return (
-    <div className={`bg-port-card border border-port-border rounded-xl p-4 space-y-2 ${className}`}>
+    <div ref={queueRef} tabIndex={-1} className={`bg-port-card border border-port-border rounded-xl p-4 space-y-2 ${className}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <ListOrdered className="w-4 h-4 text-port-accent shrink-0" />
@@ -281,6 +367,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
           )}
           <button
             onClick={fetchJobs}
+            disabled={clearing}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
             title="Refresh" aria-label="Refresh"
           >
@@ -312,7 +399,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
         <div className="text-xs"><BrailleSpinner text="Loading…" /></div>
       ) : loadError && !hasSnapshot ? (
         <div className="text-xs text-port-warning">Queue status unavailable.</div>
-      ) : live.length === 0 && recent.length === 0 ? (
+      ) : live.length === 0 && displayedRecent.length === 0 ? (
         <div className="text-port-text-muted text-xs">
           No {kind || 'media'} {kind === 'training' ? 'runs' : 'renders'} queued.
         </div>
@@ -341,17 +428,52 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
             live.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />)
           )}
 
-          {recent.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowRecent((s) => !s)}
-              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 pt-1"
-            >
-              {showRecent ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              {showRecent ? 'Hide' : 'Show'} {kind === 'video-upscale' ? 'completed / failed / canceled' : 'failed / canceled'} ({recent.length})
-            </button>
+          {displayedRecent.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={clearing}
+                onClick={() => setShowRecent((s) => !s)}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 pt-1 disabled:opacity-50"
+              >
+                {showRecent ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                {showRecent ? 'Hide' : 'Show'} {kind === 'video-upscale' ? 'completed / failed / canceled' : 'failed / canceled'} ({displayedRecent.length})
+              </button>
+              {(canClearFailed || confirmClear) && (
+                <div ref={clearControlsRef} tabIndex={-1}>
+                  {confirmClear ? (
+                    <ConfirmButtonPair prompt="Remove all failed and canceled jobs?" confirmText="Remove all" className="flex-wrap" responsiveTouchTargets
+                      ariaLabel="Confirm clearing failed and canceled jobs" busy={clearing} busyText="Removing…"
+                      onConfirm={handleClearFailed} onCancel={() => {
+                        restoreClearFocus.current = true;
+                        clearControlsRef.current?.focus({ preventScroll: true });
+                        setConfirmClear(false);
+                      }} />
+                  ) : (
+                    <button ref={clearButtonRef} type="button" onClick={() => {
+                      clearControlsRef.current?.focus({ preventScroll: true });
+                      setConfirmClear(true);
+                    }}
+                      title="Remove all failed and canceled jobs, including older jobs"
+                      className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-error/40 hover:text-port-error sm:min-h-9">
+                      <Trash2 className="w-3 h-3" /> Clear failed / canceled
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
-          {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onDelete={handleDelete} />)}
+          {showRecent && (
+            <div tabIndex={-1}>
+              {displayedRecent.map((j) => (
+                <CollapsibleListItem key={j.id} removing={pendingExits.current.has(j.id)} onExited={() => finishExit(j.id)}>
+                  <div inert={clearing || undefined}>
+                    <JobRow job={j} onCancel={handleCancel} onRetry={handleRetry} onDelete={handleDelete} />
+                  </div>
+                </CollapsibleListItem>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -359,10 +481,12 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
 }
 
 function formatCounts(live, recent, failedCount) {
-  const parts = [`${live.length} active`];
-  if (failedCount > 0) parts.push(`${failedCount} failed`);
-  const canceledCount = recent.length - failedCount;
-  if (canceledCount > 0) parts.push(`${canceledCount} canceled`);
+  const parts = [`${formatCount(live.length)} active`];
+  if (failedCount > 0) parts.push(`${formatCount(failedCount)} failed`);
+  const canceledCount = recent.filter((job) => job.status === 'canceled').length;
+  const completedCount = recent.filter((job) => job.status === 'completed').length;
+  if (canceledCount > 0) parts.push(`${formatCount(canceledCount)} canceled`);
+  if (completedCount > 0) parts.push(`${formatCount(completedCount)} completed`);
   return parts.join(' • ');
 }
 

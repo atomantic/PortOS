@@ -26,6 +26,10 @@ export const cancelMediaJob = (id, options = {}) => request(`/media-jobs/${encod
 // Live jobs are rejected with 409 — use cancelMediaJob for those.
 export const deleteMediaJob = (id, options = {}) => request(`/media-jobs/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 
+// Remove all removable failed/canceled jobs of one kind, including older rows.
+export const deleteFailedCanceledMediaJobs = (kind, options = {}) =>
+  request(`/media-jobs/failed-canceled?kind=${encodeURIComponent(kind)}`, { method: 'DELETE', ...options });
+
 // Re-enqueue a terminal job (typically `failed`) with the same kind/params/
 // owner. Optional `paramOverrides` patches user-facing fields (prompt,
 // model, dimensions, etc.) before the re-enqueue; non-listed params inherit
