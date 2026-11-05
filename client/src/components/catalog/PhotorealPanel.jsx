@@ -43,6 +43,7 @@ const ENGINES = [
 const MAX_SAMPLES = 1024;
 const FLY_FPS = 24;
 const FLY_SECONDS = { min: 2, max: 60, default: 8 };
+const STATUS_TIMEOUT_MS = 15_000;
 const PREFS_KEY = 'portos.photoreal.render';
 const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 
@@ -120,9 +121,15 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   useEffect(() => {
     let live = true;
     let request = 0;
-    let applied = 0;
-    let lastRequestFailed = false;
     let jobFrames = 0;
+    let activeRequest = null;
+    let statusTimer = null;
+    const cancelStatus = () => {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+      activeRequest?.abort();
+      activeRequest = null;
+    };
     const refreshStatus = () => loadStatus('refresh');
     // The server emits a frame only when a job starts, finishes or fails, so a
     // finish seen while the tab is open is news: act on it once, whatever order
@@ -141,16 +148,18 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     const loadStatus = (kind) => {
       const sequence = ++request;
       const framesAtStart = jobFrames;
-      lastRequestFailed = false;
+      cancelStatus();
+      const controller = new AbortController();
+      activeRequest = controller;
+      const aborted = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('Scene status request canceled')), { once: true }));
+      const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+      statusTimer = timer;
       setStatusRefreshing(true);
-      return getCatalogPhotoreal(record.id, { silent: true })
+      return Promise.race([getCatalogPhotoreal(record.id, { silent: true, signal: controller.signal }), aborted])
         .then((fresh) => {
-          if (!live || sequence < applied) return;
-          applied = sequence;
-          if (sequence === request || lastRequestFailed) {
-            setStatusRefreshing(false);
-            setStatusError('');
-          }
+          if (!live || sequence !== request) return;
+          setStatusRefreshing(false);
+          setStatusError('');
           const newerJobFrame = framesAtStart !== jobFrames;
           if (!newerJobFrame && fresh?.job?.state === 'running') seenRunning.current.add(fresh.job.id);
           setStatus((cur) => ({ ...fresh, job: (kind === 'refresh' || newerJobFrame) ? cur?.job || fresh.job : fresh.job }));
@@ -160,9 +169,12 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         })
         .catch(() => {
           if (!live || sequence !== request) return;
-          lastRequestFailed = true;
           setStatusRefreshing(false);
           setStatusError('Could not refresh the scene status. Try again before opening or rendering.');
+        })
+        .finally(() => {
+          clearTimeout(timer);
+          if (activeRequest === controller) { activeRequest = null; statusTimer = null; }
         });
     };
     loadStatus('initial');
@@ -182,6 +194,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     socket.on('connect', onConnect);
     return () => {
       live = false;
+      cancelStatus();
       reconcileRef.current = null;
       socket.off('catalog:photoreal', onFrame);
       socket.off('catalog:photoreal-scene', onScene);

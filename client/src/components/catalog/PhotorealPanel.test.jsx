@@ -404,16 +404,23 @@ describe('PhotorealPanel', () => {
     expect(screen.queryByRole('button', { name: 'Building scene…' })).not.toBeInTheDocument();
   });
 
-  it('uses a successful initial status if a newer refresh fails', async () => {
+  it.each([
+    { label: 'building', sceneBuilding: true, blendUrl: null },
+    { label: 'idle', sceneBuilding: false, blendUrl: '/old-scene.blend' },
+  ])('keeps a retry available when an old $label status arrives after a failed refresh', async (stale) => {
     let finishInitial;
     getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
-      .mockRejectedValueOnce(new Error('Network unavailable'));
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
     show();
     await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
     await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the scene status');
     expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
-    await act(async () => finishInitial({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    await act(async () => finishInitial({ job: null, blenderVersion: '5.2.3', ...stale }));
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry status' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status' }));
     expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
     expect(screen.queryByRole('button', { name: 'Retry status' })).not.toBeInTheDocument();
@@ -428,6 +435,26 @@ describe('PhotorealPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry status' }));
     expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('times out a stalled refresh and offers a retry', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    vi.useFakeTimers();
+    try {
+      act(() => { handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }); });
+      expect(screen.getByText('Checking scene status…')).toBeInTheDocument();
+      await act(async () => { vi.advanceTimersByTime(15_000); });
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+      expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry status' })); });
+      expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a newer running-render frame when a reconnect status arrives late', async () => {
