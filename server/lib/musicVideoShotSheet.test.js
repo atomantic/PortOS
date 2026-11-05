@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
+const selectedFrameOutdated = (shot) => shotSheetRows({ scenes: [shot] })[0].frameOutdated;
 const scene = (over = {}) => ({ sceneId: 's1', framePrompt: 'Renee rides away at dusk', referenceImageId: 'a.png', takes: [], ...over });
 const take = (prompt) => ({ kind: 'image', assetId: 'a.png', prompt });
 
