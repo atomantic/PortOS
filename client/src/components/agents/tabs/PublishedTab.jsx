@@ -153,7 +153,7 @@ export default function PublishedTab({ agentId }) {
                       <th className="pb-2 pr-4 text-right">Score</th>
                       <th className="pb-2 pr-4 text-right">Comments</th>
                       <th className="pb-2 pr-4">Published</th>
-                      <th className="pb-2 w-8"></th>
+                      <th className="pb-2 w-11"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -182,19 +182,20 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(post.publishedAt)}>
                           {timeAgo(post.publishedAt)}
                         </td>
-                        <td className="py-2">
+                        <td className="py-1">
                           {post.url ? (
                             <a
                               href={post.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-port-accent hover:text-port-accent/80"
+                              className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] p-2 text-port-accent hover:text-port-accent/80"
                               title="Open on Moltbook"
+                              aria-label="Open on Moltbook"
                             >
                               ↗
                             </a>
                           ) : (
-                            <span className="text-gray-600">-</span>
+                            <span className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-600">-</span>
                           )}
                         </td>
                       </tr>
@@ -216,7 +217,7 @@ export default function PublishedTab({ agentId }) {
                       <th className="pb-2 pr-4">Post</th>
                       <th className="pb-2 pr-4">Type</th>
                       <th className="pb-2 pr-4">Published</th>
-                      <th className="pb-2 w-8"></th>
+                      <th className="pb-2 w-11"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -239,19 +240,20 @@ export default function PublishedTab({ agentId }) {
                         <td className="py-2 pr-4 text-gray-500 whitespace-nowrap" title={formatDateTime(comment.publishedAt)}>
                           {timeAgo(comment.publishedAt)}
                         </td>
-                        <td className="py-2">
+                        <td className="py-1">
                           {comment.url ? (
                             <a
                               href={comment.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-port-accent hover:text-port-accent/80"
+                              className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] p-2 text-port-accent hover:text-port-accent/80"
                               title="Open on Moltbook"
+                              aria-label="Open on Moltbook"
                             >
                               ↗
                             </a>
                           ) : (
-                            <span className="text-gray-600">-</span>
+                            <span className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-600">-</span>
                           )}
                         </td>
                       </tr>
