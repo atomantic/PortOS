@@ -100,6 +100,19 @@ describe('Loops index empty state', () => {
 });
 
 describe('Loops initial list loading', () => {
+  it('keeps the create form hidden until the first list read succeeds', async () => {
+    let resolveLoops;
+    api.getLoops.mockReturnValueOnce(new Promise(resolve => { resolveLoops = resolve; }));
+    render(<Loops />);
+
+    expect(screen.getByText('Loading loops...')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loop prompt')).not.toBeInTheDocument();
+
+    await act(async () => resolveLoops([]));
+    expect(await screen.findByText('No loops yet')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loop prompt')).toBeInTheDocument();
+  });
+
   it('shows a retryable error instead of inviting a new loop, then recovers on retry', async () => {
     api.getLoops.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce([]);
     toast.error.mockClear();

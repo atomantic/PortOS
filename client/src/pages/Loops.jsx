@@ -395,7 +395,7 @@ function LoopsContent() {
         </div>
       </div>
 
-      {!(error && data === null) && <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />}
+      {data !== null && <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />}
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-gray-500">
