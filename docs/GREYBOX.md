@@ -183,6 +183,22 @@ stops matching. **Remove look** goes back to flat zone colors and the sun. A
 linked universe's canon mirrors the look, but a canon sync never changes or
 removes it.
 
+#### Photo textures (CC0)
+
+Under the look, each surface material (wood floor, painted wall or metal,
+carpet, tile, concrete, plastic, vinyl, fabric) can use a photo texture from
+[Poly Haven](https://polyhaven.com), whose assets are all CC0. **Choose photo**
+searches Poly Haven by that material; nothing is downloaded until you tap a
+texture. The tap downloads its 2K color, roughness and normal maps once into
+`data/photoreal-textures/<id>/` (a few MB) and saves the pick on the look, so it
+is a revision you can roll back. The texture is laid out at its real-world size
+and box-projected. A natural material keeps the photo's color with a light tint
+toward the look's color, while a painted one takes the look's color over the
+photo's grain. **Procedural** goes back to PortOS's own surface. Glass, mirror,
+chrome and neon always stay procedural. AI drafts never see or change the picks.
+On a machine that hasn't downloaded a picked texture, that material renders
+procedurally until you pick the texture there.
+
 ### Fly-through
 
 **Render fly-through** glides one camera through the ticked cameras in the order

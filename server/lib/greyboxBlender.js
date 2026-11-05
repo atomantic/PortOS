@@ -188,6 +188,54 @@ PRESETS = {
     'neon': dict(roughness=0.3),
 }
 
+# Downloaded CC0 photo textures, by preset (staged under the worker input).
+job_textures = job.get('textures') or {}
+# Painted surfaces take the look's color over the photo's grain; natural ones keep the photo's color.
+PAINTED = ('painted-wall', 'painted-metal', 'plastic', 'vinyl', 'fabric')
+
+def photo_texture(nodes, links, coord, bsdf, tex, base, painted):
+    # Box-projected in metres from the object's own coordinates, so a plank is plank-sized.
+    scale = nodes.new('ShaderNodeMapping')
+    size = max(0.05, float(tex.get('sizeM') or 2.0))
+    scale.inputs['Scale'].default_value = (1.0 / size, 1.0 / size, 1.0 / size)
+    links.new(coord.outputs['Object'], scale.inputs['Vector'])
+    def image(name, non_color):
+        path = tex['maps'].get(name)
+        if not path:
+            return None
+        img = bpy.data.images.load(os.path.join(root, path), check_existing=True)
+        if non_color:
+            img.colorspace_settings.name = 'Non-Color'
+        node = nodes.new('ShaderNodeTexImage')
+        node.image = img
+        node.projection = 'BOX'
+        node.projection_blend = 0.25
+        links.new(scale.outputs['Vector'], node.inputs['Vector'])
+        return node
+    color = image('color', False)
+    tint = nodes.new('ShaderNodeMix')
+    tint.data_type = 'RGBA'
+    if painted:
+        grey = nodes.new('ShaderNodeRGBToBW')
+        links.new(color.outputs['Color'], grey.inputs['Color'])
+        tint.blend_type = 'MULTIPLY'
+        tint.inputs['Factor'].default_value = 1.0
+        tint.inputs['A'].default_value = base
+        links.new(grey.outputs['Val'], tint.inputs['B'])
+    else:
+        tint.blend_type = 'COLOR'
+        tint.inputs['Factor'].default_value = 0.3
+        links.new(color.outputs['Color'], tint.inputs['A'])
+        tint.inputs['B'].default_value = base
+    rough = image('roughness', True)
+    normal = image('normal', True)
+    if normal is not None:
+        bump = nodes.new('ShaderNodeNormalMap')
+        bump.inputs['Strength'].default_value = 1.0
+        links.new(normal.outputs['Color'], bump.inputs['Color'])
+        links.new(bump.outputs['Normal'], bsdf.inputs['Normal'])
+    return tint.outputs['Result'], (rough.outputs['Color'] if rough is not None else None)
+
 def set_input(node, name, value):
     if name in node.inputs:
         node.inputs[name].default_value = value
@@ -208,8 +256,12 @@ def look_material(rule):
     set_input(bsdf, 'Sheen Weight', preset.get('sheen', 0.0))
     coord = nodes.new('ShaderNodeTexCoord')
     color_out = None
+    rough_src = None
     grain = preset.get('grain')
-    if grain == 'wood':
+    tex = job_textures.get(rule['preset'])
+    if tex:
+        color_out, rough_src = photo_texture(nodes, links, coord, bsdf, tex, base, rule['preset'] in PAINTED)
+    elif grain == 'wood':
         # Narrow maple strips laid along the part's long X axis, in metres (#14941).
         # Mesh-local X/Z is the floor plane; the mapping turns it onto the texture's X/Y.
         boards = nodes.new('ShaderNodeMapping')
@@ -309,8 +361,12 @@ def look_material(rule):
         rough.operation = 'ADD'
         rough.use_clamp = True
         rough.inputs[1].default_value = roughness
+        if rough_src is not None:
+            links.new(rough_src, rough.inputs[1])
         links.new(ramp.outputs['Result'], rough.inputs[0])
         links.new(rough.outputs['Value'], bsdf.inputs['Roughness'])
+    elif rough_src is not None:
+        links.new(rough_src, bsdf.inputs['Roughness'])
     if color_out is not None:
         links.new(color_out, bsdf.inputs['Base Color'])
     else:

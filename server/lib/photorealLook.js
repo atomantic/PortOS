@@ -35,6 +35,11 @@ export const PHOTOREAL_MATERIAL_PRESETS = Object.freeze({
 });
 export const PHOTOREAL_PRESET_IDS = Object.freeze(Object.keys(PHOTOREAL_MATERIAL_PRESETS));
 export const PHOTOREAL_LIGHT_TYPES = Object.freeze(['point', 'spot', 'area']);
+// Presets a downloaded CC0 photo texture can replace; glass, mirror, chrome and
+// neon stay procedural because their look is reflection or glow, not a surface.
+export const PHOTOREAL_TEXTURED_PRESETS = Object.freeze(['wood-floor', 'painted-wall', 'painted-metal', 'carpet', 'tile', 'concrete', 'plastic', 'vinyl', 'fabric']);
+// A Poly Haven asset id: lowercase slug, the only shape that names a texture folder.
+export const PHOTOREAL_TEXTURE_ID = /^[a-z0-9][a-z0-9_]{0,79}$/;
 
 const idSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z][A-Za-z0-9_-]*$/);
 const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
@@ -87,6 +92,11 @@ export const photorealLookSchema = z.object({
   materials: z.array(materialSchema).max(PHOTOREAL_LOOK_LIMITS.MATERIALS).default([]),
   lights: z.array(lightSchema).max(PHOTOREAL_LOOK_LIMITS.LIGHTS).default([]),
   atmosphere: atmosphereSchema.default({}),
+  // preset → installed CC0 texture id. Chosen by the user, never by the model.
+  // An entry this version doesn't know is dropped, not fatal, so a newer
+  // peer's look still renders here.
+  textures: z.record(z.string(), z.unknown()).default({}).transform((map) => Object.fromEntries(Object.entries(map)
+    .filter(([preset, id]) => PHOTOREAL_TEXTURED_PRESETS.includes(preset) && typeof id === 'string' && PHOTOREAL_TEXTURE_ID.test(id)))),
 }).superRefine((look, ctx) => {
   for (const key of ['materials', 'lights']) {
     for (const id of duplicateIds(look[key])) ctx.addIssue({ code: 'custom', message: `duplicate ${key} id "${id}"`, path: [key] });
@@ -136,7 +146,12 @@ export function photorealGreyboxBlock(scene) {
   return `Greybox zones and parts (JSON):\n${JSON.stringify({ zones: scene.zones, parts, landmarks: scene.landmarks.map(({ id, label, position }) => ({ id, label, position })) })}`;
 }
 
-export const photorealCurrentLookBlock = (look) => (look ? `Current look (JSON):\n${JSON.stringify(look)}` : '');
+// Textures are the user's own pick, so the model neither sees nor sets them.
+export const photorealCurrentLookBlock = (look) => {
+  if (!look) return '';
+  const { textures: _textures, ...rest } = look;
+  return `Current look (JSON):\n${JSON.stringify(rest)}`;
+};
 
 /** The one text the model reads: contract, place, greybox, current look, request. */
 export function photorealLookPrompt({ instructions, placeBlock, greyboxBlock, currentBlock, request }) {

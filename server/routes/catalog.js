@@ -1,4 +1,4 @@
-import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema } from '../lib/catalogGreyboxValidation.js';
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -68,6 +68,7 @@ import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/em
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
 import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
+import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
 import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalogPhotorealLook.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
@@ -813,6 +814,21 @@ router.post('/ingredients/:id/greybox/shots/:shotId/render', asyncHandler(async 
   const media = await renderGreyboxShot(req.params.id, req.params.shotId);
   res.status(201).json(media);
   catalogEvents.emit('primitive-changed', { ingredientId: req.params.id });
+}));
+
+// CC0 photo textures for Photoreal looks. Poly Haven is reached only from these
+// user actions: opening the picker searches, a tap downloads.
+router.get('/photoreal/textures', asyncHandler(async (_req, res) => {
+  res.json({ installed: await listInstalledTextures() });
+}));
+
+router.get('/photoreal/textures/search', asyncHandler(async (req, res) => {
+  const { preset, q } = validateRequest(catalogPhotorealTextureSearchSchema, req.query);
+  res.json({ results: await searchTextures({ preset, query: q }) });
+}));
+
+router.post('/photoreal/textures/:id/install', asyncHandler(async (req, res) => {
+  res.json(await installTexture(validateRequest(catalogPhotorealTextureIdSchema, req.params.id)));
 }));
 
 // Photoreal: the place's greybox rebuilt in Blender and rendered from its saved

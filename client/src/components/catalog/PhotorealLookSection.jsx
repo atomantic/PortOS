@@ -3,6 +3,7 @@ import { Check, Loader2, Sparkles, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import MusicVideoLlmPicker from '../musicVideo/MusicVideoLlmPicker';
 import SentPromptPanel from '../media/SentPromptPanel';
+import PhotorealTexturesSection from './PhotorealTexturesSection';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { draftCatalogPhotorealLook, previewCatalogPhotorealLookPrompt, saveCatalogPhotorealLook } from '../../services/apiCatalog';
 import { formatPercent } from '../../utils/formatters';
@@ -108,6 +109,10 @@ export default function PhotorealLookSection({ record, scene, readOnly = false, 
           : <button type="button" className="text-xs text-gray-400 hover:text-white underline min-h-[32px]" onClick={() => setConfirmClear(true)} disabled={blocked}>Remove look</button>)}
       </div>
       {saved ? <LookSummary look={saved} scene={scene} /> : <p className="text-xs text-gray-400">No look yet: renders use flat zone colors and a daylight sun.</p>}
+      {saved && (
+        <PhotorealTexturesSection record={record} look={saved} readOnly={readOnly} disabled={blocked}
+          onBusyChange={onBusyChange} onSaved={onSaved} />
+      )}
 
       {draft && (
         <div role="status" className="rounded-lg border border-port-accent/50 bg-port-accent/10 p-3 space-y-3">

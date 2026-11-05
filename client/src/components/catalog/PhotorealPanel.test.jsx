@@ -11,6 +11,7 @@ vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => han
 vi.mock('../../services/apiCatalog', () => ({
   getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
   draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
+  getCatalogPhotorealTextures: vi.fn(async () => ({ installed: [] })), searchCatalogPhotorealTextures: vi.fn(), installCatalogPhotorealTexture: vi.fn(),
 }));
 vi.mock('../../services/apiCodeAnimation', () => ({
   findCodeAnimationBlender: vi.fn(), getCodeAnimationExecution: vi.fn(), probeCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(),

@@ -94,6 +94,7 @@ export const CATEGORIES = {
   'launch-videos': { label: 'Launch Videos', description: 'App launch-video compositions, plans, captions and rendered deliverables', archivable: true, deletable: false },
   'composition-proofs': { label: 'Composition Proofs', description: 'Contact-sheet review stills from HTML-composition proof renders — re-rendered from source, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'photoreal-blends': { label: 'Photoreal Blender Scenes', description: 'The latest Blender scene built from each Environment greybox for download — rebuilt by the next Photoreal render, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
+  'photoreal-textures': { label: 'Photoreal Textures', description: 'CC0 photo textures downloaded from Poly Haven for Photoreal looks — re-downloaded on the next pick; until then those materials render procedurally', archivable: false, deletable: true, purgeScope: 'category' },
   'photoreal-workspaces': { label: 'Photoreal Render Workers', description: 'Per-run staged input, output and scratch for an in-flight Photoreal Blender render — removed when the run ends', archivable: false, deletable: false },
   'greybox-renders': { label: 'Greybox Render Scratch', description: 'Temporary viewer pages for in-flight greybox shot captures — removed when each render ends', archivable: false, deletable: false },
   // Development artifacts ("ingredients") of Music Video projects — every

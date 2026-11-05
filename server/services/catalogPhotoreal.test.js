@@ -88,7 +88,7 @@ describe('startPhotorealRender', () => {
 
   it('renders the saved greybox in Blender, attaches each camera, keeps plates and the .blend', async () => {
     const record = place();
-    record.payload.photoreal = { materials: [], lights: [{ id: 'panel', type: 'area', position: [0, 6, 0], watts: 600 }], atmosphere: { haze: 0.2 } };
+    record.payload.photoreal = { materials: [], lights: [{ id: 'panel', type: 'area', position: [0, 6, 0], watts: 600 }], atmosphere: { haze: 0.2 }, textures: { 'wood-floor': 'oak_planks' } };
     db.getIngredient.mockResolvedValue(record);
     const worker = fakeWorker({
       'report.json': JSON.stringify({ version: '5.2.3', engine: 'CYCLES', device: 'GPU', backend: 'METAL', samples: 64, parts: 1, shots: [{ shotId: 'wide', seconds: 12.5 }] }),
@@ -96,9 +96,12 @@ describe('startPhotorealRender', () => {
       'shot-wide.png': PNG,
       'shot-booth.png': PNG,
     });
+    const texture = { id: 'oak_planks', sizeM: 2.4, maps: { color: 'textures/oak_planks/color.jpg' } };
+    const stageTextures = vi.fn(async () => ({ files: [{ path: texture.maps.color, content: Buffer.from('jpg') }], job: { 'wood-floor': texture }, missing: [] }));
     __setPhotorealDepsForTests({
       resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }),
       lastCheckedVersion: async () => '5.2.3',
+      stageTextures,
     });
 
     const job = await startPhotorealRender(record.id, { shotIds: ['wide', 'booth'], engine: 'cycles', samples: 64 });
@@ -108,7 +111,10 @@ describe('startPhotorealRender', () => {
     // The scene goes in as data beside PortOS's own script; argv never runs caller code.
     const data = JSON.parse(fakeWorker.lastFiles.find((f) => f.path === 'greybox-blender.json').content);
     expect(data).toMatchObject({ engine: 'CYCLES', useGpu: true, samples: 64, longEdge: 1920, shotIds: ['wide', 'booth'],
-      look: { lights: [{ id: 'panel', size: 0.25 }], atmosphere: { haze: 0.2, sun: false } } });
+      look: { lights: [{ id: 'panel', size: 0.25 }], atmosphere: { haze: 0.2, sun: false } }, textures: { 'wood-floor': texture } });
+    // The look's downloaded textures are staged beside the script for Blender to read.
+    expect(stageTextures).toHaveBeenCalledWith({ 'wood-floor': 'oak_planks' });
+    expect(fakeWorker.lastFiles.map((f) => f.path)).toContain('textures/oak_planks/color.jpg');
     expect(worker.mock.calls[0][0].tool.argv('entry.py')).toEqual(expect.arrayContaining(['--background', '--disable-autoexec', '--python', 'entry.py']));
     expect(upload).toHaveBeenCalledWith(expect.objectContaining({ role: 'photoreal:wide', mimeType: 'image/png', dataBase64: PNG.toString('base64'),
       caption: expect.stringContaining('Cycles, 64 samples, 12.5s') }));
