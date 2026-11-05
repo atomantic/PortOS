@@ -947,6 +947,7 @@ export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
 export * from './musicVideoCameos.js';
+export * from './musicVideoShotSheet.js';
 export * from './musicVideoCreditsOutro.js';
 export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';

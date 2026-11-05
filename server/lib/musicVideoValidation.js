@@ -1,4 +1,5 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
@@ -262,6 +263,24 @@ export const musicVideoPacingSchema = z.object({
   minShotSec: z.number().min(0.5).max(60).optional(),
   maxShotSec: z.number().min(1).max(120).optional(),
   hookSec: z.number().min(0.5).max(60).optional(),
+}).strict();
+
+// The cameras that exist in this video, and each shot's plan (lib/musicVideoShotSheet.js).
+export const musicVideoCameraSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(SHOT_CAMERA_KINDS),
+  owner: z.string().trim().max(120).optional(),
+  // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
+  rule: z.string().trim().max(1000).optional(),
+}).strict();
+export const musicVideoShotSheetSchema = z.object({
+  cameraId: z.string().min(1).max(64).nullable().optional(),
+  holder: z.string().trim().max(120).nullable().optional(),
+  characters: z.array(z.string().trim().min(1).max(120)).max(SHOT_SHEET_CHARACTERS_MAX).optional(),
+  // The director has read this shot's plan and it's right.
+  checked: z.boolean().optional(),
+  ...Object.fromEntries(SHOT_SHEET_TEXT_FIELDS.map(([field, max]) => [field, z.string().max(max).optional()])),
 }).strict();
 
 // Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
@@ -1733,6 +1752,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
+  cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
@@ -1939,6 +1959,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   cameoVariantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN, 'Invalid variant id').nullable().optional(),
   // This shot's own on-screen name for its cameo (an alias, e.g. Spoodle for the Cockapoo); null uses the cameo's label.
   cameoLabel: z.string().trim().max(120).nullable().optional(),
+  shotSheet: musicVideoShotSheetSchema.nullable().optional(),
   ...scenePanelFields,
 }).strict();
 
