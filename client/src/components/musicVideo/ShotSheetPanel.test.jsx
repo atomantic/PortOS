@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ShotSheetPanel from './ShotSheetPanel.jsx';
 
 const boardFor = (over = {}) => ({
@@ -152,6 +152,20 @@ describe('ShotSheetPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Set on 1 listed shot' }));
     expect(board.saveScene).toHaveBeenCalledTimes(1);
     expect(board.saveScene).toHaveBeenCalledWith('b', { shotSheet: { location: 'Mall' } });
+  });
+
+  // Catches a shot's medium not following its camera, or the match not saving both the plan and the layer.
+  it('flags a shot that disagrees with its camera and matches it on request', async () => {
+    const board = boardFor();
+    board.treatment = { save: vi.fn(async () => ({})) };
+    board.project.cameras[0].output = 'image';
+    board.project.treatment = { shotDirections: [{ sceneId: 'a', medium: 'generated-footage' }] };
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    expect(screen.getByText('VHS shoots photos, but this shot is set to video')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Match 1 shot to its camera' }));
+    await waitFor(() => expect(board.saveScene).toHaveBeenCalledWith('a', { visualLayer: 'still' }));
+    expect(board.treatment.save).toHaveBeenCalledWith({ shotDirections: [{ sceneId: 'a', medium: 'still', mediumPinned: true }] });
   });
 
   // Catches a camera edit not persisting to the project.

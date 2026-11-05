@@ -11,6 +11,8 @@ import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
 
 export const SHOT_CAMERA_KINDS = ['in-world', 'observer'];
 export const SHOT_CAMERA_MAX = 12;
+// What a camera produces. A camera with neither set can shoot both.
+export const SHOT_CAMERA_OUTPUTS = ['image', 'video'];
 export const SHOT_SHEET_CHARACTERS_MAX = 24;
 // Shots per AI request, so one reply stays short enough to read and retry.
 export const SHOT_SHEET_PROPOSE_BATCH = 15;
@@ -47,10 +49,18 @@ function selectedFrameOutdated(scene) {
   return !take.prompt.includes(framePrompt);
 }
 
+/** What a shot is set to render: a photo or video, from its planned medium, else its picture layer. */
+function shotOutput(scene, direction) {
+  if (direction?.medium === 'still') return 'image';
+  if (direction?.medium === 'generated-footage' || direction?.medium === 'existing-footage') return 'video';
+  return scene.visualLayer === 'still' ? 'image' : 'video';
+}
+
 /** The sheet's rows: timed shots in song order, then untimed ones, each with its sung lyric, camera and frame state. */
 export function shotSheetRows(project) {
   const scenes = (project?.scenes || []).filter(Boolean);
   const cameras = new Map((project?.cameras || []).map((camera) => [camera.id, camera]));
+  const directions = new Map((project?.treatment?.shotDirections || []).map((direction) => [direction.sceneId, direction]));
   const timed = scenes.filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
   const untimed = scenes.filter((scene) => !Number.isFinite(scene.startSec));
   return [...timed, ...untimed].map((scene) => {
@@ -62,6 +72,9 @@ export function shotSheetRows(project) {
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
       frameOutdated: selectedFrameOutdated(scene),
+      output: shotOutput(scene, directions.get(scene.sceneId)),
+      // The picture layer can disagree with the plan, and a composed render reads the layer.
+      layerOutput: scene.visualLayer === 'still' ? 'image' : 'video',
     };
   });
 }
@@ -101,6 +114,9 @@ export function shotSheetProblems(row, previous = null) {
   const problems = missing.length ? [`Missing ${missing.join(', ')}`] : [];
   if (sheet.cameraId && !camera) problems.push('Its camera was removed from this video');
   if (camera?.kind === 'in-world' && !sheet.holder) problems.push(`Nobody holds the ${camera.name}`);
+  if (camera?.output && (row.output !== camera.output || row.layerOutput !== camera.output)) {
+    problems.push(`${camera.name} shoots ${camera.output === 'image' ? 'photos' : 'video'}, but this shot is set to ${row.output === camera.output ? row.layerOutput === 'image' ? 'a photo' : 'video' : row.output === 'image' ? 'a photo' : 'video'}`);
+  }
   const action = sheet.action?.trim();
   if (action && action === previous?.sheet?.action?.trim()) problems.push('Same action as the shot before');
   return problems;
@@ -139,6 +155,22 @@ export function shotSheetStretches(rows, readValue) {
 export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
   const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
   return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
+}
+
+/**
+ * The media changes that bring shots in line with their camera's output: the
+ * planned medium and the picture layer. Footage already planned stays as it is
+ * when it's on a video camera.
+ */
+export function shotSheetMediaEdits(rows) {
+  return rows.flatMap(({ scene, camera, output, layerOutput }) => {
+    if (!camera?.output || (output === camera.output && layerOutput === camera.output)) return [];
+    return [{
+      sceneId: scene.sceneId,
+      ...(output !== camera.output ? { medium: camera.output === 'image' ? 'still' : 'generated-footage' } : {}),
+      ...(layerOutput !== camera.output ? { visualLayer: camera.output === 'image' ? 'still' : 'footage' } : {}),
+    }];
+  });
 }
 
 /**

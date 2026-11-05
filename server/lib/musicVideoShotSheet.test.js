@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
@@ -133,6 +133,30 @@ describe('shotSheetStretches', () => {
     const rows = [row(0, 1, { holder: 'Kevin', timeOfDay: 'Dusk', light: 'Flash' }, vhs), row(1, 2, { holder: 'Renee', timeOfDay: 'Dusk', light: 'Lamp' }, vhs), row(2, 3, { timeOfDay: 'Night' }, observer)];
     expect(shotSheetStretches(rows, bar('camera')).map((stretch) => stretch.value)).toEqual(['VHS · Kevin', 'VHS · Renee', 'Observer']);
     expect(shotSheetStretches(rows, bar('timeOfDay')).map((stretch) => stretch.value)).toEqual(['Dusk', 'Night']);
+  });
+});
+
+describe('camera output', () => {
+  const project = (medium, visualLayer, output) => ({
+    cameras: [{ id: 'c', name: 'Snapshot', kind: 'in-world', output }],
+    treatment: { shotDirections: [{ sceneId: 's', medium }] },
+    scenes: [{ sceneId: 's', startSec: 0, endSec: 1, visualLayer, shotSheet: { cameraId: 'c' } }],
+  });
+  // Catches the plan and the picture layer disagreeing unnoticed, which is how a photo shot renders as video.
+  it('edits only what disagrees with the camera', () => {
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'footage', 'image')))).toEqual([{ sceneId: 's', visualLayer: 'still' }]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('generated-footage', 'footage', 'image')))).toEqual([{ sceneId: 's', medium: 'still', visualLayer: 'still' }]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'still', 'video')))).toEqual([{ sceneId: 's', medium: 'generated-footage', visualLayer: 'footage' }]);
+  });
+  // Catches existing footage being replanned, or a camera that shoots both being constrained.
+  it('leaves agreeing shots and unconstrained cameras alone', () => {
+    expect(shotSheetMediaEdits(shotSheetRows(project('existing-footage', 'footage', 'video')))).toEqual([]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'footage', undefined)))).toEqual([]);
+  });
+  // Catches a mismatch that the sheet's problems don't report.
+  it('reports a mismatch as a problem', () => {
+    const [row] = shotSheetRows(project('still', 'footage', 'image'));
+    expect(shotSheetProblems(row)).toContain('Snapshot shoots photos, but this shot is set to video');
   });
 });
 
