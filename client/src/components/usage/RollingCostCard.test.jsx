@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import RollingCostCard, { niceTicks } from './RollingCostCard';
 
@@ -29,6 +30,13 @@ const tapAt = (clientX) => {
 };
 
 describe('RollingCostCard', () => {
+  it('uses only its own range diagnostics, not the monthly selection', async () => {
+    api.getUsageRollingCost.mockResolvedValue({ ...payload, coverage: { pricingIncomplete: true, classificationUnreported: ['Rolling peer'] } });
+    render(<MemoryRouter><RollingCostCard coverage={{ pricingIncomplete: true, classificationUnreported: ['Monthly peer'] }} /></MemoryRouter>);
+    expect(await screen.findByText('Partial chart: unpriced ledger usage from Rolling peer.')).toBeInTheDocument();
+    expect(screen.queryByText(/Monthly peer/)).not.toBeInTheDocument();
+  });
+
   it('stacks plans with a legend and pins tapped days until tapped again', async () => {
     render(<RollingCostCard />);
     await screen.findByText('$40.25');

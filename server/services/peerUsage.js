@@ -631,6 +631,21 @@ function distinctPeerInstances(peers) {
   });
 }
 
+// Diagnostics use the exact per-origin report rows, never another machine's config.
+function classificationGapsFor(source, report) {
+  return report.providers.filter((row) => row.classificationKnown === false
+    && (row.observations?.from || row.observations?.hasUndatedUsage)).map((row) => ({
+    instanceId: source.instanceId, instanceName: source.name || source.instanceId,
+    self: source.isSelf, capturedAt: source.capturedAt || null,
+    providerId: row.id, providerName: row.name,
+    models: row.models.map((model) => model.model).sort(),
+    tokens: reportTokens(row), sessions: row.sessions,
+    ...row.observations,
+    reason: row.id === 'legacy' ? 'legacy-unattributed'
+      : source.providerClasses == null ? 'classification-not-reported' : 'provider-not-configured',
+  }));
+}
+
 export async function getFleetUsage({ from = null, to = null, providers = [], apiBilledInstanceIds = [] } = {}) {
   const { self, peers } = await entriesWithSelf();
   const localIdentity = self || await readSelfIdentity();
@@ -654,7 +669,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     totalMessages: from || to ? null : activity.totalMessages,
     providerClasses,
   });
-  const reportFor = (entries) => {
+  const reportFor = (entries, includeObservations = false) => {
     const [first = {}, ...additionalSources] = entries.map(reportSource);
     return buildUsageReport(first.dailyActivity || {}, {
       from,
@@ -666,10 +681,12 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
       totalMessages: first.totalMessages,
       providerClasses: first.providerClasses,
       additionalSources,
+      includeObservations,
     });
   };
-  const row = ({ instanceId, name, capturedAt, activity, providerClasses, isSelf }) => {
-    const report = reportFor([{ activity, providerClasses }]);
+  const sourceReports = new Map(sources.map((source) => [source.instanceId, reportFor([source], true)]));
+  const row = ({ instanceId, name, capturedAt, activity, isSelf }) => {
+    const report = sourceReports.get(instanceId);
     return {
       instanceId,
       name: name || instanceId,
@@ -754,11 +771,13 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
     transcriptUpdatedAt: localTranscript?.updatedAt || null,
     hourlyActivity: hourly.hourly,
     coverage: {
+      range: { from, to },
+      classificationGaps: sources.flatMap((source) => classificationGapsFor(source, sourceReports.get(source.instanceId))),
       instanceCount: sources.length, missingInstances, notSyncingInstances, incompleteMonths, subscriptionIncomplete,
       pricingIncomplete: Boolean(report.totals.costIncomplete),
       hourlyIncomplete: hourly.incomplete || missingInstances.length > 0,
       classificationUnreported: peers.filter((entry) => !entry.providerClasses
-        && (!optedOut.has(entry.instanceId) || reportFor([{ activity: entry.usage, providerClasses: entry.providerClasses }]).totals.costIncomplete))
+        && (!optedOut.has(entry.instanceId) || sourceReports.get(entry.instanceId).totals.costIncomplete))
         .map((entry) => entry.name || entry.instanceId),
       blockEventsUnreported: [...(!localBlockProjection ? [localIdentity?.name || 'This instance'] : []),
         ...expectedPeers.filter((entry) => !entry.blockEvents).map((entry) => entry.name || entry.instanceId)],
@@ -1008,6 +1027,8 @@ async function usageHistorySources(providers = []) {
   return [
     {
       id: self?.instanceId ?? 'local',
+      instanceId: self?.instanceId ?? 'local', name: self?.name || 'This machine', isSelf: true,
+      capturedAt: local?.lastUpdated || self?.capturedAt || null,
       stamp: [local?.lastUpdated, localTranscript?.updatedAt],
       daily: local?.dailyActivity,
       monthly: local?.monthlyActivity,
@@ -1016,6 +1037,7 @@ async function usageHistorySources(providers = []) {
     },
     ...peers.map((e) => ({
       id: e.instanceId,
+      instanceId: e.instanceId, name: e.name || e.instanceId, isSelf: false, capturedAt: e.capturedAt,
       stamp: e.capturedAt,
       daily: e.usage.dailyActivity,
       monthly: e.usage.monthlyActivity,
@@ -1101,7 +1123,8 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
   const spanLength = pointCount + ROLLING_COST_WINDOW_DAYS - 1;
   const span = Array.from({ length: spanLength }, (_, i) => utcDay(todayMs - (spanLength - 1 - i) * DAY_MS));
 
-  const key = JSON.stringify([rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p), familyForProvider(p)])]);
+  const participation = await usageParticipation();
+  const key = JSON.stringify([participation.participating, [...participation.optedOut], rangeId, span[0], span.at(-1), sources.map((s) => [s.id, s.stamp]), providers.map((p) => [p.id, isFreeProvider(p), familyForProvider(p)])]);
   if (rollingMemo?.key === key) return rollingMemo.value;
 
   const labels = new Map();
@@ -1122,10 +1145,29 @@ export async function getFleetRollingCost({ providers = [], range = '3m', now = 
     const values = running.map((v) => Math.max(0, roundCents(v)));
     points.push({ date: span[i], cost: roundCents(values.reduce((sum, v) => sum + v, 0)), values });
   }
-  const pricingIncomplete = sources.some((source) => buildUsageReport(source.daily || {}, {
-    from: span[0], to: span.at(-1), providers, monthlyActivity: source.monthly, providerClasses: source.providerClasses,
-  }).totals.costIncomplete);
-  const value = { range: rangeId, windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, series, points, pricingIncomplete };
+  const diagnosticRange = { from: span[0], to: span.at(-1) };
+  const reports = sources.map((source) => {
+    // Rolling charts use a month bucket only on days without a daily bucket.
+    // Report the observed bucket in full, rather than inventing exact run dates.
+    const contributingMonths = new Set(span.filter((day) => !source.daily?.[day]).map((day) => day.slice(0, 7)));
+    const monthlyActivity = Object.fromEntries(Object.entries(source.monthly || {}).filter(([month]) => contributingMonths.has(month)));
+    return buildUsageReport(source.daily || {}, {
+      ...diagnosticRange, providers, monthlyActivity, providerClasses: source.providerClasses,
+      includeObservations: true,
+    });
+  });
+  const pricingIncomplete = reports.some((report) => report.totals.costIncomplete);
+  const { participating, optedOut } = participation;
+  const known = new Set(sources.map((source) => source.instanceId));
+  const expected = sources.filter((source) => !source.isSelf && !optedOut.has(source.instanceId));
+  const coverage = {
+    range: diagnosticRange, pricingIncomplete,
+    classificationGaps: sources.flatMap((source, index) => classificationGapsFor(source, reports[index])),
+    missingInstances: distinctPeerInstances(participating.filter((peer) => !known.has(peer.instanceId))).map(peerLabel),
+    transcriptUnreported: expected.filter((source) => !source.transcript).map((source) => source.name),
+    classificationUnreported: expected.filter((source) => !source.providerClasses).map((source) => source.name),
+  };
+  const value = { range: rangeId, windowDays: ROLLING_COST_WINDOW_DAYS, instanceCount: sources.length, series, points, pricingIncomplete, coverage };
   rollingMemo = { key, value };
   return value;
 }

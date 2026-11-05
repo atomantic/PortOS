@@ -247,7 +247,7 @@ describe('UsagePage subscription savings', () => {
     }));
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
     expect(await screen.findByText('Usage from 2 reported instances; peer data reflects the last sync.')).toBeInTheDocument();
-    expect(screen.getByText(/No usage snapshot from Offline/)).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Monthly estimated API cost and tokens' })).getByText(/No usage snapshot from Offline/)).toBeInTheDocument();
     expect(screen.getByText(/Partial months 2025-01 are excluded/)).toBeInTheDocument();
     expect(screen.getByText(/some instances did not report complete image receipts/)).toBeInTheDocument();
     expect(screen.getByText(/older sessions or unavailable instances/)).toBeInTheDocument();
@@ -342,6 +342,24 @@ describe('UsagePage historical reconciliation', () => {
     await act(async () => document.dispatchEvent(new Event('visibilitychange')));
     expect(api.getUsageBackfillStatus).toHaveBeenCalledTimes(5);
     expect(await screen.findByText('Example scan failed')).toBeInTheDocument();
+  });
+
+  it('runs local repair from the warning and refreshes both charts after partial failure', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, coverage: { pricingIncomplete: true, classificationGaps: [] } });
+    let finish;
+    api.startUsageBackfill.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByText('What’s missing and how to fix it'));
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile local history' }));
+    expect(screen.getByRole('button', { name: 'Reconciling local history…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Reconcile now/ })).toBeDisabled();
+    const rollingReads = api.getUsageRollingCost.mock.calls.length;
+    const usageReads = api.getUsage.mock.calls.length;
+    await act(async () => finish({ status: 'error', corrected: 1, error: 'One saved transcript was unreadable' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('One saved transcript was unreadable');
+    expect(api.startUsageBackfill).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.getUsageRollingCost.mock.calls.length).toBeGreaterThan(rollingReads));
+    expect(api.getUsage.mock.calls.length).toBeGreaterThan(usageReads);
   });
 
   it('reconciles a completion that beats the start response', async () => {
