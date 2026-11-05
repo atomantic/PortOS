@@ -395,7 +395,7 @@ function LoopsContent() {
         </div>
       </div>
 
-      {!error && <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />}
+      {!(error && data === null) && <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />}
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-gray-500">
@@ -403,26 +403,31 @@ function LoopsContent() {
         </div>
       ) : error && data === null ? (
         <ListLoadError what="loops" error={error} onRetry={fetchLoops} />
-      ) : loops.length === 0 ? (
-        <EmptyState
-          icon={RefreshCw}
-          title="No loops yet"
-          message="A loop re-runs one prompt on a schedule with any AI provider. Describe the first one in the form above."
-          actionLabel="Describe your first loop"
-          onAction={() => promptRef.current?.focus()}
-        />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
-          {loops.map(loop => (
-            <LoopCard
-              key={loop.id}
-              loop={loop}
-              onAction={handleAction}
-              expandedId={expandedId}
-              onToggle={id => setExpandedId(prev => prev === id ? null : id)}
+        <>
+          {error && <ListLoadError what="loops" error={error} onRetry={fetchLoops} />}
+          {loops.length === 0 ? (
+            <EmptyState
+              icon={RefreshCw}
+              title="No loops yet"
+              message="A loop re-runs one prompt on a schedule with any AI provider. Describe the first one in the form above."
+              actionLabel="Describe your first loop"
+              onAction={() => promptRef.current?.focus()}
             />
-          ))}
-        </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+              {loops.map(loop => (
+                <LoopCard
+                  key={loop.id}
+                  loop={loop}
+                  onAction={handleAction}
+                  expandedId={expandedId}
+                  onToggle={id => setExpandedId(prev => prev === id ? null : id)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

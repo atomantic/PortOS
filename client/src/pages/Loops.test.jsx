@@ -99,7 +99,6 @@ describe('Loops index empty state', () => {
   });
 });
 
-
 describe('Loops initial list loading', () => {
   it('shows a retryable error instead of inviting a new loop, then recovers on retry', async () => {
     api.getLoops.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce([]);
@@ -127,5 +126,21 @@ describe('Loops initial list loading', () => {
 
     expect(await screen.findByText('Loaded loop')).toBeInTheDocument();
     expect(screen.queryByText('No loops yet')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('Loops refresh errors with retained data', () => {
+  it('keeps the form and previously loaded list visible while showing a refresh error', async () => {
+    api.getLoops.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error('Refresh failed'));
+    render(<Loops />);
+
+    expect(await screen.findByText('No loops yet')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loop prompt')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load loops — Refresh failed');
+    expect(screen.getByText('No loops yet')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loop prompt')).toBeInTheDocument();
   });
 });
