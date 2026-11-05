@@ -647,6 +647,12 @@ export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
 // sheet (standing feedback the direction keeps honoring); a target names one image.
 export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const renderMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/render`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const refreshMusicVideoCastAndSetsFeedbackRenderer = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/refresh-renderer`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const removeMusicVideoCastAndSetsImageFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/remove-image-note`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>

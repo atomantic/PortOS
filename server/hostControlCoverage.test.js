@@ -860,6 +860,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/music-video/:id/cameos/:cameoId/variants/:variantId', RECORDS],
   ['DELETE /api/music-video/:id/cast-and-sets', REMOVES_RECORD],
   ['DELETE /api/music-video/:id/cast-and-sets/feedback/:feedbackId', REMOVES_RECORD],
+  ['POST /api/music-video/:id/cast-and-sets/feedback/refresh-renderer', IN_PROCESS_COMPUTE],
+  ['POST /api/music-video/:id/cast-and-sets/feedback/remove-image-note', REMOVES_RECORD],
   ['POST /api/music-video/:id/cast-and-sets/reconfirm', RECORDS],
   ['POST /api/music-video/:id/cast-and-sets/edit-image-preview', READ_OVER_POST],
   ['POST /api/music-video/:id/cast-and-sets/discard-image-edit', RECORDS],

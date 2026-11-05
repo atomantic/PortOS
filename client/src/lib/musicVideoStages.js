@@ -326,7 +326,7 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
   const entry = progress.stages.find((stage) => stage.id === progress.current);
   const allDone = progress.stages.every((stage) => stage.optional || stage.state === 'done');
   const blocked = entry?.state === 'blocked';
-  const asksForYou = ['review-production', 'approve-cast-sets', 'review-autonomous'].includes(nextAction?.id);
+  const asksForYou = ['review-production', 'approve-cast-sets', 'review-cast-feedback', 'review-autonomous'].includes(nextAction?.id);
   const needsYou = blocked || asksForYou;
   const needsYouStage = !needsYou ? null : blocked ? progress.current
     : nextAction.id === 'approve-cast-sets' ? 'cast-sets' : nextAction.stage || progress.current;
@@ -577,7 +577,9 @@ function setupNextAction({ project, readiness, kickoffBlockedReason }) {
 }
 
 function castSetsNextAction({ project, castPhase, kickoffBlockedReason }) {
+  if (castPhase === 'review' && project.castAndSets?.feedbackRenderPlan) return { id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin', label: 'Review feedback plan', shortLabel: 'Review' };
   if (castPhase === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
+  if (castPhase === 'stopped' && (project.castAndSets?.queuedImagesToCheck ?? Object.values(project.castAndSets?.images || {}).filter((image) => image.status === 'queued' && image.jobId).length)) return { id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin', label: 'Review queued images', shortLabel: 'Review' };
   if (castPhase === 'stopped') return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
   if (castPhase === 'building') return { id: 'busy', kind: 'run', label: 'Building cast & sets…', shortLabel: 'Building…', disabled: true };
   if (castPhase === 'absent' && !project.automation) return { id: 'start-cast-sets', kind: 'run', label: 'Build cast & sets', shortLabel: 'Build', ...analyzeFirst(project) };

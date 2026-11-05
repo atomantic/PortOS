@@ -99,6 +99,9 @@ import {
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
   musicVideoCastAndSetsFeedbackSchema,
+  musicVideoCastAndSetsFeedbackPlanSchema,
+  musicVideoCastAndSetsFeedbackRenderSchema,
+  musicVideoCastAndSetsImageNoteRemovalSchema,
   musicVideoCastAndSetsRegenerateSchema,
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
@@ -235,7 +238,10 @@ import {
   startCastAndSets,
   editCastAndSetsDirection,
   applyCastAndSetsFeedback,
+  renderCastAndSetsFeedback,
+  refreshCastAndSetsFeedbackRenderer,
   removeCastAndSetsFeedbackEntry,
+  removeCastAndSetsImageFeedback,
   editCastAndSetsImage,
   previewCastAndSetsImageEdit,
   acceptCastAndSetsImageEdit,
@@ -1700,6 +1706,23 @@ router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
 router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsFeedbackSchema, req.body || {});
   res.status(202).json(await applyCastAndSetsFeedback(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback/render', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackRenderSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await renderCastAndSetsFeedback(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback/refresh-renderer', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackPlanSchema, req.body || {});
+  res.status(202).json(await refreshCastAndSetsFeedbackRenderer(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback/remove-image-note', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsImageNoteRemovalSchema, req.body || {});
+  res.json(await removeCastAndSetsImageFeedback(req.params.id, input));
 }));
 
 router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {

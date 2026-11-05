@@ -11,7 +11,7 @@ import { requireProject } from './requireProject.js';
 import { findProductionRun, reserveProductionStep, settleProductionStep } from './production.js';
 
 const editError = (message) => new ServerError(message, { status: 409, code: 'CAST_SETS_EDIT_STALE' });
-const editable = (stage) => stage && ['review', 'approved'].includes(stage.status);
+const editable = (stage) => stage && !stage.feedbackRenderPlan && ['review', 'approved'].includes(stage.status);
 const currentCandidate = (stage, key, id) => {
   const edit = stage?.images?.[key]?.edit;
   return edit?.requestId === id && stage.revision === edit.revision

@@ -75,6 +75,7 @@ function visionHeadline(inspection) {
 
 function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLook, onAcknowledgeImage, onReinspectImage, busy }) {
   const image = stage.images?.[item.key] || {};
+  const feedbackStale = stage.feedbackRenderPlan?.keys?.includes(item.key);
   // Old images remain visible during regeneration, but only a persisted done
   // record can bypass the new job's subscription.
   const live = useMediaJobProgress(image.status === 'queued' ? image.jobId : null);
@@ -88,7 +89,8 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
     .map((key) => stage.plan?.[key]?.label || key);
   const error = image.error || (image.status === 'queued' ? live.error : null);
   let status = 'Waiting';
-  if (image.status === 'done') status = 'Complete';
+  if (feedbackStale) status = 'Out of date — not rendered';
+  else if (image.status === 'done') status = 'Complete';
   else if (image.status === 'failed' || live.status === 'failed') status = 'Failed';
   else if (live.status === 'canceled') status = 'Canceled';
   else if (finishing) status = 'Saving result';
@@ -126,7 +128,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
             <img src={src} alt={`${item.label || item.key} — ${previous ? 'previous revision' : 'generated reference'}`}
               className={`w-full ${currentImage ? 'max-h-24' : 'max-h-64'} rounded object-contain`} loading="lazy" />
           </button>
-          {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
+          {(previous || retained) && <figcaption className="text-[11px] text-port-text-muted">{feedbackStale ? 'Previous revision — rendering has not started' : previous ? 'Previous revision — replacement pending' : `Retained from revision ${formatCount(image.submittedRevision)}`}</figcaption>}
         </figure>
       )}
       {image.status === 'done' && (
