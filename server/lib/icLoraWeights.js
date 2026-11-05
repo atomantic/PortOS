@@ -31,11 +31,10 @@
 import { findCachedRepoFile } from './hfCache.js';
 import { readSafetensorsHeader } from './safetensors.js';
 
-// The base model the MLX `ICLoraPipeline` remix path is pinned to. A weight
-// whose `baseModel` is anything else is registered here for PROVISIONING only —
-// it rides the same download/verify/repair surface, but it must never reach the
-// render-mode enum, because fusing a 2.5 adapter into the 2.3 pipeline loads
-// without erroring and produces garbage rather than a clean failure.
+// The base model the legacy MLX `ICLoraPipeline` remix path is pinned to.
+// LTX 2.5 Ingredients is offered separately through its guided two-stage path;
+// never fuse its adapter into the 2.3 pipeline, which accepts it without
+// erroring but produces garbage rather than a clean failure.
 export const IC_LORA_REMIX_BASE_MODEL = 'ltx-2.3';
 
 // One entry per registered IC-LoRA weight. `minReferences`/`maxReferences` are
