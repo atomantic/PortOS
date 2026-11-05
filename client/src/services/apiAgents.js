@@ -444,7 +444,7 @@ export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { m
 export const getCosWorkflow = (hours = 168, options) => request(`/cos/workflow?hours=${hours}`, options);
 
 // Feature Agents
-export const getFeatureAgents = () => request('/feature-agents');
+export const getFeatureAgents = (options) => request('/feature-agents', options);
 export const getFeatureAgent = (id, options) => request(`/feature-agents/${id}`, options);
 export const createFeatureAgent = (data, options = {}) => request('/feature-agents', {
   method: 'POST',
