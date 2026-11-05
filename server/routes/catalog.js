@@ -847,7 +847,7 @@ router.put('/ingredients/:id/photoreal/look', asyncHandler(async (req, res) => {
   });
 }));
 
-// Launches the operator-checked Blender on this host with the kept scene.
+// Builds a missing scene without rendering, then opens it in the checked Blender.
 router.post('/ingredients/:id/photoreal/open', asyncHandler(async (req, res) => {
   validateRequest(catalogPhotorealOpenSchema, req.body || {});
   res.json(await openPhotorealBlend(req.params.id));

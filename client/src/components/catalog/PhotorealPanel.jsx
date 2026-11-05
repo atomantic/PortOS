@@ -8,7 +8,7 @@ import PhotorealLookSection from './PhotorealLookSection';
 import ProductionContainment from '../codeAnimation/ProductionContainment';
 import { getCatalogPhotoreal, openCatalogPhotorealBlend, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { withShot } from '../../lib/greybox';
-import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
+import { detailTabPath, libraryById, PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formatDurationSec } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
@@ -43,6 +43,7 @@ const ENGINES = [
 const MAX_SAMPLES = 1024;
 const FLY_FPS = 24;
 const FLY_SECONDS = { min: 2, max: 60, default: 8 };
+const STATUS_TIMEOUT_MS = 15_000;
 const PREFS_KEY = 'portos.photoreal.render';
 const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 
@@ -78,23 +79,29 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const scene = record.payload?.greybox ?? null;
   const shots = useMemo(() => scene?.shots || [], [scene]);
   const [status, setStatus] = useState(null);
+  const [statusRefreshing, setStatusRefreshing] = useState(true);
+  const [statusError, setStatusError] = useState('');
   const [selected, setSelected] = useState(null);
   const [engine, setEngine] = useState(() => readPrefs()?.engine || 'eevee');
   const [samples, setSamples] = useState(() => readPrefs()?.samples ?? null);
   const [flySeconds, setFlySeconds] = useState(() => readPrefs()?.flySeconds ?? FLY_SECONDS.default);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
+  const [lookBusy, setLookBusy] = useState(false);
   const [opening, setOpening] = useState(false);
   const [blenderExecution, setBlenderExecution] = useState(null);
   const [blenderRefresh, setBlenderRefresh] = useState(0);
   const [blenderRefreshing, setBlenderRefreshing] = useState(false);
   const [blenderOpenRequest, setBlenderOpenRequest] = useState(0);
   const [blenderNotice, setBlenderNotice] = useState('');
+  const [sceneBuildError, setSceneBuildError] = useState('');
   const [missingFfmpeg, setMissingFfmpeg] = useState(false);
   // Finish frames already acted on; the server sends one per transition.
   const finished = useRef(new Set());
   const job = status?.job || null;
   const running = job?.state === 'running';
+  const sceneBuilding = status?.sceneBuilding === true;
+  const statusUnavailable = !status || statusRefreshing || !!statusError;
   const blenderReady = blenderExecution?.lanes?.blender?.ready === true;
   const checkedEngine = blenderExecution?.tools?.blender?.engine;
   const requestedEngine = engine === 'eevee' ? 'BLENDER_EEVEE_NEXT' : 'CYCLES';
@@ -113,9 +120,19 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
   useEffect(() => {
     let live = true;
-    const refreshStatus = () => getCatalogPhotoreal(record.id, { silent: true })
-      .then((fresh) => { if (live) setStatus((cur) => ({ ...fresh, job: cur?.job || fresh.job })); })
-      .catch(() => {});
+    let request = 0;
+    let jobFrames = 0;
+    let lastJobFrame = null;
+    let reconcileNeeded = false;
+    let activeRequest = null;
+    let statusTimer = null;
+    const cancelStatus = () => {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+      activeRequest?.abort();
+      activeRequest = null;
+    };
+    const refreshStatus = () => loadStatus('refresh');
     // The server emits a frame only when a job starts, finishes or fails, so a
     // finish seen while the tab is open is news: act on it once, whatever order
     // the start response, status read or a reconnect read land in.
@@ -130,34 +147,65 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         toast.error(`Blender render failed: ${next.error || 'unknown error'}`);
       }
     };
-    getCatalogPhotoreal(record.id, { silent: true })
-      .then((next) => {
-        if (!live) return;
-        if (next?.job?.state === 'running') seenRunning.current.add(next.job.id);
-        setStatus((cur) => (cur?.job ? { ...next, job: cur.job } : next));
-      })
-      .catch(() => { if (live) setStatus({ job: null, blendUrl: null, blenderVersion: null }); });
+    const loadStatus = (kind) => {
+      const sequence = ++request;
+      const framesAtStart = jobFrames;
+      if (kind === 'reconcile') reconcileNeeded = true;
+      cancelStatus();
+      const controller = new AbortController();
+      activeRequest = controller;
+      const aborted = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('Scene status request canceled')), { once: true }));
+      const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+      statusTimer = timer;
+      setStatusRefreshing(true);
+      return Promise.race([getCatalogPhotoreal(record.id, { silent: true, signal: controller.signal }), aborted])
+        .then((fresh) => {
+          if (!live || sequence !== request) return;
+          setStatusRefreshing(false);
+          setStatusError('');
+          const newerJobFrame = framesAtStart !== jobFrames;
+          const reconcileJob = reconcileNeeded;
+          reconcileNeeded = false;
+          if (!newerJobFrame && fresh?.job?.state === 'running') seenRunning.current.add(fresh.job.id);
+          setStatus((cur) => ({ ...fresh, job: ((!reconcileJob && kind === 'refresh') || newerJobFrame) ? cur?.job || fresh.job : fresh.job }));
+          if (reconcileJob && fresh?.job && seenRunning.current.has(fresh.job.id)) {
+            // A newer frame owns the visible job, but an older, different job
+            // may still need its missed completion handled once.
+            if (!newerJobFrame || lastJobFrame?.id !== fresh.job.id) settle(fresh.job);
+          }
+        })
+        .catch(() => {
+          if (!live || sequence !== request) return;
+          setStatusRefreshing(false);
+          setStatusError('Could not refresh the scene status. Try again before opening or rendering.');
+        })
+        .finally(() => {
+          clearTimeout(timer);
+          if (activeRequest === controller) { activeRequest = null; statusTimer = null; }
+        });
+    };
+    loadStatus('initial');
     const onFrame = (frame) => {
       if (frame?.ingredientId !== record.id || !frame.job) return;
+      jobFrames += 1;
+      lastJobFrame = frame.job;
       setStatus((cur) => ({ ...(cur || {}), job: frame.job }));
       settle(frame.job);
     };
+    const onScene = (frame) => { if (frame?.ingredientId === record.id) refreshStatus(); };
     // A sleeping laptop or dropped socket can miss the one finish frame: re-read
     // the server's job and settle a render this tab saw running.
-    reconcileRef.current = () => getCatalogPhotoreal(record.id, { silent: true })
-      .then((fresh) => {
-        if (!live) return;
-        setStatus(fresh);
-        if (fresh?.job && seenRunning.current.has(fresh.job.id)) settle(fresh.job);
-      })
-      .catch(() => {});
+    reconcileRef.current = () => loadStatus('reconcile');
     const onConnect = () => reconcileRef.current?.();
     socket.on('catalog:photoreal', onFrame);
+    socket.on('catalog:photoreal-scene', onScene);
     socket.on('connect', onConnect);
     return () => {
       live = false;
+      cancelStatus();
       reconcileRef.current = null;
       socket.off('catalog:photoreal', onFrame);
+      socket.off('catalog:photoreal-scene', onScene);
       socket.off('connect', onConnect);
     };
   }, [record.id]);
@@ -195,7 +243,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const render = async ({ flythrough = false } = {}) => {
-    if (chosen.length < (flythrough ? 2 : 1) || running || starting || !canRender) return;
+    if (statusUnavailable || chosen.length < (flythrough ? 2 : 1) || running || starting || opening || sceneBuilding || !canRender) return;
     setBlenderNotice('');
     setStarting(true);
     const body = { shotIds: chosen, engine, samples: samplesField.effective, ...(flythrough ? { flythroughSeconds: secondsField.effective } : {}) };
@@ -213,17 +261,25 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const openInBlender = async () => {
-    if (opening || !blenderReady) return;
+    if (statusUnavailable || opening || starting || sceneBuilding || disabled || lookBusy || platingShot || !blenderReady || (running && !status.blendUrl)) return;
     setBlenderNotice('');
+    setSceneBuildError('');
     setOpening(true);
     const opened = await openCatalogPhotorealBlend(record.id, { silent: true })
-      .catch((err) => { handleBlenderError(err, 'Could not open Blender'); return null; });
+      .catch((err) => {
+        if (err?.code === 'PHOTOREAL_BUILD_FAILED') setSceneBuildError(err.message || 'Could not build the Blender scene.');
+        else handleBlenderError(err, 'Could not open Blender');
+        return null;
+      });
     setOpening(false);
-    if (opened) toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
+    if (opened) {
+      setStatus((cur) => ({ ...(cur || {}), sceneBuilding: false, blendUrl: opened.blendUrl || cur?.blendUrl }));
+      toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
+    }
   };
 
   const setPlate = async (shot, mediaKey) => {
-    if (!scene || platingShot || disabled) return;
+    if (!scene || platingShot || disabled || opening || sceneBuilding || statusUnavailable || lookBusy) return;
     setPlatingShot(shot.id);
     onBusyChange?.(true);
     const { plate: _previous, ...rest } = shot;
@@ -262,8 +318,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         </div>
         <div className="flex flex-wrap gap-2">
           {!readOnly && (
-            <button type="button" onClick={openInBlender} disabled={!status?.blendUrl || opening || !blenderReady} className={actionButton}>
-              {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
+            <button type="button" onClick={openInBlender} disabled={statusUnavailable || opening || starting || sceneBuilding || disabled || lookBusy || !!platingShot || !blenderReady || (running && !status.blendUrl)} className={actionButton}>
+              {(opening || sceneBuilding) ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />}
+              {opening && status?.blendUrl ? 'Opening Blender…' : (opening || sceneBuilding) ? 'Building scene…' : 'Open in Blender'}
             </button>
           )}
           {status?.blendUrl && (
@@ -273,7 +330,19 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           )}
         </div>
       </div>
-      {status && !status.blendUrl && <p className="text-xs text-gray-400">The first render builds the Blender scene; Open in Blender works after that.</p>}
+      {status && !status.blendUrl && <p role={sceneBuilding ? 'status' : undefined} className="text-xs text-gray-400">{running
+        ? 'The current render is building the Blender scene. Open it when the render finishes.'
+        : sceneBuilding ? 'A Blender scene is being built. Open it or render cameras when the build finishes.'
+        : 'Open in Blender will first build the scene from the saved greybox and Look without rendering cameras, using Cycles CPU.'}</p>}
+      {sceneBuilding && status?.blendUrl && <p role="status" className="text-xs text-gray-400">A Blender scene is being built. Open it or render cameras when the build finishes.</p>}
+      {status && <p className="text-xs text-gray-400">The scene reflects the Greybox and Look saved when it was built. Later changes appear after the next camera render.</p>}
+      {statusRefreshing && <p role="status" className="text-xs text-gray-400">Checking scene status…</p>}
+      {statusError && <div role="alert" className="space-y-2 rounded border border-port-warning p-3 text-sm">
+        <p>{statusError}</p>
+        <button type="button" className={actionButton} onClick={() => reconcileRef.current?.()} disabled={statusRefreshing}>Retry status</button>
+      </div>}
+      {(disabled || lookBusy || platingShot) && <p role="status" className="text-xs text-port-warning">Wait for the current changes to finish before opening the scene.</p>}
+      {running && status?.blendUrl && !readOnly && <p role="status" className="text-xs text-port-warning">The current render will replace this scene when it finishes. In Blender, use File › Save As before editing to keep your changes.</p>}
       {status?.files && (
         <dl className="space-y-1 text-xs" aria-label="Files">
           {[['Blender scene', status.files.blend], ['Renders', status.files.renders]].map(([label, path]) => (
@@ -289,9 +358,18 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       <ProductionContainment inline rendererKind="blender" onExecutionChange={next => { setBlenderExecution(next); if (next) setBlenderRefreshing(false); }} refreshKey={blenderRefresh}
         openRequest={blenderOpenRequest} locked={starting || opening || blenderRefreshing} />
       {blenderNotice && <p role="alert" className="rounded border border-port-warning p-3 text-sm text-port-warning">{blenderNotice}</p>}
+      {sceneBuildError && <div role="alert" className="space-y-2 rounded border border-port-warning p-3 text-sm">
+        <p>{sceneBuildError}</p>
+        <p>Review the saved Greybox and try again. If the build still fails, open Blender setup and run Check Blender.</p>
+        <div className="flex flex-wrap gap-2">
+          <Link to={detailTabPath(libraryById('environments'), record.id, 'greybox')} className={actionButton}>Review Greybox</Link>
+          <button type="button" className={actionButton} onClick={() => setBlenderOpenRequest(value => value + 1)}>Check Blender setup</button>
+          <button type="button" className={actionButton} onClick={openInBlender} disabled={statusUnavailable || opening || starting || sceneBuilding || disabled || lookBusy || !!platingShot || !blenderReady || (running && !status?.blendUrl)}>Try building scene again</button>
+        </div>
+      </div>}
 
-      <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running}
-        onBusyChange={onBusyChange} onSaved={onSaved} />
+      <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running || opening || sceneBuilding || statusUnavailable || !!platingShot}
+        onBusyChange={(busy) => { setLookBusy(busy); onBusyChange?.(busy); }} onSaved={onSaved} />
 
       {shots.length === 0 ? (
         <p className="text-sm text-gray-400">Save a camera on the Greybox tab to render it here.</p>
@@ -338,7 +416,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                         className="w-full rounded bg-black object-contain" />
                       <p className="text-[11px] text-gray-500 line-clamp-2">{latest.caption}</p>
                       {!readOnly && (
-                        <button type="button" className={actionButton} disabled={!!platingShot || disabled}
+                        <button type="button" className={actionButton} disabled={!!platingShot || disabled || opening || sceneBuilding || statusUnavailable || lookBusy}
                           aria-pressed={!!isPlate} onClick={() => setPlate(shot, isPlate ? null : latest.mediaKey)}>
                           {platingShot === shot.id ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
                           {isPlate ? 'Photo plate (tap to clear)' : 'Use as photo plate'}
@@ -355,7 +433,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || !canRender}
+              <button type="button" onClick={() => render()} disabled={statusUnavailable || !chosen.length || running || starting || opening || sceneBuilding || !canRender}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
@@ -396,7 +474,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                   <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
-                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || !canRender} className={actionButton}>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={statusUnavailable || chosen.length < 2 || running || starting || opening || sceneBuilding || !canRender} className={actionButton}>
                   <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}

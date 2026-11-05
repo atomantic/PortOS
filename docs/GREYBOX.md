@@ -161,11 +161,11 @@ camera and replaces the camera's previous render unless that one is a photo plat
 landmarks and anchors as empties, and every saved camera, ready to dress in
 Blender.
 **Open in Blender** opens that scene in a new window of the checked Blender on
-the machine running PortOS (with scripts off, as in a render). The next render
-replaces the kept file, so use **File › Save As** to keep your edits. The
-button shows before the first render but stays disabled until a render has
-built the scene. Under it the tab lists the paths of the kept `.blend` and of
-the folder the stills are saved in, each with **Copy**.
+the machine running PortOS (with scripts off, as in a render). If no scene exists,
+it first builds one from the saved greybox and look without rendering any cameras;
+the initial scene uses Cycles CPU. The next render replaces the kept file, so use
+**File › Save As** to keep your edits. Under the button the tab lists the paths of
+the kept `.blend` and of the folder the stills are saved in, each with **Copy**.
 
 ### Dress it (Look)
 

@@ -30,9 +30,10 @@ export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).pa
  * With `flythroughSeconds`, one camera glides through `shotIds` in order and
  * the script writes numbered frames instead of one still per camera.
  */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu } = {}) {
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu, sceneOnly = false } = {}) {
   return {
     look,
+    ...(sceneOnly ? { sceneOnly: true } : {}),
     flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
     samples: samples ?? PHOTOREAL_DEFAULT_SAMPLES[engine],
@@ -488,14 +489,16 @@ def fly_camera(fly):
 fly = job.get('flythrough')
 if fly:
     fly_camera(fly)
-else:
+elif job['shotIds']:
     # The downloaded scene opens ready to render from the first chosen camera.
     use_shot(job['shotIds'][0])
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'blockout.blend'))
 rendered = []
 report = dict(version=portos_version(), engine=job['engine'], device=device, backend=backend,
     samples=job['samples'], parts=len(grey['parts']))
-if fly:
+if job.get('sceneOnly'):
+    report.update(sceneOnly=True)
+elif fly:
     started = time.time()
     for frame in range(1, fly['frames'] + 1):
         scene.frame_set(frame)
