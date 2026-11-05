@@ -18,11 +18,11 @@ const savedVideo = { id: 'upload-video', filename: 'upload-video.mp4', thumbnail
 const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
 
 // Every request is contained by this fixture; no live API, catalog or provider.
-async function openBoard(fixture, viewport, containerWidth) {
+async function openBoard(fixture, viewport, containerWidth, items = []) {
   const page = await fixture.browser.newPage({ viewport });
   page.setDefaultTimeout(10000);
-  const boards = { a: { id: 'a', name: 'Example A', items: [] }, b: { id: 'b', name: 'Example B', items: [] } };
-  const state = { calls: [], failures: 0, hold: null, release: null, errors: [] };
+  const boards = { a: { id: 'a', name: 'Example A', items: structuredClone(items) }, b: { id: 'b', name: 'Example B', items: [] } };
+  const state = { calls: [], updates: [], failures: 0, hold: null, release: null, errors: [] };
   page.on('pageerror', error => state.errors.push(error.message));
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -40,6 +40,14 @@ async function openBoard(fixture, viewport, containerWidth) {
       const item = { id: 'pinterest-pin', type: 'image', source: url, imageUrl: '/data/images/pinterest-pin.jpg' };
       boards.a.items.push(item);
       return route.fulfill({ json: { board: boards.a, added: 1, found: 1 } });
+    }
+    const itemMatch = path.match(/^\/mood-boards\/([ab])\/items\/([^/]+)$/);
+    if (itemMatch && route.request().method() === 'PATCH') {
+      const item = boards[itemMatch[1]].items.find(row => row.id === itemMatch[2]);
+      const patch = route.request().postDataJSON();
+      state.updates.push({ id: itemMatch[2], patch });
+      Object.assign(item, patch);
+      return route.fulfill({ json: item });
     }
     const match = path.match(/^\/mood-boards\/([ab])(?:\/(items))?$/);
     if (!match) { state.errors.push(`Unexpected API: ${path}`); return route.abort(); }
@@ -59,7 +67,7 @@ async function openBoard(fixture, viewport, containerWidth) {
   return { page, boards, state };
 }
 
-describe.skipIf(!chrome)('direct mood board upload in Chromium', () => {
+describe.skipIf(!chrome)('mood board in Chromium', () => {
   let fixture;
   beforeAll(async () => {
     fixture = await startBrowserFixture({
@@ -115,6 +123,71 @@ describe.skipIf(!chrome)('direct mood board upload in Chromium', () => {
     });
   }, BROWSER_FIXTURE_STARTUP_MS);
   afterAll(() => fixture?.close());
+
+  it('fits card prompt text as it wraps, changes, and rewraps at a narrower width', async () => {
+    const initial = 'Silver lanterns illuminate a winding forest path beneath distant mountains. '.repeat(3).trim();
+    const item = { id: 'prompt-pin', type: 'image', prompt: initial, caption: initial };
+    const { page, boards, state } = await openBoard(fixture, { width: 1440, height: 900 }, undefined, [item]);
+    try {
+      const field = page.getByLabel('Item prompt', { exact: true });
+      const dimensions = () => field.evaluate(el => ({
+        height: el.getBoundingClientRect().height,
+        width: el.clientWidth,
+        clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+        overflow: getComputedStyle(el).overflowY,
+      }));
+      await field.waitFor();
+      const initialSize = await dimensions();
+      expect(initialSize.scrollHeight).toBeLessThanOrEqual(initialSize.clientHeight + 1);
+      expect(initialSize.overflow).toBe('hidden');
+
+      await field.fill('Short');
+      const shortSize = await dimensions();
+      expect(shortSize.height).toBeLessThan(initialSize.height);
+      await field.fill(initial);
+      expect((await dimensions()).height).toBeGreaterThan(shortSize.height);
+
+      await field.evaluate(el => { el.parentElement.style.width = '90px'; });
+      await vi.waitFor(async () => {
+        const narrow = await dimensions();
+        expect(narrow.width).toBeLessThan(initialSize.width);
+        expect(narrow.height).toBeGreaterThan(initialSize.height);
+        expect(narrow.scrollHeight).toBeLessThanOrEqual(narrow.clientHeight + 1);
+      });
+      await field.evaluate(el => { el.parentElement.style.removeProperty('width'); });
+      await vi.waitFor(async () => expect((await dimensions()).height).toBeLessThan(initialSize.height + 1));
+
+      await page.evaluate(async () => {
+        await Promise.all([document.fonts.load('12px Inter'), document.fonts.load('12px "IBM Plex Mono"')]);
+        await document.fonts.ready;
+        document.documentElement.style.setProperty('--port-font-ui', 'Inter, sans-serif');
+      });
+      await field.fill('illustration twilight vision in a vivid valley '.repeat(8));
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const proportional = await dimensions();
+      await page.evaluate(() => document.documentElement.style.setProperty('--port-font-ui', '"IBM Plex Mono", monospace'));
+      await vi.waitFor(async () => {
+        const monospace = await dimensions();
+        expect(monospace.width).toBe(proportional.width);
+        expect(monospace.height).toBeGreaterThan(proportional.height);
+        expect(monospace.scrollHeight).toBeLessThanOrEqual(monospace.clientHeight + 1);
+      });
+      // A font can finish loading after the theme was applied, without a DOM
+      // or width change. Simulate that notification after changing its metrics.
+      await field.evaluate(el => { el.style.fontFamily = 'Inter, sans-serif'; });
+      await page.evaluate(() => document.fonts.dispatchEvent(new Event('loadingdone')));
+      await vi.waitFor(async () => expect((await dimensions()).height).toBeLessThanOrEqual(proportional.height + 1));
+
+      const edited = 'First line\nSecond line';
+      await field.fill(edited);
+      expect(state.updates).toEqual([]);
+      await field.blur();
+      await vi.waitFor(() => expect(state.updates).toEqual([{ id: item.id, patch: { prompt: edited, caption: edited } }]));
+      expect(boards.a.items[0].prompt).toBe(edited);
+      expect(state.errors).toEqual([]);
+    } finally { await page.close(); }
+  });
 
   it.each([
     { width: 320, height: 740 },
