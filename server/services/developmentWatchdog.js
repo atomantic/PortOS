@@ -19,6 +19,24 @@ const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPS
 // watchdog coordinator there would only race the live session.
 const EXTERNAL_AGENT_BRANCH_RE = /^claude\//;
 
+function withActiveAgentOwnership(tasks, peerTasks, agents) {
+  const allTasks = [...tasks, ...peerTasks];
+  for (const agent of agents) {
+    const task = tasks.find(item => item.id === agent.taskId);
+    if (task) allTasks.push({ ...task, status: 'running' });
+    else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
+    // Registration retains a review target even if the task is gone or stale.
+    // Project only that target: other agent metadata can omit a pinned claim
+    // and would otherwise turn it into ownership of every issue in the app.
+    if (agent.metadata?.reviewLoopMergeTarget?.url) allTasks.push({
+      id: agent.taskId || agent.id,
+      status: 'running',
+      metadata: { app: agent.metadata.taskApp, reviewLoopPRUrl: agent.metadata.reviewLoopMergeTarget.url },
+    });
+  }
+  return allTasks;
+}
+
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
   if (metadata.reviewLoopFollowUp !== true && metadata.reviewLoopFollowUp !== 'true') return null;
@@ -224,8 +242,8 @@ async function dispatch(app, decision) {
   const { getAllTasks, addTask } = await import('./cosTaskStore.js');
   const peers = await participatingPeerTasks();
   if (peers.blockers.length) return { reason: 'peer-ownership-unknown' };
-  const liveTasks = [...tasksFrom(await getAllTasks()), ...peers.tasks];
   const agents = Object.values(current.agents || {}).filter(a => ACTIVE_AGENT_STATUSES.has(a.status));
+  const liveTasks = withActiveAgentOwnership(tasksFrom(await getAllTasks()), peers.tasks, agents);
   const queued = liveTasks.filter(t => t.status === 'pending');
   const project = a => (a.metadata?.app || a.metadata?.taskApp) === app.id;
   if (agents.length + queued.length >= (current.config.maxConcurrentAgents || 1)
@@ -306,19 +324,13 @@ async function collectActiveWork(state) {
   const taskSources = await getAllTasks();
   const tasks = tasksFrom(taskSources);
   const peers = await participatingPeerTasks();
-  const allTasks = [...tasks, ...peers.tasks];
   // Include finalization and queued ownership, not only live subprocesses.
   const activeAgents = Object.values(state.agents || {}).filter(agent => ACTIVE_AGENT_STATUSES.has(agent.status));
+  const allTasks = withActiveAgentOwnership(tasks, peers.tasks, activeAgents);
   const activeAgentTaskIds = new Set([
     ...activeAgents.map(agent => agent.taskId),
     ...allTasks.filter(task => ['queued', 'running', 'in_progress', 'finalizing', 'paused'].includes(task.status)).map(task => task.id),
   ].filter(Boolean));
-  // A live agent owns its work even when its task record is gone or already terminal.
-  for (const agent of activeAgents) {
-    const task = tasks.find(t => t.id === agent.taskId);
-    if (task) allTasks.push({ ...task, status: 'running' });
-    else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
-  }
   return {
     tasks, allTasks, peers, activeAgents, activeAgentTaskIds,
     localReviewTasks: taskSources.cos?.tasks || [],
