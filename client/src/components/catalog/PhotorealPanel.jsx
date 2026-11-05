@@ -283,6 +283,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       {status && !status.blendUrl && <p className="text-xs text-gray-400">{running
         ? 'The current render is building the Blender scene. Open it when the render finishes.'
         : 'Open in Blender will first build the scene from the saved greybox without rendering cameras, using Cycles CPU.'}</p>}
+      {running && status?.blendUrl && !readOnly && <p role="status" className="text-xs text-port-warning">The current render will replace this scene when it finishes. In Blender, use File › Save As before editing to keep your changes.</p>}
       {status?.files && (
         <dl className="space-y-1 text-xs" aria-label="Files">
           {[['Blender scene', status.files.blend], ['Renders', status.files.renders]].map(([label, path]) => (

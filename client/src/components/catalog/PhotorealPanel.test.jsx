@@ -268,6 +268,14 @@ describe('PhotorealPanel', () => {
     await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
   });
 
+  it('warns that an active render will replace the scene before opening it', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: { id: 'pr-running', state: 'running', engine: 'cycles', shotIds: ['wide'] },
+      blendUrl: '/scene.blend', blenderVersion: '5.2.3' });
+    show();
+    expect(await screen.findByText(/current render will replace this scene/)).toHaveTextContent('File › Save As');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
   it('builds and opens a scene without rendering cameras when none exists yet', async () => {
     const files = { blend: '/srv/portos/data/scene.blend', renders: '/srv/portos/data/images' };
     getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3', files });
