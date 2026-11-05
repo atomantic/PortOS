@@ -36,8 +36,8 @@ const MAP_COLORS = ['bg-port-accent/30', 'bg-port-success/30', 'bg-port-warning/
 function ShotSheetMap({ rows, active, onPick }) {
   return (
     <div role="group" aria-label="Video map" className="min-w-0 space-y-1">
-      {SHOT_SHEET_MAP_BARS.map(([bar, label, valueOf]) => {
-        const stretches = shotSheetStretches(rows, valueOf);
+      {SHOT_SHEET_MAP_BARS.map(([bar, label, readValue]) => {
+        const stretches = shotSheetStretches(rows, readValue);
         const values = [...new Set(stretches.map((stretch) => stretch.value).filter(Boolean))];
         return (
           <div key={bar} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] items-stretch gap-1.5">
