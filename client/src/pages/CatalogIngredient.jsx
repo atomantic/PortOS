@@ -8,8 +8,7 @@
  */
 
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
 import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2, Aperture } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -163,19 +162,11 @@ function IngredientEditor() {
   // the static built-ins so the editor renders before the fetch resolves.
   const { getType: getMergedType } = useCatalogTypes();
   const [record, setRecord] = useState(null);
-  const [universeMount] = useState(() => document.createElement('div'));
-  const universeProfileSlot = useRef(null);
-  const universeFallbackSlot = useRef(null);
   const [mergeVersion, setMergeVersion] = useState(0);
   const [mergeBusy, setMergeBusy] = useState(false);
   const identityReadOnly = record?.sharedIdentity?.writable === false;
   const identityReason = identityReadOnly ? 'This shared identity is read-only here. Inspect its ownership notice and agreement.' : null;
   const [loading, setLoading] = useState(true);
-  useLayoutEffect(() => {
-    const slot = record?.type === 'character' && profileActive ? universeProfileSlot.current : universeFallbackSlot.current;
-    slot?.appendChild(universeMount);
-    return () => universeMount.remove();
-  }, [record?.type, profileActive, profileVisited, loading, universeMount]);
   const [name, setName] = useState('');
   const [tags, setTags] = useState([]);
   const [payload, setPayload] = useState({});
@@ -898,6 +889,9 @@ function IngredientEditor() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
+              onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
+              seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />
             {FORM_TYPES.has(record.type) && <CatalogLockButton key={record.id} record={record}
               disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy} onPendingChange={setUnlocking} onChanged={applyLock} />}
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
@@ -955,11 +949,6 @@ function IngredientEditor() {
           <button type="button" onClick={() => { applyDetails(externalDetails); setExternalDetails(null); }}
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
-        <div ref={universeFallbackSlot} />
-        {createPortal(<CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
-          onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
-          seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />, universeMount)}
-
         {record.type !== 'character' && <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
           onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />}
 
@@ -1057,13 +1046,13 @@ function IngredientEditor() {
                     }).catch(error => toast.error(error.message || 'Could not refresh the character.'));
                   }} />}
               </div>}
-              primaryActions={<div className="grid grid-cols-1 gap-3 md:grid-cols-2 items-start"><div className="flex flex-wrap items-start gap-2">
+              primaryActions={<div className="flex flex-wrap items-start gap-2">
                 <GenerateImageControl key={record.id} ingredientId={record.id} name={name} description={genDescription}
                   universeId={universeRef?.refId || null} onComplete={handleGeneratedImage}
                   disabled={identityReadOnly || payload.locked === true || characterActionBusy || saving || unlocking || lookSaving || !!externalDetails} />
                 <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
                   onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
-              </div><div ref={universeProfileSlot} /></div>}
+              </div>}
               storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
             >
               <div className="bg-port-card border border-port-border rounded-lg p-4">

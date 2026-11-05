@@ -15,7 +15,7 @@ vi.mock('../../services/apiCatalog', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 import CatalogUniversePanel from './CatalogUniversePanel';
 import socket from '../../services/socket';
-import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient } from '../../services/apiCatalog';
+import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient, unlinkCatalogIngredient } from '../../services/apiCatalog';
 import toast from '../ui/Toast';
 
 const initial = { status: 'needs-review', owner: null, refs: [
@@ -27,14 +27,83 @@ function Harness(props) {
   return <CatalogUniversePanel ingredient={{ id: 'cat-chr-1', type: 'character', name: 'Example courier' }} context={context} onContextChange={setContext} {...props} />;
 }
 beforeEach(() => vi.clearAllMocks());
+const openDetails = () => fireEvent.click(screen.getByRole('button', { name: /^Universe:/ }));
 
 describe('primitive ownership and fork controls', () => {
+  it.each(['character', 'place', 'object'])('adds an owned %s to canon from the compact control', async (type) => {
+    const owner = { refKind: 'universe', refId: 'first', role: 'owner', refName: 'First world', resolved: true };
+    const member = { ...owner, role: `canon-${type}` };
+    linkCatalogIngredient.mockResolvedValueOnce({ success: true });
+    getCatalogUniverseContext.mockResolvedValueOnce({ status: 'owned', owner, refs: [owner, member] });
+    function OwnedHarness() {
+      const [context, setContext] = useState({ status: 'owned', owner, refs: [owner] });
+      return <CatalogUniversePanel ingredient={{ id: 'item-1', type, name: 'Example' }} context={context} onContextChange={setContext} />;
+    }
+    render(<MemoryRouter><OwnedHarness /></MemoryRouter>);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    openDetails();
+    expect(screen.getByRole('link', { name: 'First world' })).toHaveAttribute('href', '/universes/first');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to owning universe' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Add to owning universe' })).toBeNull());
+    expect(linkCatalogIngredient).toHaveBeenCalledWith('item-1', { refKind: 'universe', refId: 'first', role: `canon-${type}` }, { silent: true });
+    fireEvent.click(screen.getByText('Usage (1)'));
+    expect(screen.getByText(new RegExp(`First world · ${type === 'place' ? 'Environment' : type === 'object' ? 'Object' : 'Character'} canon`))).toBeVisible();
+  });
+
+  it('keeps conflict and unsaved state visible while gating ownership and fork mutations', async () => {
+    render(<MemoryRouter><Harness context={{ ...initial, status: 'conflict' }} unsaved /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Universe: Conflicting owners' })).toBeVisible();
+    openDetails();
+    expect(screen.getByText('Conflicting owners — review required')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve ownership / fork…' }));
+    await screen.findByRole('option', { name: 'Second world' });
+    fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
+    expect(screen.getByText('Save your edits before changing ownership or creating a fork.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Set owning universe' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create fork' })).toBeDisabled();
+  });
+
+  it('removes an editable usage while retaining inferred and protected usages', async () => {
+    const retained = { refKind: 'series', refId: 'series-1', refName: 'Kept series', role: 'cast', retained: true };
+    const derived = { refKind: 'series', refId: 'series-2', refName: 'Story mention', role: 'mentioned', derived: true };
+    const editable = { refKind: 'series', refId: 'series-3', refName: 'Editable series', role: 'cast', resolved: true };
+    const context = { ...initial, refs: [retained, derived, editable] };
+    unlinkCatalogIngredient.mockResolvedValueOnce({ success: true });
+    getCatalogUniverseContext.mockResolvedValueOnce({ ...context, refs: [retained, derived] });
+    function UsageHarness() {
+      const [value, setValue] = useState(context);
+      return <CatalogUniversePanel ingredient={{ id: 'item-1', type: 'character', name: 'Example' }} context={value} onContextChange={setValue} />;
+    }
+    render(<MemoryRouter><UsageHarness /></MemoryRouter>);
+    openDetails();
+    fireEvent.click(screen.getByText('Usage (3)'));
+    expect(screen.queryByRole('button', { name: /Remove Kept series/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remove Story mention/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Editable series · Cast' }));
+    await screen.findByText('Usage (2)');
+    expect(unlinkCatalogIngredient).toHaveBeenCalledWith('item-1', { refKind: 'series', refId: 'series-3', role: 'cast' }, { silent: true });
+    expect(screen.queryByText('Editable series · Cast')).toBeNull();
+  });
+
+  it('closes the details with Escape and returns focus to the header control', async () => {
+    render(<MemoryRouter><Harness /></MemoryRouter>);
+    const control = screen.getByRole('button', { name: 'Universe: Needs review' });
+    control.focus();
+    fireEvent.click(control);
+    expect(screen.getByRole('dialog', { name: 'Universe ownership and usage' })).toBeVisible();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(control).toHaveFocus();
+  });
+
   it('shows the new membership immediately and permits a retry after an assignment failure', async () => {
     const owner = { refKind: 'universe', refId: 'second', role: 'owner', refName: 'Second world', resolved: true };
     const member = { ...owner, role: 'canon-character' };
     setCatalogUniverseOwner.mockRejectedValueOnce(new Error('Universe is full'))
       .mockResolvedValueOnce({ ...initial, status: 'owned', owner, refs: [...initial.refs, owner, member] });
     render(<MemoryRouter><Harness /></MemoryRouter>);
+    openDetails();
+    fireEvent.click(screen.getByText('Usage (2)'));
     fireEvent.click(screen.getByRole('button', { name: 'Resolve ownership / fork…' }));
     await screen.findByRole('option', { name: 'Second world' });
     fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'second' } });
@@ -51,6 +120,7 @@ describe('primitive ownership and fork controls', () => {
   it.each([false, true])('allows an independent fork from a read-only source unless its identity is fenced (%s)', async (fenced) => {
     forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
     render(<MemoryRouter><Harness readOnly forkBlocked={fenced} /></MemoryRouter>);
+    openDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Fork / experiment with redesign…' }));
     await screen.findByRole('option', { name: 'Second world' });
     expect(screen.queryByRole('button', { name: 'Set owning universe' })).toBeNull();
@@ -69,6 +139,8 @@ describe('primitive ownership and fork controls', () => {
     setCatalogUniverseOwner.mockResolvedValue({ ...initial, status: 'owned', owner });
     forkCatalogIngredient.mockRejectedValueOnce(new Error('Connection interrupted')).mockResolvedValueOnce({ id: 'cat-chr-fork', type: 'character' });
     render(<MemoryRouter><Harness /></MemoryRouter>);
+    openDetails();
+    fireEvent.click(screen.getByText('Usage (2)'));
     expect(screen.getByText('Ownership needs review')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /missing-series/ })).toBeNull();
     expect(screen.getByText('missing')).toBeInTheDocument();
@@ -166,6 +238,8 @@ it('keeps incomplete usage distinct from unused and retries secondary failures',
   }
   getCatalogUniverseContext.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValue({ ...initial, refs: [], usageComplete: true });
   render(<MemoryRouter><PendingHarness /></MemoryRouter>);
+  openDetails();
+  fireEvent.click(screen.getByText('Usage (0)'));
   await screen.findByRole('alert');
   expect(screen.queryByText('No linked containers')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Retry usage' }));
@@ -180,6 +254,8 @@ it('retries a failed socket refresh after usage has already loaded', async () =>
   }
   getCatalogUniverseContext.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce({ ...initial, usageComplete: true });
   render(<MemoryRouter><LoadedHarness /></MemoryRouter>);
+  openDetails();
+  fireEvent.click(screen.getByText('Usage (0)'));
   expect(getCatalogUniverseContext).not.toHaveBeenCalled();
   const refresh = socket.on.mock.calls.find(([event]) => event === 'catalog:primitive-changed')[1];
   await act(async () => { refresh({ ingredientId: 'cat-chr-1' }); });
