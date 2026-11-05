@@ -48,6 +48,7 @@ import {
   nearestAgyAspectRatio, visualReferenceRole,
 } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
+import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
@@ -349,7 +350,7 @@ async function generateImagePrepared({
     // renders on Antigravity's fixed server-side backend — record it so
     // provenance names the model that actually produced the pixels (#3231).
     imageModel: AGY_IMAGEGEN_IMAGE_MODEL,
-    inputProvenance: 'provider-inputs',
+    inputProvenance: CLI_IMAGE_INPUT_PROVENANCE[IMAGE_GEN_MODE.AGY],
     initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
     referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),

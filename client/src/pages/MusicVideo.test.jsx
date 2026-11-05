@@ -2702,7 +2702,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     // The automatic set shows as chips; swap the flagged Lead for the Pier set.
     await showFrames();
-    const refs = within(screen.getByRole('group', { name: 'References sent with the frames' }));
+    const refs = within(screen.getByRole('group', { name: 'References selected for the frames' }));
     expect(refs.getByText('Auto: from the prompt')).toBeTruthy();
     fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());

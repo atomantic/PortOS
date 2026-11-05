@@ -14,6 +14,35 @@ vi.mock('../../lib/db.js', () => ({ query: vi.fn() }));
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 
 describe('indexed gallery page', () => {
+  it('projects old CLI input claims accurately in paged gallery results without changing the indexed record', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    const item = { filename: 'old.png', mode: 'codex', inputProvenance: 'provider-inputs' };
+    query.mockImplementation(async sql => sql.includes('COUNT(*)')
+      ? { rows: [{ count: '1' }] } : { rows: [imageToRow(item)] });
+    const page = await listGalleryPage({ limit: 5 });
+    expect(page.items[0].inputProvenance).toBe('cli-attachments');
+    expect(item.inputProvenance).toBe('provider-inputs');
+  });
+
+  it('projects old CLI input claims for mixed pages and image variants', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    const item = { filename: 'old.png', mode: 'grok', inputProvenance: 'provider-inputs' };
+    query.mockImplementation(async sql => {
+      if (sql.includes('COUNT(*)')) return { rows: [{ count: '1' }] };
+      if (sql.includes("data->>'cleanedFrom'")) return { rows: [] };
+      return { rows: [{ kind: 'image', data: item }] };
+    });
+    const page = await listGalleryPage({ kind: 'all', media: true, videoSnapshot: [] });
+    expect(page.items[0].data.inputProvenance).toBe('cli-requested');
+    const variants = await listImageVariants('old.png');
+    expect(variants[0].inputProvenance).toBe('cli-requested');
+    expect(item.inputProvenance).toBe('provider-inputs');
+  });
+
   it('bounds production SQL reads and preserves metadata without invoking disk', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);

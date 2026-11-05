@@ -6,15 +6,18 @@ import CatalogImagePreview from '../catalog/CatalogImagePreview';
 // own and the render generates fresh instead of editing the canonical portrait.
 // `onToggleLikeness(image, include)` lets the record's own images (those with a
 // `mediaKind`) be left out of or put back into the likeness guides.
-export default function ModelReferenceImages({ images, editBase, onOpenPreview, onToggleLikeness }) {
+export default function ModelReferenceImages({ images, editBase, onOpenPreview, onToggleLikeness, inputProvenance = null }) {
   if (!Array.isArray(images)) return null;
   const editing = images.some((image) => image.role === 'edit-base');
-  const sentCount = images.filter((image) => image.status !== 'left-out').length;
+  const sentCount = images.filter((image) => image.status === 'included').length;
+  const blocked = images.some((image) => !image.relative && (image.status === 'missing' || image.status === 'unsupported'));
   return (
-    <section aria-label="Reference images sent" className="space-y-2">
-      <h3 className="text-xs font-semibold text-gray-300">Reference images sent</h3>
+    <section aria-label={inputProvenance ? 'Reference inputs' : 'Reference images sent'} className="space-y-2">
+      <h3 className="text-xs font-semibold text-gray-300">{inputProvenance ? 'Reference inputs' : 'Reference images sent'}</h3>
       <p className="text-xs text-gray-500">
-        {editing
+        {inputProvenance === 'peer-requested' ? 'These references will be sent to the selected peer. Whether its image tool receives them is unconfirmed.'
+          : inputProvenance === 'cli-attachments' ? 'These images will be attached to the Codex session. Whether its image tool receives them is unconfirmed.'
+            : inputProvenance ? 'These image paths will be provided to the CLI driver. Whether its image tool receives them is unconfirmed.' : editing
           ? `The render edits the ${editBase?.scope === 'form' ? 'first image' : 'portrait'}; the other images guide likeness.`
           : 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
       </p>
@@ -22,7 +25,8 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
       {editBase?.status === 'fallback' && (
         <p role="status" className="text-xs text-port-warning">Not editing from the portrait: {editBase.reason}</p>
       )}
-      {sentCount === 0 && (
+      {blocked && <p className="text-xs text-port-warning">Restore unavailable canonical references or choose a supported renderer before generating this sheet.</p>}
+      {!blocked && sentCount === 0 && (
         <p className="text-xs text-port-warning">No canonical reference images will be sent. This sheet will be generated from text only.</p>
       )}
       {images.length > 0 && (
@@ -54,10 +58,12 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
               <figcaption className="text-[11px] break-words">
                 <span className="block text-gray-300">{image.filename}</span>
                 <span className="block text-gray-500">{image.source}</span>
-                {image.role === 'edit-base' && <span className="block font-medium text-port-accent">Edit base — the render starts from this image</span>}
+                {image.role === 'edit-base' && <span className="block font-medium text-port-accent">{inputProvenance ? 'Edit base — requested as the image to edit' : 'Edit base — the render starts from this image'}</span>}
                 {typeof image.strength === 'number' && <span className="block text-gray-500">Strength {image.strength}</span>}
-                <span className={image.status === 'included' ? 'text-port-success' : image.status === 'left-out' ? 'text-gray-500' : 'text-port-warning'}>
-                  {image.status === 'included' ? 'Will be sent to the model'
+                <span className={image.status === 'included' && !inputProvenance ? 'text-port-success' : image.status === 'left-out' ? 'text-gray-500' : 'text-port-warning'}>
+                  {image.status === 'included' ? inputProvenance === 'cli-attachments' ? 'Will be attached to Codex; image-tool use unconfirmed'
+                    : inputProvenance === 'peer-requested' ? 'Will be sent to the peer; image-tool use unconfirmed'
+                      : inputProvenance ? 'Will be requested from the CLI driver; image-tool use unconfirmed' : 'Will be sent to the model'
                     : image.status === 'left-out' ? 'Left out of likeness guides'
                     : image.status === 'missing' ? 'Missing file — restore or update this reference'
                       : image.status === 'unsupported' ? 'Not sent — choose FLUX.2, Qwen Image 2.1 or a cloud image backend'

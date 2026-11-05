@@ -27,6 +27,60 @@ it('edits and saves each frame prompt on blur', () => {
   expect(onSave).toHaveBeenLastCalledWith('s1', { endFramePrompt: null });
 });
 
+// The list depends on this render's source frame, not just the number of chips.
+it('names the references Codex would omit for each frame and updates when the source changes', () => {
+  const references = Array.from({ length: 6 }, (_, i) => ({
+    id: `r${i}`, imageId: `ref-${i}.png`, label: `Reference ${i}`, role: 'character',
+  }));
+  const project = { id: 'mv-example', visualSpec: { references } };
+  frames({ project, scene: { ...scene, frameReferenceIds: references.map(ref => ref.id) } });
+
+  let notices = screen.getAllByText(/If this frame uses Codex/);
+  expect(notices[0].textContent).toContain('Reference 5');
+  expect(notices[0].textContent).not.toContain('Reference 4');
+  expect(notices[1].textContent).toContain('Reference 4, Reference 5');
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Refine' })[0]);
+  notices = screen.getAllByText(/If this frame uses Codex/);
+  expect(notices[1].textContent).toContain('Reference 4, Reference 5');
+
+  fireEvent.change(screen.getAllByRole('combobox', { name: 'From' })[0], { target: { value: 'start' } });
+  notices = screen.getAllByText(/If this frame uses Codex/);
+  expect(notices[0].textContent).toContain('Reference 4, Reference 5');
+});
+
+it('keeps an automatic storyboard panel in the Codex allowance when naming omissions', () => {
+  const references = Array.from({ length: 5 }, (_, i) => ({
+    id: `r${i}`, imageId: `ref-${i}.png`, label: `Reference ${i}`, role: 'character', condition: true,
+  }));
+  const project = { id: 'mv-example', visualSpec: { references } };
+  frames({ project, scene: { ...scene, panelArt: 'panel.png' } });
+  const notice = screen.getAllByText(/If this frame uses Codex/)[0].textContent;
+  expect(notice).toContain('Reference 4');
+  expect(notice).not.toContain('Storyboard panel');
+});
+
+it('does not flag references already covered by the source frame', () => {
+  const references = [
+    { id: 'a', imageId: 'start.png', label: 'A', role: 'character' },
+    { id: 'b', imageId: 'start.png', label: 'B', role: 'character' },
+  ];
+  frames({ project: { id: 'mv-example', visualSpec: { references } },
+    scene: { ...scene, frameReferenceIds: references.map(ref => ref.id) } });
+  expect(screen.queryByText(/If this frame uses Codex/)).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'Refine' })[0]);
+  expect(screen.queryByText(/If this frame uses Codex/)).toBeNull();
+});
+
+it('shows mood-board images that will not fit after shot references', () => {
+  const references = Array.from({ length: 5 }, (_, i) => ({
+    id: `r${i}`, imageId: `ref-${i}.png`, label: `Reference ${i}`, role: 'character',
+  }));
+  const project = { id: 'mv-example', visualSpec: { references }, styleReferences: [{ imageId: 'style.png', caption: 'soft light' }] };
+  frames({ project, scene: { ...scene, frameReferenceIds: references.map(ref => ref.id) } });
+  expect(screen.getAllByText(/If this frame uses Codex/)[0].textContent).toContain('mood-board image style.png');
+});
+
 describe('older Casting look (#14154)', () => {
   const guide = (mediaKey, age) => ({ mediaKey, kind: 'reference', library: { variant: { age }, guide: true } });
   const project = { id: 'mv-example', concept: { subjects: [

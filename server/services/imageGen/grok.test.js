@@ -341,7 +341,7 @@ describe('grok provider — directed-path harvest', () => {
     const meta = JSON.parse(await readFile(sidecar, 'utf8'));
     expect(meta.renderMs).toBeGreaterThanOrEqual(0);
     expect(meta.initImageFilename).toBe('source.png');
-    expect(meta.inputProvenance).toBe('provider-inputs');
+    expect(meta.inputProvenance).toBe('cli-requested');
     expect(meta.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
     expect(Date.parse(meta.renderStartedAt)).toBeLessThanOrEqual(Date.parse(meta.renderCompletedAt));
     expect(Date.parse(meta.renderCompletedAt) - Date.parse(meta.renderStartedAt)).toBe(meta.renderMs);

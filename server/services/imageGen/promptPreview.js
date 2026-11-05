@@ -10,6 +10,7 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fa
 import { tmpdir } from 'node:os';
 import { getRunwayImageModel, RUNWAY_IMAGE_DEFAULT_MODEL } from '../../lib/runwayImageModels.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
+import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
@@ -87,6 +88,9 @@ export async function previewImagePrompt({ uploadedInitImage = false, uploadedRe
 
 /** Apply the render backend's prompt builder to an already-prepared request. */
 export async function previewPreparedImagePrompt({ params, mode = params.mode, settings, envelope = {} }) {
+  if (!params.mediaProviderPeerId && Object.hasOwn(CLI_IMAGE_INPUT_PROVENANCE, mode)) {
+    envelope = { ...envelope, referenceInputProvenance: CLI_IMAGE_INPUT_PROVENANCE[mode] };
+  }
   const carried = carriedPromptAdditions(params);
   const common = {
     prompt: params.prompt || '', negativePrompt: params.negativePrompt || '',

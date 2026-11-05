@@ -11,6 +11,7 @@ import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../../lib/fileUt
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { projectImageInputProvenance } from '../../lib/imageInputProvenance.js';
 
 // Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
 // the preferred Portos location on miss — callers writing back land at the
@@ -20,7 +21,12 @@ export async function readImageSidecar(filename) {
   const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
   for (const path of [portosSidecar, altSidecar]) {
     const raw = await tryReadFile(path);
-    if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
+    if (raw != null) {
+      // Older CLI sidecars named the driver's inputs as provider inputs,
+      // although they did not record the separate image-tool call.
+      // Correct the read projection without rewriting an existing sidecar.
+      return { path, metadata: projectImageInputProvenance(safeJSONParse(raw, {})) };
+    }
   }
   return { path: portosSidecar, metadata: {} };
 }

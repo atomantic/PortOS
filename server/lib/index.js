@@ -1071,3 +1071,4 @@ export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal
 export * from './blenderVersion.js';
 export * from './greyboxBlender.js';
 export * from './photorealLook.js';
+export * from './imageInputProvenance.js';

@@ -55,6 +55,7 @@ import {
 } from './modes.js';
 import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
 import { resolveInputImages } from './inputImages.js';
+import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
@@ -299,7 +300,7 @@ async function generateImagePrepared({
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.GROK,
-    inputProvenance: 'provider-inputs',
+    inputProvenance: CLI_IMAGE_INPUT_PROVENANCE[IMAGE_GEN_MODE.GROK],
     initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
     referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),
