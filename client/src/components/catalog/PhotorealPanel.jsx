@@ -353,7 +353,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               )}
               {job?.state === 'done' && job.report && (
                 <span className="text-xs text-gray-400" role="status">
-                  Last render: Blender {job.report.version} on {job.report.device === 'GPU' ? `GPU (${job.report.backend})` : 'CPU'}
+                  Last render: Blender {job.report.version} on {job.report.device === 'GPU' ? `GPU${job.report.backend ? ` (${job.report.backend})` : ''}` : 'CPU'}
                 </span>
               )}
               {job?.state === 'failed' && <span className="text-xs text-red-400" role="alert">{job.error}</span>}

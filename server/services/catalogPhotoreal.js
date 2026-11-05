@@ -171,10 +171,10 @@ async function runRender({ place, scene, tool, job, samples }) {
       const labels = job.shotIds.map((id) => scene.shots.find((s) => s.id === id)?.label || id);
       const entry = await deps.saveVideo(outputs.video, `${place.name} fly-through (${labels.join(' → ')}).mp4`);
       video = { id: entry.id, filename: entry.filename };
-      console.log(`🎥 Photoreal ${job.engine} fly-through for place ${place.id.slice(0, 12)}: ${fly.frames} frames on ${report.device}/${report.backend}`);
+      console.log(`🎥 Photoreal ${job.engine} fly-through for place ${place.id.slice(0, 12)}: ${fly.frames} frames on ${report.device}${report.backend ? `/${report.backend}` : ''}`);
     } else {
       await attachRenders(place, scene, job, outputs, report);
-      console.log(`🎥 Photoreal ${job.engine} render for place ${place.id.slice(0, 12)}: ${job.shotIds.length} camera(s) on ${report.device}/${report.backend}`);
+      console.log(`🎥 Photoreal ${job.engine} render for place ${place.id.slice(0, 12)}: ${job.shotIds.length} camera(s) on ${report.device}${report.backend ? `/${report.backend}` : ''}`);
     }
     publish({ ...job, state: 'done', report, video, finishedAt: new Date().toISOString() });
     if (!fly) catalogEvents.emit('primitive-changed', { ingredientId: place.id });
