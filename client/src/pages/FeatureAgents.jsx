@@ -7,6 +7,7 @@ import socket from '../services/socket';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
+import ListLoadError from '../components/ui/ListLoadError';
 import { formatCount } from '../utils/formatters';
 
 export default function FeatureAgents() {
@@ -16,7 +17,7 @@ export default function FeatureAgents() {
   const [loadFailed, setLoadFailed] = useState(false);
 
   const fetchAgents = useCallback(() => {
-    api.getFeatureAgents().then(data => {
+    api.getFeatureAgents({ silent: true }).then(data => {
       setAgents(data || []);
       setLoadFailed(false);
       setLoading(false);
@@ -119,8 +120,11 @@ export default function FeatureAgents() {
             gridColsClass="lg:grid-cols-2 xl:grid-cols-3"
             cards={3}
           />
-        ) : agents.length === 0 ? (
-          <div className="text-center py-16">
+        ) : (
+          <>
+            {loadFailed && <ListLoadError what="feature agents" onRetry={fetchAgents} />}
+            {agents.length === 0 && !loadFailed ? (
+              <div className="text-center py-16">
             <Wand2 size={48} className="mx-auto text-gray-600 mb-4" />
             <h3 className="text-lg font-medium text-gray-400 mb-2">No Feature Agents</h3>
             <p className="text-sm text-gray-600 mb-4">
@@ -132,10 +136,10 @@ export default function FeatureAgents() {
             >
               <Plus size={16} /> Create Feature Agent
             </Link>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-            {agents.map(agent => (
+              </div>
+            ) : agents.length > 0 ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                {agents.map(agent => (
               <FeatureAgentCard
                 key={agent.id}
                 agent={agent}
@@ -146,8 +150,10 @@ export default function FeatureAgents() {
                 onTrigger={handleTrigger}
                 onDelete={handleDelete}
               />
-            ))}
-          </div>
+                ))}
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </div>
