@@ -101,6 +101,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const job = status?.job || null;
   const running = job?.state === 'running';
   const sceneBuilding = status?.sceneBuilding === true;
+  const changesPending = disabled || lookBusy || !!platingShot;
   const statusUnavailable = !status || statusRefreshing || !!statusError;
   const blenderReady = blenderExecution?.lanes?.blender?.ready === true;
   const checkedEngine = blenderExecution?.tools?.blender?.engine;
@@ -243,7 +244,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const render = async ({ flythrough = false } = {}) => {
-    if (statusUnavailable || chosen.length < (flythrough ? 2 : 1) || running || starting || opening || sceneBuilding || !canRender) return;
+    if (statusUnavailable || changesPending || chosen.length < (flythrough ? 2 : 1) || running || starting || opening || sceneBuilding || !canRender) return;
     setBlenderNotice('');
     setStarting(true);
     const body = { shotIds: chosen, engine, samples: samplesField.effective, ...(flythrough ? { flythroughSeconds: secondsField.effective } : {}) };
@@ -433,7 +434,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => render()} disabled={statusUnavailable || !chosen.length || running || starting || opening || sceneBuilding || !canRender}
+              <button type="button" onClick={() => render()} disabled={statusUnavailable || changesPending || !chosen.length || running || starting || opening || sceneBuilding || !canRender}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
@@ -474,7 +475,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                   <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
-                <button type="button" onClick={() => render({ flythrough: true })} disabled={statusUnavailable || chosen.length < 2 || running || starting || opening || sceneBuilding || !canRender} className={actionButton}>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={statusUnavailable || changesPending || chosen.length < 2 || running || starting || opening || sceneBuilding || !canRender} className={actionButton}>
                   <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}
