@@ -568,6 +568,24 @@ describe('Layout — persistent mobile touch targets', () => {
     }
   });
 
+  it('keeps primary and working-set links plus section toggles at least 44px', async () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/review']));
+    await renderLayout('/');
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+
+    const reviewLinks = screen.getAllByRole('link', { name: /Review Hub/ });
+    const createSection = screen.getByRole('button', { name: 'Create', exact: true });
+    for (const link of reviewLinks) {
+      expect(link.className).toContain('min-h-[44px]');
+      expect(link.className).toContain('items-center');
+      expect(link.className).toContain('lg:min-h-0');
+      expect(link.className).toContain('pointer-coarse:min-h-11');
+    }
+    expect(createSection.className).toContain('min-h-[44px]');
+    expect(createSection.className).toContain('lg:min-h-0');
+    expect(createSection.className).toContain('pointer-coarse:min-h-11');
+  });
+
   it('enlarges collapsed flyout grandchild navigation links on coarse viewports while staying compact on desktop', async () => {
     localStorage.setItem('portos-sidebar-collapsed', 'true');
     await renderLayout('/');
