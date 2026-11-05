@@ -103,19 +103,27 @@ export function shotSheetProblems(row, previous = null) {
   return problems;
 }
 
+// The map's bars, top to bottom: what each one reads from a shot's row. A camera shows who has it, so a borrow reads as a change.
+export const SHOT_SHEET_MAP_BARS = [
+  ['location', 'Location', (row) => row.sheet.location?.trim() || ''],
+  ['camera', 'Camera', (row) => (row.camera ? [row.camera.name, row.sheet.holder].filter(Boolean).join(' · ') : '')],
+  ['light', 'Time of day', (row) => row.sheet.light?.trim() || ''],
+];
+
 /**
- * The video's route: consecutive timed shots in one location joined into a
- * stretch, with its span and shot count, for reading where the story goes over
- * the song. Shots with no location form their own stretches (`location: ''`).
+ * One bar of the video's map: consecutive timed shots with the same value joined
+ * into a stretch, with its span and shot count, for reading how the story moves
+ * over the song. Shots with no value form their own stretches (`value: ''`).
  */
-export function shotSheetRoute(rows) {
+export function shotSheetStretches(rows, valueOf) {
   const stretches = [];
-  for (const { scene, sheet } of rows) {
+  for (const row of rows) {
+    const { scene } = row;
     if (!Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)) continue;
-    const location = sheet.location?.trim() || '';
+    const value = valueOf(row);
     const last = stretches.at(-1);
-    if (last?.location === location) { last.endSec = scene.endSec; last.shots += 1; }
-    else stretches.push({ location, startSec: scene.startSec, endSec: scene.endSec, shots: 1 });
+    if (last?.value === value) { last.endSec = scene.endSec; last.shots += 1; }
+    else stretches.push({ value, startSec: scene.startSec, endSec: scene.endSec, shots: 1 });
   }
   return stretches;
 }

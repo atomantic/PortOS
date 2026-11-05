@@ -89,20 +89,23 @@ describe('ShotSheetPanel', () => {
     expect(container.querySelector('#mv-sheet-emotion option[value="Contemplative"]')).not.toBeNull();
   });
 
-  // Catches the route not following the sheet, or a stretch not narrowing the list.
-  it('shows the route from each shot\u2019s location and filters to a tapped stretch', () => {
+  // Catches a bar missing from the map, a bar not following the sheet, or a stretch not narrowing the list.
+  it('maps location, camera and time of day and filters to a tapped stretch', () => {
     const board = boardFor();
-    board.project.scenes[0].shotSheet.location = 'Street';
-    board.project.scenes[1].shotSheet = { location: 'Dead mall' };
+    Object.assign(board.project.scenes[0].shotSheet, { location: 'Street', light: 'Dusk' });
+    board.project.scenes[1].shotSheet = { location: 'Dead mall', light: 'Dusk', cameraId: 'obs' };
     render(<ShotSheetPanel board={board} />);
     openPanel();
-    const route = screen.getByRole('group', { name: 'Route by time' });
-    const mall = within(route).getByRole('button', { name: /^Dead mall, 0:02/ });
+    const mall = within(screen.getByRole('group', { name: 'Location' })).getByRole('button', { name: /^Location Dead mall, 0:02/ });
     expect(mall.style.flex).toContain('2');
-    fireEvent.click(mall);
-    expect(mall).toHaveAttribute('aria-pressed', 'true');
+    within(screen.getByRole('group', { name: 'Camera' })).getByRole('button', { name: /^Camera VHS · Kevin, 0:00/ });
+    const observer = within(screen.getByRole('group', { name: 'Camera' })).getByRole('button', { name: /^Camera Observer, 0:02/ });
+    // One stretch across both shots: the light didn't change.
+    within(screen.getByRole('group', { name: 'Time of day' })).getByRole('button', { name: /^Time of day Dusk, 0:00.*2 shots/ });
+    fireEvent.click(observer);
+    expect(observer).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
-    fireEvent.click(mall);
+    fireEvent.click(observer);
     expect(screen.getByRole('button', { name: 'Open Shot 1' })).toBeInTheDocument();
   });
 
