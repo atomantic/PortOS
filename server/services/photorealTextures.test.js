@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,7 @@ import { __setPhotorealTextureDepsForTests, installTexture, listInstalledTexture
 
 const JPEG = (tag) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from(tag)]);
 const json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-const map = (id, name) => ({ '2k': { jpg: { url: `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/${id}/${id}_${name}_2k.jpg` } } });
+const map = (id, name) => ({ '2k': { jpg: { url: `https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/${id}/${id}_${name}_2k.jpg`, md5: createHash('md5').update(JPEG(name)).digest('hex') } } });
 
 const assets = {
   oak_planks: { name: 'Oak Planks', categories: ['floor', 'wood'], tags: ['plank', 'parquet'], download_count: 10 },
@@ -69,6 +70,8 @@ describe('CC0 photo textures', () => {
     routes.set('https://api.polyhaven.com/files/oak_planks', () => json({ Diffuse: map('oak_planks', 'diff') }));
     routes.set('https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_planks/oak_planks_diff_2k.jpg', () => new Response('<html>'));
     await expect(installTexture('oak_planks')).rejects.toMatchObject({ code: 'PHOTOREAL_TEXTURE_INVALID' });
+    routes.set('https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_planks/oak_planks_diff_2k.jpg', () => new Response(JPEG('tampered')));
+    await expect(installTexture('oak_planks')).rejects.toMatchObject({ code: 'PHOTOREAL_TEXTURE_INVALID', message: expect.stringContaining('checksum') });
     await expect(installTexture('../etc')).rejects.toMatchObject({ code: 'PHOTOREAL_TEXTURE_ID' });
     expect(await listInstalledTextures()).toEqual([]);
   });

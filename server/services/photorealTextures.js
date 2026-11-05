@@ -8,6 +8,7 @@
  * re-downloadable, so a peer that lacks one renders that preset procedurally.
  */
 
+import { createHash } from 'node:crypto';
 import { readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../lib/errorHandler.js';
@@ -22,6 +23,8 @@ const MAP_BYTES_MAX = 40 * 1024 * 1024;
 const CATALOG_TTL_MS = 60 * 60 * 1000;
 const RESULTS_MAX = 36;
 const JPEG = Buffer.from([0xff, 0xd8, 0xff]);
+// Poly Haven asks API clients to name themselves.
+const USER_AGENT = 'PortOS-photoreal-textures/1';
 
 // The maps Blender reads, by the keys Poly Haven's files API may use for each.
 export const TEXTURE_MAPS = Object.freeze({
@@ -59,7 +62,7 @@ const thumbnail = (id) => `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?
 let catalog = null;
 
 async function getJson(url) {
-  const res = await deps.fetch(url, { headers: { Accept: 'application/json' } }, 20000)
+  const res = await deps.fetch(url, { headers: { Accept: 'application/json', 'User-Agent': USER_AGENT } }, 20000)
     .catch((err) => { throw refuse(`Poly Haven could not be reached: ${err.message}`, 'PHOTOREAL_TEXTURES_OFFLINE', 502); });
   if (!res.ok) throw refuse(`Poly Haven answered ${res.status}.`, 'PHOTOREAL_TEXTURES_OFFLINE', 502);
   return res.json();
@@ -99,24 +102,25 @@ export async function searchTextures({ preset, query = '' }) {
   return scored.slice(0, RESULTS_MAX).map(({ id, name }) => ({ id, name, thumbnail: thumbnail(id), installed: installed.has(id) }));
 }
 
-function pickMapUrl(files, keys) {
+function pickMap(files, keys) {
   for (const key of keys) {
-    const url = files?.[key]?.['2k']?.jpg?.url;
-    if (typeof url === 'string') return url;
+    const jpg = files?.[key]?.['2k']?.jpg;
+    if (typeof jpg?.url === 'string') return { url: jpg.url, md5: typeof jpg.md5 === 'string' ? jpg.md5.toLowerCase() : null };
   }
   return null;
 }
 
-async function downloadMap(url) {
+async function downloadMap({ url, md5 }) {
   let host;
   try { host = new URL(url).hostname; } catch { host = ''; }
   if (!DOWNLOAD_HOSTS.has(host)) throw refuse('Poly Haven pointed a texture at an unexpected host.', 'PHOTOREAL_TEXTURE_HOST', 502);
-  const res = await deps.fetch(url, {}, 120000)
+  const res = await deps.fetch(url, { headers: { 'User-Agent': USER_AGENT } }, 120000)
     .catch((err) => { throw refuse(`The texture download failed: ${err.message}`, 'PHOTOREAL_TEXTURES_OFFLINE', 502); });
   if (!res.ok) throw refuse(`The texture download answered ${res.status}.`, 'PHOTOREAL_TEXTURES_OFFLINE', 502);
   const bytes = Buffer.from(await res.arrayBuffer());
   if (bytes.length > MAP_BYTES_MAX) throw refuse('A texture map is larger than expected.', 'PHOTOREAL_TEXTURE_TOO_LARGE', 502);
   if (!bytes.subarray(0, 3).equals(JPEG)) throw refuse('A texture map is not a JPEG.', 'PHOTOREAL_TEXTURE_INVALID', 502);
+  if (md5 && createHash('md5').update(bytes).digest('hex') !== md5) throw refuse('A texture map did not match its published checksum.', 'PHOTOREAL_TEXTURE_INVALID', 502);
   return bytes;
 }
 
@@ -136,9 +140,10 @@ async function doInstall(id) {
   if (await pathExists(join(dir, 'texture.json'))) return (await listInstalledTextures()).find((t) => t.id === id);
   const [files, info] = await Promise.all([getJson(`${API}/files/${id}`), getJson(`${API}/info/${id}`)]);
   if (info?.type !== undefined && info.type !== 1) throw refuse('That Poly Haven asset is not a texture.', 'PHOTOREAL_TEXTURE_ID', 404);
-  const urls = Object.fromEntries(Object.entries(TEXTURE_MAPS).map(([map, keys]) => [map, pickMapUrl(files, keys)]));
-  if (!urls.color) throw refuse('That texture has no 2K color map.', 'PHOTOREAL_TEXTURE_INVALID', 404);
-  const maps = await Promise.all(Object.entries(urls).filter(([, url]) => url).map(async ([map, url]) => [map, await downloadMap(url)]));
+  // Only the color map is required; an asset without roughness or normal still installs.
+  const sources = Object.fromEntries(Object.entries(TEXTURE_MAPS).map(([map, keys]) => [map, pickMap(files, keys)]));
+  if (!sources.color) throw refuse('That texture has no 2K color map.', 'PHOTOREAL_TEXTURE_INVALID', 404);
+  const maps = await Promise.all(Object.entries(sources).filter(([, source]) => source).map(async ([map, source]) => [map, await downloadMap(source)]));
   // Real-world width in metres, so a plank is plank-sized; Poly Haven gives millimetres.
   const widthMm = Number(info?.dimensions?.[0]);
   const meta = {
