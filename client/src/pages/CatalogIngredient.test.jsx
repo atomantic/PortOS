@@ -218,6 +218,15 @@ beforeEach(() => {
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  it.each(['character', 'place', 'object'])('puts the %s creative redesign action beside Save without a separate body trigger', async (type) => {
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, type }));
+    await renderPage(`/catalog/${type}/cat-chr-1`);
+    const header = screen.getByRole('button', { name: 'Save', exact: true }).closest('header');
+    expect(within(header).getByRole('button', { name: 'Redesign with a creative assistant' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getAllByRole('button', { name: 'Redesign with a creative assistant' })).toHaveLength(1);
+    expect(document.getElementById('catalog-redesign')).not.toBeVisible();
+  });
+
   it('aborts an uncommitted agreement without saving or discarding the existing creative draft', async () => {
     const receipt = { id: 'example-abort-operation', sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, localOwner: 'canonical-owner', sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', state: 'proposed', planHash: 'example-hash',
       plan: { sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', source: { ingredients: [{ id: 'example-source', type: 'character', name: 'Original subject' }] }, survivor: { ingredients: [CHAR_FIXTURE] }, proposed: { name: CHAR_FIXTURE.name } } };

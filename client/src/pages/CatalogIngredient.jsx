@@ -64,7 +64,7 @@ import CanonReferenceRemoval from '../components/catalog/CanonReferenceRemoval';
 import CatalogLockButton from '../components/catalog/CatalogLockButton';
 import CharacterCanonActions from '../components/catalog/CharacterCanonActions';
 import ObjectAttachmentsEditor from '../components/universe/ObjectAttachmentsEditor';
-import CatalogRedesign from '../components/catalog/CatalogRedesign';
+import CatalogRedesign, { CatalogRedesignButton } from '../components/catalog/CatalogRedesign';
 import CatalogUniversePanel from '../components/catalog/CatalogUniversePanel';
 import CatalogFormsEditor from '../components/catalog/CatalogFormsEditor';
 import CatalogFamilyPicker from '../components/catalog/CatalogFamilyPicker';
@@ -199,6 +199,8 @@ function IngredientEditor() {
   const [mediaError, setMediaError] = useState(null);
   // A redesign-assistant proposal waiting to be saved onto a new fork.
   const [redesignFork, setRedesignFork] = useState(null);
+  const [redesignSession, setRedesignSession] = useState(null);
+  const redesignOpen = redesignSession?.id === id ? redesignSession.open : null;
   const mediaSequence = useRef(0);
   const sheetPointerSequence = useRef(0);
   const mediaReadyRef = useRef(false);
@@ -898,6 +900,8 @@ function IngredientEditor() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <CatalogRedesignButton type={record.type} open={redesignOpen} controls="catalog-redesign"
+              onToggle={() => setRedesignSession({ id, open: !redesignOpen })} />
             <CatalogUniversePanel key={`universe-${record.id}`} ingredient={record} context={record.universeContext}
               onContextChange={applyUniverseContext} readOnly={identityReadOnly} forkBlocked={record.sharedIdentity?.reason === 'CATALOG_IDENTITY_FENCED'} unsaved={isDirty || saving || lookSaving}
               seed={forkSeed} redesign={redesignFork ? { fields: redesignFork, clear: () => setRedesignFork(null) } : null} />
@@ -959,8 +963,9 @@ function IngredientEditor() {
           <button type="button" onClick={() => { applyDetails(externalDetails); setExternalDetails(null); }}
             className="ml-2 text-port-accent hover:underline">Discard local edits and load latest</button>
         </div>}
-        {record.type !== 'character' && <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
-          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />}
+        <CatalogRedesign key={`redesign-${record.id}`} id="catalog-redesign" open={redesignOpen} ingredient={record} payload={payload}
+          disabled={identityReadOnly || payload.locked === true || saving || lookSaving || characterActionBusy || !!externalDetails}
+          onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
 
         {profileVisited && (
           <div hidden={activeTab !== 'profile'} className="space-y-4">
@@ -1061,8 +1066,6 @@ function IngredientEditor() {
                 <GenerateImageControl key={record.id} ingredientId={record.id} name={name} description={genDescription}
                   universeId={universeRef?.refId || null} onComplete={handleGeneratedImage}
                   disabled={identityReadOnly || payload.locked === true || characterActionBusy || saving || unlocking || lookSaving || !!externalDetails} />
-                <CatalogRedesign ingredient={record} payload={payload} disabled={identityReadOnly || payload.locked === true || saving || lookSaving || !!externalDetails}
-                  onApply={patch => setPayload(previous => ({ ...previous, ...patch }))} onFork={setRedesignFork} />
               </div>}
               storyExtra={<fieldset disabled={identityReadOnly || characterActionBusy}><EditableListFields fields={editableLists.filter(field => field.key === 'aliases')} payload={payload} onChange={updatePayload} /></fieldset>}
             >
