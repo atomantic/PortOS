@@ -521,6 +521,20 @@ const GENERATED_DATA_RULES = [
 // children — `scripts/` is past the memo's directory limit, and hashing the
 // whole tree would fail the installer suites closed instead of keying the pins.
 export const FIXTURE_OWNERS = [
+  // The snapshot contract executes this shell verifier against signed fixtures;
+  // neither the planner's import graph nor the test memo can see those reads.
+  {
+    re: /^docker\/supercollider\/(?:verify-snapshot\.sh|debian-inrelease\.sha256)$/,
+    dir: 'docker/supercollider',
+    fileRe: /^(?:verify-snapshot\.sh|debian-inrelease\.sha256)$/,
+    tests: ['server/lib/superColliderSnapshot.test.js'],
+  },
+  {
+    re: /^server\/test\/fixtures\/supercollider-snapshot\/[^/]+\.InRelease$/,
+    dir: 'server/test/fixtures/supercollider-snapshot',
+    fileRe: /\.InRelease$/,
+    tests: ['server/lib/superColliderSnapshot.test.js'],
+  },
   {
     re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',

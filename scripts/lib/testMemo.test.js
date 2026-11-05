@@ -163,6 +163,29 @@ describe('fixture owners', () => {
       ).recorded.key, owner).not.toBe(recorded.recorded.key);
     }
   });
+
+  it('invalidates both keys when a SuperCollider snapshot verifier, pin or signed fixture changes', () => {
+    const owner = 'server/lib/superColliderSnapshot.test.js';
+    const inputs = [
+      'docker/supercollider/verify-snapshot.sh',
+      'docker/supercollider/debian-inrelease.sha256',
+      'server/test/fixtures/supercollider-snapshot/trixie.InRelease',
+    ];
+    const tree = {
+      ...TREE,
+      [owner]: stub,
+      ...Object.fromEntries(inputs.map((path) => [path, 'original\n'])),
+    };
+    const records = new Map([[owner, [owner]]]);
+    const before = keyOf(tree, owner, { records });
+    expect(before.floor.memoizable).toBe(true);
+    expect(before.recorded.memoizable).toBe(true);
+    for (const input of inputs) {
+      const after = keyOf({ ...tree, [input]: 'changed\n' }, owner, { records });
+      expect(after.floor.key, input).not.toBe(before.floor.key);
+      expect(after.recorded.key, input).not.toBe(before.recorded.key);
+    }
+  });
 });
 
 describe('recorded key', () => {

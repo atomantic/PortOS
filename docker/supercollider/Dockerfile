@@ -18,6 +18,7 @@ ARG DEBIAN_IMAGE=debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d
 
 FROM ${DEBIAN_IMAGE} AS base
 ARG DEBIAN_SNAPSHOT=20261104T212339Z
+COPY verify-snapshot.sh debian-inrelease.sha256 /tmp/portos-apt/
 # Both stages install packages as root. Require these minimum Debian package
 # versions before the first apt invocation (DSA-6607-1, DSA-6531-1). The fixed
 # apt must already be in the base; an image override still needs verification.
@@ -44,7 +45,9 @@ FROM base AS build
 ARG SC_VERSION=3.14.1
 ARG SC_SOURCE_SHA256=ee640c68777ae697682066ce5c4a8b7e56c5b223e76c79c13b5be5387ee55bb2
 RUN set -eux; \
+    rm -rf /var/lib/apt/lists/*; \
     apt-get update --error-on=any; \
+    sh /tmp/portos-apt/verify-snapshot.sh /var/lib/apt/lists /tmp/portos-apt/debian-inrelease.sha256; \
     for attempt in 1 2 3 4 5; do \
       if apt-get install -y \
         build-essential bzip2 ca-certificates cmake curl pkg-config \
@@ -59,7 +62,7 @@ RUN set -eux; \
       echo "apt-get install failed on attempt ${attempt}; retrying after sleep..." >&2; \
       sleep $(( attempt * 5 )); \
     done; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* /tmp/portos-apt
 RUN set -eux; \
     curl -fsSL --retry 5 -o /tmp/sc.tar.bz2 \
       "https://github.com/supercollider/supercollider/releases/download/Version-${SC_VERSION}/SuperCollider-${SC_VERSION}-Source.tar.bz2"; \
@@ -94,9 +97,11 @@ RUN set -eux; \
 FROM base AS runtime
 COPY --from=build /usr/local /usr/local
 RUN set -eux; \
-    apt-get update --error-on=any; \
-    xargs -a /usr/local/share/doc/supercollider/runtime-packages.txt apt-get install -y; \
     rm -rf /var/lib/apt/lists/*; \
+    apt-get update --error-on=any; \
+    sh /tmp/portos-apt/verify-snapshot.sh /var/lib/apt/lists /tmp/portos-apt/debian-inrelease.sha256; \
+    xargs -a /usr/local/share/doc/supercollider/runtime-packages.txt apt-get install -y; \
+    rm -rf /var/lib/apt/lists/* /tmp/portos-apt; \
     ldconfig; \
     if ldd /usr/local/bin/sclang /usr/local/bin/scsynth | grep 'not found'; then exit 1; fi; \
     sclang -v; \
