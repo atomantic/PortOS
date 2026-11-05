@@ -974,6 +974,22 @@ describe('pipeline issues service', () => {
     });
 
     describe('mergeIssuesFromSync', () => {
+      it.each([
+        ['equal precision variants', '2026-11-05T12:00:00.000Z', '2026-11-05T12:00:00Z', false],
+        ['newer fractional second', '2026-11-05T12:00:00Z', '2026-11-05T12:00:00.500Z', true],
+        ['equal timezone offsets', '2026-11-05T12:00:00Z', '2026-11-05T13:00:00+01:00', false],
+        ['invalid remote timestamp', '2026-11-05T12:00:00Z', 'not-a-date', false],
+        ['invalid local timestamp', 'not-a-date', '2026-11-05T12:00:00Z', true],
+      ])('LWW compares instants for %s', async (_case, localTs, remoteTs, remoteWins) => {
+        const local = { id: 'iss-lww', seriesId: 'ser-1', title: 'Local', createdAt: '2026-01-01T00:00:00Z', updatedAt: localTs };
+        await svc.mergeIssuesFromSync([local]);
+
+        const result = await svc.mergeIssuesFromSync([{ ...local, title: 'Remote', updatedAt: remoteTs }]);
+
+        expect(result).toEqual({ applied: remoteWins, count: remoteWins ? 1 : 0 });
+        expect(await svc.getIssue(local.id)).toMatchObject({ title: remoteWins ? 'Remote' : 'Local', updatedAt: remoteWins ? remoteTs : localTs });
+      });
+
       it('applies an inbound soft-delete from a peer', async () => {
         const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Synced' });
         const ts = new Date(Date.now() + 60_000).toISOString();

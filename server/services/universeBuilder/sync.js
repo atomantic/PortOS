@@ -22,6 +22,7 @@ import { emitRecordDeleted } from '../sharing/recordEvents.js';
 import { unlinkCollectionsForUniverse } from '../mediaCollections.js';
 import { clearPendingSheetSlotsForUniverse } from '../universeCharacterSheetSlot.js';
 import { isStr } from '../../lib/textUtils.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
 /**
  * Cascade orphan cleanup for a universe whose soft-delete arrived via peer
@@ -163,9 +164,7 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         // chance to download bytes for it.
         return;
       }
-      const localTs = local.updatedAt || '';
-      const remoteTs = sanitized.updatedAt || '';
-      if (remoteTs > localTs) {
+      if (compareNewerWins(sanitized.updatedAt, local.updatedAt)) {
         // `styleImageRefs` is WIRE-LOCAL — sanitizeRecordForWire strips it, so an
         // inbound payload never carries it and sanitizeTemplate defaulted it to []
         // above. The local value is authoritative for THIS peer's probe renders;

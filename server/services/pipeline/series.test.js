@@ -538,6 +538,22 @@ describe('pipeline series service', () => {
     });
 
     describe('mergeSeriesFromSync', () => {
+      it.each([
+        ['equal precision variants', '2026-11-05T12:00:00.000Z', '2026-11-05T12:00:00Z', false],
+        ['newer fractional second', '2026-11-05T12:00:00Z', '2026-11-05T12:00:00.500Z', true],
+        ['equal timezone offsets', '2026-11-05T12:00:00Z', '2026-11-05T13:00:00+01:00', false],
+        ['invalid remote timestamp', '2026-11-05T12:00:00Z', 'not-a-date', false],
+        ['invalid local timestamp', 'not-a-date', '2026-11-05T12:00:00Z', true],
+      ])('LWW compares instants for %s', async (_case, localTs, remoteTs, remoteWins) => {
+        const local = { id: 'ser-lww', name: 'Local', createdAt: '2026-01-01T00:00:00Z', updatedAt: localTs };
+        await svc.mergeSeriesFromSync([local]);
+
+        const result = await svc.mergeSeriesFromSync([{ ...local, name: 'Remote', updatedAt: remoteTs }]);
+
+        expect(result).toEqual({ applied: remoteWins, count: remoteWins ? 1 : 0 });
+        expect(await svc.getSeries(local.id)).toMatchObject({ name: remoteWins ? 'Remote' : 'Local', updatedAt: remoteWins ? remoteTs : localTs });
+      });
+
       it('applies an inbound soft-delete from a peer', async () => {
         const s = await svc.createSeries({ name: 'Synced' });
         const ts = new Date(Date.now() + 60_000).toISOString();
