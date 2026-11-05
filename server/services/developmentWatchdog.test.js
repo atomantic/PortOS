@@ -122,7 +122,7 @@ describe('development watchdog scan to dispatch', () => {
   });
 });
 
-const orphan = { number: 5, url: 'https://github.com/atomantic/example/pull/5', headSha: 'abc', labels: [], checks: [], author: 'atomantic', headBranch: 'claim/issue-5' };
+const orphan = { number: 5, url: 'https://github.com/atomantic/example/pull/5', headSha: 'abc', labels: [], checks: [], author: 'atomantic', headBranch: 'claim/issue-5', updatedAt: '2020-01-01T00:00:00Z' };
 it('queues abandoned claim PRs through review-then-merge and withholds changed heads', async () => {
   m.prs = [orphan];
   expect((await runDevelopmentWatchdog({ force: true })).counts.dispatched).toBe(1);
@@ -272,6 +272,24 @@ it('withholds dispatch when PR or dependency evidence cannot be read', async () 
   m.execGhFailureOn = 'issue';
   receipt = await runDevelopmentWatchdog({ force: true });
   expect(receipt.decisions[0].reason).toBe('dependency-read-failed'); expect(m.adds).toEqual([]);
+});
+
+it('waits for PR activity to go quiet before dispatching or redispatching', async () => {
+  m.prs = [{ ...orphan, headBranch: 'fix', checks: [{ status: 'COMPLETED', conclusion: 'FAILURE' }], updatedAt: new Date(Date.now() - 13 * 60_000).toISOString() }];
+  let receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0].disposition).toBe('recently-active');
+  expect(receipt.counts.deferred).toBe(1); expect(m.adds).toHaveLength(0);
+  m.prs[0].updatedAt = new Date(Date.now() - 121 * 60_000).toISOString();
+  receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0].disposition).toBe('queued-for-resolution'); expect(m.adds).toHaveLength(1);
+  m.prs[0] = { ...m.prs[0], headSha: 'new-push', updatedAt: new Date().toISOString() };
+  receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0].disposition).toBe('recently-active'); expect(m.adds).toHaveLength(1);
+  for (const updatedAt of [null, 'invalid']) {
+    m.prs[0].updatedAt = updatedAt;
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0].disposition).toBe('unknown'); expect(m.adds).toHaveLength(1);
+  }
 });
 
 it('does not repeatedly resolve unchanged PR evidence after its task completes', async () => {
