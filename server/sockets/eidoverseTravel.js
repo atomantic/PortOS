@@ -19,11 +19,11 @@ function refresh() {
   dirty = false;
   pending = import('../services/eidoverseTravel.js')
     .then(({ listEidoverseDestinations }) => listEidoverseDestinations())
-    // Unavailable local travel must remove destinations just as a failed
-    // initial read does. Do not expose runtime or peer error details.
-    .catch(() => ({ destinations: [] }))
+    // Only an explicit capability loss clears valid destinations. Transient
+    // probe failures preserve the last snapshot without exposing error details.
+    .catch(error => error?.code === 'EIDOVERSE_TRAVEL_UNAVAILABLE' ? { destinations: [] } : null)
     .then(snapshot => {
-      if (current !== generation || !subscribers.size || dirty) return;
+      if (snapshot === null || current !== generation || !subscribers.size || dirty) return;
       const next = JSON.stringify(snapshot);
       if (next === fingerprint) return;
       fingerprint = next;

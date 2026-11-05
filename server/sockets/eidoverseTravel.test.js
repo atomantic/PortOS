@@ -53,7 +53,7 @@ it('shares one probe loop, emits only changes, and stops after the last disconne
   expect(listEidoverseDestinations).toHaveBeenCalledTimes(calls);
 });
 
-it('coalesces invalidations during a probe, drops stale results, and recovers after failure', async () => {
+it('coalesces invalidations during a probe and drops stale results', async () => {
   vi.useFakeTimers();
   let finish;
   listEidoverseDestinations.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }))
@@ -68,16 +68,48 @@ it('coalesces invalidations during a probe, drops stale results, and recovers af
   await vi.advanceTimersByTimeAsync(0);
   expect(listEidoverseDestinations).toHaveBeenCalledTimes(2);
   expect(first.sent).toHaveBeenCalledExactlyOnceWith('eidoverse-travel:destinations', { destinations: [] });
+});
 
-  listEidoverseDestinations.mockResolvedValue({ destinations: [{ peerId: 'new-peer', label: 'New world' }] });
+it('preserves the last snapshot and fingerprint on probe failure, then publishes later changes', async () => {
+  vi.useFakeTimers();
+  const snapshot = { destinations: [{ peerId: 'example-peer', label: 'Example world' }] };
+  listEidoverseDestinations.mockResolvedValue(snapshot);
+  const first = connect();
+  first.receive('eidoverse-travel:subscribe');
   await vi.advanceTimersByTimeAsync(30_000);
+  expect(first.sent).toHaveBeenCalledExactlyOnceWith('eidoverse-travel:destinations', snapshot);
+
   listEidoverseDestinations.mockRejectedValueOnce(new Error('private runtime detail'));
   await vi.advanceTimersByTimeAsync(30_000);
-  expect(first.sent).toHaveBeenLastCalledWith('eidoverse-travel:destinations', { destinations: [] });
+  expect(first.sent).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(30_000);
-  expect(first.sent).toHaveBeenLastCalledWith('eidoverse-travel:destinations', {
-    destinations: [{ peerId: 'new-peer', label: 'New world' }],
-  });
+  expect(first.sent).toHaveBeenCalledTimes(1);
+
+  listEidoverseDestinations.mockResolvedValue({ destinations: [] });
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(first.sent).toHaveBeenCalledTimes(2);
+  expect(first.sent).toHaveBeenLastCalledWith('eidoverse-travel:destinations', { destinations: [] });
+});
+
+it('clears destinations once when local travel becomes unavailable and recovers when enabled', async () => {
+  vi.useFakeTimers();
+  const snapshot = { destinations: [{ peerId: 'example-peer', label: 'Example world' }] };
+  listEidoverseDestinations.mockResolvedValue(snapshot);
+  const first = connect();
+  first.receive('eidoverse-travel:subscribe');
+  await vi.advanceTimersByTimeAsync(30_000);
+
+  listEidoverseDestinations.mockRejectedValue(Object.assign(new Error('Travel disabled'), {
+    code: 'EIDOVERSE_TRAVEL_UNAVAILABLE',
+  }));
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(first.sent).toHaveBeenCalledTimes(2);
+  expect(first.sent).toHaveBeenLastCalledWith('eidoverse-travel:destinations', { destinations: [] });
+
+  listEidoverseDestinations.mockResolvedValue(snapshot);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(first.sent).toHaveBeenCalledTimes(3);
+  expect(first.sent).toHaveBeenLastCalledWith('eidoverse-travel:destinations', snapshot);
 });
 
 it('does not publish a pending probe after its subscriber generation ends', async () => {
