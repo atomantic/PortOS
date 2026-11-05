@@ -90,6 +90,8 @@ describe('assembled forge claim prompts', () => {
       expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
     } else {
       expect(prompt).toContain('leave the PR open for human handoff');
+      expect(prompt).toContain('Continue to the human handoff when they pass');
+      expect(prompt).not.toContain('Continue to the authorized merge when they pass');
       expect(prompt).not.toContain('gh pr merge');
       expect(prompt).not.toContain('gh issue close');
       expect(prompt).not.toContain('PortOS cleans up the managed worktree and branch automatically after completion');
@@ -111,7 +113,8 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('recovery is unsafe');
     expect(prompt).toContain('Respect configured retry budgets');
     expect(prompt).toContain('exact current head');
-    expect(prompt).toContain('complete the authorized merge');
+    expect(prompt).toContain('continue to the authorized merge');
+    expect(prompt).toContain('replace `CI_VERIFIED_HEAD` with that full verified SHA');
   });
 
   it('creates and verifies a GitLab draft explicitly', async () => {
