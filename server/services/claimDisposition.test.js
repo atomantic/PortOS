@@ -23,11 +23,11 @@ const merged = () => ({ __typename: 'PullRequest', number: 7, merged: true, merg
   baseRefName: 'main', baseRepository: { nameWithOwner: 'example/project' }, mergeCommit: { oid: 'a'.repeat(40) },
   closingIssuesReferences: { nodes: [{ number: 42, repository: { nameWithOwner: 'example/project' } }] } });
 const closure = () => ({ __typename: 'ClosedEvent', actor: { login: 'example' }, createdAt: '2026-10-01T11:00:00Z', closer: null });
-const parkIssue = () => {
+const parkIssue = (label = 'blocked') => {
   repository.issue.state = 'OPEN';
-  repository.issue.labels = { nodes: [{ name: 'blocked' }] };
+  repository.issue.labels = { nodes: [{ name: label }] };
   repository.issue.timelineItems.nodes = [{ __typename: 'LabeledEvent', actor: { login: 'example' },
-    createdAt: '2026-10-01T11:00:00Z', label: { name: 'blocked' } }];
+    createdAt: '2026-10-01T11:00:00Z', label: { name: label } }];
 };
 let repository;
 const verify = (extra = {}) => verifyClaimDisposition({ task, agent, reportedOutcome, success: true, ...extra });
@@ -55,6 +55,27 @@ describe('selected claim tracker completion', () => {
       [['merge-base', '--is-ancestor', 'HEAD', 'c'.repeat(40)], '/example/claim', { ignoreExitCode: true }],
     ]);
     expect(repository.issue.state).toBe('OPEN');
+  });
+
+  // The claim prompt's Phase 3 parks with needs-input and calls it converging.
+  // Rejecting it retried a settled claim until its recovery budget ran out.
+  it('settles the needs-input park under the same authority and checkout gates', async () => {
+    parkIssue('needs-input');
+    expect(await verify()).toMatchObject({ status: 'verified', issues: [{ issue: 42, disposition: 'operator-blocked' }] });
+
+    execGit.mockResolvedValueOnce({ exitCode: 0, stdout: ' M example.js' });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+
+    repository.issue.timelineItems.nodes.push({ ...repository.issue.timelineItems.nodes[0], actor: { login: 'outside-contributor' } });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'block-authority-unverified' });
+  });
+
+  it('ignores an earlier park label that is no longer applied', async () => {
+    parkIssue('blocked');
+    repository.issue.timelineItems.nodes.push({ __typename: 'LabeledEvent', actor: { login: 'outside-contributor' },
+      createdAt: '2026-10-01T11:30:00Z', label: { name: 'needs-input' } },
+    { __typename: 'UnlabeledEvent', actor: { login: 'example' }, createdAt: '2026-10-01T11:40:00Z', label: { name: 'needs-input' } });
+    expect(await verify()).toMatchObject({ status: 'verified', issues: [{ blockedBy: 'example' }] });
   });
 
   it.each([

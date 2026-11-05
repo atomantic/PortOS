@@ -9,6 +9,9 @@ import { getAppDataForTask } from './agentAppWorkspace.js';
 const unverified = reason => ({ status: 'unverified', reason });
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const positiveIssue = value => /^[1-9]\d*$/.test(String(value ?? '')) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+// `needs-input` is the park the claim prompt's Phase 3 applies, so a parked
+// claim must settle here instead of retrying until its budget is exhausted.
+const PARK_LABELS = new Set(['blocked', 'needs-input']);
 
 async function trustedGithubEvent(event, target, run) {
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
@@ -74,8 +77,9 @@ async function githubDisposition({ number, target, run }) {
     return unverified('issue-not-closed-or-mismatched');
   }
   const events = issue.timelineItems?.nodes;
-  if (issue.state === 'OPEN' && issue.labels?.nodes?.some(label => label.name === 'blocked')) {
-    const blocked = Array.isArray(events) ? events.filter(event => event?.label?.name === 'blocked').at(-1) : null;
+  const parkLabels = new Set((issue.labels?.nodes || []).map(label => label.name).filter(name => PARK_LABELS.has(name)));
+  if (issue.state === 'OPEN' && parkLabels.size) {
+    const blocked = Array.isArray(events) ? events.filter(event => parkLabels.has(event?.label?.name)).at(-1) : null;
     if (blocked?.__typename !== 'LabeledEvent' || !Number.isFinite(Date.parse(blocked.createdAt))
       || !await trustedGithubEvent(blocked, target, run)) return unverified('block-authority-unverified');
     return { status: 'verified', disposition: 'operator-blocked', issue: number,
