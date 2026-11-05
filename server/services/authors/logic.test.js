@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { computeRecordIntegrity } from '../../lib/syncIntegrity.js';
 import {
   sanitizeAuthor, buildAuthorRecord, applyAuthorPatch,
   mergeAuthorRecord, headshotImageFilename,
@@ -110,6 +111,16 @@ describe('authors logic', () => {
       const remote = { ...local, name: 'Tie' };
       const r = mergeAuthorRecord(local, remote);
       expect(r.remoteWins).toBe(false);
+    });
+
+    it('does not claim parity for different authors whose differently formatted clocks tie', () => {
+      const left = sanitizeAuthor({ ...local, updatedAt: '2026-06-01T00:00:00Z' });
+      const right = sanitizeAuthor({ ...local, name: 'Remote', updatedAt: '2026-06-01T00:00:00.000Z' });
+      expect(mergeAuthorRecord(left, right).next.name).toBe('Local');
+      expect(mergeAuthorRecord(right, left).next.name).toBe('Remote');
+      expect(computeRecordIntegrity([left], [right])[0]).toMatchObject({
+        status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie',
+      });
     });
 
     it('unparseable remote updatedAt never overrides a valid local', () => {

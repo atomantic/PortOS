@@ -78,9 +78,12 @@ const UNAVAILABLE_REASON_LABELS = {
   'peer-not-found': 'Peer not found',
 };
 
-function StatusPill({ status }) {
-  const config = STATUS_CONFIG[status];
-  if (!config) return <span className="text-gray-400 text-xs">{status ?? '—'}</span>;
+function StatusPill({ status, reason }) {
+  if (status === 'unknown') {
+    return <span className="text-gray-400 text-xs">{reason === 'timestamp-tie' ? 'Tied timestamps, content unverified' : 'Sync unknown'}</span>;
+  }
+  const config = Object.hasOwn(STATUS_CONFIG, status) ? STATUS_CONFIG[status] : null;
+  if (!config) return <span className="text-gray-400 text-xs">Sync unknown</span>;
   const { label, className, Icon } = config;
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-medium ${className}`}>
@@ -169,15 +172,16 @@ const PULL_SKIP_LABELS = {
 
 // ── Peer row with per-peer sync action ───────────────────────────────────────
 function PeerRow({ entry, kind, recordId, onRefresh }) {
-  const { peerId, peerName, status } = entry;
+  const { peerId, peerName, status, reason } = entry;
   // Direction-aware actions. local-only → we have it, peer doesn't → PUSH.
   // peer-only → peer has it, we don't → PULL. diverged / assets-missing /
   // metadata-missing are
   // ambiguous (either side could be ahead) → offer BOTH so the fix is always
   // reachable from the machine you're on. (Pre-fix, only push existed, which
   // couldn't resolve a record the LOCAL side was behind on.)
-  const canPush = ['local-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
-  const canPull = ['peer-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
+  const timestampUnknown = status === 'unknown' && reason === 'timestamp-tie';
+  const canPush = timestampUnknown || ['local-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
+  const canPull = timestampUnknown || ['peer-only', 'diverged', 'assets-missing', 'metadata-missing'].includes(status);
 
   const [syncToPeer, syncing] = useAsyncAction(async () => {
     // The endpoint returns 200 even when nothing was pushed ({ pushed:false,
@@ -209,7 +213,10 @@ function PeerRow({ entry, kind, recordId, onRefresh }) {
     <div className="flex items-center justify-between gap-2 py-2 border-b border-port-border/60 last:border-0">
       <div className="min-w-0">
         <p className="text-sm text-white truncate">{peerName}</p>
-        <StatusPill status={status} />
+        <StatusPill status={status} reason={reason} />
+        {timestampUnknown && (
+          <p className="text-gray-400 text-xs">Timestamps compare equal at millisecond precision. Contents may differ, and syncing may not replace either copy while the times tie.</p>
+        )}
       </div>
       <div className="flex-shrink-0 flex items-center gap-1.5">
         {canPull && (

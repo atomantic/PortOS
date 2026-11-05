@@ -126,6 +126,25 @@ describe('SyncDetailDrawer', () => {
     expect(screen.getByRole('button', { name: /sync to peer/i })).toBeInTheDocument();
   });
 
+  it('explains a timestamp tie and preserves manual sync actions', () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{ peerId: 'peer-a', peerName: 'void', status: 'unknown', reason: 'timestamp-tie' }]),
+    }));
+    render(<SyncDetailDrawer kind="universe" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(screen.getByText(/tied timestamps, content unverified/i)).toBeInTheDocument();
+    expect(screen.getByText(/syncing may not replace either copy/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /pull from peer/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /sync to peer/i })).toBeInTheDocument();
+  });
+
+  it('shows a neutral fallback for an unrecognized peer status', () => {
+    mockUseSyncIntegrity.mockReturnValue(defaultHookState({
+      byPeer: buildByPeer([{ peerId: 'peer-a', peerName: 'void', status: 'future-status' }]),
+    }));
+    render(<SyncDetailDrawer kind="universe" recordId={RECORD_ID} onClose={() => {}} />);
+    expect(screen.getByText('Sync unknown')).toBeInTheDocument();
+  });
+
   it('drops a stale in-flight fetch when recordId changes mid-flight (latest wins)', async () => {
     let resolveFirst;
     mockGetMediaCollection

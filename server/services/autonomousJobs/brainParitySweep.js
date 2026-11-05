@@ -23,8 +23,8 @@
 
 import { INTEGRITY_STATUS } from '../../lib/syncIntegrity.js'
 
-// Statuses that mean "these two brains hold different data". `in-parity` is
-// excluded; `total` is a denominator, not a finding.
+// Legacy warning counters include uncertain rows. `in-parity` is excluded;
+// `total` is a denominator, not a finding.
 const OUT_OF_PARITY_STATUSES = [
   INTEGRITY_STATUS.LOCAL_ONLY,
   INTEGRITY_STATUS.PEER_ONLY,
@@ -57,6 +57,8 @@ function summarizePeer(report) {
     available: true,
     recordsCompared: report.summary?.total ?? 0,
     outOfParity: countOutOfParity(report.summary),
+    // A subset of outOfParity retained there for older summary consumers.
+    timestampTies: report.summary?.[INTEGRITY_STATUS.UNKNOWN] ?? 0,
     checksumMatch: report.checksums?.match ?? null
   }
 }
@@ -86,18 +88,21 @@ export async function runBrainParitySweep({ check } = {}) {
   const peers = reports.map(summarizePeer)
 
   const peersUnavailable = peers.filter((p) => !p.available).length
-  // A peer counts as out of parity when records differ OR when the whole-brain
-  // checksums disagree — the checksum is the only signal that catches matching
-  // ids AND clocks over different bodies, which is a real divergence with an
-  // out-of-parity count of zero.
+  // Preserve the conservative legacy aggregate: it includes uncertain clocks
+  // and checksum mismatches, either of which requires inspection. The added
+  // timestamp-tie fields distinguish uncertainty without changing older consumers.
   const outOfParityPeers = peers.filter((p) => p.available && (p.outOfParity > 0 || p.checksumMatch === false))
   const outOfParityRecords = peers.reduce((total, p) => total + (p.outOfParity ?? 0), 0)
+  const timestampTieRecords = peers.reduce((total, p) => total + (p.timestampTies ?? 0), 0)
+  const peersWithTimestampTies = peers.filter((p) => p.available && p.timestampTies > 0).length
 
   const summary = {
     peersChecked: peers.length,
     peersUnavailable,
     peersOutOfParity: outOfParityPeers.length,
     outOfParityRecords,
+    peersWithTimestampTies,
+    timestampTieRecords,
     peerRegistryUnavailable,
     peers
   }
@@ -108,6 +113,9 @@ export async function runBrainParitySweep({ check } = {}) {
     console.log('🧠🔍 Brain parity sweep: no federating peers to check')
   } else if (outOfParityPeers.length === 0) {
     console.log(`🧠🔍 Brain parity sweep: ${peers.length} peer(s) checked, none out of parity (${peersUnavailable} unavailable)`)
+  } else if (peersWithTimestampTies > 0) {
+    const names = outOfParityPeers.map((p) => p.peerName || p.peerId).join(', ')
+    console.log(`🧠🔍 Brain parity sweep: ${outOfParityPeers.length}/${peers.length} peer(s) need review (${outOfParityRecords} record(s) flagged, ${timestampTieRecords} timestamp tie(s) unverified, ${peersUnavailable} unavailable) — ${names}`)
   } else {
     const names = outOfParityPeers.map((p) => p.peerName || p.peerId).join(', ')
     console.log(`🧠🔍 Brain parity sweep: ${outOfParityPeers.length}/${peers.length} peer(s) out of parity (${outOfParityRecords} record(s)) — ${names}`)

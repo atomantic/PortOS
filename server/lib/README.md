@@ -591,7 +591,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerUrl.js` | Build the base URL for a peer. |
 | `perpetualSkipCauses.js` | `formatSkipCauses(skipCauses, maxCauses?, excludeCause?)` — renders a perpetual work-detector's per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string; the one definition shared by the park log line, the on-demand toast, and the work-item picker. Re-exported at `client/src/lib/perpetualSkipCauses.js`. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
-| `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `INTEGRITY_STATUS` constants + `computeRecordIntegrity(localList, remoteList)` — classifies each record as `in-parity`, `local-only`, `peer-only`, `diverged`, or `assets-missing`. No I/O. |
+| `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `computeRecordIntegrity` reports record status and, for differently written clocks that tie at LWW precision, an `unknown` assessment with a conservative `diverged` status for older clients. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build, and return a normalized backend/MagicDNS/peer snapshot (`getTailscaleStatus` / `isTailscaleUp`). |
 | `tailcatValidation.js` | Strict operator request schemas for Tailcat device public-key approval and explicit enforcement mode. |
