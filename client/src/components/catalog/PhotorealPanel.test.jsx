@@ -257,6 +257,18 @@ describe('PhotorealPanel', () => {
     await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
   });
 
+  it('shows Open in Blender and the file paths before the first render builds the scene', async () => {
+    const files = { blend: '/srv/portos/data/scene.blend', renders: '/srv/portos/data/images' };
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3', files });
+    show();
+    expect(await screen.findByText(files.blend)).toBeInTheDocument();
+    expect(screen.getByText(files.renders)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    expect(screen.getByText(/first render builds the Blender scene/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy' })[0]);
+    expect(copyToClipboard).toHaveBeenCalledWith(files.blend, 'Path copied');
+  });
+
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
     show();
     const seconds = await screen.findByLabelText('Seconds');

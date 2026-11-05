@@ -257,19 +257,31 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           <h2 className="text-base font-semibold text-white">Photoreal</h2>
           <p className="text-xs text-gray-400">Builds this greybox in Blender, dresses it with the Look, and renders its saved cameras. Renders land here and can become a camera&apos;s photo plate.</p>
         </div>
-        {status?.blendUrl && (
-          <div className="flex flex-wrap gap-2">
-            {!readOnly && (
-              <button type="button" onClick={openInBlender} disabled={opening || !blenderReady} className={actionButton}>
-                {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
-              </button>
-            )}
+        <div className="flex flex-wrap gap-2">
+          {!readOnly && (
+            <button type="button" onClick={openInBlender} disabled={!status?.blendUrl || opening || !blenderReady} className={actionButton}>
+              {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
+            </button>
+          )}
+          {status?.blendUrl && (
             <a href={status.blendUrl} download className={actionButton}>
               <Download size={16} aria-hidden="true" /> Download .blend
             </a>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+      {status && !status.blendUrl && <p className="text-xs text-gray-400">The first render builds the Blender scene; Open in Blender works after that.</p>}
+      {status?.files && (
+        <dl className="space-y-1 text-xs" aria-label="Files">
+          {[['Blender scene', status.files.blend], ['Renders', status.files.renders]].map(([label, path]) => (
+            <div key={label} className="flex flex-wrap items-center gap-x-2">
+              <dt className="text-gray-400">{label}</dt>
+              <dd className="min-w-0 flex-1 break-all font-mono text-gray-300">{path}</dd>
+              <dd><button type="button" className="min-h-[32px] px-2 text-port-accent" onClick={() => copyToClipboard(path, 'Path copied')}>Copy</button></dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
       <ProductionContainment inline rendererKind="blender" onExecutionChange={next => { setBlenderExecution(next); if (next) setBlenderRefreshing(false); }} refreshKey={blenderRefresh}
         openRequest={blenderOpenRequest} locked={starting || opening || blenderRefreshing} />

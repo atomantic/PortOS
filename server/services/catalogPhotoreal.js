@@ -97,6 +97,8 @@ export async function getPhotorealStatus(ingredientId) {
     job: jobs.get(ingredientId) || null,
     blendUrl: (await photorealBlendPath(ingredientId)) ? blendUrl(ingredientId) : null,
     blenderVersion: await deps.lastCheckedVersion(),
+    // Where this machine keeps the scene and the stills, shown so the operator can find them.
+    files: SAFE_ID.test(ingredientId) ? { blend: blendPath(ingredientId), renders: PATHS.images } : null,
   };
 }
 
