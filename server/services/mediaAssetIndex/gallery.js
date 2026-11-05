@@ -3,6 +3,7 @@ import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
 import { compactGalleryRecord } from './logic.js';
+import { projectImageInputProvenance } from '../../lib/imageInputProvenance.js';
 
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
 const keyForRef = item => `${item.kind}:${item.ref}`;
@@ -96,6 +97,11 @@ export async function listGalleryPage({
       countAssets({ ...filters, compact }), summary ? countAssets({ ...filters, hidden: true, compact }) : undefined,
     ]);
   }
+  // The indexed snapshot can predate the sidecar read projection; normalize
+  // old CLI claims on output without rewriting that snapshot or source files.
+  items = items.map(item => mixed
+    ? item.kind === 'image' ? { ...item, data: projectImageInputProvenance(item.data) } : item
+    : projectImageInputProvenance(item));
   items = await withMediaFileSizes(items, mixed ? undefined : kind);
   return { items, total, limit, offset, ...(summary ? { hiddenTotal, ...(counts ? { counts } : {}) } : {}) };
 }
@@ -223,7 +229,7 @@ export async function listImageVariants(filename, diskReader) {
     if (!self) return [];
     const root = rootOf(self);
     const original = images.find(image => image?.filename === root && isRoot(image));
-    return withMediaFileSizes([...(original ? [original] : []), ...images.filter(image => image?.cleanedFrom === root)], 'image');
+    return withMediaFileSizes([...(original ? [original] : []), ...images.filter(image => image?.cleanedFrom === root)].map(projectImageInputProvenance), 'image');
   }
 
   const [self] = await listAssets({ kind: 'image', filename, limit: 1 });
@@ -235,5 +241,5 @@ export async function listImageVariants(filename, diskReader) {
     root === filename ? [self] : listAssets({ kind: 'image', filename: root, limit: 1 }),
     listAssets({ kind: 'image', cleanedFrom: root }),
   ]);
-  return withMediaFileSizes([...(isRoot(original) ? [original] : []), ...copies], 'image');
+  return withMediaFileSizes([...(isRoot(original) ? [original] : []), ...copies].map(projectImageInputProvenance), 'image');
 }

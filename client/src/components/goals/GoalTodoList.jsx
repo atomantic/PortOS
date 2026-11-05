@@ -41,7 +41,7 @@ export default function GoalTodoList({
               <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] ${PRIORITY_BADGE[todo.priority] || PRIORITY_BADGE.medium}`}>
                 {todo.priority}
               </span>
-              {todo.estimateMinutes && (
+              {Boolean(todo.estimateMinutes) && (
                 <span className="shrink-0 text-gray-600">{todo.estimateMinutes}m</span>
               )}
               <button

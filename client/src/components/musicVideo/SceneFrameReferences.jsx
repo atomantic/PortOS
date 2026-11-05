@@ -69,7 +69,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   };
 
   return (
-    <div role="group" aria-label="References sent with the frames" className="space-y-1">
+    <div role="group" aria-label="References selected for the frames" className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-port-text-muted">
         <span className="font-medium text-port-text">References</span>
         {auto ? <span>Auto: from the prompt</span> : (
@@ -97,8 +97,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           </li>
         )}
       </ul>
-      {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render sends as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot.</p>}
-      {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No references: frames render from the prompt alone.</p>}
+      {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.</p>}
+      {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
       {adding && !full && (
         <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">
           {others.map((ref) => (

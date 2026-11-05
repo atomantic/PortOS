@@ -5,7 +5,7 @@ import { glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sce
 import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
-import { filmLookRuntimeSource, isFilmLookNeutral } from '../../lib/filmLook.js';
+import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
@@ -78,7 +78,7 @@ export const documentAspect = musicVideoAspect;
 
 /**
  * The browser init scripts a document render opens its page with: the film
- * look runtime (lib/filmLook.js) when the project has a non-neutral look, and
+ * look runtime when the project or a shot has a non-neutral look, and
  * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
  * so every captured frame, probe sample and worker browser draws what the live
  * preview shows. Pure.
@@ -87,7 +87,7 @@ export function documentRenderInitScripts(project) {
   return [
     ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
     ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : []),
-    ...(isFilmLookNeutral(project?.filmLook) ? [] : [filmLookRuntimeSource(project.filmLook)]),
+    ...(!hasMusicVideoFilmLook(project) ? [] : [documentFilmLookRuntime(project)]),
     ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
 }
@@ -437,7 +437,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
     signal?.throwIfAborted();
     page = await openComposition(staged.directory, {
       signal, streamMedia: true, mediaMode: musicVideoMediaMode(project), ownedBrowser: true, isolation: 'required',
-      initScripts: [filmLookRuntimeSource(project?.filmLook), titleCardRuntime(project?.titleCard),
+      initScripts: [documentFilmLookRuntime(project), titleCardRuntime(project?.titleCard),
         ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
         ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : [])],
       previewBridge: true, refuseUnknown: 'empty', lockLoopback: true, onEvent,

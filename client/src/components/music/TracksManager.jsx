@@ -80,7 +80,10 @@ export default function TracksManager() {
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [uploading, setUploading] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState(null);
   const [library, setLibrary] = useState([]);
+  const libraryRequest = useRef(0);
   const [albums, setAlbums] = useState([]);
   // The render shown in the detail/remix modal, and the seed passed to the gen
   // panel when remixing (nonce bumps per click so re-remixing the same take
@@ -145,7 +148,11 @@ export default function TracksManager() {
   // old render's id to the wrong track.
   const resetTrackViewState = () => {
     cancelDelete();
+    libraryRequest.current += 1;
     setLibraryOpen(false);
+    setLibraryLoading(false);
+    setLibraryError(null);
+    setLibrary([]);
     setModalRender(null);
     setRemix(null);
     setChiptuneRemix(null);
@@ -320,12 +327,23 @@ export default function TracksManager() {
   const openLibrary = async () => {
     if (!requireSaved()) return;
     const targetId = persisted.id;
-    const res = await listMusicLibrary({ silent: true }).catch(() => null);
-    // The user may have switched tracks (or to a new unsaved one) while the
-    // library list loaded — don't pop the picker open for a stale selection.
-    if (selectedIdRef.current !== targetId) return;
-    setLibrary(Array.isArray(res?.tracks) ? res.tracks : []);
+    const request = ++libraryRequest.current;
+    const current = () => request === libraryRequest.current && selectedIdRef.current === targetId;
     setLibraryOpen(true);
+    setLibraryLoading(true);
+    setLibraryError(null);
+    await listMusicLibrary({ silent: true }).then((res) => {
+      if (!current()) return;
+      setLibrary(Array.isArray(res?.tracks) ? res.tracks : []);
+    }).catch((err) => {
+      if (!current()) return;
+      setLibraryError(err);
+      setLibrary([]);
+    }).finally(() => {
+      if (current()) {
+        setLibraryLoading(false);
+      }
+    });
   };
 
   const attachFromLibrary = async (filename) => {
@@ -685,9 +703,10 @@ export default function TracksManager() {
                       <button
                         type="button"
                         onClick={openLibrary}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent"
+                        disabled={uploading || libraryLoading}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
                       >
-                        <Library size={14} /> From library
+                        {libraryLoading ? <Loader2 size={14} className="animate-spin" /> : <Library size={14} />} From library
                       </button>
                     </div>
                   </div>
@@ -715,7 +734,13 @@ export default function TracksManager() {
 
                   {libraryOpen ? (
                     <div className="mt-1 border border-port-border rounded-lg bg-port-bg max-h-48 overflow-y-auto">
-                      {library.length === 0 ? (
+                      {libraryLoading && library.length === 0 ? (
+                        <div className="text-center py-3"><BrailleSpinner text="Loading music library" /></div>
+                      ) : libraryError ? (
+                        <div className="p-2">
+                          <ListLoadError what="music library" error={libraryError} onRetry={openLibrary} retrying={libraryLoading} />
+                        </div>
+                      ) : library.length === 0 ? (
                         <div className="text-xs text-gray-500 p-3">The music library is empty — upload a track first.</div>
                       ) : (
                         <ul className="divide-y divide-port-border">

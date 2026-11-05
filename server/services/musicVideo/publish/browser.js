@@ -13,27 +13,39 @@
  *   already-published video matched `studio.youtube.com` once and was edited).
  */
 import { ServerError } from '../../../lib/errorHandler.js';
+import { isVitestRunner } from '../../../lib/runtimeEnv.js';
 
 export const PUBLISH_STEP_TIMEOUT_MS = 60_000;
 
 let browserTail = Promise.resolve();
+// What holds the PortOS Browser now, so a queued fill can say what it waits on.
+let activeOperation = null;
+let pendingOperations = 0;
 
 /**
  * Run `fn` after every earlier PortOS Browser operation settles. Typing goes to
  * whichever tab has focus, so every driver of the shared browser — a publish
  * draft or an autonomous Suno song — queues here, not on a private tail.
  */
-export function serializeBrowserOperation(fn) {
-  const run = browserTail.then(fn, fn);
+export function serializeBrowserOperation(fn, operation = null) {
+  pendingOperations += 1;
+  const start = () => { activeOperation = operation ? { ...operation } : {}; return fn(); };
+  const run = browserTail.then(start, start).finally(() => { pendingOperations -= 1; activeOperation = null; });
   browserTail = run.catch(() => {});
   return run;
+}
+
+/** `null` when the PortOS Browser is free, else `{ label, status }` of the operation holding it (either may be null). */
+export function browserOperationInProgress() {
+  if (!pendingOperations) return null;
+  return { label: activeOperation?.label || null, status: activeOperation?.status || null };
 }
 
 /** Connect to the running PortOS Browser (launching it when it is stopped, unless `launch: false`). */
 export async function connectPortosBrowser({ launch = true } = {}) {
   // The PortOS Browser carries the operator's real sign-ins (Suno, socials): a test
   // that misses a double must fail, never spend credits or post as the operator.
-  if (process.env.VITEST) {
+  if (isVitestRunner()) {
     throw new ServerError('Tests must not drive the real PortOS Browser; stub this dependency.', { status: 503, code: 'PORTOS_BROWSER_UNAVAILABLE' });
   }
   const { getHealthStatus, launchBrowser } = await import('../../browserService.js');
@@ -59,12 +71,27 @@ export const loginRequired = (label, url) => new ServerError(`Sign in to ${label
 });
 
 /** A step the page never reached: say which, so a UI change is diagnosable. */
-export const stepFailed = (label, step, err) => new ServerError(`${label}: ${step} (${err?.message?.split('\n')[0] || 'timed out'})`, {
+// A timeout usually means the tab was hidden mid-step (the director switched tabs in the PortOS Browser).
+const timeoutHint = (err) => (/timeout/i.test(err?.message || '') ? '. Leave the PortOS Browser on the tab it opened while it fills, then Fill again' : '');
+export const stepFailed = (label, step, err) => new ServerError(`${label}: ${step} (${err?.message?.split('\n')[0] || 'timed out'})${timeoutHint(err)}`, {
   status: 502, code: 'PUBLISH_STEP_FAILED', context: { platform: label, step },
 });
 
-/** Run one named step, turning a Playwright timeout into a `stepFailed` naming it. */
-export async function step(label, name, fn) {
+/**
+ * Run one named step of a platform fill, turning a Playwright timeout into a
+ * `stepFailed` naming it. `status` is what the director reads while it runs
+ * (default: the step's name); the operation holding the browser reports it
+ * through its `onStep`. Its tab is brought to the front first: a background
+ * tab stops painting, so a click waiting for the element to settle stalls
+ * until it times out (LinkedIn and Facebook fills failed that way while the
+ * director used other tabs).
+ */
+export async function step(label, name, fn, { status } = {}) {
+  if (activeOperation) {
+    activeOperation.status = status || name;
+    try { activeOperation.onStep?.(activeOperation.status); } catch (err) { console.error(`❌ Publish step report failed: ${err.message}`); }
+    await activeOperation.focus?.()?.catch?.(() => {});
+  }
   try {
     return await fn();
   } catch (err) {

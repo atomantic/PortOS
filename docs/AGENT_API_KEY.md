@@ -77,3 +77,29 @@ node scripts/portos-api.js fableloom-export download LOOM JOB --output story.zip
 cancelled job. Downloads use the same credential transport, write ZIP bytes to a
 new file with private permissions and refuse overwriting an existing file. The
 ZIP is a static managed artifact; these commands do not deploy or host PortOS.
+
+## Diagnosing a rejected CoS credential
+
+`401 AUTH_REQUIRED` is an authentication response, not an unavailable API.
+The CLI distinguishes a missing credential from a rejected `PORTOS_API_TOKEN`
+or Agent API key. A rejected injected token still takes precedence over a valid
+key file: the CLI never retries with another credential. The response alone
+cannot distinguish an expired, revoked, foreign, or incorrectly propagated token.
+
+For a controlled fresh CoS run, request its own agent record with
+`node scripts/portos-api.js get /api/cos/agents/<current-agent-id>` before claim
+binding. Record only the HTTP result, selected credential source, launch mode,
+and whether the configured destination is the intended install. Compare token
+identity across launch boundaries only as an equality boolean; never print the
+token, its hash, environment dumps, session records, or provider configuration.
+A passing fresh run is a non-reproduction, not proof that an earlier rejection
+was repaired. Preserve that distinction when recording investigation results.
+
+Check explicit `PORTOS_URL` and the key file's destination locally. Obtain a fresh
+CoS credential through a new authorized launch; do not mint one by importing the
+auth service into a shell or weaken revocation. If the Agent API key is already
+enabled, an explicit diagnostic request with `PORTOS_API_TOKEN` removed can test
+that separate transport. Its success establishes availability and key validity,
+not the cause of the injected token's failure. Do not enable or rotate credentials
+merely to make an investigation pass. Public-content reviewers must remain
+without host API credentials.

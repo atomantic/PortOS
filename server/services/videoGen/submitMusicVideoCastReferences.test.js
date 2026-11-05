@@ -15,10 +15,13 @@ vi.mock('./local.js', () => ({
   listVideoModels: () => [{
     id: 'omni', name: 'Omni', runtime: 'fastvideo', supportedModes: ['image'],
     maxReferenceImages: 4, maxReferenceTotal: 3, maxReferenceAudios: 3,
+  }, {
+    id: 'ltx25_mlx_q8', name: 'LTX 2.5', runtime: 'ltx25',
+    supportedModes: ['text', 'image'], defaultFrames: 121,
   }],
   defaultVideoModelId: (_capabilities, preferredId) => preferredId || 'omni',
   loadHistory: async () => [],
-  BYOV_VIDEO_RUNTIMES: new Set(['fastvideo']),
+  BYOV_VIDEO_RUNTIMES: new Set(['fastvideo', 'ltx25']),
   DEFAULT_NUM_FRAMES: 121,
 }));
 vi.mock('../../lib/fileUtils.js', async (load) => ({
@@ -57,6 +60,25 @@ beforeEach(() => {
 });
 
 describe('Music Video cast references at video submission', () => {
+  it('queues an LTX 2.5 shot with its opening frame and selected cast sheet', async () => {
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/image-refs/lead.png', label: 'Lead' }]);
+    await submitVideoGenJob(body({ backend: 'local', modelId: 'ltx25_mlx_q8',
+      mode: 'ic-ingredients-25', numFrames: 121, icReferenceImageFiles: ['lead.png'],
+      musicVideo: { ...tag, expectedClipReferenceFiles: ['lead.png'] } }), {});
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+      mode: 'ic-ingredients-25', sourceImagePath: '/mock/images/still.png',
+      icReferencePaths: ['/mock/image-refs/lead.png'], numFrames: 121,
+    });
+  });
+
+  it('rejects an LTX shot when its selected references changed before queueing', async () => {
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/image-refs/new.png', label: 'Lead' }]);
+    await expect(submitVideoGenJob(body({ backend: 'local', modelId: 'ltx25_mlx_q8',
+      mode: 'ic-ingredients-25', numFrames: 121, icReferenceImageFiles: ['old.png'] }), {}))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+    expect(m.enqueue).not.toHaveBeenCalled();
+  });
+
   it('queues the default local model with cast sheets within its combined limit', async () => {
     await expect(submitVideoGenJob(body({ backend: 'local' }), {})).resolves.toMatchObject({ mode: 'local', model: 'omni' });
     expect(m.localReferences).toHaveBeenCalledWith(tag, 2, { excludePath: '/mock/images/still.png' });

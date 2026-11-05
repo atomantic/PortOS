@@ -400,7 +400,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-task'];
     const claimFlow = DEFAULT_TASK_PROMPTS['plan-task-claim'];
 
-    expect(PROMPT_VERSIONS['plan-task']).toBe(29);
+    expect(PROMPT_VERSIONS['plan-task']).toBe(30);
     expect(current).not.toContain('## Phase 6 — Review locally');
     expect(current).not.toContain('{reviewers}');
     expect(current).not.toContain('LOCAL reviewers');
@@ -1102,7 +1102,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(57);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(58);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -1136,7 +1136,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   );
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 57], ['claim-issue-gitlab', 50], ['claim-issue-jira', 28]];
+    const cases = [['claim-issue', 58], ['claim-issue-gitlab', 50], ['claim-issue-jira', 28]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];
@@ -1385,5 +1385,20 @@ describe('taskPromptDefaults integrity snapshot', () => {
     const current = DEFAULT_TASK_PROMPTS['pr-reviewer-review'];
     expect(current).toContain('Wrong scope and a mismatch with the requested behavior are findings requiring resolution');
     expect(current).toContain('when missing context prevents a sound decision');
+  });
+});
+
+describe('required-CI wait handles late check registration (#14873)', () => {
+  it.each(['claim-issue', 'plan-task', 'plan-task-claim'])('%s separates late registration from an empty requirement set', (key) => {
+    const prompt = DEFAULT_TASK_PROMPTS[key];
+    expect(prompt).toContain('no required checks reported');
+    expect(prompt).toContain('rules/branches/<base>');
+    expect(prompt).toContain('required_status_checks');
+    expect(prompt).toContain('an unreadable answer is unresolved, not empty');
+    expect(prompt).toContain('up to 30 minutes');
+  });
+
+  it('leaves the GitLab claim prompt without the GitHub-only rule', () => {
+    expect(DEFAULT_TASK_PROMPTS['claim-issue-gitlab']).not.toContain('no required checks reported');
   });
 });

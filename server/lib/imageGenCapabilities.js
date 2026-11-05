@@ -24,8 +24,8 @@ import { getRunwayImageModel } from './runwayImageModels.js';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
 import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
 
-// Wire ceiling for explicit reference slots; individual backends can be lower.
-export const IMAGE_REFERENCE_REQUEST_LIMIT = 16;
+// Defined in the dependency-free leaf so schema-only callers skip this module.
+export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 
 // Backends that cannot take an input image at all (#3243). Every *queueable*
 // backend now can: local (mflux/diffusers `--image-path` + FLUX.2 references),

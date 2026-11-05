@@ -339,6 +339,7 @@ export * from './slotstreamModels.js';
 export * from './maintenanceSequence.js';
 export * from './managedDaemon.js';
 export * from './recordedProjectDir.js';
+export * from './referenceLimits.js';
 export * from './vllmQwenProject.js';
 export * from './wslDistro.js';
 export * from './qwenAgentParsers.js';
@@ -498,6 +499,7 @@ export * from './goalFidelityFollowUp.js';
 export * from './interactiveShellResolver.js';
 export * from './killWithEscalation.js';
 export * from './npmGlobalBin.js';
+export * from './launchDetached.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './primaryCheckoutGuard.js';
@@ -938,6 +940,7 @@ export * from './imageLimits.js';
 
 export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
+export * from './musicVideoFilmLook.js';
 export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
@@ -1068,3 +1071,4 @@ export { createMaintenanceJournal, maintenanceError } from './maintenanceJournal
 export * from './blenderVersion.js';
 export * from './greyboxBlender.js';
 export * from './photorealLook.js';
+export * from './imageInputProvenance.js';

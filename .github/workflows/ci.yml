@@ -1502,7 +1502,7 @@ jobs:
 
       - name: Build and prove the shipped runtime
         run: |
-          npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-first-setup.log"
+          npm run setup:supercollider -- --yes --verbose | tee "$RUNNER_TEMP/supercollider-first-setup.log"
           cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
 
       - name: Repeat setup and prove it skipped build and probe

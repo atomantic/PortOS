@@ -1366,14 +1366,62 @@ const gitPaths = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8
   .split('\0')
   .filter(Boolean);
 
-/** Tracked test files whose text matches `pattern`; `git grep` exit 1 is "none". */
-const gitGrepFiles = (pattern, pathspecs, cwd) => {
-  try {
-    return gitPaths(['grep', '-z', '-l', '-E', pattern, '--', ...pathspecs], cwd);
-  } catch (err) {
-    if (err.status === 1) return [];
-    throw err;
+const WORD_RUN_RE = /[A-Za-z0-9_]+/g;
+const wordRuns = (text) => text.match(WORD_RUN_RE) ?? [];
+
+/**
+ * Tracked test files, read once, answering the reference lookups that used to
+ * be one repository-wide `git grep` per changed source (#14866: ~600 sources
+ * took minutes). Matching semantics are those of the old `git grep -E`: the
+ * same patterns run over the working-tree text of tracked files whose path
+ * contains `.test.` / `.spec.` (the `*` in a git pathspec crosses `/`).
+ *
+ * Each test also keeps its set of maximal word runs. Every pattern here is a
+ * word-boundary-delimited literal, so each word run of that literal must
+ * appear whole in any file it matches — a necessary condition that rejects
+ * nearly every file before the regex runs.
+ */
+const createTestReferenceIndex = (cwd) => {
+  const byPath = new Map();
+  for (const path of gitPaths(['ls-files', '-z', '--', ...TEST_FILE_GLOBS], cwd)) {
+    let text;
+    try {
+      text = readFileSync(join(cwd, path), 'utf8');
+    } catch (err) {
+      // Deleted from the working tree, or a submodule gitlink: git grep skips both.
+      if (err.code === 'ENOENT' || err.code === 'EISDIR') continue;
+      throw err;
+    }
+    byPath.set(path, { text, words: new Set(wordRuns(text)) });
   }
+
+  const matcher = (pattern, literal) => {
+    const regex = new RegExp(pattern);
+    const required = wordRuns(literal);
+    return ({ text, words }) => required.every((word) => words.has(word)) && regex.test(text);
+  };
+  const byBasename = new Map();
+  const tokenMatchers = new Map();
+  return {
+    /** Tests naming `sourcePath` by basename (see sourceReferencePattern), in path order. */
+    referencing(sourcePath) {
+      const name = basenameOf(sourcePath);
+      if (!byBasename.has(name)) {
+        const matches = matcher(sourceReferencePattern(sourcePath), name);
+        byBasename.set(name, [...byPath].filter(([, entry]) => matches(entry)).map(([path]) => path));
+      }
+      return byBasename.get(name);
+    },
+    /** Whether the indexed test at `path` names `token` as a whole identifier-delimited token. */
+    mentions(path, token) {
+      const entry = byPath.get(path);
+      if (!entry) return false;
+      if (!tokenMatchers.has(token)) {
+        tokenMatchers.set(token, matcher(`(^|[^A-Za-z0-9_])${escapeRegExp(token)}([^A-Za-z0-9_]|$)`, token));
+      }
+      return tokenMatchers.get(token)(entry);
+    },
+  };
 };
 
 const basenameOf = (path) => path.slice(path.lastIndexOf('/') + 1);
@@ -1399,16 +1447,11 @@ const sharedSourceBasenames = (files) => {
  * import graph still selects every real importer. A repo-root source has no
  * parent to tell copies apart, so it keeps every hit (#11870).
  */
-const narrowSharedBasenameHits = (source, hits, cwd) => {
+const narrowSharedBasenameHits = (source, hits, index) => {
   const dir = posix.dirname(source);
   if (dir === '.' || hits.length === 0) return hits;
   const parent = basenameOf(dir);
-  const naming = new Set(gitGrepFiles(
-    `(^|[^A-Za-z0-9_])${escapeRegExp(parent)}([^A-Za-z0-9_]|$)`,
-    hits.map((path) => `:(literal)${path}`),
-    cwd,
-  ));
-  return hits.filter((path) => path.startsWith(`${dir}/`) || naming.has(path));
+  return hits.filter((path) => path.startsWith(`${dir}/`) || index.mentions(path, parent));
 };
 
 export function emitGitHubPlan(plan) {
@@ -1609,7 +1652,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   }
 
   // Every changed executable, non-test source — not only python scripts — gets
-  // a basename lookup: `git grep`-ing tracked test files for its filename finds
+  // a basename lookup: looking up tracked test files that name its filename finds
   // the text-reading contract tests (mirror parity, navManifest.js's 20+ client
   // reads) that no import edge or feature-directory match can reach. Basename
   // matching is deliberate: a mirror test names the client copy only as e.g.
@@ -1620,9 +1663,10 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   // narrowSharedBasenameHits (#11870).
   const changedSources = collectedChangedFiles.filter((path) => isExecutable(path) && !isTestFile(path));
   const sharedBasenames = changedSources.length > 0 ? sharedSourceBasenames(presentFiles) : new Set();
+  const testIndex = changedSources.length > 0 ? createTestReferenceIndex(cwd) : null;
   const pathContractTests = Object.fromEntries(changedSources.map((path) => {
-    const hits = gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd);
-    return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, cwd) : hits];
+    const hits = testIndex.referencing(path);
+    return [path, sharedBasenames.has(basenameOf(path)) ? narrowSharedBasenameHits(path, hits, testIndex) : hits];
   }));
 
   const dependencyFiles = hasChangedFilesOverride ? uniqueSorted([...presentFiles, ...untrackedFiles]) : presentFiles;

@@ -20,6 +20,7 @@ import { randomUUID, createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
@@ -30,6 +31,10 @@ import { writersRoomStore } from './store.js';
 import { WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND } from './syncLogic.js';
 
 const store = () => writersRoomStore();
+
+// Hold the entire read/body-write/manifest-write cycle, never just saveManifest.
+// Leaf writes stay unqueued so composite workflows cannot re-enter this queue.
+const queueWorkWrite = createRecordWriteQueue();
 
 // ---------- text analysis ----------
 
@@ -257,25 +262,27 @@ async function saveManifest(workId, manifest, { announce = true } = {}) {
 // importing it at module-top would still be fine; the function-level import
 // just keeps this helper self-contained next to its caller).
 export async function ensureWorkMediaCollection(workId) {
-  const manifest = await getWork(workId);
-  const { getCollection, createCollection, ERR_NOT_FOUND } = await import('../mediaCollections.js');
-  if (manifest.mediaCollectionId) {
-    const existing = await getCollection(manifest.mediaCollectionId).catch((err) => {
-      // The collection was deleted out-of-band — drop the stale id and recreate.
-      if (err?.code === ERR_NOT_FOUND) return null;
-      throw err;
+  return queueWorkWrite(workId, async () => {
+    const manifest = await getWork(workId);
+    const { getCollection, createCollection, ERR_NOT_FOUND } = await import('../mediaCollections.js');
+    if (manifest.mediaCollectionId) {
+      const existing = await getCollection(manifest.mediaCollectionId).catch((err) => {
+        // The collection was deleted out-of-band — drop the stale id and recreate.
+        if (err?.code === ERR_NOT_FOUND) return null;
+        throw err;
+      });
+      if (existing) return existing;
+    }
+    const collection = await createCollection({
+      name: `Writers Room: ${manifest.title}`.slice(0, 80),
+      description: `Auto-generated images for "${manifest.title}"`,
+      // Machine-provisioned bucket — this work's renders land here without the
+      // user ever asking for a collection (#3311).
+      source: 'auto',
     });
-    if (existing) return existing;
-  }
-  const collection = await createCollection({
-    name: `Writers Room: ${manifest.title}`.slice(0, 80),
-    description: `Auto-generated images for "${manifest.title}"`,
-    // Machine-provisioned bucket — this work's renders land here without the
-    // user ever asking for a collection (#3311).
-    source: 'auto',
+    await saveManifest(workId, { ...manifest, mediaCollectionId: collection.id, updatedAt: nowIso() });
+    return collection;
   });
-  await saveManifest(workId, { ...manifest, mediaCollectionId: collection.id, updatedAt: nowIso() });
-  return collection;
 }
 
 function summarizeWork(manifest) {
@@ -455,59 +462,61 @@ export function resolveLiveMode(manifest) {
 }
 
 export async function updateWork(id, patch) {
-  const manifest = await getWork(id);
-  const allowed = ['title', 'folderId', 'kind', 'status', 'imageStyle'];
-  const next = { ...manifest, updatedAt: nowIso() };
-  for (const key of allowed) {
-    if (patch[key] === undefined) continue;
-    if (key === 'kind' && !WORK_KINDS.includes(patch.kind)) throw badRequest(`Invalid kind: ${patch.kind}`);
-    if (key === 'status' && !WORK_STATUSES.includes(patch.status)) throw badRequest(`Invalid status: ${patch.status}`);
-    next[key] = patch[key];
-  }
-  // liveMode is a partial merge (the UI PATCHes one knob at a time) onto the
-  // resolved current config — and the client-supplied usage counters are
-  // dropped so a crafted PATCH can't reset the server-side daily budgets. Only
-  // the user-editable knobs flow through; both server-owned counters carry over.
-  if (patch.liveMode !== undefined && patch.liveMode !== null) {
-    const current = resolveLiveMode(manifest);
-    const p = patch.liveMode;
-    next.liveMode = {
-      enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,
-      debounceMs: Number.isInteger(p.debounceMs) ? p.debounceMs : current.debounceMs,
-      dailyCallBudget: Number.isInteger(p.dailyCallBudget) ? p.dailyCallBudget : current.dailyCallBudget,
-      dailyRenderBudget: Number.isInteger(p.dailyRenderBudget) ? p.dailyRenderBudget : current.dailyRenderBudget,
-      usage: current.usage,
-      renderUsage: current.renderUsage,
-    };
-  }
-  // Voice exemplars / anti-exemplars (#2179 Writers Room parity). Sanitized
-  // through the SAME helper the series style guide uses (drops empty passages,
-  // trims to the char caps, caps the list at 3). Key present → replace (an
-  // explicit `[]` clears); key absent → carry the stored value untouched. These
-  // are consumed by the live-continuation prompt and the Phase 9 polish loop's
-  // revision brief so a freeform work anchors its voice the same way a series
-  // does.
-  if (patch.voiceExemplars !== undefined) {
-    next.voiceExemplars = sanitizeVoiceExemplars(patch.voiceExemplars);
-  }
-  if (patch.voiceAntiExemplars !== undefined) {
-    next.voiceAntiExemplars = sanitizeVoiceExemplars(patch.voiceAntiExemplars);
-  }
-  // Trim title and reject if it becomes empty after trim — keeps parity with
-  // createWork's "title required" guard so a PATCH can't blank a title out.
-  if (patch.title !== undefined) {
-    const trimmed = String(patch.title ?? '').trim();
-    if (!trimmed) throw badRequest('Work title required');
-    next.title = trimmed;
-  }
-  // folderId can be set to a real folder id or to null (unfile the work).
-  // Anything else would orphan it from the library tree.
-  if (patch.folderId !== undefined && patch.folderId !== null) {
-    const folders = await store().listFolders();
-    if (!folders.find((f) => f.id === patch.folderId)) throw notFound('Folder');
-  }
-  await saveManifest(id, next);
-  return next;
+  return queueWorkWrite(id, async () => {
+    const manifest = await getWork(id);
+    const allowed = ['title', 'folderId', 'kind', 'status', 'imageStyle'];
+    const next = { ...manifest, updatedAt: nowIso() };
+    for (const key of allowed) {
+      if (patch[key] === undefined) continue;
+      if (key === 'kind' && !WORK_KINDS.includes(patch.kind)) throw badRequest(`Invalid kind: ${patch.kind}`);
+      if (key === 'status' && !WORK_STATUSES.includes(patch.status)) throw badRequest(`Invalid status: ${patch.status}`);
+      next[key] = patch[key];
+    }
+    // liveMode is a partial merge (the UI PATCHes one knob at a time) onto the
+    // resolved current config — and the client-supplied usage counters are
+    // dropped so a crafted PATCH can't reset the server-side daily budgets. Only
+    // the user-editable knobs flow through; both server-owned counters carry over.
+    if (patch.liveMode !== undefined && patch.liveMode !== null) {
+      const current = resolveLiveMode(manifest);
+      const p = patch.liveMode;
+      next.liveMode = {
+        enabled: typeof p.enabled === 'boolean' ? p.enabled : current.enabled,
+        debounceMs: Number.isInteger(p.debounceMs) ? p.debounceMs : current.debounceMs,
+        dailyCallBudget: Number.isInteger(p.dailyCallBudget) ? p.dailyCallBudget : current.dailyCallBudget,
+        dailyRenderBudget: Number.isInteger(p.dailyRenderBudget) ? p.dailyRenderBudget : current.dailyRenderBudget,
+        usage: current.usage,
+        renderUsage: current.renderUsage,
+      };
+    }
+    // Voice exemplars / anti-exemplars (#2179 Writers Room parity). Sanitized
+    // through the SAME helper the series style guide uses (drops empty passages,
+    // trims to the char caps, caps the list at 3). Key present → replace (an
+    // explicit `[]` clears); key absent → carry the stored value untouched. These
+    // are consumed by the live-continuation prompt and the Phase 9 polish loop's
+    // revision brief so a freeform work anchors its voice the same way a series
+    // does.
+    if (patch.voiceExemplars !== undefined) {
+      next.voiceExemplars = sanitizeVoiceExemplars(patch.voiceExemplars);
+    }
+    if (patch.voiceAntiExemplars !== undefined) {
+      next.voiceAntiExemplars = sanitizeVoiceExemplars(patch.voiceAntiExemplars);
+    }
+    // Trim title and reject if it becomes empty after trim — keeps parity with
+    // createWork's "title required" guard so a PATCH can't blank a title out.
+    if (patch.title !== undefined) {
+      const trimmed = String(patch.title ?? '').trim();
+      if (!trimmed) throw badRequest('Work title required');
+      next.title = trimmed;
+    }
+    // folderId can be set to a real folder id or to null (unfile the work).
+    // Anything else would orphan it from the library tree.
+    if (patch.folderId !== undefined && patch.folderId !== null) {
+      const folders = await store().listFolders();
+      if (!folders.find((f) => f.id === patch.folderId)) throw notFound('Folder');
+    }
+    await saveManifest(id, next);
+    return next;
+  });
 }
 
 /**
@@ -532,15 +541,17 @@ export function renderWorkVoiceGuide(manifest) {
  * `updateWork` because the link isn't user-editable. Pass `null` to unlink.
  */
 export async function linkToPipeline(id, { seriesId = null, issueId = null } = {}) {
-  const manifest = await getWork(id);
-  const next = {
-    ...manifest,
-    pipelineSeriesId: seriesId ? String(seriesId).slice(0, 64) : null,
-    pipelineIssueId: issueId ? String(issueId).slice(0, 64) : null,
-    updatedAt: nowIso(),
-  };
-  await saveManifest(id, next);
-  return next;
+  return queueWorkWrite(id, async () => {
+    const manifest = await getWork(id);
+    const next = {
+      ...manifest,
+      pipelineSeriesId: seriesId ? String(seriesId).slice(0, 64) : null,
+      pipelineIssueId: issueId ? String(issueId).slice(0, 64) : null,
+      updatedAt: nowIso(),
+    };
+    await saveManifest(id, next);
+    return next;
+  });
 }
 
 /**
@@ -552,14 +563,16 @@ export async function linkToPipeline(id, { seriesId = null, issueId = null } = {
  * Mirrors `linkToPipeline`. Pass `null` to unlink.
  */
 export async function linkToCreativeDirector(id, { projectId = null } = {}) {
-  const manifest = await getWork(id);
-  const next = {
-    ...manifest,
-    cdProjectId: projectId ? String(projectId).slice(0, 64) : null,
-    updatedAt: nowIso(),
-  };
-  await saveManifest(id, next);
-  return next;
+  return queueWorkWrite(id, async () => {
+    const manifest = await getWork(id);
+    const next = {
+      ...manifest,
+      cdProjectId: projectId ? String(projectId).slice(0, 64) : null,
+      updatedAt: nowIso(),
+    };
+    await saveManifest(id, next);
+    return next;
+  });
 }
 
 // UTC day key (YYYY-MM-DD) for the daily budget window. UTC (not local) so the
@@ -578,18 +591,20 @@ export function utcDayKey() {
  * config with the new usage so the caller can echo remaining budget.
  */
 export async function recordLiveModeUsage(id) {
-  const manifest = await getWork(id);
-  const live = resolveLiveMode(manifest);
-  const today = utcDayKey();
-  const count = live.usage.date === today ? live.usage.count + 1 : 1;
-  const nextLive = { ...live, usage: { date: today, count } };
-  // Do NOT bump updatedAt: this counter is a local-only daily budget (never
-  // announced, #1565). updatedAt is the federation LWW key, so advancing it here
-  // would let a local counter bump on one peer win LWW over a real manuscript
-  // edit pushed from another — silently dropping the edit. Preserving updatedAt
-  // keeps the counter local without disturbing the merge order.
-  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
-  return nextLive;
+  return queueWorkWrite(id, async () => {
+    const manifest = await getWork(id);
+    const live = resolveLiveMode(manifest);
+    const today = utcDayKey();
+    const count = live.usage.date === today ? live.usage.count + 1 : 1;
+    const nextLive = { ...live, usage: { date: today, count } };
+    // Do NOT bump updatedAt: this counter is a local-only daily budget (never
+    // announced, #1565). updatedAt is the federation LWW key, so advancing it here
+    // would let a local counter bump on one peer win LWW over a real manuscript
+    // edit pushed from another — silently dropping the edit. Preserving updatedAt
+    // keeps the counter local without disturbing the merge order.
+    await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
+    return nextLive;
+  });
 }
 
 /**
@@ -601,49 +616,53 @@ export async function recordLiveModeUsage(id) {
  * `renderUsage` so the caller can echo remaining render budget.
  */
 export async function recordLiveModeRenderUsage(id) {
-  const manifest = await getWork(id);
-  const live = resolveLiveMode(manifest);
-  const today = utcDayKey();
-  const count = live.renderUsage.date === today ? live.renderUsage.count + 1 : 1;
-  const nextLive = { ...live, renderUsage: { date: today, count } };
-  // Same as recordLiveModeUsage above: a local-only render-budget bump must not
-  // advance the federation LWW key (updatedAt) and risk dropping a peer's edit.
-  await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
-  return nextLive;
+  return queueWorkWrite(id, async () => {
+    const manifest = await getWork(id);
+    const live = resolveLiveMode(manifest);
+    const today = utcDayKey();
+    const count = live.renderUsage.date === today ? live.renderUsage.count + 1 : 1;
+    const nextLive = { ...live, renderUsage: { date: today, count } };
+    // Same as recordLiveModeUsage above: a local-only render-budget bump must not
+    // advance the federation LWW key (updatedAt) and risk dropping a peer's edit.
+    await saveManifest(id, { ...manifest, liveMode: nextLive }, { announce: false });
+    return nextLive;
+  });
 }
 
 export async function deleteWork(id) {
-  // 404 the caller if the manifest is missing; rm() with force:true would
-  // silently succeed on a non-existent dir and the user gets no signal.
-  // Tolerate CORRUPTED_MANIFEST so a user can recover from on-disk corruption
-  // by deleting the work via the API/UI instead of resorting to `rm -rf`.
-  let corrupt = false;
-  await getWork(id).catch((err) => {
-    if (err?.code === 'CORRUPTED_MANIFEST') {
-      console.warn(`⚠️  wr: deleting work ${id} despite corrupted manifest`);
-      corrupt = true;
-      return;
+  return queueWorkWrite(id, async () => {
+    // 404 the caller if the manifest is missing; rm() with force:true would
+    // silently succeed on a non-existent dir and the user gets no signal.
+    // Tolerate CORRUPTED_MANIFEST so a user can recover from on-disk corruption
+    // by deleting the work via the API/UI instead of resorting to `rm -rf`.
+    let corrupt = false;
+    await getWork(id).catch((err) => {
+      if (err?.code === 'CORRUPTED_MANIFEST') {
+        console.warn(`⚠️  wr: deleting work ${id} despite corrupted manifest`);
+        corrupt = true;
+        return;
+      }
+      throw err;
+    });
+    if (corrupt) {
+      // A tombstone needs a parseable manifest to soft-delete + federate, but a
+      // corrupt manifest can't be sanitized for the wire anyway (sanitizeWorkForSync
+      // would drop it), so it was never syncable. Hard-remove the dir so the API's
+      // "delete a broken work to recover" path still works (the soft-delete store
+      // call would otherwise no-op on the unreadable manifest and strand it).
+      await withBackupAssetPublication(() => rmGuarded(wrWorkDir(id), { recursive: true, force: true }));
+      return { ok: true };
     }
-    throw err;
-  });
-  if (corrupt) {
-    // A tombstone needs a parseable manifest to soft-delete + federate, but a
-    // corrupt manifest can't be sanitized for the wire anyway (sanitizeWorkForSync
-    // would drop it), so it was never syncable. Hard-remove the dir so the API's
-    // "delete a broken work to recover" path still works (the soft-delete store
-    // call would otherwise no-op on the unreadable manifest and strand it).
-    await withBackupAssetPublication(() => rmGuarded(wrWorkDir(id), { recursive: true, force: true }));
+    // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date
+    // peer can't resurrect the work via the LWW merge. The work row/manifest + its
+    // draft rows + the on-disk .md bodies all stay until tombstone GC hard-prunes
+    // them (sync.js pruneTombstonedWorks). The record drops out of every user-facing
+    // read immediately (readWork/listWorks filter `deleted`).
+    await store().deleteWork(id);
+    // Push the tombstone to subscribed peers immediately.
+    emitRecordDeleted(WRITERS_ROOM_WORK_KIND, id);
     return { ok: true };
-  }
-  // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date
-  // peer can't resurrect the work via the LWW merge. The work row/manifest + its
-  // draft rows + the on-disk .md bodies all stay until tombstone GC hard-prunes
-  // them (sync.js pruneTombstonedWorks). The record drops out of every user-facing
-  // read immediately (readWork/listWorks filter `deleted`).
-  await store().deleteWork(id);
-  // Push the tombstone to subscribed peers immediately.
-  emitRecordDeleted(WRITERS_ROOM_WORK_KIND, id);
-  return { ok: true };
+  });
 }
 
 // ---------- draft body / version snapshots ----------
@@ -661,6 +680,10 @@ function buildDraftMeta(text, base = {}) {
 // hash, word count and segment index, so the pair is one backup-admitted workflow
 // (#9982): a cut never copies the old prose beside a row that describes the new.
 export function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
+  return queueWorkWrite(workId, () => saveDraftBodyNow(workId, body, { referencedIngredientIds }));
+}
+
+function saveDraftBodyNow(workId, body, { referencedIngredientIds } = {}) {
   return withBackupAssetPublication(async () => {
     const manifest = await getWork(workId);
     const activeId = manifest.activeDraftVersionId;
@@ -688,41 +711,45 @@ export function saveDraftBody(workId, body, { referencedIngredientIds } = {}) {
 // The new version's body file and the manifest row that adds it are one
 // backup-admitted workflow (#9982).
 export function snapshotDraft(workId, { label } = {}) {
-  return withBackupAssetPublication(async () => {
-    const { manifest, body } = await getWorkWithBody(workId);
-    const newDraftId = `wr-draft-${randomUUID()}`;
-    const fromId = manifest.activeDraftVersionId;
-    const fromDraft = manifest.drafts.find((d) => d.id === fromId);
-    const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
-    await atomicWrite(wrDraftPath(workId, newDraftId), body);
-    // The new draft copies the source's body verbatim, so carry its referenced
-    // ingredient ids forward — otherwise the freshly-snapshotted version would
-    // render no chips (despite identical prose) until the next save re-scans.
-    manifest.drafts.push(buildDraftMeta(body, {
-      id: newDraftId,
-      label: draftLabel,
-      contentFile: `drafts/${newDraftId}.md`,
-      createdAt: nowIso(),
-      createdFromVersionId: fromId,
-      ...(Array.isArray(fromDraft?.referencedIngredientIds)
-        ? { referencedIngredientIds: fromDraft.referencedIngredientIds }
-        : {}),
-    }));
-    manifest.activeDraftVersionId = newDraftId;
-    manifest.updatedAt = nowIso();
-    await saveManifest(workId, manifest);
-    console.log(`📚 wr: snapshot ${draftLabel} for ${manifest.title}`);
-    return manifest;
+  return queueWorkWrite(workId, () => {
+    return withBackupAssetPublication(async () => {
+      const { manifest, body } = await getWorkWithBody(workId);
+      const newDraftId = `wr-draft-${randomUUID()}`;
+      const fromId = manifest.activeDraftVersionId;
+      const fromDraft = manifest.drafts.find((d) => d.id === fromId);
+      const draftLabel = label || `Draft ${manifest.drafts.length + 1}`;
+      await atomicWrite(wrDraftPath(workId, newDraftId), body);
+      // The new draft copies the source's body verbatim, so carry its referenced
+      // ingredient ids forward — otherwise the freshly-snapshotted version would
+      // render no chips (despite identical prose) until the next save re-scans.
+      manifest.drafts.push(buildDraftMeta(body, {
+        id: newDraftId,
+        label: draftLabel,
+        contentFile: `drafts/${newDraftId}.md`,
+        createdAt: nowIso(),
+        createdFromVersionId: fromId,
+        ...(Array.isArray(fromDraft?.referencedIngredientIds)
+          ? { referencedIngredientIds: fromDraft.referencedIngredientIds }
+          : {}),
+      }));
+      manifest.activeDraftVersionId = newDraftId;
+      manifest.updatedAt = nowIso();
+      await saveManifest(workId, manifest);
+      console.log(`📚 wr: snapshot ${draftLabel} for ${manifest.title}`);
+      return manifest;
+    });
   });
 }
 
 export async function setActiveDraft(workId, draftId) {
-  const manifest = await getWork(workId);
-  if (!manifest.drafts.find((d) => d.id === draftId)) throw notFound('Draft version');
-  manifest.activeDraftVersionId = draftId;
-  manifest.updatedAt = nowIso();
-  await saveManifest(workId, manifest);
-  return manifest;
+  return queueWorkWrite(workId, async () => {
+    const manifest = await getWork(workId);
+    if (!manifest.drafts.find((d) => d.id === draftId)) throw notFound('Draft version');
+    manifest.activeDraftVersionId = draftId;
+    manifest.updatedAt = nowIso();
+    await saveManifest(workId, manifest);
+    return manifest;
+  });
 }
 
 export async function getDraftBody(workId, draftId) {
@@ -797,7 +824,7 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
   return finished;
 }
 
-export async function promoteExercise(id) {
+async function requirePromotableExercise(id) {
   const all = await store().listExercises();
   const existing = all.find((exercise) => exercise.id === id);
   if (!existing) throw notFound('Exercise');
@@ -806,19 +833,30 @@ export async function promoteExercise(id) {
   if (!existing.workId) throw badRequest('Exercise is not linked to a work');
   const text = typeof existing.appendedText === 'string' ? existing.appendedText.trim() : '';
   if (!text) throw badRequest('Exercise has no text to promote');
+  return { exercise: existing, text };
+}
 
-  const { body } = await getWorkWithBody(existing.workId);
-  const nextBody = body.trimEnd() === '' ? text : `${body.trimEnd()}\n\n${text}\n`;
-  const { manifest: updatedManifest } = await saveDraftBody(existing.workId, nextBody);
-  const promoted = {
-    ...existing,
-    promotedAt: nowIso(),
-    promotedDraftVersionId: updatedManifest.activeDraftVersionId,
-    updatedAt: nowIso(),
-  };
-  await store().writeExercise(promoted);
-  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
-  return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
+export async function promoteExercise(id) {
+  const { exercise: initial } = await requirePromotableExercise(id);
+  // Re-read the exercise after earlier work writes finish, and retain the turn
+  // until its promotion marker is saved. A duplicate request must see that
+  // marker before it can append the same sprint to the draft again.
+  return queueWorkWrite(initial.workId, async () => {
+    const { exercise: existing, text } = await requirePromotableExercise(id);
+    if (existing.workId !== initial.workId) throw badRequest('Exercise work changed; retry promotion');
+    const { body } = await getWorkWithBody(existing.workId);
+    const nextBody = body.trimEnd() === '' ? text : `${body.trimEnd()}\n\n${text}\n`;
+    const { manifest: updatedManifest } = await saveDraftBodyNow(existing.workId, nextBody);
+    const promoted = {
+      ...existing,
+      promotedAt: nowIso(),
+      promotedDraftVersionId: updatedManifest.activeDraftVersionId,
+      updatedAt: nowIso(),
+    };
+    await store().writeExercise(promoted);
+    emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
+    return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
+  });
 }
 
 export async function discardExercise(id) {

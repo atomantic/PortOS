@@ -35,19 +35,23 @@ export default function vitestRunDiagnostics() {
   };
   let snapshotExitCode = null;
   let diagnostics = { reason: 'not-finished', errorCount: 0, errors: [], completedCount: 0 };
+  // Vitest's resolved cap, not the launcher's environment: the worker count that actually ran.
+  let workers;
   const activeModules = new Set();
   const completedModules = [];
   const moduleResults = [];
   const persist = (processExit) => {
     if (!processExit) snapshotExitCode = process.exitCode ?? null;
     if (!path) return;
-    persistTestDiagnostic(path, { ...diagnostics, ...(collecting ? { collection } : {}), activeModules: [...activeModules].slice(0, 100),
+    persistTestDiagnostic(path, { ...diagnostics, ...(workers ? { workers } : {}), ...(collecting ? { collection } : {}), activeModules: [...activeModules].slice(0, 100),
       completedModules, moduleResults, exitCode: snapshotExitCode,
       ...(processExit ? { processExit } : {}) });
   };
   return {
     onInit(vitest) {
       context = vitest;
+      const resolved = Number(vitest.config?.maxWorkers);
+      if (Number.isInteger(resolved) && resolved > 0) workers = resolved;
       if (collecting) {
         // Preserve Vitest's error recording; never suppress or reclassify it.
         const previous = vitest.state.onUnhandledError;

@@ -308,6 +308,61 @@ describe('runVerificationPass', () => {
     expect(res.confirmed).toHaveLength(1);
     expect(transitionCase).toHaveBeenCalledWith('c2', 'confirmed_removed', expect.objectContaining({ viaRescan: true }));
   });
+  it.each(['found', 'indirect_exposure'])('reopens due removed listings on %s and makes them submittable (#14905)', async (verdict) => {
+    const now = new Date('2026-11-04T12:00:00Z');
+    const broker = { id: 'spokeo' };
+    getBroker.mockResolvedValue(broker);
+    const kase = { id: 'removed', brokerId: broker.id, state: 'confirmed_removed', nextRecheckAt: now.toISOString(), evidence: { verificationRechecks: 3 } };
+    listBrokerCases.mockResolvedValue([kase]);
+    const evidence = { listing_urls: ['https://www.spokeo.com/example'], match_basis: 'name_location' };
+    const removalProbe = vi.fn(async () => ({ verdict, found: verdict === 'found' ? true : null, evidence }));
+
+    const result = await runVerificationPass({ now, subjectId: 'subject-2', removalProbe });
+
+    expect(result.reappeared).toEqual([{ caseId: 'removed', brokerId: broker.id }]);
+    expect(listBrokerCases).toHaveBeenCalledWith({ subjectId: 'subject-2' });
+    expect(transitionCase).toHaveBeenCalledExactlyOnceWith('removed', 'reappeared', {
+      viaRescan: true, found: verdict === 'found' ? true : null, reason: null,
+      evidence: { ...evidence, verificationRechecks: 0 }, now,
+    });
+    const reopened = await transitionCase.mock.results[0].value;
+    expect(planOptOutActions([{ case: reopened, broker }]).submit).toHaveLength(1);
+  });
+  it('renews a due removed case but skips a future recheck (#14905)', async () => {
+    const now = new Date('2026-11-04T12:00:00Z');
+    getBroker.mockResolvedValue({ id: 'spokeo' });
+    listBrokerCases.mockResolvedValue([
+      { id: 'due', brokerId: 'spokeo', state: 'confirmed_removed', nextRecheckAt: '2026-11-03T12:00:00Z' },
+      { id: 'future', brokerId: 'spokeo', state: 'confirmed_removed', nextRecheckAt: '2026-11-05T12:00:00Z' },
+    ]);
+    const removalProbe = vi.fn(async () => ({ verdict: 'not_found' }));
+
+    const result = await runVerificationPass({ now, removalProbe });
+
+    expect(removalProbe).toHaveBeenCalledTimes(1);
+    expect(result.confirmed).toEqual([{ caseId: 'due', brokerId: 'spokeo' }]);
+    // transitionCase derives the next 30-day deadline from this exact now.
+    expect(transitionCase).toHaveBeenCalledExactlyOnceWith('due', 'confirmed_removed', {
+      viaRescan: true, evidence: { verifiedRemovedAt: now.toISOString() }, now,
+    });
+  });
+  it.each([
+    { skipped: true, reason: 'inconclusive' }, { verdict: 'blocked' }, null,
+  ])('preserves removed cases on inconclusive probes without renewing verification (#14905): %j', async (probeResult) => {
+    getBroker.mockResolvedValue({ id: 'spokeo' });
+    // No deadline is treated as due, including legacy cases.
+    listBrokerCases.mockResolvedValue([{ id: 'removed', brokerId: 'spokeo', state: 'confirmed_removed' }]);
+    const removalProbe = vi.fn(async () => {
+      if (!probeResult) throw new Error('network unavailable');
+      return probeResult;
+    });
+
+    const result = await runVerificationPass({ removalProbe });
+
+    expect(removalProbe).toHaveBeenCalledTimes(1);
+    expect(transitionCase).not.toHaveBeenCalled();
+    expect(result).toEqual({ advanced: [], confirmed: [], unfulfilled: [], reappeared: [] });
+  });
   it('increments recheck count and moves verification_pending to awaiting_processing when still found (#4020)', async () => {
     getBroker.mockResolvedValue({ id: 'spokeo', urls: { search: 'https://www.spokeo.com/{firstName}/{state}' } });
     const vault = await import('./privacyVault.js');

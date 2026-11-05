@@ -4,8 +4,10 @@ import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../..
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { hashString } from '../../utils/hashString.js';
+import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
+import PreviewFilmLook, { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import toast from '../ui/Toast';
 import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
 
@@ -40,7 +42,7 @@ const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durat
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
-    s.referenceImageId, s.photoSequence, s.direction?.medium])]);
+    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook])]);
 const shotEffectsVersion = (project) => {
   const key = shotEffectsKey(project);
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
@@ -110,9 +112,12 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [preparing, setPreparing] = useState(false);
   const [audioError, setAudioError] = useState('');
   const [upgrading, setUpgrading] = useState(false);
+  const [lookOn, toggleLook] = usePreviewFilmLook();
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
-  const filmLook = lyrics ? null : (project.filmLook ?? null);
+  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook));
+  const filmLook = !lyrics && lookOn ? (project.filmLook ?? (shotLookAvailable ? { preset: 'none' } : null)) : null;
+  const lookAvailable = !lyrics && (!isFilmLookNeutral(project.filmLook) || shotLookAvailable);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
   const request = useMemo(() => {
@@ -395,6 +400,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           onChange={(e) => stopPlayback(Number(e.target.value))}
           className="min-w-0 flex-1" />
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
+        {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
       </div>
       {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
       {shotNav && (

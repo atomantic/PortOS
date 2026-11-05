@@ -143,3 +143,7 @@ PROMPT_VERSIONS['plan-task'] = 29; // v29: simplify managed-worktree delivery an
 // A still-owned checkout hands off to exact, durable completion recovery.
 PROMPT_VERSIONS['plan-task-claim'] = 6; // v6: simplify managed-worktree delivery and cleanup contract after confirmed MERGED. v5: the reviewer budget also governs the PR-side stop and the publication gate. v4: per-reviewer ~max budgets replace the hardcoded 3 rounds. Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.
 PROMPT_VERSIONS['branch-cleanup'] = 4; // v4: align merged-branch worktree disposal with AGENTS.md and simplified cleanup contract. Hosting-provider merge authority; no second local certificate. Prior: v2: a merged clean checkout is removed in place; do not copy it into an archive.
+
+PROMPT_VERSIONS['claim-issue'] = 58; // v58: GitHub required-CI wait distinguishes late check registration from an empty requirement set via rulesets + classic protection (#14873)
+PROMPT_VERSIONS['plan-task'] = 30; // v30: same late-registration rule for the required-CI wait (#14873)
+PROMPT_VERSIONS['plan-task-claim'] = 7; // v7: same late-registration rule for the required-CI wait (#14873)

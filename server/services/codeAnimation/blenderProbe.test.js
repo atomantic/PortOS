@@ -66,6 +66,19 @@ describe('Blender render readiness (synthetic worker evidence, not real Blender 
     expect(result.passed).toBe(false);
   });
 
+  it('names the crash in the check detail and says contained EEVEE has no GPU', async () => {
+    const worker = async () => ({ status: 'failed', reason: 'exit', signal: 'SIGABRT', exitCode: null, processGroupClear: true, stderr: 'private worker output' });
+    const eevee = await probeBlenderRender(tool, '/example/workspaces', { worker, engine: 'BLENDER_EEVEE_NEXT' });
+    expect(eevee).toMatchObject({ passed: false, failure: 'Blender crashed with SIGABRT.', detail: expect.stringContaining('Contained mode has no GPU') });
+    expect(eevee.detail).toContain('Blender crashed with SIGABRT.');
+    expect(JSON.stringify(eevee)).not.toContain('private worker output');
+    const cycles = await probeBlenderRender(tool, '/example/workspaces', { worker });
+    expect(cycles.detail).toContain('Blender crashed with SIGABRT.');
+    expect(cycles.detail).not.toContain('no GPU');
+    const trusted = await probeBlenderRender(tool, '/example/workspaces', { worker, engine: 'BLENDER_EEVEE_NEXT', executionMode: 'trusted-local' });
+    expect(trusted.detail).not.toContain('no GPU');
+  });
+
   it('does not spawn a missing runtime, and contains worker failures without exposing diagnostics', async () => {
     const worker = vi.fn().mockRejectedValue(new Error('private diagnostic'));
     expect(await probeBlenderRender({ executable: null }, '/example/workspaces', { worker })).toBeNull();

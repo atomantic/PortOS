@@ -190,6 +190,10 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await phase('show-song-seek', () => page.waitForFunction((t) => Math.abs(document.querySelector('audio')?.currentTime - t) < 0.00001 && !document.querySelector('audio').seeking, t));
     await phase('show-images-ready', () => page.waitForFunction(() => [...document.querySelectorAll('figure img')].every((image) => image.complete && image.naturalWidth > 0)));
   };
+  const enableFilmLook = async () => {
+    const look = page.getByRole('button', { name: 'Film look', exact: true });
+    if (await look.getAttribute('aria-pressed') === 'false') await look.click();
+  };
   const capture = async (label = '') => {
     await phase('capture-reset', () => page.evaluate(() => { window.uploads = []; window.captureErrors = []; }));
     await phase('capture-video-ready', () => page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime)))));
@@ -359,6 +363,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
       { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
     ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await enableFilmLook();
     await capture();
     expect(await page.locator('canvas[data-paused-video]:visible').count()).toBe(2);
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
@@ -375,9 +380,9 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       await page.reload();
       await page.waitForFunction(() => typeof window.show === 'function');
     });
-    // A fresh document makes first activation independent of earlier toggles,
-    // media decoders and cached filter/compositor surfaces in this suite.
-    await page.evaluate(() => localStorage.removeItem('portos-mv-animatic-look'));
+    // Enable the viewer preference before mounting so first activation still
+    // exercises a project look being added, independently of earlier tests.
+    await page.evaluate(() => localStorage.setItem('portos-mv-preview-film-look', 'on'));
     await page.reload();
     await page.waitForFunction(() => typeof window.show === 'function');
     const scenes = [
@@ -413,6 +418,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
       { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
     ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await enableFilmLook();
     await page.waitForFunction(() => document.querySelector('[data-film-look-width="640"]'));
     await page.evaluate(() => { window.deferFilterResize = true; document.querySelector('main').style.width = '602px'; });
     await page.waitForFunction(() => typeof window.applyFilterResize === 'function');
@@ -464,6 +470,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
   it('captures the exact paused film-look filter after freezing a newer audio clock across a shot boundary', async () => {
     const look = filmLookPreset('vhs');
     await show(project([still, { ...still, sceneId: 'next', startSec: 4, endSec: 8, order: 1, referenceImageId: 'end.png' }], { filmLook: look }), 3);
+    await enableFilmLook();
     await page.evaluate(() => {
       const audio = document.querySelector('audio');
       audio.currentTime = 4.5;

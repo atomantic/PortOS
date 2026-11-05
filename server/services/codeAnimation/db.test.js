@@ -88,7 +88,7 @@ describe.skipIf(!ready)('Production persisted public boundary', () => {
     const second = await imported(project.id, pkg('<html>new</html>'));
     expect((await get(`/projects/${project.id}`)).body).toMatchObject({ budgets: limits, localSettings, acceptedRevisionId: first.revision.id, candidateRevisionId: second.revision.id });
     const history = (await get(`/projects/${project.id}/history?limit=1`)).body;
-    expect(history.items).toHaveLength(1); expect(history.nextCursor).toBe('1');
+    expect(history.items).toHaveLength(1); expect(history.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(history.items[0]).toMatchObject({ status: 'completed', revisionId: second.revision.id, data: { requested: localSettings, effective: null, stageRunIds: {}, budgets: limits, executed: false } });
     expect((await get(`/projects/${project.id}/revisions/${first.revision.id}/package`)).body).toEqual(pkg());
     const brief = (await get(`/projects/${project.id}/brief`)).body;
@@ -97,6 +97,60 @@ describe.skipIf(!ready)('Production persisted public boundary', () => {
     expect((await get('/projects?limit=1')).body.items[0]).not.toHaveProperty('manifest');
     await query("INSERT INTO code_animation_project_runs (id, project_id, status, data) VALUES ($1, $2, 'staging', $3)", [randomUUID(), project.id, { executed: false }]);
     expect((await get(`/projects/${project.id}/history`)).body.items.some(run => run.status === 'interrupted' && run.data.executed === false)).toBe(true);
+  });
+
+  it('keeps keyset page boundaries stable when newer projects and runs arrive between requests', async () => {
+    const project = await create();
+    const projectIds = [randomUUID(), randomUUID(), randomUUID()];
+    const runIds = [randomUUID(), randomUUID(), randomUUID()];
+    const tieTimestamp = '9000-01-01T00:00:00.123456Z';
+    const olderTimestamp = '9000-01-01T00:00:00.123455Z';
+    await query(`INSERT INTO code_animation_projects (id, title, data, created_at)
+      VALUES ($1, 'page-a', '{}', $4), ($2, 'page-b', '{}', $4), ($3, 'page-c', '{}', $5)`, [...projectIds, tieTimestamp, olderTimestamp]);
+    await query(`INSERT INTO code_animation_project_runs (id, project_id, status, data, created_at)
+      VALUES ($1, $4, 'completed', '{}', $5), ($2, $4, 'completed', '{}', $5), ($3, $4, 'completed', '{}', $6)`, [...runIds, project.id, tieTimestamp, olderTimestamp]);
+    ids.push(...projectIds);
+    const expectedProjects = [projectIds[0], projectIds[1]].sort().reverse().concat(projectIds[2]);
+    const expectedRuns = [runIds[0], runIds[1]].sort().reverse().concat(runIds[2]);
+
+    const firstProjects = await get('/projects?limit=1');
+    expect(expectedProjects).toContain(firstProjects.body.items[0].id);
+    const traversedProjects = [firstProjects.body.items[0].id];
+    const legacyProjectPage = await get('/projects?limit=1&cursor=1');
+    expect(legacyProjectPage.body.items[0].id).toBe(expectedProjects[1]);
+    expect(legacyProjectPage.body.nextCursor).not.toBe('2');
+    const extraFieldCursor = Buffer.from(JSON.stringify({
+      createdAt: '9000-01-01 00:00:00.123456+00', id: expectedProjects[0], legacyOffset: 1,
+    })).toString('base64url');
+    expect((await get(`/projects?limit=1&cursor=${extraFieldCursor}`)).body.items[0].id).toBe(expectedProjects[1]);
+    const invalidDateCursor = Buffer.from(JSON.stringify({
+      createdAt: '2026-02-31T00:00:00Z', id: expectedProjects[0], legacyOffset: 1,
+    })).toString('base64url');
+    expect((await get(`/projects?limit=1&cursor=${invalidDateCursor}`)).status).toBe(400);
+    const insertedProjectId = randomUUID();
+    await query(`INSERT INTO code_animation_projects (id, title, data, created_at) VALUES ($1, 'newer', '{}', '9001-01-01T00:00:00Z')`, [insertedProjectId]);
+    ids.push(insertedProjectId);
+    let projectCursor = firstProjects.body.nextCursor;
+    while (projectCursor) {
+      const next = await get(`/projects?limit=1&cursor=${encodeURIComponent(projectCursor)}`);
+      traversedProjects.push(...next.body.items.map(item => item.id));
+      projectCursor = next.body.nextCursor;
+    }
+    expect(traversedProjects.filter(id => expectedProjects.includes(id))).toEqual(expectedProjects);
+
+    const firstHistory = await get(`/projects/${project.id}/history?limit=1`);
+    expect(expectedRuns).toContain(firstHistory.body.items[0].id);
+    const traversedRuns = [firstHistory.body.items[0].id];
+    await query(`INSERT INTO code_animation_project_runs (id, project_id, status, data, created_at)
+      VALUES ($1, $2, 'completed', '{}', '9001-01-01T00:00:00Z')`, [randomUUID(), project.id]);
+    let historyCursor = firstHistory.body.nextCursor;
+    while (historyCursor) {
+      const next = await get(`/projects/${project.id}/history?limit=1&cursor=${encodeURIComponent(historyCursor)}`);
+      traversedRuns.push(...next.body.items.map(item => item.id));
+      historyCursor = next.body.nextCursor;
+    }
+    expect(traversedRuns.filter(id => expectedRuns.includes(id))).toEqual(expectedRuns);
+    expect(firstHistory.body.items[0]).not.toHaveProperty('cursorCreatedAt');
   });
 
   it('gives overlapping imports distinct owned destinations and rejects stale or cross-project acceptance', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { codeAnimationBubblewrapArgs, codeAnimationSeccompFilter } from './codeAnimationContainment.js';
+import { codeAnimationBubblewrapArgs, codeAnimationSeatbeltProfile, codeAnimationSeccompFilter, codeAnimationWorkerFailure } from './codeAnimationContainment.js';
 import { autofixVerifySeccompFilter } from './autofixVerifyContainment.js';
 
 // Interpret the small classic-BPF instruction set this security filter uses.
@@ -23,6 +23,31 @@ const verdict = (filter, { arch, nr, flags = 0, type = 0 }) => {
   }
   throw new Error('Filter did not return a verdict');
 };
+
+describe('macOS Seatbelt profile', () => {
+  const profile = codeAnimationSeatbeltProfile({
+    executable: '/Applications/Blender.app/Contents/MacOS/Blender', toolRoots: ['/Applications/Blender.app'], workspace: '/example/workspace',
+  });
+
+  // Blender cannot start without listing the GPU (#14939). Any wider grant here
+  // would open other drivers or Mach services to generated package code.
+  it('grants only the Apple GPU user client from IOKit and keeps Mach, process and network denied', () => {
+    expect(profile.match(/\(allow iokit[^\n]*/g)).toEqual(['(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient"))']);
+    expect(profile).toContain('(deny default)');
+    expect(profile.match(/\(allow process-[^\s)]+/g)).toEqual(['(allow process-exec']);
+    for (const denied of ['mach-lookup', 'network', 'process-fork', 'ipc-']) expect(profile).not.toContain(denied);
+  });
+});
+
+describe('worker failure sentence', () => {
+  it.each([
+    [{ status: 'terminated', reason: 'canceled', signal: 'SIGKILL', exitCode: null }, 'Blender was canceled.'],
+    [{ status: 'terminated', reason: 'watchdog', signal: 'SIGKILL', exitCode: null }, 'Blender was stopped by its supervisor.'],
+    [{ status: 'failed', reason: 'spawn', signal: null, exitCode: null }, 'The worker failed before Blender finished.'],
+  ])('describes %j', (run, sentence) => {
+    expect(codeAnimationWorkerFailure(run)).toBe(sentence);
+  });
+});
 
 describe('Linux worker containment policy', () => {
   it.each([

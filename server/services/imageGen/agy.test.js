@@ -327,7 +327,7 @@ describe('agy image provider', () => {
     // agent/session model that drove the CLI (#3231).
     expect(sidecar.imageModel).toBe('imagen-3.0-generate-002');
     expect(sidecar.initImageFilename).toBe('source.png');
-    expect(sidecar.inputProvenance).toBe('provider-inputs');
+    expect(sidecar.inputProvenance).toBe('cli-requested');
     expect(sidecar.referenceImageFilenames).toEqual(['ref-a.png', 'ref-b.png']);
     expect(recordAgyImageUsage).toHaveBeenCalledWith(expect.objectContaining({
       jobId: job.jobId, inputImages: 3,

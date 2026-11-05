@@ -57,13 +57,14 @@ let tmpRoot;
 let setImageHidden;
 let updateImagePrompt;
 let fillImageSidecarFields;
+let readImageSidecar;
 
 beforeAll(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-gallery-sidecar-test-'));
   imagesDir = join(tmpRoot, 'images');
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRoot, 'media-models.json');
   vi.resetModules();
-  ({ setImageHidden, updateImagePrompt, fillImageSidecarFields } = await import('./local.js'));
+  ({ setImageHidden, updateImagePrompt, fillImageSidecarFields, readImageSidecar } = await import('./local.js'));
 });
 
 afterAll(() => {
@@ -84,6 +85,17 @@ const seed = (f) => writeFileSync(sidecar(f), JSON.stringify({ prompt: 'before',
 const read = (f) => JSON.parse(readFileSync(sidecar(f), 'utf8'));
 
 describe('gallery sidecar edits', () => {
+  it('projects legacy CLI input provenance without rewriting the files', async () => {
+    for (const [mode, inputProvenance] of [['codex', 'cli-attachments'], ['grok', 'cli-requested'], ['agy', 'cli-requested']]) {
+      const filename = `${mode}.png`;
+      writeFileSync(sidecar(filename), JSON.stringify({ mode, inputProvenance: 'provider-inputs', referenceImageFilenames: ['ref.png'] }));
+      expect((await readImageSidecar(filename)).metadata).toMatchObject({ inputProvenance, referenceImageFilenames: ['ref.png'] });
+      expect(read(filename).inputProvenance).toBe('provider-inputs');
+    }
+    writeFileSync(sidecar('direct.png'), JSON.stringify({ mode: 'fal', inputProvenance: 'provider-inputs' }));
+    expect((await readImageSidecar('direct.png')).metadata.inputProvenance).toBe('provider-inputs');
+  });
+
   it('keeps both the prompt and visibility edit when they overlap', async () => {
     seed('a.png');
     let release;

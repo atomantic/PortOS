@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { createTestPhaseDiagnostics } from './testPhaseDiagnostics.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -55,4 +56,17 @@ it('retains bounded phase evidence with the original failure before suite teardo
     expect(observed[0][0].split('recent=')[1].split(',')).toHaveLength(24);
     expect(observed[1][0]).toContain('capture-upload-or-error:failed@');
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Uniquely catches teardown racing work a timed-out test abandoned (fixture-owned
+// writes landing after the temp root is removed) without letting a hung phase wedge teardown.
+it('settle() joins only tracked in-flight work and stays bounded for a hung phase', async () => {
+  const phase = createTestPhaseDiagnostics(() => {});
+  let written = false;
+  const abandoned = phase('delayed-write', () => new Promise(resolve => setTimeout(() => { written = true; resolve(); }, 30)));
+  expect(await phase.settle(1000)).toBe(true);
+  expect(written).toBe(true);
+  await abandoned;
+  phase('hung-phase', () => new Promise(() => {})).catch(() => {});
+  expect(await phase.settle(20)).toBe(false);
 });

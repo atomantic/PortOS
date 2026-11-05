@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { captureClipReferenceDependency } from '../lib/musicVideoDependencies.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-scene-hooks-test-'));
 
@@ -250,6 +251,22 @@ describe('music-video scene completion hooks → takes', () => {
       ['video', 'clip-2', 'frame-a.png'],
     ]);
     expect(emitted[1]).toMatchObject({ event: 'scene-video', videoHistoryId: 'clip-1' });
+  });
+
+  it('keeps a clip using an untracked cast guide unselected after completion', async () => {
+    await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
+    const current = await projects.getProject(project.id);
+    const currentScene = current.scenes.find((item) => item.sceneId === scene.sceneId);
+    const reference = { ...captureClipReferenceDependency(current, currentScene), untrackedCastGuides: true };
+    const job = videoJob(project.id, scene.sceneId, 'clip-1');
+    job.params.musicVideoDependencies = { version: 1, references: [reference] };
+    mediaJobEvents.emit('completed', job);
+    await waitFor(() => emitted.some((event) => event.event === 'scene-video'));
+    const stored = await sceneOf(project.id, scene.sceneId);
+    expect(stored.videoHistoryId).toBeNull();
+    expect(stored.takes.find((item) => item.assetId === 'clip-1')).toMatchObject({
+      status: 'candidate', dependencies: { references: [{ untrackedCastGuides: true }] },
+    });
   });
 
   it('files a storyboard clip\'s first frame as the still it was animated from, filling the empty still slot', async () => {

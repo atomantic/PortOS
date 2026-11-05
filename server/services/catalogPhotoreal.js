@@ -11,13 +11,15 @@
  * One render per place at a time; progress goes out as `catalog:photoreal` frames.
  */
 
-import { access, readFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises';
+import { access, readFile, mkdir, mkdtemp, copyFile, link, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { CONTAINED_BLENDER_GPU_NOTICE, codeAnimationWorkerFailure } from '../lib/codeAnimationContainment.js';
 import { H264_ENCODE_ARGS } from '../lib/ffmpeg.js';
+import { launchDetached } from '../lib/launchDetached.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
 import { resolvePhotorealLook } from '../lib/photorealLook.js';
 import {
@@ -38,12 +40,16 @@ const deps = {
   findFfmpeg: async () => (await import('../lib/ffmpeg.js')).findFfmpeg(),
   runFfmpeg: async (args) => (await import('../lib/ffmpeg.js')).runFfmpegProcess(args),
   saveVideo: async (path, name) => (await import('./videoUpload.js')).saveUploadedGalleryVideoFile(path, name),
+  launch: (executable, args) => launchDetached(executable, args),
+  stageTextures: async (textures) => (await import('./photorealTextures.js')).stagePhotorealTextures(textures),
 };
+
 export const __setPhotorealDepsForTests = (overrides) => Object.assign(deps, overrides);
 
 // ingredientId → latest job. In memory: a render is a disposable process; the
 // renders it attached and the .blend it kept are the durable results.
 const jobs = new Map();
+const sceneBuilds = new Map();
 
 // Ingredient ids are slug-safe; anything else never reaches a file path.
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -55,6 +61,25 @@ export async function photorealBlendPath(ingredientId) {
   if (!SAFE_ID.test(ingredientId)) return null;
   const path = blendPath(ingredientId);
   return access(path).then(() => path, () => null);
+}
+
+/**
+ * Open the kept `.blend`, building it without rendering if it does not exist.
+ * The next render replaces that file, so keep edits with Save As.
+ */
+export async function openPhotorealBlend(ingredientId) {
+  if (!SAFE_ID.test(ingredientId)) throw refuse('This place id cannot name a scene file.', 'PHOTOREAL_BAD_ID');
+  let path = await photorealBlendPath(ingredientId);
+  const tool = await deps.resolveTool();
+  const active = sceneBuilds.get(ingredientId);
+  if (active) path = await active;
+  else if (!path) path = await ensurePhotorealScene(ingredientId, tool);
+  // The file is PortOS's own build; scripts stay off as in every render.
+  await deps.launch(tool.executable, ['--disable-autoexec', path]).catch((err) => {
+    throw refuse(`Blender did not start: ${err.message}`, 'PHOTOREAL_OPEN_FAILED', 500);
+  });
+  console.log(`🧊 Opened the photoreal scene for place ${ingredientId.slice(0, 12)} in Blender ${tool.version}`);
+  return { opened: true, blenderVersion: tool.version, blendUrl: blendUrl(ingredientId) };
 }
 
 function publish(job) {
@@ -72,18 +97,83 @@ async function requireSpecGreybox(ingredientId) {
   return { place, scene };
 }
 
+// A scene-only build shares the render worker's fixed script and security
+// boundary, but never renders a frame or replaces an existing scene file.
+async function buildPhotorealScene(ingredientId, tool) {
+  const { place, scene } = await requireSpecGreybox(ingredientId);
+  const existing = await photorealBlendPath(ingredientId);
+  if (existing) return existing;
+  const destination = blendPath(ingredientId);
+  const look = resolvePhotorealLook(place.payload);
+  const textures = await deps.stageTextures(look?.textures);
+  const config = { ...greyboxBlenderJob(scene, {
+    shotIds: scene.shots.slice(0, 1).map((shot) => shot.id), engine: 'cycles', useGpu: false,
+    look, sceneOnly: true,
+  }), textures: textures.job };
+  let saved = false;
+  const run = await maintenance.run('composition', 'Photoreal scene build', () => tool.worker({
+    tool: { executable: tool.executable, argv: (entry) => ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', entry] },
+    workspaceRoot: join(PATHS.data, WORKSPACES), entrypoint: 'greybox-blender.py',
+    files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }, ...textures.files],
+    limits: { wallSeconds: 300, diskBytes: 4 * 1024 ** 3, memoryBytes: 8 * 1024 ** 3 },
+    onOutput: async (directory, files) => {
+      const sizes = new Map(files.map((file) => [file.path, file.bytes]));
+      if (!(sizes.get('blockout.blend') > 0) || !(sizes.get('report.json') > 0) || sizes.get('report.json') > 128 * 1024) {
+        throw new Error('Blender finished without its scene or report');
+      }
+      const report = JSON.parse(await readFile(join(directory, 'report.json'), 'utf8'));
+      if (report.sceneOnly !== true) throw new Error('Blender did not report a scene-only build');
+      const blendDir = join(PATHS.data, BLEND_DIR);
+      await mkdir(blendDir, { recursive: true });
+      // Publish a complete file atomically without replacing a scene saved in
+      // the meantime. The temporary copy must be on the destination filesystem.
+      const staging = await mkdtemp(join(blendDir, '.scene-build-'));
+      try {
+        const stagedScene = join(staging, 'blockout.blend');
+        await copyFile(join(directory, 'blockout.blend'), stagedScene);
+        await link(stagedScene, destination).catch((error) => { if (error.code !== 'EEXIST') throw error; });
+      } finally {
+        await rm(staging, { recursive: true, force: true });
+      }
+      saved = true;
+    },
+  }), { continuation: true }).catch((error) => {
+    if (error instanceof ServerError) throw error;
+    throw refuse(`Could not build the Blender scene: ${error.message}`, 'PHOTOREAL_BUILD_FAILED', 500);
+  });
+  if (run.status !== 'completed') throw refuse(`Could not build the Blender scene: ${codeAnimationWorkerFailure(run)}`, 'PHOTOREAL_BUILD_FAILED', 500);
+  if (!saved) throw refuse('Blender finished without a scene file.', 'PHOTOREAL_BUILD_FAILED', 500);
+  return destination;
+}
+
+function ensurePhotorealScene(ingredientId, tool) {
+  const active = sceneBuilds.get(ingredientId);
+  if (active) return active;
+  if (jobs.get(ingredientId)?.state === 'running') throw refuse('A Photoreal render is already building this scene. Wait for it to finish.', 'PHOTOREAL_BUSY', 409);
+  const task = buildPhotorealScene(ingredientId, tool).finally(() => {
+    sceneBuilds.delete(ingredientId);
+    catalogEvents.emit('photoreal-scene', { ingredientId });
+  });
+  sceneBuilds.set(ingredientId, task);
+  catalogEvents.emit('photoreal-scene', { ingredientId });
+  return task;
+}
+
 /** What the tab shows on open. Memory and file reads only; starts nothing. */
 export async function getPhotorealStatus(ingredientId) {
   return {
     job: jobs.get(ingredientId) || null,
     blendUrl: (await photorealBlendPath(ingredientId)) ? blendUrl(ingredientId) : null,
     blenderVersion: await deps.lastCheckedVersion(),
+    sceneBuilding: sceneBuilds.has(ingredientId),
+    // Where this machine keeps the scene and the stills, shown so the operator can find them.
+    files: SAFE_ID.test(ingredientId) ? { blend: blendPath(ingredientId), renders: PATHS.images } : null,
   };
 }
 
 /** Validate, then render in the background; answers with the running job. */
 export async function startPhotorealRender(ingredientId, { shotIds, engine, samples, flythroughSeconds = null }) {
-  if (jobs.get(ingredientId)?.state === 'running') throw refuse('A render is already running for this place.', 'PHOTOREAL_BUSY', 409);
+  if (jobs.get(ingredientId)?.state === 'running' || sceneBuilds.has(ingredientId)) throw refuse('A Photoreal render or scene build is already running for this place.', 'PHOTOREAL_BUSY', 409);
   const { place, scene } = await requireSpecGreybox(ingredientId);
   if (!SAFE_ID.test(place.id)) throw refuse('This place id cannot name a scene file.', 'PHOTOREAL_BAD_ID');
   const known = new Set(scene.shots.map((s) => s.id));
@@ -93,8 +183,9 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
   // Checked before Blender starts, so a missing encoder never costs a render.
   if (flythroughSeconds && !(await deps.findFfmpeg())) throw refuse('A fly-through needs ffmpeg to make its MP4; install ffmpeg first.', 'FFMPEG_MISSING', 503);
   const tool = await deps.resolveTool();
+  if (engine === 'eevee' && tool.executionMode === 'contained') throw refuse(CONTAINED_BLENDER_GPU_NOTICE, 'PHOTOREAL_CONTAINED_NO_GPU', 409);
   // Validation can overlap another request; claim the slot only after its awaits.
-  if (jobs.get(ingredientId)?.state === 'running') throw refuse('A render is already running for this place.', 'PHOTOREAL_BUSY', 409);
+  if (jobs.get(ingredientId)?.state === 'running' || sceneBuilds.has(ingredientId)) throw refuse('A Photoreal render or scene build is already running for this place.', 'PHOTOREAL_BUSY', 409);
   const job = {
     id: `pr-${Date.now().toString(36)}`, ingredientId, state: 'running', engine, shotIds, samples: greyboxBlenderJob(scene, { shotIds, engine, samples }).samples,
     ...(flythroughSeconds ? { flythroughSeconds } : {}),
@@ -111,7 +202,10 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
 
 async function runRender({ place, scene, tool, job, samples }) {
   // The look dresses parts by id; a rule for a part since removed just matches nothing.
-  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look: resolvePhotorealLook(place.payload), flythroughSeconds: job.flythroughSeconds });
+  const look = resolvePhotorealLook(place.payload);
+  const textures = await deps.stageTextures(look?.textures);
+  if (textures.missing.length) console.log(`⏭️ Photoreal render for place ${place.id.slice(0, 12)}: textures not on this machine, rendering procedurally: ${textures.missing.join(', ')}`);
+  const config = { ...greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look, flythroughSeconds: job.flythroughSeconds, useGpu: tool.executionMode !== 'contained' }), textures: textures.job };
   const fly = config.flythrough;
   let report = null;
   const outputs = {};
@@ -123,7 +217,7 @@ async function runRender({ place, scene, tool, job, samples }) {
     const run = await tool.worker({
       tool: { executable: tool.executable, argv: (entry) => ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1', '--python', entry] },
       workspaceRoot: join(PATHS.data, WORKSPACES), entrypoint: 'greybox-blender.py',
-      files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }],
+      files: [{ path: 'greybox-blender.py', content: GREYBOX_BLENDER_PY }, { path: 'greybox-blender.json', content: JSON.stringify(config) }, ...textures.files],
       limits: { wallSeconds, diskBytes: (fly ? 16 : 4) * 1024 ** 3, memoryBytes: 24 * 1024 ** 3 },
       onOutput: async (directory, files) => {
         const sizes = new Map(files.map((f) => [f.path, f.bytes]));
@@ -146,16 +240,17 @@ async function runRender({ place, scene, tool, job, samples }) {
         }
       },
     });
-    if (run.status !== 'completed' || !report) throw new Error(`Blender stopped before finishing (${run.status}${run.reason ? `: ${run.reason}` : ''})`);
+    if (run.status !== 'completed') throw new Error(codeAnimationWorkerFailure(run));
+    if (!report) throw new Error('Blender finished without its report');
     let video = null;
     if (fly) {
       const labels = job.shotIds.map((id) => scene.shots.find((s) => s.id === id)?.label || id);
       const entry = await deps.saveVideo(outputs.video, `${place.name} fly-through (${labels.join(' → ')}).mp4`);
       video = { id: entry.id, filename: entry.filename };
-      console.log(`🎥 Photoreal ${job.engine} fly-through for place ${place.id.slice(0, 12)}: ${fly.frames} frames on ${report.device}/${report.backend}`);
+      console.log(`🎥 Photoreal ${job.engine} fly-through for place ${place.id.slice(0, 12)}: ${fly.frames} frames on ${report.device}${report.backend ? `/${report.backend}` : ''}`);
     } else {
       await attachRenders(place, scene, job, outputs, report);
-      console.log(`🎥 Photoreal ${job.engine} render for place ${place.id.slice(0, 12)}: ${job.shotIds.length} camera(s) on ${report.device}/${report.backend}`);
+      console.log(`🎥 Photoreal ${job.engine} render for place ${place.id.slice(0, 12)}: ${job.shotIds.length} camera(s) on ${report.device}${report.backend ? `/${report.backend}` : ''}`);
     }
     publish({ ...job, state: 'done', report, video, finishedAt: new Date().toISOString() });
     if (!fly) catalogEvents.emit('primitive-changed', { ingredientId: place.id });

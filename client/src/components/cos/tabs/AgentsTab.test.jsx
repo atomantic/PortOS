@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 const socket = vi.hoisted(() => {
@@ -37,9 +37,10 @@ vi.mock('../../ui/Toast', () => ({
 }));
 
 vi.mock('./AgentCard', () => ({
-  default: ({ agent, onFeedbackChange, onResume, onRelaunch, onDelete }) => (
+  default: ({ agent, durations, onFeedbackChange, onResume, onRelaunch, onDelete }) => (
     <div data-testid={`agent-${agent.id}`}>
       <span>{agent.metadata?.taskDescription}</span>
+      <output data-testid={`durations-${agent.id}`}>{JSON.stringify(durations)}</output>
       {onDelete && <button type="button" onClick={() => onDelete(agent.id)}>Delete {agent.id}</button>}
       <input aria-label={`Card draft ${agent.id}`} defaultValue="" />
       {onResume && (
@@ -134,6 +135,23 @@ beforeEach(() => {
   api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
+});
+
+describe('AgentsTab duration loading lifecycle', () => {
+  it('ignores a duration request from the StrictMode effect pass that was cleaned up', async () => {
+    const firstRequest = deferred();
+    const activeRequest = deferred();
+    api.getCosLearningDurations.mockReturnValueOnce(firstRequest.promise).mockReturnValueOnce(activeRequest.promise);
+    render(<StrictMode><MemoryRouter><AgentsTab agents={[completedAgent('done', 'Completed work')]} onRefresh={vi.fn()}
+      liveOutputs={{}} providers={[]} apps={[]} /></MemoryRouter></StrictMode>);
+
+    expect(api.getCosLearningDurations).toHaveBeenCalledTimes(2);
+    await act(async () => firstRequest.resolve({ first: 1 }));
+    expect(screen.getByTestId('durations-done')).toHaveTextContent('null');
+
+    await act(async () => activeRequest.resolve({ active: 1 }));
+    expect(screen.getByTestId('durations-done')).toHaveTextContent('{"active":1}');
+  });
 });
 
 // A relaunch is offered only on a RUNNING agent — it is the recovery for a run

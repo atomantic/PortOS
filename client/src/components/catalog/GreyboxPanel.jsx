@@ -28,6 +28,7 @@ import MediaImage from '../MediaImage';
 // three.js stays out of the main chunk: the viewer loads when the tab opens.
 const GreyboxViewer = lazy(() => import('./GreyboxViewer'));
 
+const iconActionButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const actionButton = 'min-h-[40px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const EMPTY_LLM = { providerId: '', model: '', effort: '' };
 const AUTO = 'Default — the active provider';
@@ -435,7 +436,7 @@ export default function GreyboxPanel({ record, media, readOnly = false, disabled
                       {busy === 'capture' ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Camera size={14} aria-hidden="true" />}
                       {selectedCapture ? 'Replace reference image' : 'Capture reference image'}
                     </button>
-                    <button type="button" className={actionButton} onClick={removeShot} disabled={blocked} aria-label={`Delete shot ${shot.label}`}>
+                    <button type="button" className={iconActionButton} onClick={removeShot} disabled={blocked} aria-label={`Delete shot ${shot.label}`}>
                       <Trash2 size={14} aria-hidden="true" />
                     </button>
                   </div>

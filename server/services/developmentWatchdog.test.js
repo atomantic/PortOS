@@ -244,6 +244,13 @@ it('treats a slashdo /do:next branch (next/issue-<num>) as a live external claim
   expect(m.adds).toEqual([]);
 });
 
+it('leaves a PR a Claude Code session is driving (claude/ branch) to that session', async () => {
+  m.prs = [{ ...orphan, headBranch: 'claude/project-thread-abc123' }];
+  const receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'externally-managed' });
+  expect(m.adds).toEqual([]);
+});
+
 it('turns failed or malformed claim reads into unknown evidence instead of aborting the scan', async () => {
   m.prs = [orphan]; m.execGhFailureOn = 'issue';
   let receipt = await runDevelopmentWatchdog({ force: true });

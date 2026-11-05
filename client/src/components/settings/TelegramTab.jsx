@@ -1,7 +1,8 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useCallback } from 'react';
 import { Save, Eye, EyeOff, Trash2, Send } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import ListLoadError from '../ui/ListLoadError';
 import {
   getSettings, getTelegramStatus, updateTelegramConfig,
   deleteTelegramConfig, testTelegram, updateTelegramForwardTypes, updateTelegramMethod
@@ -11,6 +12,7 @@ export function TelegramTab() {
   const botTokenId = useId();
   const chatIdId = useId();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [method, setMethod] = useState('manual');
   const [switching, setSwitching] = useState(false);
   const [tgToken, setTgToken] = useState('');
@@ -23,11 +25,14 @@ export function TelegramTab() {
   const [tgForwardTypes, setTgForwardTypes] = useState([]);
   const [availableForwardTypes, setAvailableForwardTypes] = useState(null);
 
-  useEffect(() => {
-    Promise.all([
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [settings, status] = await Promise.all([
       getSettings({ silent: true }),
       getTelegramStatus({ silent: true }).catch(() => null)
-    ]).then(([settings, status]) => {
+      ]);
       setTgForwardTypes(status?.forwardTypes || settings?.telegram?.forwardTypes || []);
       if (status) {
         setTgStatus(status);
@@ -35,9 +40,16 @@ export function TelegramTab() {
         setTgChatId(settings?.telegram?.chatId || '');
         setAvailableForwardTypes(Array.isArray(status.availableForwardTypes) ? status.availableForwardTypes : null);
       }
-    }).catch(() => toast.error('Failed to load Telegram settings'))
-      .finally(() => setLoading(false));
+    } catch (error) {
+      setLoadError(error);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const handleMethodChange = async (newMethod) => {
     setSwitching(true);
@@ -112,6 +124,10 @@ export function TelegramTab() {
 
   if (loading) {
     return <BrailleSpinner text="Loading Telegram settings" />;
+  }
+
+  if (loadError) {
+    return <ListLoadError what="Telegram settings" error={loadError} onRetry={loadSettings} retrying={loading} />;
   }
 
   return (

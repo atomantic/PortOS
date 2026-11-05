@@ -13,7 +13,7 @@ import { normalizeUniverseVisualProfile } from '../lib/universeVisualProfile.js'
 import { imageVisualProfileRevision } from '../services/imageGen/visualProfile.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES, MEDIA_QUEUE_SHUTTING_DOWN } from '../services/mediaJobQueue/index.js';
+import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, removeFailedCanceledJobs, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES, MEDIA_QUEUE_SHUTTING_DOWN } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { saveMediaPromptExamination, listMediaPromptExaminations, getMediaPromptExamination } from '../services/mediaPromptHistory.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
@@ -462,6 +462,12 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] retry: archive prune found nothing to drop — old row may persist in /api/media-jobs`);
   }
   res.json({ ...result, retriedFrom: job.id });
+}));
+
+const clearFailedCanceledSchema = z.object({ kind: z.enum(['image', 'video', 'video-upscale']) });
+router.delete('/failed-canceled', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(clearFailedCanceledSchema, req.query);
+  res.json(await removeFailedCanceledJobs({ kind }));
 }));
 
 // Delete a terminal job from the failed/canceled archive. Live jobs

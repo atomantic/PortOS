@@ -28,11 +28,9 @@ Modes (class names shown new→old; we resolve whichever the installed pin has):
 IC-LoRA remix modes (--mode ic):
   The IC ("In-Context") pipeline conditions generation on a *reference video*
   channel (VideoConditionByReferenceLatent) with a per-mode IC-LoRA fused into
-  the Stage-1 transformer. One pipeline class, several capabilities selected by
-  which IC-LoRA weight you fuse — so `--ic-mode` is a label PortOS carries for
-  logging/validation, not a different code path. `control` drives structure and
-  motion from a depth/pose/edge clip; future modes (ingredients, colorize) reuse
-  the same runner with a different weight and reference count.
+  the Stage-1 transformer. The 2.3 adapters use ICLoraPipeline; the 2.5
+  Ingredients adapter uses the guided dev two-stage pipeline with a separate
+  reference sheet and an optional first-frame anchor.
 
 Pin compatibility — class renames + frame_rate:
   The v0.14.x line of ltx-2-mlx renamed every public pipeline class and
@@ -1579,7 +1577,7 @@ def enforce_i2v_anchor_invariant(args) -> str:
     Called from main() BEFORE any pipeline is constructed, so a refusal costs the
     user a second rather than a full model load.
     """
-    if args.mode != "image" or not args.image:
+    if not args.image or not (args.mode == "image" or (args.mode == "ic" and getattr(args, "ic_mode", None) == "ingredients-25")):
         return "not-required"
     samplers = _import_ancestral_sampler()
     if samplers is None:
@@ -1698,7 +1696,7 @@ def _pipeline_optional_kwargs(pipeline_cls, pipeline_label: str, streaming_polic
     return build_pipeline_options(pipeline_cls, pipeline_label, optional)
 
 
-def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
+def run_two_stage(args: argparse.Namespace, image: str | None = None, reference: str | None = None) -> str:
     """T2V/I2V path that honors CFG via the dgrauet two-stage pipeline."""
     TwoStagePipeline = _resolve_pipeline("TI2VidTwoStagesPipeline", "TwoStagePipeline")
     streaming_policy = configure_streaming_policy(args, TwoStagePipeline, "two-stage")
@@ -1726,21 +1724,36 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     # _two_stage_teacache_kwargs. {} on every non-profile render, so a quality
     # render calls generate_and_save with exactly the arguments it always did.
     teacache_kwargs = _two_stage_teacache_kwargs(pipe.generate_and_save, args)
-    return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
-        prompt=args.prompt,
-        output_path=args.output,
-        height=args.height,
-        width=args.width,
-        num_frames=args.num_frames,
-        seed=args.seed,
-        stage1_steps=args.steps if args.steps is not None else 30,
-        stage2_steps=args.stage2_steps,
-        cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
-        **teacache_kwargs,
-        **_image_conditioning_kwargs(pipe.generate_and_save, image, args.image_strength,
-                                     args.i2v_reference_mode),
-        **_rate_kwargs(pipe.generate_and_save, args.fps),
-    ))
+    def generate():
+        return _run_with_ltx_stepwise_preview(pipe, args, lambda: pipe.generate_and_save(
+            prompt=args.prompt,
+            output_path=args.output,
+            height=args.height,
+            width=args.width,
+            num_frames=args.num_frames,
+            seed=args.seed,
+            stage1_steps=args.steps if args.steps is not None else 30,
+            stage2_steps=args.stage2_steps,
+            cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
+            **teacache_kwargs,
+            **_image_conditioning_kwargs(pipe.generate_and_save, image, args.image_strength,
+                                         args.i2v_reference_mode),
+            **_rate_kwargs(pipe.generate_and_save, args.fps),
+        ))
+    if reference is None:
+        return generate()
+    from ltx25_reference import reference_sheet_conditioning
+    from ltx_runtime_lora import release_pipeline_adapters
+    try:
+        with reference_sheet_conditioning(
+            pipe, adapter_path=args.ic_lora_path, reference_path=reference,
+            strength=args.ic_strength,
+            attention_strength=args.ic_attention_strength if args.ic_attention_strength is not None else 1.0,
+            num_frames=args.num_frames, report=_lora_report(), status=emit_status,
+        ):
+            return generate()
+    finally:
+        release_pipeline_adapters(pipe)
 
 
 def run_text(args: argparse.Namespace) -> str:
@@ -2084,9 +2097,8 @@ def run_ic_lora(args: argparse.Namespace) -> str:
     ICLoraPipeline is a two-stage distilled pipeline whose Stage 1 fuses an
     IC-LoRA and appends the reference clip(s) as VideoConditionByReferenceLatent
     tokens; Stage 2 reloads a clean transformer and refines at 2x. The flavor
-    (control/ingredients/colorize) is entirely a function of WHICH IC-LoRA
-    weight is fused — same class, same call — so `--ic-mode` only drives
-    validation + status prose here.
+    2.3 modes use ICLoraPipeline; ingredients-25 uses the guided dev pipeline
+    so the adapter matches the 2.5 model on which it was trained.
 
     Notes:
       - `--ic-lora-path` may be a local .safetensors OR an HF repo id; the
@@ -2111,7 +2123,6 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         tiny 9-frame constant clip before invoking this helper, so `--ic-reference`
         is uniformly a video path regardless of the weight's reference kind.
     """
-    ICLoraPipeline = _resolve_pipeline("ICLoraPipeline")
     ic_mode = args.ic_mode or "control"
     if not args.ic_lora_path:
         raise SystemExit("--ic-lora-path is required for ic mode")
@@ -2141,6 +2152,15 @@ def run_ic_lora(args: argparse.Namespace) -> str:
             raise SystemExit(f"--ic-reference does not exist: {ref}")
     if args.ic_attention_strength is not None and not (0.0 <= args.ic_attention_strength <= 1.0):
         raise SystemExit("--ic-attention-strength must be between 0.0 and 1.0")
+
+    if ic_mode == "ingredients-25":
+        if len(references) != 1:
+            raise SystemExit("LTX 2.5 Ingredients requires one prepared composite reference sheet")
+        if args.ic_skip_stage_2:
+            raise SystemExit("LTX 2.5 Ingredients does not support skipping stage 2")
+        return run_two_stage(args, image=args.image, reference=references[0])
+
+    ICLoraPipeline = _resolve_pipeline("ICLoraPipeline")
 
     streaming_policy = configure_streaming_policy(args, ICLoraPipeline, "ic-lora")
     optional_kwargs = _pipeline_optional_kwargs(

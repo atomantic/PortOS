@@ -18,6 +18,9 @@ const runPython = (source) => execFileSync(pyBin, ['-c', source, script], { enco
 
 const importRunner = [
   'import importlib.util, sys',
+  // The bridge probes MLX at import time; these stdlib fixtures must not
+  // accidentally initialize an installed native wheel or its Metal device.
+  'sys.modules.setdefault("mlx", None)',
   'from pathlib import Path',
   'script = Path(sys.argv[1])',
   'spec = importlib.util.spec_from_file_location("generate_ltx2", script)',

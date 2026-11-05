@@ -25,6 +25,7 @@ import { fontContainer, fontFamilyName } from '../../lib/fontMetadata.js';
 import { atomicWrite } from '../../lib/fileCore.js';
 import { readJSONFile } from '../../lib/jsonIo.js';
 import { PATHS } from '../../lib/paths.js';
+import { isVitestRunner } from '../../lib/runtimeEnv.js';
 import { measureWidths } from './coverArtCompose.js';
 
 export const MAX_COVER_FONT_BYTES = 8 * 1024 * 1024;
@@ -37,7 +38,7 @@ const POLL_MS = 400;
 const defaults = {
   sharp: async () => (await import('sharp')).default,
   // macOS only: CoreText reads fonts from a Fonts folder, not from a fontconfig directory.
-  mirrorDir: process.platform === 'darwin' && !process.env.VITEST ? join(homedir(), 'Library', 'Fonts', 'PortOS') : null,
+  mirrorDir: process.platform === 'darwin' && !isVitestRunner() ? join(homedir(), 'Library', 'Fonts', 'PortOS') : null,
   waitMs: 6000,
 };
 let deps = { ...defaults };

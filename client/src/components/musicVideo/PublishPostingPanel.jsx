@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { safeReadJsonStorage, safeRemoveStorage } from '../../lib/safeStorage.js';
-import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, Undo2 } from 'lucide-react';
+import { ExternalLink, X as XIcon, LogIn, Link as LinkIcon, Check, ChevronDown, ChevronRight, ImageOff, ImagePlus, Undo2 } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import { DISTROKID_GENRES, DISTROKID_REMEMBERED_OPTIONS, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
@@ -118,27 +119,47 @@ function FittedCutNotice({ project, cut, excerpts }) {
   );
 }
 
-/** The story reply's image, picked by sight: a tile per video frame plus "No image". */
-function StoryImagePicker({ idFor, thumbnails, value, onChange }) {
+/** The story reply's image, picked by sight: a tile per video frame, any gallery image (or an upload), plus "No image". */
+function StoryImagePicker({ idFor, thumbnails, frame, galleryFile, onFrame, onGallery }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const tile = (selected) => `relative rounded overflow-hidden border-2 aspect-video min-h-[44px] ${selected ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'}`;
   const mark = <span className="absolute top-1 right-1 rounded-full bg-port-accent text-white p-0.5" aria-hidden="true"><Check size={12} /></span>;
+  const none = !frame && !galleryFile;
   return (
     <div className="space-y-0.5 min-w-0">
       <span id={idFor('storyImage')} className="block text-[11px] text-port-text-muted">Image on the story reply (optional)</span>
       <div role="radiogroup" aria-labelledby={idFor('storyImage')} className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-        <button type="button" role="radio" aria-checked={!value} onClick={() => onChange('')}
-          className={`${tile(!value)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+        <button type="button" role="radio" aria-checked={none} onClick={() => onFrame('')}
+          className={`${tile(none)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
           <ImageOff size={14} aria-hidden="true" /> No image
-          {!value && mark}
+          {none && mark}
         </button>
-        {thumbnails.map((name, i) => (
-          <button key={name} type="button" role="radio" aria-checked={value === name} aria-label={`Video frame ${i + 1}`} title={name}
-            onClick={() => onChange(name)} className={tile(value === name)}>
-            <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
-            {value === name && mark}
+        {galleryFile ? (
+          <button type="button" role="radio" aria-checked="true" aria-label="Gallery image" title={galleryFile}
+            onClick={() => setPickerOpen(true)} className={tile(true)}>
+            <img src={`/data/images/${encodeURIComponent(galleryFile)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+            {mark}
           </button>
-        ))}
+        ) : null}
+        {thumbnails.map((name, i) => {
+          const selected = !galleryFile && frame === name;
+          return (
+            <button key={name} type="button" role="radio" aria-checked={selected} aria-label={`Video frame ${i + 1}`} title={name}
+              onClick={() => onFrame(name)} className={tile(selected)}>
+              <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+              {selected && mark}
+            </button>
+          );
+        })}
+        <button type="button" onClick={() => setPickerOpen(true)}
+          className={`${tile(false)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+          <ImagePlus size={14} aria-hidden="true" /> {galleryFile ? 'Other image…' : 'Gallery image…'}
+        </button>
       </div>
+      {pickerOpen && (
+        <GalleryImagePicker open allowUpload onClose={() => setPickerOpen(false)}
+          onSelect={(item) => { setPickerOpen(false); if (item?.filename) onGallery(item.filename); }} />
+      )}
     </div>
   );
 }
@@ -287,7 +308,10 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
     return (
       <div className="space-y-2">
         {area('prompt', 'Prompt reply (optional, e.g. the prompt that started it)')}
-        {kit.thumbnails?.length > 0 && <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails} value={options.storyImage || ''} onChange={(name) => setOption('storyImage', name)} />}
+        {/* A frame and a gallery image are one choice: picking either clears the other. */}
+        <StoryImagePicker idFor={idFor} thumbnails={kit.thumbnails || []} frame={options.storyImage || ''} galleryFile={options.storyImageFile || ''}
+          onFrame={(name) => { setOption('storyImageFile', ''); setOption('storyImage', name); }}
+          onGallery={(file) => { setOption('storyImage', ''); setOption('storyImageFile', file); }} />
       </div>
     );
   }
@@ -422,26 +446,58 @@ function PostPreview({ label, preview }) {
   );
 }
 
-const STATUS = { posted: ['Done', 'text-port-success border-port-success/40'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
+const STATUS = { posted: ['Done', 'bg-port-success/15 text-port-success border-port-success/60 font-medium'], draft: ['Draft open', 'text-port-warning border-port-warning/40'], none: ['To do', 'text-port-text-muted border-port-border'] };
 
 function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const { target, label, note, linkPlaceholder } = entry;
   const idFor = (key) => `mv-post-${project.id}-${target}-${key}`;
   const [options, setOptions] = useState(() => {
+    // What the director saved on this row wins over every prefill below.
+    const saved = kit.postOptions?.[target] || {};
     // Prefill Suno URL from autonomous run if available
     if ((target === 'suno' || target === 'sunoHook') && project?.autonomousRun?.output?.sunoSongIds?.length > 0) {
       const songId = project.autonomousRun.output.sunoSongIds[0];
-      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}` };
+      return { songUrl: `https://suno.com/song/${encodeURIComponent(songId)}`, ...saved };
     }
     if (target === 'distrokid') {
       // A song whose lyrics an LLM wrote in the autonomous run discloses AI lyrics by default.
-      return { songwriterFirst: '', songwriterLast: '', ...rememberedDistrokid(publishing.platforms?.distrokid), aiLyrics: !!project?.autonomousRun?.output?.lyrics };
+      return { songwriterFirst: '', songwriterLast: '', ...rememberedDistrokid(publishing.platforms?.distrokid), aiLyrics: !!project?.autonomousRun?.output?.lyrics, ...saved };
     }
-    return {};
+    return { ...saved };
   });
-  const setOption = (key, value) => setOptions((prev) => ({ ...prev, [key]: value }));
+  // Every answer saves with the project as it is edited (briefly debounced, and at once
+  // when a field is left or the row goes away), so a reload or another tab shows it again.
+  const dirty = useRef(false);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const publishingRef = useRef(publishing);
+  publishingRef.current = publishing;
+  const projectId = project.id;
+  const flushOptions = () => {
+    if (!dirty.current) return;
+    dirty.current = false;
+    const answers = Object.fromEntries(Object.entries(optionsRef.current).filter(([, v]) => v !== '' && v != null));
+    const saving = publishingRef.current.savePostOptions?.(projectId, target, answers);
+    saving?.then((ok) => { if (!ok) dirty.current = true; });
+  };
+  const optionsKey = JSON.stringify(options);
+  useEffect(() => {
+    if (!dirty.current) return undefined;
+    const timer = setTimeout(flushOptions, 600);
+    return () => clearTimeout(timer);
+    // Keyed by the options' JSON; flushOptions reads the latest through refs.
+    // Dependency list is intentionally partial.
+  }, [optionsKey]);
+  // Leaving a field saves at once, but only after its change has rendered: a select that
+  // sets and commits in one event would otherwise save the previous value.
+  const [flushTick, setFlushTick] = useState(0);
+  useEffect(() => { if (flushTick) flushOptions(); }, [flushTick]);
+  // Dependency list is intentionally partial: flush once, as the row unmounts.
+  useEffect(() => () => flushOptions(), []);
+  const setOption = (key, value) => { dirty.current = true; setOptions((prev) => ({ ...prev, [key]: value })); };
   // Keep an answer that repeats across releases (or the account it names) in settings when the director leaves the field.
   const commitOption = (key, raw) => {
+    if (dirty.current) setFlushTick((n) => n + 1);
     const value = typeof raw === 'string' ? raw.trim() : raw;
     const platform = publishing.platforms?.[target] || {};
     if (ACCOUNT_OPTION[target] === key) {
@@ -470,10 +526,21 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
   const draftSongUrl = draft?.songUrl;
   useEffect(() => {
     if (!draftSongUrl) return;
-    setOptions((prev) => (prev.songUrl && prev.songUrl !== draftSongUrl ? { ...prev, songUrl: draftSongUrl } : prev));
+    setOptions((prev) => {
+      if (!prev.songUrl || prev.songUrl === draftSongUrl) return prev;
+      dirty.current = true;
+      return { ...prev, songUrl: draftSongUrl };
+    });
   }, [draftSongUrl]);
   // A done platform folds to its header so the ones still to do are easy to reach.
   const [open, setOpen] = useState(() => !kit.posts?.[target]);
+  // ...and folds as soon as it is posted or marked done while the page is open.
+  const isPosted = !!kit.posts?.[target];
+  const wasPosted = useRef(isPosted);
+  useEffect(() => {
+    if (isPosted && !wasPosted.current) setOpen(false);
+    wasPosted.current = isPosted;
+  }, [isPosted]);
   const busy = publishing.busy[target];
   const error = publishing.errors[target];
   const posted = kit.posts?.[target];
@@ -494,7 +561,7 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
               className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
               <Chevron size={13} className="shrink-0" />
               <span>{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</span>
-              <span className={`ml-1 shrink-0 rounded border px-1 text-[10px] font-normal ${STATUS[status][1]}`}>{STATUS[status][0]}</span>
+              <span className={`ml-1 shrink-0 inline-flex items-center gap-0.5 rounded border px-1 text-[10px] ${status === 'posted' ? '' : 'font-normal'} ${STATUS[status][1]}`}>{status === 'posted' && <Check size={10} aria-hidden="true" />}{STATUS[status][0]}</span>
             </button>
           </h4>
           {open && <div className="text-[11px] text-port-text-muted">{note}</div>}
@@ -544,6 +611,9 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
       <TargetOptions target={target} kit={kit} project={project} options={options} setOption={setOption} commitOption={commitOption} flairs={flairs} idFor={idFor} account={account} excerpts={excerpts} />
       <PostPreview label={label} preview={preview} />
       {!posted && <ManualLink idFor={idFor} label={label} placeholder={linkPlaceholder} onSave={(body) => publishing.recordPost(target, body)} />}
+      {busy === 'prepare' && (
+        <p role="status" className="text-[11px] text-port-text-muted">{publishing.progress?.[target] || 'Filling in the PortOS Browser…'}</p>
+      )}
       {error && (
         <div role="alert" className="text-[11px] text-port-error space-y-0.5">
           <div className="flex items-center gap-1">{error.code === 'PUBLISH_LOGIN_REQUIRED' && <LogIn size={11} />}{error.message}</div>

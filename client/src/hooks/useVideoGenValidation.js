@@ -55,6 +55,7 @@ export function useVideoGenValidation({
   pixelBudget,
   sourceImageFile,
   sourceImageUpload,
+  unavailableSourceImageName,
   width,
 }) {
   const maxSafeFrames = useMemo(
@@ -101,7 +102,9 @@ export function useVideoGenValidation({
     (icImageKind
       ? (filledImageRefs < icSpec.minReferences || filledImageRefs > icSpec.maxReferences)
       : (!icReferenceFile && !icReferenceVideoId))
-    || !ltx2Runtime
+    || !ltx2Runtime || !isModelAllowedForMode(currentModel, mode)
+    || (mode === 'ic-ingredients-25' && !!unavailableSourceImageName)
+    || (mode === 'ic-ingredients-25' && (Number(numFrames) < 121 || (Number(numFrames) - 1) % 8 !== 0))
     || !!icResolutionIssue(icSpec, width, height)
   );
   const chainingActive = mode !== 'a2v' && !keyframesActive && !icModeActive

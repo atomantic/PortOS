@@ -1,9 +1,11 @@
 import { castLookForTake } from '../../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
+import SceneFrameReferenceLimitNotice from './SceneFrameReferenceLimitNotice.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCastVariant from './SceneCastVariant.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
@@ -34,23 +36,12 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
   );
 }
 
-/**
- * A frame prompt that grows to fit its text, so a long prompt never sits
- * scrolled partway inside a short box (on iOS that left a half-cut line).
- */
 function FramePrompt({ id, label, value, ...props }) {
-  const ref = useRef(null);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
-  }, [value]);
   return (
     <>
       <label htmlFor={id} className="sr-only">{label}</label>
-      <textarea ref={ref} id={id} value={value} rows={3} {...props}
-        className="block max-h-80 w-full resize-none overflow-y-auto bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
+      <AutoSizeTextarea id={id} value={value} rows={3} {...props}
+        className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
     </>
   );
 }
@@ -123,6 +114,7 @@ export default function SceneFrames({
           placeholder={start ? 'Start frame prompt (defaults to the shot prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* A greybox or a storyboard panel adds to the still's prompt, so its full input shows here. */}
         {project && (greybox?.reference || scene.panelId) && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
+        {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
             title={needsPrompt ? 'Describe the end frame first' : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
@@ -162,7 +154,7 @@ export default function SceneFrames({
         {olderLook && (
           <p className="text-xs text-port-text-muted">Older look: Casting changed since this was rendered. Re-render to use the new look.</p>
         )}
-        {refining === which && imageId && (
+        {refining === which && imageId && (<>
           <form onSubmit={refine} className="flex min-w-0 gap-2">
             <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
             <input id={id(`${which}-refine`)} type="text" value={instruction} onChange={(e) => setInstruction(e.target.value)}
@@ -174,7 +166,8 @@ export default function SceneFrames({
               <Wand2 size={14} /> Render
             </button>
           </form>
-        )}
+          {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={imageId} />}
+        </>)}
         {(start ? onImportTake || onContinueFromPrevious : scene.endImageId) && (
           <div className="flex flex-wrap gap-2">
             {start && onImportTake && (

@@ -11,7 +11,6 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideoValidation.js';
 import { getProject, updateProject } from './projects.js';
-import { vocalStemMasterChanged } from './vocalStem.js';
 import {
   alignDirectorWords,
   lyricAlignFfmpegArgs,
@@ -94,6 +93,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     stemOfOldSong: async (record) => {
       if (!record.vocalStemFilename || !record.vocalStemMasterFilename) return false;
       const { resolveMasterAudioPath } = await import('./render.js');
+      const { vocalStemMasterChanged } = await import('./vocalStem.js');
       return vocalStemMasterChanged(record, await resolveMasterAudioPath(record));
     },
     ...options.deps,

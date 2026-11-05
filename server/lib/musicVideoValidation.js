@@ -10,9 +10,8 @@ import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCredits
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
-import { IMAGE_REFERENCE_REQUEST_LIMIT } from './imageGenCapabilities.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './musicVideoConditioning.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
  *
@@ -999,6 +998,19 @@ export const musicVideoPublishCopyPatchSchema = z.object({
     include: z.object({ title: z.boolean(), lyrics: z.boolean(), spend: z.boolean(), chapters: z.boolean(), hashtags: z.boolean() }).partial().strict().optional(),
     length: z.enum(['short', 'full']).optional(),
   }).strict().optional(),
+  // The printable flyer's text (client/src/lib/musicVideoFlyer.js); `url` overrides the YouTube link the QR encodes, '' clears it.
+  flyer: z.object({
+    kicker: kitText(60), title: kitText(120), byline: kitText(120), tagline: kitText(300), scanLine: kitText(60), printedLink: kitText(120), details: kitText(1200),
+    url: z.union([z.string().url().max(500), z.literal('')]),
+    image: z.enum(['cover', 'youtubeThumbnail', 'thumbnail', 'gallery', 'none']),
+    // A gallery image (data/images/<file>) for image: 'gallery'.
+    imageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
+    style: z.enum(['80s', 'clean']),
+    layout: z.enum(['full', 'half']),
+  }).partial().strict().optional(),
+  // What the director typed or picked on each platform's Publish row, saved as edited so a
+  // reload or another tab shows it again. Replaces that platform's saved answers.
+  postOptions: z.lazy(() => musicVideoPublishPostOptionsSchema).optional(),
 }).strict();
 export const musicVideoPublishCopyDraftSchema = z.object({
   providerId: z.string().max(200).nullable().optional(),
@@ -1125,6 +1137,8 @@ export const musicVideoPublishPrepareSchema = z.object({
   showLyrics: z.boolean(),
   prompt: kitText(25000),
   storyImage: z.string().min(1).max(300),
+  // A gallery image (data/images/<file>) for the story reply, in place of a video frame.
+  storyImageFile: z.string().min(1).max(255).regex(/^[^/\\]+$/).refine((f) => f !== '.' && f !== '..'),
   cutId: z.string().min(1).max(100),
   // Fill a draft for a platform the release was already posted to.
   again: z.boolean(),
@@ -1149,6 +1163,13 @@ export const musicVideoPublishPrepareSchema = z.object({
   producerName: z.string().trim().min(1).max(100),
   previewStartSec: z.number().min(0).max(3600),
 }).partial().strict();
+// A row's answers are kept while half-typed (a link mid-edit), so values are checked by
+// type only here; Fill draft still validates them against the prepare schema.
+const postOptionValue = z.union([z.string().max(25000), z.boolean(), z.number().finite()]);
+const postOptionsEntry = z.object(Object.fromEntries(Object.keys(musicVideoPublishPrepareSchema.shape)
+  .filter((k) => k !== 'again').map((k) => [k, postOptionValue]))).partial().strict();
+export const musicVideoPublishPostOptionsSchema = z.object(Object.fromEntries(MUSIC_VIDEO_PUBLISH_TARGETS
+  .map((t) => [t, postOptionsEntry]))).partial().strict();
 
 export const musicVideoExcerptNoteSchema = z.object({
   atSec: z.number().min(0).max(36000),

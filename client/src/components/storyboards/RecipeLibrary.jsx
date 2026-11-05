@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import { deleteStoryboardRecipe, listStoryboardRecipes, saveStoryboardRecipe } from '../../services/api';
 import { RECIPE_LIMITS } from '../../../../server/lib/storyboardRecipe.js';
 
+const iconActionButton = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const actionButton = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const fieldClass = 'min-h-[44px] w-full bg-port-bg border border-port-border rounded px-2 text-sm text-white';
 
@@ -105,7 +106,7 @@ export default function RecipeLibrary({ recipe, onLoad }) {
                 </select>
               </div>
               <button type="button" onClick={() => setConfirm('load')} disabled={!picked} className={`${actionButton} bg-port-accent/20 border-port-accent/50`}>Load</button>
-              <button type="button" onClick={() => setConfirm('delete')} disabled={!picked} aria-label={picked ? `Delete ${picked.name}` : 'Delete saved recipe'} className={actionButton}>
+              <button type="button" onClick={() => setConfirm('delete')} disabled={!picked} aria-label={picked ? `Delete ${picked.name}` : 'Delete saved recipe'} className={iconActionButton}>
                 <Trash2 size={16} aria-hidden="true" />
               </button>
             </div>

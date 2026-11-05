@@ -30,13 +30,15 @@ export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).pa
  * With `flythroughSeconds`, one camera glides through `shotIds` in order and
  * the script writes numbered frames instead of one still per camera.
  */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null } = {}) {
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu, sceneOnly = false } = {}) {
   return {
     look,
+    ...(sceneOnly ? { sceneOnly: true } : {}),
     flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
     samples: samples ?? PHOTOREAL_DEFAULT_SAMPLES[engine],
     longEdge: PHOTOREAL_LONG_EDGE[engine],
+    useGpu,
     shotIds,
     greybox: { parts: scene.parts, zones: scene.zones, landmarks: scene.landmarks, anchors: scene.anchors, shots: scene.shots },
   };
@@ -137,6 +139,13 @@ for part in grey['parts']:
     rotation = Matrix.Rotation(rx, 4, 'X') @ Matrix.Rotation(ry, 4, 'Y') @ Matrix.Rotation(rz, 4, 'Z')
     obj.matrix_world = Y_UP @ Matrix.Translation(Vector(part['position'])) @ rotation
     collection(zone['label'] if zone else 'Unzoned', parts_root).objects.link(obj)
+    # Real edges catch a highlight; a knife-sharp one reads as CG (#14941).
+    if kind != 'plane':
+        dims = part['size'] if kind == 'box' else [part['radius'] * 2, part['height']] if kind == 'cylinder' else [part['height']]
+        bevel = obj.modifiers.new('Bevel', 'BEVEL')
+        bevel.width = min(0.012, 0.15 * min(dims))
+        bevel.segments = 2
+        bevel.limit_method = 'ANGLE'
     part_objects.append((part, obj))
 
 marks = collection('Landmarks and anchors')
@@ -165,7 +174,7 @@ for shot in grey['shots']:
 
 # Photoreal look: allowlisted presets mapped to procedural node setups.
 PRESETS = {
-    'wood-floor': dict(roughness=0.35, coat=0.6, grain='wood'),
+    'wood-floor': dict(roughness=0.45, coat=0.5, grain='wood'),
     'painted-wall': dict(roughness=0.8),
     'painted-metal': dict(roughness=0.35, metallic=0.0, coat=0.3),
     'carpet': dict(roughness=1.0, grain='pile'),
@@ -179,6 +188,57 @@ PRESETS = {
     'chrome': dict(roughness=0.08, metallic=1.0),
     'neon': dict(roughness=0.3),
 }
+
+# Downloaded CC0 photo textures, by preset (staged under the worker input).
+job_textures = job.get('textures') or {}
+# Painted surfaces take the look's color over the photo's grain; natural ones keep the photo's color.
+PAINTED = ('painted-wall', 'painted-metal', 'plastic', 'vinyl', 'fabric')
+
+def photo_texture(nodes, links, coord, bsdf, tex, base, painted):
+    # Box-projected in metres from the object's own coordinates, so a plank is plank-sized.
+    scale = nodes.new('ShaderNodeMapping')
+    size = max(0.05, float(tex.get('sizeM') or 2.0))
+    scale.inputs['Scale'].default_value = (1.0 / size, 1.0 / size, 1.0 / size)
+    links.new(coord.outputs['Object'], scale.inputs['Vector'])
+    def image(name, non_color):
+        path = tex['maps'].get(name)
+        if not path:
+            return None
+        img = bpy.data.images.load(os.path.join(root, path), check_existing=True)
+        # Packed into the kept .blend: the worker's input folder is gone once the render ends.
+        if img.packed_file is None:
+            img.pack()
+        if non_color:
+            img.colorspace_settings.name = 'Non-Color'
+        node = nodes.new('ShaderNodeTexImage')
+        node.image = img
+        node.projection = 'BOX'
+        node.projection_blend = 0.25
+        links.new(scale.outputs['Vector'], node.inputs['Vector'])
+        return node
+    color = image('color', False)
+    tint = nodes.new('ShaderNodeMix')
+    tint.data_type = 'RGBA'
+    if painted:
+        grey = nodes.new('ShaderNodeRGBToBW')
+        links.new(color.outputs['Color'], grey.inputs['Color'])
+        tint.blend_type = 'MULTIPLY'
+        tint.inputs['Factor'].default_value = 1.0
+        tint.inputs['A'].default_value = base
+        links.new(grey.outputs['Val'], tint.inputs['B'])
+    else:
+        tint.blend_type = 'COLOR'
+        tint.inputs['Factor'].default_value = 0.3
+        links.new(color.outputs['Color'], tint.inputs['A'])
+        tint.inputs['B'].default_value = base
+    rough = image('roughness', True)
+    normal = image('normal', True)
+    if normal is not None:
+        bump = nodes.new('ShaderNodeNormalMap')
+        bump.inputs['Strength'].default_value = 1.0
+        links.new(normal.outputs['Color'], bump.inputs['Color'])
+        links.new(bump.outputs['Normal'], bsdf.inputs['Normal'])
+    return tint.outputs['Result'], (rough.outputs['Color'] if rough is not None else None)
 
 def set_input(node, name, value):
     if name in node.inputs:
@@ -200,18 +260,70 @@ def look_material(rule):
     set_input(bsdf, 'Sheen Weight', preset.get('sheen', 0.0))
     coord = nodes.new('ShaderNodeTexCoord')
     color_out = None
+    rough_src = None
     grain = preset.get('grain')
-    if grain == 'wood':
-        wave = nodes.new('ShaderNodeTexWave')
-        wave.inputs['Scale'].default_value = 1.2
-        wave.inputs['Distortion'].default_value = 6.0
-        links.new(coord.outputs['Object'], wave.inputs['Vector'])
+    tex = job_textures.get(rule['preset'])
+    if tex:
+        color_out, rough_src = photo_texture(nodes, links, coord, bsdf, tex, base, rule['preset'] in PAINTED)
+    elif grain == 'wood':
+        # Narrow maple strips laid along the part's long X axis, in metres (#14941).
+        # Mesh-local X/Z is the floor plane; the mapping turns it onto the texture's X/Y.
+        boards = nodes.new('ShaderNodeMapping')
+        boards.inputs['Rotation'].default_value = (math.radians(90), 0, 0)
+        links.new(coord.outputs['Object'], boards.inputs['Vector'])
+        brick = nodes.new('ShaderNodeTexBrick')
+        brick.offset = 0.37
+        brick.offset_frequency = 1
+        brick.squash = 1.0
+        brick.inputs['Scale'].default_value = 1.0
+        brick.inputs['Brick Width'].default_value = 1.8
+        brick.inputs['Row Height'].default_value = 0.057
+        brick.inputs['Mortar Size'].default_value = 0.0012
+        brick.inputs['Mortar Smooth'].default_value = 0.4
+        brick.inputs['Bias'].default_value = 0.0
+        brick.inputs['Color1'].default_value = base
+        brick.inputs['Color2'].default_value = tuple(c * 0.8 for c in base[:3]) + (1.0,)
+        brick.inputs['Mortar'].default_value = tuple(c * 0.35 for c in base[:3]) + (1.0,)
+        links.new(boards.outputs['Vector'], brick.inputs['Vector'])
+        # Fine grain streaks run with each strip: noise stretched along X.
+        streak = nodes.new('ShaderNodeMapping')
+        streak.inputs['Scale'].default_value = (0.6, 60.0, 1.0)
+        links.new(boards.outputs['Vector'], streak.inputs['Vector'])
+        fibre = nodes.new('ShaderNodeTexNoise')
+        fibre.inputs['Scale'].default_value = 3.0
+        fibre.inputs['Detail'].default_value = 6.0
+        links.new(streak.outputs['Vector'], fibre.inputs['Vector'])
         mix = nodes.new('ShaderNodeMix')
         mix.data_type = 'RGBA'
-        mix.inputs['A'].default_value = tuple(c * 0.7 for c in base[:3]) + (1.0,)
-        mix.inputs['B'].default_value = base
-        links.new(wave.outputs['Fac'], mix.inputs['Factor'])
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs['Factor'].default_value = 0.25
+        links.new(brick.outputs['Color'], mix.inputs['A'])
+        links.new(fibre.outputs['Color'], mix.inputs['B'])
         color_out = mix.outputs['Result']
+        # Seams sink a little and scuffs break up the lacquer, so lights smear
+        # into soft streaks instead of mirroring as hard rectangles.
+        seam = nodes.new('ShaderNodeBump')
+        seam.invert = True
+        seam.inputs['Strength'].default_value = 0.4
+        seam.inputs['Distance'].default_value = 0.002
+        links.new(brick.outputs['Fac'], seam.inputs['Height'])
+        scuff = nodes.new('ShaderNodeTexNoise')
+        scuff.inputs['Scale'].default_value = 9.0
+        scuff.inputs['Detail'].default_value = 10.0
+        links.new(coord.outputs['Object'], scuff.inputs['Vector'])
+        scuff_bump = nodes.new('ShaderNodeBump')
+        scuff_bump.inputs['Strength'].default_value = 0.04
+        links.new(scuff.outputs['Fac'], scuff_bump.inputs['Height'])
+        links.new(seam.outputs['Normal'], scuff_bump.inputs['Normal'])
+        links.new(scuff_bump.outputs['Normal'], bsdf.inputs['Normal'])
+        if 'Coat Normal' in bsdf.inputs:
+            links.new(scuff_bump.outputs['Normal'], bsdf.inputs['Coat Normal'])
+        coat_rough = nodes.new('ShaderNodeMapRange')
+        coat_rough.inputs['To Min'].default_value = 0.04
+        coat_rough.inputs['To Max'].default_value = 0.22
+        links.new(scuff.outputs['Fac'], coat_rough.inputs['Value'])
+        if 'Coat Roughness' in bsdf.inputs:
+            links.new(coat_rough.outputs['Result'], bsdf.inputs['Coat Roughness'])
     elif grain == 'tile':
         brick = nodes.new('ShaderNodeTexBrick')
         brick.inputs['Scale'].default_value = 3.0
@@ -253,8 +365,12 @@ def look_material(rule):
         rough.operation = 'ADD'
         rough.use_clamp = True
         rough.inputs[1].default_value = roughness
+        if rough_src is not None:
+            links.new(rough_src, rough.inputs[1])
         links.new(ramp.outputs['Result'], rough.inputs[0])
         links.new(rough.outputs['Value'], bsdf.inputs['Roughness'])
+    elif rough_src is not None:
+        links.new(rough_src, bsdf.inputs['Roughness'])
     if color_out is not None:
         links.new(color_out, bsdf.inputs['Base Color'])
     else:
@@ -287,6 +403,8 @@ def apply_look(look):
         data.color = srgb(spec['color'])[:3]
         if kind == 'SPOT':
             data.spot_size = math.radians(spec['spotDegrees'])
+            # A stage wash fades out at its rim; Blender's default 0.15 draws a hard disc.
+            data.spot_blend = 0.8
             data.shadow_soft_size = spec['size']
         elif kind == 'AREA':
             data.shape = 'SQUARE'
@@ -352,7 +470,7 @@ portos_set_engine(scene, job['engine'])
 device, backend = 'CPU', 'CPU'
 if job['engine'] == 'CYCLES':
     prefs = bpy.context.preferences.addons['cycles'].preferences
-    for kind in ('METAL', 'OPTIX', 'CUDA', 'HIP', 'ONEAPI'):
+    for kind in ('METAL', 'OPTIX', 'CUDA', 'HIP', 'ONEAPI') if job['useGpu'] else ():
         try:
             prefs.compute_device_type = kind
         except TypeError:
@@ -370,9 +488,16 @@ if job['engine'] == 'CYCLES':
     scene.cycles.adaptive_threshold = 0.02
     scene.cycles.use_denoising = True
 else:
-    import gpu
     scene.eevee.taa_render_samples = job['samples']
-    device, backend = 'GPU', gpu.platform.backend_type_get()
+    # The GPU module starts with the first render; it is read after rendering (#14937).
+    device, backend = 'GPU', None
+
+def eevee_backend():
+    try:
+        import gpu
+        return gpu.platform.backend_type_get()
+    except Exception:
+        return None
 scene.view_settings.view_transform = 'AgX'
 scene.render.image_settings.file_format = 'PNG'
 scene.render.image_settings.color_mode = 'RGB'
@@ -423,14 +548,16 @@ def fly_camera(fly):
 fly = job.get('flythrough')
 if fly:
     fly_camera(fly)
-else:
+elif job['shotIds']:
     # The downloaded scene opens ready to render from the first chosen camera.
     use_shot(job['shotIds'][0])
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(out, 'blockout.blend'))
 rendered = []
 report = dict(version=portos_version(), engine=job['engine'], device=device, backend=backend,
     samples=job['samples'], parts=len(grey['parts']))
-if fly:
+if job.get('sceneOnly'):
+    report.update(sceneOnly=True)
+elif fly:
     started = time.time()
     for frame in range(1, fly['frames'] + 1):
         scene.frame_set(frame)
@@ -447,6 +574,8 @@ else:
         rendered.append(dict(shotId=shot_id, seconds=round(time.time() - started, 2),
             width=scene.render.resolution_x, height=scene.render.resolution_y))
     report.update(shots=rendered)
+if backend is None:
+    report['backend'] = eevee_backend()
 with open(os.path.join(out, 'report.json'), 'w') as handle:
     json.dump(report, handle)
 `;

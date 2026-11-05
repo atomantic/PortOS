@@ -25,8 +25,18 @@ beforeEach(() => {
 });
 
 describe('IC-LoRA registry', () => {
+  it('makes the 2.5 reference adapter an explicit single-file gated download', () => {
+    const spec = icLoraSpecForMode('ic-ingredients-25');
+    expect(spec).toMatchObject({ baseModel: 'ltx-2.5', minReferences: 1, maxReferences: 8,
+      gated: true, requiresPreDownload: true, referenceKind: 'image' });
+    expect(icLoraProbesExactFile(spec)).toBe(true);
+    expect(icLoraWeightCandidates(spec)).toEqual([expect.objectContaining({
+      repo: 'Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients',
+      filename: 'ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors',
+    })]);
+  });
   it('exposes ic-prefixed mode values derived from the registry', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'ic-ingredients-25']);
     // The `ic-` prefix is load-bearing: the client's download-id router and the
     // route's mode enum both key off it.
     for (const v of IC_LORA_MODE_VALUES) expect(v.startsWith('ic-')).toBe(true);
@@ -55,6 +65,7 @@ describe('IC-LoRA registry', () => {
       'Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
       'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
       'Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients',
+      'Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients',
       'Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler',
     ]);
   });
@@ -340,7 +351,7 @@ describe('the LTX-2.5 Pixel Spatial Upscaler weight (#6502)', () => {
   });
 
   it('is absent from the render-mode enum the route builds its z.enum from', () => {
-    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'ic-ingredients-25']);
     expect(IC_LORA_MODE_VALUES).not.toContain('ic-pixel-upscale');
     expect(isIcLoraMode('ic-pixel-upscale')).toBe(false);
     expect(isIcLoraMode('pixel-upscale')).toBe(false);
@@ -362,7 +373,7 @@ describe('the LTX-2.5 Pixel Spatial Upscaler weight (#6502)', () => {
     // `/ic-loras/ic-control/download` is unchanged.
     expect(icLoraWeightKey(IC_LORA_MODES.control)).toBe('ic-control');
     expect(icLoraSpecByKey('ic-control')).toBe(IC_LORA_MODES.control);
-    expect(IC_LORA_WEIGHT_KEYS).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'pixel-upscale']);
+    expect(IC_LORA_WEIGHT_KEYS).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'ic-ingredients-25', 'pixel-upscale']);
   });
 
   it('pins the exact repo, filename, revision and byte size from the HF listing', () => {

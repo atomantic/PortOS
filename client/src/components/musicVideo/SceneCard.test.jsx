@@ -1148,3 +1148,94 @@ describe('shot editor groups', () => {
     window.matchMedia.mockRestore();
   });
 });
+
+it('passes the selected LTX character references and prompt labels from the shot card', () => {
+  const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png',
+    clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } };
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
+  const onGenerateVideo = vi.fn();
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateVideo={onGenerateVideo} videoModels={models}
+    falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+  show('Clip');
+  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
+  fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
+  expect(screen.getByTestId('render-inputs').querySelector('pre').textContent)
+    .toContain('Reference sheet: Rider.\n\nGenerated video: The rider turns');
+  fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+  expect(onGenerateVideo).toHaveBeenCalledWith(scene, expect.objectContaining({ card: expect.objectContaining({
+    ltxReferences: true, songAudio: false, endFrame: false,
+    expectedClipReferenceFiles: ['rider.png'],
+    expectedClipReferenceLabels: ['Rider'],
+    prompt: 'Reference sheet: Rider.\n\nGenerated video: The rider turns',
+  }) }));
+});
+
+it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
+  const scene = { sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'The rider turns',
+    clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } };
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image'] }];
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateFrame={vi.fn()} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+  expect(screen.getByRole('button', { name: 'Clip from storyboard' })).toBeTruthy();
+  expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+  expect(screen.getByText(/Generate the storyboard frame first to use LTX reference images/)).toBeTruthy();
+});
+
+it('shows the effective LTX reference clip length and refuses an empty motion prompt', () => {
+  const scene = { sceneId: 's1', prompt: '', referenceImageId: 'start.png',
+    clipReferenceIds: ['rider'], startSec: 0, endSec: 3, takes: [] };
+  const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } };
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', frameStride: 8, supportedModes: ['image'] }];
+  const onGenerateVideo = vi.fn();
+  render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateVideo={onGenerateVideo} videoModels={models}
+    falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+  show('Clip');
+  fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+  fireEvent.change(screen.getByLabelText('Clip length'), { target: { value: '73' } });
+  expect(screen.getByLabelText('Clip length').value).toBe('73');
+  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
+  expect(screen.getByLabelText('Clip length').value).toBe('121');
+  expect([...screen.getByLabelText('Clip length').options].every((option) => Number(option.value) >= 121)).toBe(true);
+  expect(screen.getByTestId('render-refusal')).toHaveTextContent('Add a shot prompt first');
+  expect(screen.getByRole('button', { name: 'Render' })).toBeDisabled();
+  expect(onGenerateVideo).not.toHaveBeenCalled();
+});
+
+it('explains why a greybox shot cannot use LTX reference images', () => {
+  const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png',
+    setReference: { greyboxShotId: 'greybox-1' }, startSec: 0, endSec: 4, takes: [] };
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image'] }];
+  render(<SceneCard scene={scene} project={{ id: 'p', scenes: [scene] }} index={0} expanded
+    onEditLocal={vi.fn()} onSave={vi.fn()} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
+  show('Clip');
+  expect(screen.getByLabelText(/Use LTX reference images/)).toBeDisabled();
+  expect(screen.getByText(/Clear the greybox reference to use LTX reference images/)).toBeTruthy();
+});
+
+
+it('lets a document shot opt out of the video look and return to inheritance', async () => {
+  const onSave = vi.fn();
+  function Harness() {
+    const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 5, visualLayer: 'code', takes: [] });
+    return <SceneCard scene={scene} index={0} expanded layered documentComposition
+      project={{ id: 'mv-document', composition: { mode: 'document' }, filmLook: { preset: 'vhs' }, scenes: [scene] }}
+      onEditLocal={(_id, patch) => setScene(current => ({ ...current, ...patch }))} onSave={onSave} />;
+  }
+  render(<Harness />);
+  fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'none' } });
+  await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', expect.objectContaining({ filmLook: expect.objectContaining({ preset: 'none' }) })));
+  expect(screen.getByLabelText('Film look').value).toBe('none');
+  fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
+  await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', { filmLook: null }));
+  expect(screen.queryByRole('button', { name: 'Render shot' })).toBeNull();
+});

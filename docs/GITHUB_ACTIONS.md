@@ -708,6 +708,15 @@ because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
+`npm run pregate -- --full` reuses the same split locally: a full unit plan
+becomes one stage per shard (server 2, client 3, from `FULL_SUITE_SHARDS`), run
+sequentially with the env `resolvePlanStages` builds once per scope. Each shard
+is a normal runner invocation with its own memo write, so a late failure in one
+shard leaves the earlier shards' green entries reusable on the next attempt;
+nothing is certified from a failed run. Sequential execution keeps a single
+writer on each workspace's Vitest dependency record. Scoped plans, structural
+guards and the browser stage clear `CI_SHARD` and stay unsliced.
+
 `scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
 matrix from the planner, hands `CI_SHARD` to the runner, and gates its
 once-only steps on shard 1.

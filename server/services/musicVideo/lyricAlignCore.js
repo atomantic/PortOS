@@ -7,7 +7,6 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { STT_TIMEOUT_MS } from '../voice/stt.js';
 import { lyricKey, lyricTokens } from './timedText.js';
-import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
 
 const LYRIC_ALIGN_SAMPLE_RATE = 16000;
 const LYRIC_ALIGN_CHUNK_SEC = 20;
@@ -817,6 +816,8 @@ function sliceWav(buf, startSec, endSec) {
 }
 
 export async function pickAlignmentPath(project, io = {}) {
+  // Loaded here so importing the alignment algorithms does not pull the stem storage graph.
+  const { resolveVocalStemPath, vocalStemMasterChanged } = await import('./vocalStem.js');
   const resolveStem = io.resolveStem || resolveVocalStemPath;
   const resolveMaster = io.resolveMaster || (async (record) => {
     const { resolveMasterAudioPath } = await import('./render.js');

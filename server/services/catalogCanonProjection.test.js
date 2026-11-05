@@ -18,10 +18,19 @@
  */
 
 import { describe, it, expect, afterAll, vi } from 'vitest';
+
+const reconcileUniverses = vi.hoisted(() => ({ list: [] }));
+vi.mock('./universeBuilder.js', () => ({
+  listUniverses: vi.fn(async () => reconcileUniverses.list),
+  updateUniverse: vi.fn(async () => null),
+}));
+vi.mock('../lib/migrationMarker.js', () => ({ readMarker: vi.fn(async () => null), writeMarker: vi.fn(async () => {}) }));
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
 import { projectToCanon, projectToCatalog } from './catalogCanonProjection.js';
+import { sanitizePlace } from '../lib/storyBible.js';
+import { reconcileCanonCatalog } from '../scripts/reconcileCanonCatalog.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -64,6 +73,73 @@ async function pinClock(id, at = PINNED_AT) {
   await query('UPDATE catalog_ingredients SET updated_at = $2 WHERE id = $1', [id, at]);
 }
 const canonEntry = (ingredientId, name, updatedAt) => ({ id: `e-${ingredientId}`, ingredientId, name, updatedAt });
+
+describe.skipIf(!runDb)('a place Photoreal look across canon sync (#14946)', () => {
+  const look = {
+    version: 1,
+    materials: [],
+    lights: [{ id: 'key', type: 'point', position: [0, 3, 0], color: '#ffffff', watts: 100, size: 0.25, spotDegrees: 45 }],
+    atmosphere: { haze: 0.2, worldColor: '#0d0d10', worldStrength: 0.3, exposure: 0, sun: false },
+    textures: { 'wood-floor': 'example_planks' },
+  };
+
+  async function makeLinkedPlace(universeId) {
+    const place = await catalogDB.createIngredient({ type: 'place', name: 'Example Rink', payload: { description: 'old' } });
+    createdIngredientIds.add(place.id);
+    await catalogDB.linkIngredientToRef(place.id, 'universe', universeId, 'canon-place');
+    return catalogDB.setIngredientPayloadKey(place.id, 'photoreal', look);
+  }
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+
+  it('survives catalog→canon→catalog unchanged, through the canon sanitizer', async () => {
+    const uId = `u-look-${Date.now()}-a`;
+    const place = await makeLinkedPlace(uId);
+    const canon = { places: [{ id: 'e1', ingredientId: place.id, name: place.name, updatedAt: '2020-01-01T00:00:00.000Z' }] };
+    await projectToCanon(place.id, place, { updateUniverse: async (_id, mutator) => {
+      const patch = await mutator(canon);
+      canon.places = patch.places.map((entry) => ({ ...sanitizePlace(entry), ingredientId: entry.ingredientId }));
+      return canon;
+    } });
+    expect(canon.places[0].photoreal).toEqual(look);
+
+    canon.places[0] = { ...canon.places[0], description: 'edited in canon', updatedAt: future() };
+    expect((await projectToCatalog(uId, canon)).written).toBe(1);
+    const row = await catalogDB.getIngredient(place.id);
+    expect(row.payload.description).toBe('edited in canon');
+    expect(row.payload.photoreal).toEqual(look);
+  });
+
+  it('survives a sync from a canon entry saved before the sanitizer kept it', async () => {
+    const uId = `u-look-${Date.now()}-b`;
+    const place = await makeLinkedPlace(uId);
+    const stale = { id: 'e1', ingredientId: place.id, name: place.name, description: 'stale mirror', updatedAt: future() };
+    expect((await projectToCatalog(uId, { places: [stale] })).written).toBe(1);
+    expect((await catalogDB.getIngredient(place.id)).payload.photoreal).toEqual(look);
+  });
+
+  it('a removed look is not brought back by a canon entry still holding it', async () => {
+    const uId = `u-look-${Date.now()}-c`;
+    const place = await makeLinkedPlace(uId);
+    await catalogDB.setIngredientPayloadKey(place.id, 'photoreal', null);
+    const mirror = { id: 'e1', ingredientId: place.id, name: place.name, photoreal: look, updatedAt: future() };
+    expect((await projectToCatalog(uId, { places: [mirror] })).written).toBe(1);
+    expect((await catalogDB.getIngredient(place.id)).payload).not.toHaveProperty('photoreal');
+  });
+
+  it('survives a boot reconcile where an older-shape canon entry wins', async () => {
+    const uId = `u-look-${Date.now()}-d`;
+    const place = await makeLinkedPlace(uId);
+    reconcileUniverses.list = [{ id: uId, places: [
+      { id: 'e1', ingredientId: place.id, name: place.name, description: 'canon won', updatedAt: future() },
+    ] }];
+    const result = await reconcileCanonCatalog({ force: true });
+    reconcileUniverses.list = [];
+    expect(result.stats.canonWon).toBe(1);
+    const row = await catalogDB.getIngredient(place.id);
+    expect(row.payload.description).toBe('canon won');
+    expect(row.payload.photoreal).toEqual(look);
+  });
+});
 
 describe.skipIf(!runDb)('catalogCanonProjection', () => {
   it('projectToCanon fans a catalog edit into every linked universe canon entry', async () => {

@@ -334,3 +334,19 @@ it('inherits a twelve-worker swarm and saves an explicit per-app count', async (
   await act(async () => fireEvent.change(screen.getByLabelText('Swarm mode for Acme'), { target: { value: '12' } }));
   expect(onUpdate).toHaveBeenCalledWith('app-1', 'claim-issue', { taskMetadata: { swarmCount: 12 } });
 });
+
+describe('AppOverrideRow — cron schedule trigger', () => {
+  it('renders cron expression button with touch target classes and opens CronInput on click', async () => {
+    renderRow({ override: { interval: '0 7 * * *' } });
+    const cronButton = screen.getByRole('button', { name: '0 7 * * *' });
+    expect(cronButton).toBeInTheDocument();
+    expect(cronButton).toHaveClass('min-h-[40px]', 'pointer-coarse:min-h-11', 'inline-flex', 'items-center');
+
+    await act(async () => {
+      fireEvent.click(cronButton);
+    });
+
+    expect(screen.queryByRole('button', { name: '0 7 * * *' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save schedule' })).toBeInTheDocument();
+  });
+});

@@ -25,6 +25,7 @@ const kit = await import('./publishKit.js');
 const frames = await import('./thumbnailFrames.js');
 const excerptRender = await import('./excerptRender.js');
 const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+const validation = await import('../../lib/musicVideoValidation.js');
 const ffmpeg = await findFfmpeg();
 const watchedBuilds = new Set();
 const startPublishKitBuild = kit.startPublishKitBuild.bind(kit);
@@ -384,6 +385,17 @@ describe('publishing kit copy (#9281)', () => {
     await expect(kit.draftPublishKitCopy(id, {}, deps)).resolves.toBeTruthy();
   });
 
+  it('merges the flyer fields as they are edited and clears the QR link override with an empty string', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { flyer: { title: 'EXAMPLE', url: 'https://example.com/watch' } });
+    const { project } = await kit.updatePublishKitCopy(id, { flyer: { tagline: 'Out now', url: '' } });
+    expect(project.publishKit.flyer).toEqual({ title: 'EXAMPLE', tagline: 'Out now', url: '' });
+    expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { image: 'elsewhere' } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { imageFile: '../secrets.png' } })).toThrow();
+    expect(validation.musicVideoPublishCopyPatchSchema.parse({ flyer: { image: 'gallery', imageFile: 'art.png' } }).flyer.imageFile).toBe('art.png');
+  });
+
   it('saves the draft inputs as they are edited without marking the posts hand-edited', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     await kit.updatePublishKitCopy(id, { notes: 'made it on a Sunday', links: { youtube: 'https://example.com/v', song: 'https://example.com/s' } });
@@ -397,6 +409,21 @@ describe('publishing kit copy (#9281)', () => {
     expect(project.publishKit.links).not.toHaveProperty('song');
     // Notes, links and options are draft inputs, not posts: a draft still runs without the replace confirmation.
     expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+  });
+
+  it('keeps each platform row\'s answers, replacing that platform\'s and dropping blanks', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { postOptions: { suno: { songUrl: 'https://suno.com/s/AbCdEf123', pin: false }, x: { storyImage: 't2.jpg' } } });
+    let { project } = await kit.updatePublishKitCopy(id, { postOptions: { suno: { songUrl: 'https://suno.com/song/abc', prompt: '' } } });
+    expect(project.publishKit.postOptions).toEqual({ suno: { songUrl: 'https://suno.com/song/abc' }, x: { storyImage: 't2.jpg' } });
+    ({ project } = await kit.updatePublishKitCopy(id, { postOptions: { x: {} } }));
+    expect(project.publishKit.postOptions).toEqual({ suno: { songUrl: 'https://suno.com/song/abc' } });
+    expect(project.publishKit).not.toHaveProperty('copyEditedAt');
+    // A half-typed link is kept; an unknown platform or answer, or `again`, is refused.
+    expect(validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { suno: { songUrl: 'https://su' } } }).postOptions.suno.songUrl).toBe('https://su');
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { myspace: {} } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { x: { color: 'red' } } })).toThrow();
+    expect(() => validation.musicVideoPublishCopyPatchSchema.parse({ postOptions: { x: { again: true } } })).toThrow();
   });
 
   it('saves a Suno share link as the song page it opens, and keeps it as typed when it cannot be followed', async () => {

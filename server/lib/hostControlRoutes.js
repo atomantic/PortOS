@@ -804,8 +804,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/lora-training/runs',
   'POST /api/lora-training/runs/:id/resume',
 
-  // Code Animation contained execution (#9388): choosing the installed tool a
-  // worker runs, and the containment check that spawns sandboxed processes.
+  // Code Animation: discovering host applications, choosing the installed tool,
+  // and the containment check that spawns sandboxed processes.
+  'GET /api/code-animation/execution/blender-candidates',
   'PUT /api/code-animation/execution/tools',
   'POST /api/code-animation/execution/probe',
 
@@ -1092,6 +1093,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/catalog/ingredients/:id/photoreal/look/draft',
   // Photoreal runs the operator-checked Blender executable on the host.
   'POST /api/catalog/ingredients/:id/photoreal/render',
+  'POST /api/catalog/ingredients/:id/photoreal/open',
   // New from prompt hands the user's prompt and the story's context to a
   // caller-chosen provider (possibly a tool-capable harness). Joining is data-only.
   'POST /api/catalog/stories/draft',

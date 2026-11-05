@@ -52,7 +52,11 @@ vi.mock('./ThemeContext', () => ({
 
 // --- Heavy child widgets: render nothing so they don't open sockets / fetch. ---
 vi.mock('./Logo', () => ({ default: () => null }));
-vi.mock('./NotificationDropdown', () => ({ default: () => null }));
+vi.mock('./NotificationDropdown', () => ({
+  default: ({ position = 'above' }) => (
+    <div data-testid="notification-dropdown" data-position={position} />
+  ),
+}));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('./voice/VoiceWidget', () => ({ default: () => null }));
 vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
@@ -521,6 +525,19 @@ describe('Layout — persistent mobile touch targets', () => {
     dispatchSpy.mockRestore();
   });
 
+  it('renders NotificationDropdown in both mobile topbar and desktop sidebar footer with correct placement', async () => {
+    await renderLayout();
+
+    const mobileDropdown = within(screen.getByRole('banner')).getByTestId('notification-dropdown');
+    expect(mobileDropdown).toBeInTheDocument();
+    expect(mobileDropdown).toHaveAttribute('data-position', 'below');
+
+    const sidebar = document.getElementById('app-sidebar');
+    const desktopDropdown = within(sidebar).getByTestId('notification-dropdown');
+    expect(desktopDropdown).toBeInTheDocument();
+    expect(desktopDropdown).toHaveAttribute('data-position', 'above');
+  });
+
   it('expands section children when the mobile sidebar opens from a collapsed desktop preference', async () => {
     localStorage.setItem('portos-sidebar-collapsed', 'true');
     await renderLayout('/');
@@ -529,6 +546,44 @@ describe('Layout — persistent mobile touch targets', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
 
     expect(screen.getByRole('link', { name: 'Authors' })).toHaveAttribute('href', '/authors');
+  });
+
+  it('enlarges grandchild navigation links to at least 44px on mobile viewports while staying compact on desktop', async () => {
+    await renderLayout('/');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+
+    const castingLink = screen.getByRole('link', { name: 'Casting' });
+    const environmentsLink = screen.getByRole('link', { name: 'Environments' });
+    const objectsLink = screen.getByRole('link', { name: 'Objects' });
+
+    for (const link of [castingLink, environmentsLink, objectsLink]) {
+      expect(link.className).toContain('min-h-[44px]');
+      expect(link.className).toContain('flex');
+      expect(link.className).toContain('items-center');
+      expect(link.className).toContain('lg:min-h-0');
+      expect(link.className).toContain('lg:block');
+      expect(link.className).toContain('pointer-coarse:min-h-11');
+    }
+  });
+
+  it('enlarges collapsed flyout grandchild navigation links on coarse viewports while staying compact on desktop', async () => {
+    localStorage.setItem('portos-sidebar-collapsed', 'true');
+    await renderLayout('/');
+
+    const createButton = screen.getByRole('button', { name: 'Create' });
+    fireEvent.mouseEnter(createButton.parentElement);
+
+    const flyoutNav = screen.getByRole('navigation', { name: 'Create pages' });
+    const castingFlyoutLink = within(flyoutNav).getByRole('link', { name: 'Casting' });
+
+    expect(castingFlyoutLink.className).toContain('min-h-[44px]');
+    expect(castingFlyoutLink.className).toContain('flex');
+    expect(castingFlyoutLink.className).toContain('items-center');
+    expect(castingFlyoutLink.className).toContain('lg:min-h-0');
+    expect(castingFlyoutLink.className).toContain('lg:block');
+    expect(castingFlyoutLink.className).toContain('pointer-coarse:min-h-11');
   });
 });
 

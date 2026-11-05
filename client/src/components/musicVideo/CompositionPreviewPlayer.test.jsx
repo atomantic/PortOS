@@ -47,6 +47,7 @@ const uploadGalleryImage = vi.hoisted(() => vi.fn(async () => ({ filename: 'uplo
 vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
 import CompositionPreviewPlayer, { playthroughVersion } from './CompositionPreviewPlayer.jsx';
+import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -93,7 +94,49 @@ describe('playthroughVersion', () => {
 });
 
 describe('CompositionPreviewPlayer', () => {
+  it.each([false, true])('starts the %s composition preview without film look and toggles it live', async (draft) => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const withLook = { ...project, filmLook: look, composition: { ...project.composition, documentDraft: DOCUMENT } };
+    globalThis.localStorage.setItem('portos-mv-animatic-look', 'on');
+    const { rerender } = render(<CompositionPreviewPlayer project={withLook} audioUrl={null} draft={draft} />);
+    expect(opens()[0][1].look).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Film look' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const updatedLook = { ...look, grain: 0.7 };
+    rerender(<CompositionPreviewPlayer project={{ ...withLook, filmLook: updatedLook }} audioUrl={null} draft={draft} />);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(0);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look: updatedLook })));
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(globalThis.localStorage.getItem(PREVIEW_FILM_LOOK_KEY)).toBe('on');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look: null })));
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(opens()).toHaveLength(1);
+  });
+
+  it('keeps simultaneous active and candidate previews in sync', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const both = { ...project, filmLook: look, composition: { ...project.composition,
+      documentDraft: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-candidate' } } };
+    render(<><CompositionPreviewPlayer project={both} audioUrl={null} /><CompositionPreviewPlayer project={both} audioUrl={null} draft /></>);
+    const toggles = screen.getAllByRole('button', { name: 'Film look' });
+    expect(opens()).toHaveLength(2);
+    expect(opens().map(([, payload]) => payload.look)).toEqual([null, null]);
+    fireEvent.click(toggles[0]);
+    await waitFor(() => expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(2));
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+    const enabled = socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command').map(([, payload]) => payload);
+    expect(enabled.map(({ action, look: value }) => ({ action, look: value }))).toEqual([{ action: 'film-look', look }, { action: 'film-look', look }]);
+    expect(new Set(enabled.map(({ sessionId }) => sessionId)).size).toBe(2);
+    fireEvent.click(toggles[1]);
+    await waitFor(() => expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command')).toHaveLength(4));
+    expect(toggles.map((toggle) => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
+    expect(socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:command').slice(2).map(([, payload]) => payload.look)).toEqual([null, null]);
+  });
+
   it('resumes an expired preview only on request and restores its controls and playhead', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl='/song.mp3' />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
@@ -159,6 +202,7 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   it.each([false, true])('reopens a disconnected preview after a session error (frame recovered: %s) with current controls', async (frameRecovered) => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl='/song.mp3' />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
@@ -323,6 +367,7 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   it('applies film look and title-card edits made while the isolated worker is opening', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     socket.emit.mockImplementation(() => {});
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const card = { enabled: true, title: 'Opening title', startSec: 2, endSec: 8 };
@@ -344,6 +389,7 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   it('reconciles controls only for the new session after reopening and ignores the old reply', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
     const oldOpen = opens()[0][1];
@@ -364,6 +410,7 @@ describe('CompositionPreviewPlayer', () => {
   });
 
   it('sends the film look with the open and again when it changes, without reopening', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     const look = { version: 1, preset: 'custom', grain: 0.4 };
     const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look }} audioUrl={null} />);
     await waitFor(() => expect(opens()[0][1].look).toEqual(look));
@@ -511,6 +558,31 @@ describe('CompositionPreviewPlayer', () => {
     expect(uploadGalleryImage).toHaveBeenCalledWith(blob, { silent: true });
     fetchSpy.mockRestore();
   });
+
+  it('saves the displayed frame while a film-look redraw is pending and the new frame after it arrives', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const blob = new Blob(['jpeg'], { type: 'image/jpeg' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => blob });
+    const { container } = render(<CompositionPreviewPlayer project={{ ...project, filmLook: look, scenes: [{ sceneId: 'a', startSec: 0 }] }} audioUrl="/song.mp3" shotNav />);
+    const image = container.querySelector('img');
+    await loadImage(image);
+    const oldSrc = image.getAttribute('src');
+    fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
+    const command = socket.emit.mock.calls.find(([event]) => event === 'generated-preview:command')[1];
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Save frame/ })));
+    expect(fetchSpy).toHaveBeenLastCalledWith(oldSrc);
+    act(() => {
+      for (const fn of socket.__handlers.get('generated-preview:frame') || []) {
+        fn({ ...command, mime: 'image/jpeg', data: btoa('updated frame') });
+      }
+    });
+    const newSrc = image.getAttribute('src');
+    expect(newSrc).not.toBe(oldSrc);
+    await loadImage(image);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: /Save frame/ })));
+    expect(fetchSpy).toHaveBeenLastCalledWith(newSrc);
+    fetchSpy.mockRestore();
+  });
 });
 
 
@@ -568,13 +640,13 @@ describe('native composition playback', () => {
     vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
     return { play, pause, raf };
   };
-  const presenter = async ({ shotNav = false } = {}) => {
+  const presenter = async ({ shotNav = false, initialProject = project } = {}) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const native = installNative();
     const controls = media();
     const create = vi.spyOn(URL, 'createObjectURL');
     const revoke = vi.spyOn(URL, 'revokeObjectURL');
-    const view = render(<CompositionPreviewPlayer project={project} audioUrl='/song.mp3' shotNav={shotNav} />);
+    const view = render(<CompositionPreviewPlayer project={initialProject} audioUrl='/song.mp3' shotNav={shotNav} />);
     const image = view.container.querySelector('img');
     await loadImage(image);
     const baseline = image.src;
@@ -685,8 +757,9 @@ describe('native composition playback', () => {
     expect(fetch).toHaveBeenLastCalledWith(latest);
   });
 
-  it('flushes old-look frames at visual control dispatch before the server responds', async () => {
-    const p = await presenter();
+  it('flushes old-look frames when the viewer toggles the look during playback', async () => {
+    const look = { version: 1, preset: 'custom', grain: 0.4 };
+    const p = await presenter({ initialProject: { ...project, filmLook: look } });
     const first = p.frame(1);
     await p.task();
     await loadImage(p.image);
@@ -696,8 +769,8 @@ describe('native composition playback', () => {
     let finishDecode;
     await loadImage(p.image, new Promise((resolve) => { finishDecode = resolve; }));
     const queued = p.frame(3);
-    p.rerender(<CompositionPreviewPlayer project={{ ...project, filmLook: { version: 1, preset: 'custom', grain: 0.4 } }} audioUrl='/song.mp3' />);
-    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
+    expect(socket.emit).toHaveBeenLastCalledWith('generated-preview:command', expect.objectContaining({ action: 'film-look', look }));
     expect(p.image.src).toBe(first);
     const count = p.create.mock.calls.length;
     p.frame(4);
@@ -1234,4 +1307,16 @@ describe('native composition playback', () => {
     expect(opens()).toHaveLength(2);
     expect(screen.queryByRole('alert')).toBeNull();
   });
+});
+
+it('keeps shot-only film looks available and reloads the document when a shot look changes', async () => {
+  globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
+  const scene = { sceneId: 's1', startSec: 0, endSec: 5, filmLook: { preset: 'vhs', grain: 0.3 } };
+  const { rerender } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [scene] }} />);
+  expect(screen.getByRole('button', { name: 'Film look' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(opens().at(-1)[1].look).toEqual({ preset: 'none' }));
+  const firstRevision = opens().at(-1)[1].revision;
+  rerender(<CompositionPreviewPlayer project={{ ...project, scenes: [{ ...scene, filmLook: { preset: 'super8', grain: 0.4 } }] }} />);
+  await waitFor(() => expect(opens().at(-1)[1].revision).not.toBe(firstRevision));
+  expect(opens().at(-1)[1].look).toEqual({ preset: 'none' });
 });

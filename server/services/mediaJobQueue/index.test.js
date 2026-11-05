@@ -1032,6 +1032,175 @@ describe('mediaJobQueue', () => {
     );
   });
 
+  it.each(['image', 'video', 'video-upscale'])('clears the full %s failure archive while retaining protected, completed, active and other-kind jobs', async (kind) => {
+    const otherKind = kind === 'image' ? 'video' : 'image';
+    const now = new Date().toISOString();
+    const failures = Array.from({ length: 12 }, (_, i) => ({
+      id: `failed-${i}`, kind, status: i === 0 ? 'canceled' : 'failed', queuedAt: now, completedAt: now, params: {},
+    }));
+    const retained = [
+      { id: 'completed', kind, status: 'completed', queuedAt: now, completedAt: now, params: {} },
+      { id: 'other-kind', kind: otherKind, status: 'failed', queuedAt: now, completedAt: now, params: {} },
+      { id: 'protected', kind, status: 'failed', queuedAt: now, completedAt: now,
+        params: kind === 'video-upscale' ? { mode: 'topaz' } : { remotePeerReservation: true },
+        result: kind === 'video-upscale' ? { topazUncertain: true } : undefined },
+      ...(kind === 'video-upscale' ? [{ id: 'recoverable', kind, status: 'failed', queuedAt: now, completedAt: now,
+        params: { mode: 'topaz', requestId: 'example-request' }, result: { topazRecoveryAvailable: true } }] : []),
+      ...(kind === 'video' ? [true, false].map((submissionUncertain) => ({
+        id: `production-${submissionUncertain}`, kind, status: 'failed', queuedAt: now, completedAt: now,
+        params: { videoProduction: { projectId: 'example', attemptId: 'attempt', submissionUncertain } },
+      })) : []),
+    ];
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [...failures, ...retained] }));
+    await mediaJobQueue.initMediaJobQueue();
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    stubs.generateImage.mockImplementation(() => new Promise(() => {}));
+    const params = kind === 'video-upscale' ? { historyId: 'example', sourceFilename: 'example.mp4', runtime: 'ltx25' } : {};
+    const first = await mediaJobQueue.enqueueJob({ kind, params });
+    const second = await mediaJobQueue.enqueueJob({ kind, params });
+    await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'running');
+    await flush();
+    const liveStatuses = [first, second].map(({ jobId }) => mediaJobQueue.getJob(jobId).status);
+    expect(liveStatuses).toEqual(['running', 'queued']);
+    expect(mediaJobQueue.listQueueJobs({ kind })).toHaveLength(kind === 'video-upscale' ? 14 : 12);
+    // Simulate a quiet day: clearing failures must not trigger TTL pruning of
+    // completed rows or a retained production receipt as a side effect.
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    mediaJobQueue.getJob('completed').completedAt = old;
+    if (kind === 'video') mediaJobQueue.getJob('production-false').completedAt = old;
+
+    const result = await mediaJobQueue.removeFailedCanceledJobs({ kind });
+    expect(result.deletedIds).toEqual(failures.map((job) => job.id));
+    expect(result.skipped).toBe(kind === 'image' ? 1 : kind === 'video' ? 3 : 2);
+    for (const job of failures) expect(mediaJobQueue.getJob(job.id)).toBeNull();
+    for (const job of retained) expect(mediaJobQueue.getJob(job.id)).not.toBeNull();
+    expect([first, second].map(({ jobId }) => mediaJobQueue.getJob(jobId).status)).toEqual(liveStatuses);
+    const savedIds = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.map((job) => job.id);
+    expect(savedIds).toEqual(expect.arrayContaining([...retained.map((job) => job.id), first.jobId, second.jobId]));
+    expect(savedIds).not.toEqual(expect.arrayContaining([failures[0].id]));
+    expect(await mediaJobQueue.removeFailedCanceledJobs({ kind })).toEqual({ deletedIds: [], skipped: kind === 'image' ? 1 : kind === 'video' ? 3 : 2 });
+  });
+
+  it('retains failed jobs and reports a storage error when a bulk prune cannot be persisted', async () => {
+    const now = new Date().toISOString();
+    const job = { id: 'failed-save', kind: 'image', status: 'failed', queuedAt: now, completedAt: now, params: {} };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [job] }));
+    await mediaJobQueue.initMediaJobQueue();
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    atomicWriteSpy.mockRejectedValue(new Error('disk full'));
+    await expect(mediaJobQueue.removeFailedCanceledJobs({ kind: 'image' }))
+      .rejects.toMatchObject({ status: 503, code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
+    atomicWriteSpy.mockImplementation(realWrite);
+    expect(mediaJobQueue.getJob(job.id)).toMatchObject({ status: 'failed' });
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs).toEqual([expect.objectContaining({ id: job.id })]);
+  });
+
+  it('keeps the durable receipt when earlier queued writes succeed and the bulk write fails', async () => {
+    const now = new Date().toISOString();
+    const jobs = [
+      { id: 'failed-save', kind: 'image', status: 'failed', queuedAt: now, completedAt: now, params: {} },
+      ...['first-write', 'second-write'].map((id) => ({ id, kind: 'image', status: 'completed', queuedAt: now, completedAt: now, params: {} })),
+    ];
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
+    await mediaJobQueue.initMediaJobQueue();
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let releaseFirst;
+    let startFirst;
+    let writeCount = 0;
+    const gate = new Promise((resolve) => { releaseFirst = resolve; });
+    const started = new Promise((resolve) => { startFirst = resolve; });
+    atomicWriteSpy.mockImplementation(async (...args) => {
+      writeCount += 1;
+      if (writeCount === 1) { startFirst(); await gate; }
+      if (writeCount === 3) throw new Error('disk full');
+      return realWrite(...args);
+    });
+    const first = mediaJobQueue.updateJobResult('first-write', { note: 'first' });
+    await started;
+    const second = mediaJobQueue.updateJobResult('second-write', { note: 'second' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const pruning = expect(mediaJobQueue.removeFailedCanceledJobs({ kind: 'image' }))
+      .rejects.toMatchObject({ status: 503, code: mediaJobQueue.MEDIA_QUEUE_PERSIST_FAILED });
+    releaseFirst();
+    await Promise.all([first, second, pruning]);
+    atomicWriteSpy.mockImplementation(realWrite);
+    expect(writeCount).toBe(3);
+    expect(mediaJobQueue.getJob('failed-save')).toMatchObject({ status: 'failed' });
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'failed-save' })]));
+  });
+
+  it('reports a saved clear when another terminal acknowledgement fails after the snapshot write', async () => {
+    const now = new Date().toISOString();
+    const jobs = [
+      { id: 'failed-save', kind: 'image', status: 'failed', queuedAt: now, completedAt: now, params: {} },
+      { id: 'hold-write', kind: 'image', status: 'completed', queuedAt: now, completedAt: now, params: {} },
+    ];
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
+    await mediaJobQueue.initMediaJobQueue();
+    stubs.generateImage.mockImplementation(() => new Promise(() => {}));
+    const active = await mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let releaseWrite;
+    let startWrite;
+    const gate = new Promise((resolve) => { releaseWrite = resolve; });
+    const started = new Promise((resolve) => { startWrite = resolve; });
+    atomicWriteSpy.mockImplementationOnce(async (...args) => { startWrite(); await gate; return realWrite(...args); });
+    const held = mediaJobQueue.updateJobResult('hold-write', { note: 'holding' });
+    await started;
+    const clearing = mediaJobQueue.removeFailedCanceledJobs({ kind: 'image' });
+    mediaJobQueue.mediaJobEvents.once('failed', () => { throw new Error('example listener failure'); });
+    imageGenEvents.emit('failed', { generationId: active.jobId, error: 'example failure' });
+    await waitFor(() => mediaJobQueue.getJob(active.jobId)?.durabilityPending?.status === 'failed');
+    releaseWrite();
+    const result = await clearing;
+    await held;
+    expect(result).toEqual({ deletedIds: ['failed-save'], skipped: 0,
+      warning: 'Another queue update could not finish. Check the queue.' });
+    expect(mediaJobQueue.getJob('failed-save')).toBeNull();
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'failed-save' })]));
+  });
+
+  it('keeps a successful clear when a queue-change listener throws', async () => {
+    const now = new Date().toISOString();
+    const job = { id: 'failed-save', kind: 'image', status: 'failed', queuedAt: now, completedAt: now, params: {} };
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs: [job] }));
+    await mediaJobQueue.initMediaJobQueue();
+    mediaJobQueue.mediaJobEvents.once('changed', () => { throw new Error('example notification failure'); });
+    await expect(mediaJobQueue.removeFailedCanceledJobs({ kind: 'image' }))
+      .resolves.toEqual({ deletedIds: ['failed-save'], skipped: 0 });
+    expect(mediaJobQueue.getJob('failed-save')).toBeNull();
+    expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs).toEqual([]);
+  });
+
+  it('leaves a job whose result is being persisted available for reconciliation', async () => {
+    const now = new Date().toISOString();
+    const jobs = ['updating', 'removable'].map((id) => ({ id, kind: 'image', status: 'failed', queuedAt: now, completedAt: now, params: {} }));
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
+    await mediaJobQueue.initMediaJobQueue();
+    const realWrite = atomicWriteSpy.getMockImplementation();
+    let releaseWrite;
+    let startedWrite;
+    const gate = new Promise((resolve) => { releaseWrite = resolve; });
+    const started = new Promise((resolve) => { startedWrite = resolve; });
+    atomicWriteSpy.mockImplementationOnce(async (...args) => {
+      startedWrite();
+      await gate;
+      return realWrite(...args);
+    });
+    const update = mediaJobQueue.updateJobResult('updating', { note: 'example' });
+    await started;
+    const clearing = mediaJobQueue.removeFailedCanceledJobs({ kind: 'image' });
+    await Promise.resolve();
+    releaseWrite();
+    await update;
+    expect(await clearing).toEqual({ deletedIds: ['removable'], skipped: 1 });
+    expect(mediaJobQueue.getJob('updating').result).toEqual({ note: 'example' });
+    expect(mediaJobQueue.getJob('removable')).toBeNull();
+  });
+
   it('cancelQueuedJobs cancels every queued job, leaves running ones alone', async () => {
     // Block the worker so subsequent enqueues stay queued.
     let resolveBlocker;
@@ -4054,6 +4223,7 @@ describe('durable remote source-audio settlement', () => {
     await waitFor(() => mediaJobQueue.getJob(first.jobId).status === 'failed');
     expect(maintenance.status().blockers).toContainEqual(expect.objectContaining({ resource: first.jobId, unsettled: true }));
     expect(mediaJobQueue.removeArchivedJob(first.jobId)).toBe(false);
+    expect(await mediaJobQueue.removeFailedCanceledJobs({ kind: 'video' })).toEqual({ deletedIds: [], skipped: 1 });
     const next = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: remoteVideoMediaParams() } });
     const other = await mediaJobQueue.enqueueJob({ kind: 'video', params: { remoteMedia: { ...remoteVideoMediaParams(), peerId: '00000000-0000-4000-8000-000000000002' } } });
     await waitFor(() => stubs.generateVideoRemote.mock.calls.some(([params]) => params.jobId === other.jobId));

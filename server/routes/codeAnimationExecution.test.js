@@ -8,23 +8,40 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { currentContainmentMechanism } from '../services/codeAnimation/containedWorker.js';
 
-const { settings } = vi.hoisted(() => ({ settings: { current: {} } }));
+const { settings, discover } = vi.hoisted(() => ({
+  settings: { current: {} },
+  discover: vi.fn(async () => [{ executable: '/Applications/Example.app/Contents/MacOS/Blender', version: '5.2.3' }]),
+}));
 vi.mock('../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-code-animation-execution-') }));
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => settings.current),
   updateSettings: vi.fn(async (patch) => { settings.current = { ...settings.current, ...patch }; return settings.current; }),
+  settingsEvents: { on: vi.fn(), off: vi.fn() },
 }));
 // The browser lane's availability is reported, not exercised, by the probe.
 vi.mock('../services/browserService.js', () => ({ cdpRequest: vi.fn(async () => { throw new Error('offline'); }) }));
+vi.mock('../services/softwareInventory.js', () => ({ getInstalledBlenderCandidates: discover }));
+vi.mock('../services/auth.js', () => ({
+  isAuthEnabled: vi.fn().mockResolvedValue(false), verifyPassword: vi.fn(), verifyRequestSession: vi.fn(),
+}));
 
 import { PATHS } from '../lib/paths.js';
+import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import router from './codeAnimationExecution.js';
 
 const app = express();
 app.use(express.json());
 app.use('/api/code-animation/execution', router);
 app.use(errorMiddleware);
+const gatedApp = (remoteAddress) => {
+  const gated = express();
+  gated.use((req, _res, next) => { Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress }); next(); });
+  gated.use(authGate, hostControlRouteGate, express.json());
+  gated.use('/api/code-animation/execution', router);
+  gated.use(errorMiddleware);
+  return gated;
+};
 const mechanism = await currentContainmentMechanism();
 const supported = mechanism.supported;
 if (process.env.PORTOS_REQUIRE_LINUX_CONTAINMENT === '1' && mechanism.id !== 'linux-bubblewrap') {
@@ -35,7 +52,7 @@ afterAll(async () => {
   cleanupTempDataRoots();
   await Promise.all(scratch.map((dir) => rm(dir, { recursive: true, force: true })));
 });
-beforeEach(() => { settings.current = {}; });
+beforeEach(() => { settings.current = {}; discover.mockClear(); });
 
 const executableAt = async (dir, name = 'blender') => {
   await mkdir(dir, { recursive: true });
@@ -46,6 +63,18 @@ const executableAt = async (dir, name = 'blender') => {
 };
 
 describe('Code Animation execution capability', () => {
+  it('limits installed Blender discovery to an operator', async () => {
+    const path = '/api/code-animation/execution/blender-candidates';
+    const refused = await request(gatedApp('192.0.2.10')).get(path);
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe('HOST_CONTROL_FORBIDDEN');
+    expect(discover).not.toHaveBeenCalled();
+    const allowed = await request(gatedApp('127.0.0.1')).get(path);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.candidates).toEqual([{ executable: '/Applications/Example.app/Contents/MacOS/Blender', version: '5.2.3' }]);
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
   it('stays fail-closed before a containment check has passed on this server process', async () => {
     const { status, body } = await request(app).get('/api/code-animation/execution');
     expect(status).toBe(200);
@@ -102,7 +131,7 @@ describe('Code Animation execution capability', () => {
     });
     expect(body.probe.passed).toBe(true);
     expect(body.probe.tools.blender).toMatchObject({ passed: false, version: null });
-    expect(body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in contained mode.' });
+    expect(body.lanes.blender).toEqual({ ready: false, reason: expect.stringMatching(/^Blender did not render the supported test scene in contained mode\. Blender (exited with code \d+|crashed with SIG\w+)\.$/) });
     // Every owned workspace was removed, including the terminated ones.
     expect(await readdir(join(PATHS.data, 'code-animation-workspaces'))).toEqual([]);
   }, 60_000);

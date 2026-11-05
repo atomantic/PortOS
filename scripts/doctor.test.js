@@ -106,6 +106,11 @@ describe('runProbe', () => {
     const result = await runProbe({ name: 'silent', run: async () => undefined });
     expect(result).toMatchObject({ status: 'unavailable', detail: '' });
   });
+
+  it('accepts probes returning status: available as a fallback', async () => {
+    const result = await runProbe({ name: 'legacy', run: async () => ({ status: 'available', detail: 'supported' }) });
+    expect(result).toMatchObject({ status: 'available', detail: 'supported' });
+  });
 });
 
 describe('collectFacts', () => {
@@ -188,6 +193,16 @@ describe('defaultProbes', () => {
     // running install legitimately occupies the block, and failing on that
     // would make doctor exit 1 on every healthy machine.
     expect(required).toMatchObject({ npm: false, ffmpeg: false, gh: false, 'tls-cert': false, ports: false });
+  });
+
+  it('runs git:merge-tree probe with the available/detail probe contract', async () => {
+    const probe = defaultProbes().find((p) => p.name === 'git:merge-tree');
+    expect(probe).toBeDefined();
+    const result = await probe.run();
+    expect(result).toHaveProperty('available');
+    expect(typeof result.available).toBe('boolean');
+    const fact = await runProbe(probe);
+    expect(fact.status).toBe(result.available ? 'available' : 'unavailable');
   });
 });
 

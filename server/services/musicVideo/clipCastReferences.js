@@ -13,10 +13,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 
 /** Ordered references for a tagged shot, resolved once before the job is queued. */
-export async function musicVideoClipReferences({ projectId, sceneId } = {}, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { excludePath = null } = {}) {
+export async function musicVideoClipReferences({ projectId, sceneId } = {}, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { excludePath = null, project: snapshot = null, includePromptLabels = false } = {}) {
   if (!projectId || !sceneId || limit < 1) return [];
   const { getProject } = await import('./projects.js');
-  const project = await getProject(projectId);
+  const project = snapshot || await getProject(projectId);
   const scene = project?.scenes?.find((entry) => entry.sceneId === sceneId);
   if (!scene) return [];
   const castMedia = await loadSceneCastMedia(scene);
@@ -32,7 +32,8 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
     if (!path) throw new ServerError(`The clip reference ${ref.label || ref.imageId} is missing. Restore it or select another.`,
       { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
     if (path === excludePath || resolved.some((item) => item.path === path)) continue;
-    resolved.push({ path, label: ref.label || '', ...(ref.role && ref.role !== 'character' ? { role: ref.role } : {}) });
+    resolved.push({ path, label: ref.label || '', ...(ref.role && ref.role !== 'character' ? { role: ref.role } : {}),
+      ...(includePromptLabels ? { promptLabel: ref.label || ref.role || 'visual reference' } : {}) });
   }
   return resolved;
 }

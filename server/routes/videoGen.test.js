@@ -111,7 +111,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   getProject: vi.fn(),
 }));
 const clipCastReferences = vi.hoisted(() => vi.fn(async () => []));
-vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences }));
+vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences, musicVideoClipReferences: clipCastReferences }));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
@@ -2815,7 +2815,7 @@ describe('videoGen routes', () => {
           prompt: 'follow it', mode: 'ic-control', modelId: 'ltx_legacy',
         });
         expect(r.status).toBe(400);
-        expect(r.body.error).toMatch(/ltx2-runtime model/i);
+        expect(r.body.error).toMatch(/ltx-2.3 model/i);
         expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
       });
 
@@ -2951,6 +2951,29 @@ describe('videoGen routes', () => {
           expect(r.body.error).toMatch(/only valid with an IC remix mode/i);
           expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
         });
+      });
+
+      it('queues a tagged LTX 2.5 reference request without optional client label metadata', async () => {
+        const scene = { sceneId: 's1', shotMode: 'cutaway', startSec: 0, endSec: 5, prompt: 'A rider turns',
+          referenceImageId: 'start.png', clipReferenceIds: ['rider'] };
+        const project = { id: 'mv-1', scenes: [scene], visualSpec: { references: [{ id: 'rider', imageId: 'rider.png' }] } };
+        getMusicVideoProject.mockResolvedValue(project);
+        clipCastReferences.mockResolvedValue([{ path: '/mock/images/rider.png', label: 'Rider', promptLabel: 'Rider' }]);
+        videoGenService.listVideoModels.mockReturnValueOnce([{ id: 'ltx25_mlx_q8', runtime: 'ltx25', supportedModes: ['text', 'image'], defaultFrames: 121 }]);
+        try {
+          const r = await request(app).post('/api/video-gen/').send({
+            backend: 'local', modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25', prompt: 'A rider turns',
+            sourceImageFile: 'start.png', icReferenceImageFiles: ['rider.png'], numFrames: 121,
+            musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true },
+          });
+          expect(r.status, JSON.stringify(r.body)).toBe(200);
+          expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({
+            prompt: 'Reference sheet: Rider.\n\nGenerated video: A rider turns', icReferencePaths: ['/mock/images/rider.png'],
+          }) }));
+        } finally {
+          getMusicVideoProject.mockReset();
+          clipCastReferences.mockReset().mockResolvedValue([]);
+        }
       });
     });
   });
@@ -3166,6 +3189,44 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.activeJob.params.referenceImageFiles).toEqual(['cast.png']);
       expect(r.body.activeJob.params.unavailableReferenceImageNames).toEqual(['guide.png', 'cast.png']);
+      expect(JSON.stringify(r.body)).not.toContain('/mock/');
+    });
+
+    it('does not restore any IC stills as gallery picks if a cast guide is outside the gallery', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
+        id: 'running-ic', kind: 'video', status: 'running', params: {
+          mode: 'ic-ingredients-25', icReferencePaths: ['/mock/images/rider.png', '/mock/image-refs/rider.png'],
+        },
+      }]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.params.icReferenceNames).toEqual(['rider.png', 'rider.png']);
+      expect(r.body.activeJob.params).not.toHaveProperty('icReferenceImageFiles');
+      expect(JSON.stringify(r.body)).not.toContain('/mock/');
+    });
+
+    it('restores a complete gallery-backed IC still set', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
+        id: 'running-ic-gallery', kind: 'video', status: 'running', params: {
+          mode: 'ic-ingredients-25', icReferencePaths: ['/mock/images/rider.png', '/mock/images/bike.png'],
+        },
+      }]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.body.activeJob.params.icReferenceImageFiles).toEqual(['rider.png', 'bike.png']);
+    });
+
+    it.each([
+      ['/mock/images/start.png', { sourceImageFile: 'start.png' }],
+      ['/mock/uploads/start.png', { unavailableSourceImageName: 'start.png' }],
+    ])('restores or marks the IC opening frame from %s', async (path, expected) => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([{
+        id: 'running-ic-frame', kind: 'video', status: 'running', params: {
+          mode: 'ic-ingredients-25', sourceImagePath: path,
+        },
+      }]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJob.params).toMatchObject(expected);
       expect(JSON.stringify(r.body)).not.toContain('/mock/');
     });
 
@@ -3943,6 +4004,15 @@ describe('videoGen routes', () => {
   // repairable without ever being a render mode. These pin that split.
   describe('IC-LoRA provisioning endpoints', () => {
     const upscaler = IC_LORA_MODES['pixel-upscale'];
+
+    it('downloads only the gated LTX 2.5 Ingredients adapter file', async () => {
+      const spec = IC_LORA_MODES['ingredients-25'];
+      const res = await request(app).post('/api/video-gen/ic-loras/ic-ingredients-25/download');
+      expect(res.status).toBe(200);
+      const [{ fallbacks, repo }] = sseDownload.start.mock.calls[0];
+      expect(repo).toBeUndefined();
+      expect(fallbacks).toEqual([{ repo: spec.repo, only: [spec.filename], revision: spec.revision }]);
+    });
 
     it('downloads a pinned weight single-file, at its pinned revision', async () => {
       const res = await request(app).post(`/api/video-gen/ic-loras/${icLoraWeightKey(upscaler)}/download`);

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { collectTestDiagnostics } from './ci-test-diagnostics.js';
+import { collectTestDiagnostics, replayContext, replayDiagnostic } from './ci-test-diagnostics.js';
 import vitestRunDiagnostics from './vitestRunDiagnostics.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -177,5 +177,26 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(testMinutes).toBeGreaterThan(0);
     expect(testMinutes).toBeLessThan(jobMinutes - 1);
     expect(testStep).not.toContain('continue-on-error');
+  });
+});
+
+// Uniquely guards the privacy boundary: replay evidence is an allowlist, so hostile
+// environment values and argv can never reach a persisted or rendered diagnostic.
+describe('effective replay context allowlist', () => {
+  it('keeps only validated settings and renders no secret, argv or path', () => {
+    const head = 'a'.repeat(40);
+    const replay = replayContext({
+      env: { CI_SHARD: '2/3', PORTOS_CI_BROWSER_OWNER: 'browser', PORTOS_BROWSER_TEST_PROFILE: '/Users/x/secret',
+        PORTOS_TEST_QUIET: '1', PORTOS_TEST_MEMO: 'off', PORTOS_API_TOKEN: 'token-value', HOME: '/Users/x' },
+      scope: 'client', script: 'test:ci', extraArgs: ['--silent', '--token=hunter2', '/Users/x/file.test.js'], head,
+    });
+    expect(replay).toEqual({ head, node: process.version, scope: 'client', script: 'test:ci', shard: '2/3',
+      browserOwner: 'browser', browserProfile: 'unset', quiet: true, silent: true, memo: 'off' });
+    const line = replayDiagnostic({ replay: { ...replay, head: 'rm -rf /', scope: '/Users/x' }, selectors: ['a', 'b'] }, { workers: 4 });
+    expect(line).toContain('head=unavailable');
+    expect(line).toContain('scope=unavailable');
+    expect(line).toContain('selectors=2; workers=4;');
+    expect(line).not.toMatch(/hunter2|token-value|\/Users\//);
+    expect(replayDiagnostic({}, {})).toContain('Diagnostic gap');
   });
 });

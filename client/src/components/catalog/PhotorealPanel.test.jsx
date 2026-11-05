@@ -2,14 +2,21 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
-import { draftCatalogPhotorealLook, getCatalogPhotoreal, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { draftCatalogPhotorealLook, getCatalogPhotoreal, getCatalogPhotorealTextures, installCatalogPhotorealTexture, searchCatalogPhotorealTextures, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
+import { copyToClipboard } from '../../lib/clipboard';
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
 vi.mock('../../services/apiCatalog', () => ({
-  getCatalogPhotoreal: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
+  getCatalogPhotoreal: vi.fn(), openCatalogPhotorealBlend: vi.fn(), saveCatalogGreybox: vi.fn(), startCatalogPhotorealRender: vi.fn(),
   draftCatalogPhotorealLook: vi.fn(), previewCatalogPhotorealLookPrompt: vi.fn(), saveCatalogPhotorealLook: vi.fn(),
+  getCatalogPhotorealTextures: vi.fn(async () => ({ installed: [] })), searchCatalogPhotorealTextures: vi.fn(), installCatalogPhotorealTexture: vi.fn(),
 }));
+vi.mock('../../services/apiCodeAnimation', () => ({
+  findCodeAnimationBlender: vi.fn(), getCodeAnimationExecution: vi.fn(), probeCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(),
+}));
+vi.mock('../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../musicVideo/MusicVideoLlmPicker', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../MediaImage', () => ({ default: (props) => <img alt={props.alt} src={props.src} /> }));
@@ -20,6 +27,12 @@ const greybox = {
 };
 const record = { id: 'plc-example', payload: { greybox } };
 const render1 = { mediaKey: 'wide-render.png', kind: 'reference', role: 'photoreal:wide', caption: 'Example Rink: Wide', createdAt: '2026-01-02' };
+const blenderPath = '/Applications/Example.app/Contents/MacOS/Blender';
+const execution = (ready = true) => ({
+  platform: 'darwin', mechanism: { id: 'macos-seatbelt', supported: true }, executionMode: 'contained', probe: null,
+  tools: { blender: { executable: ready ? blenderPath : null, engine: 'CYCLES', problem: ready ? null : 'Not configured.' } },
+  lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender: ready ? { ready: true, reason: null } : { ready: false, reason: 'Blender: Not configured.' } },
+});
 
 const show = (props = {}) => render(<MemoryRouter><PhotorealPanel record={record} media={[render1]} {...props} /></MemoryRouter>);
 
@@ -28,9 +41,154 @@ beforeEach(() => {
   try { localStorage.clear(); } catch { /* storage unavailable */ }
   previewCatalogPhotorealLookPrompt.mockResolvedValue({ sentPrompt: 'composed', promptAdditions: [] });
   getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: '/api/catalog/ingredients/plc-example/photoreal/blend', blenderVersion: '5.2.3' });
+  getCodeAnimationExecution.mockResolvedValue(execution());
+  findCodeAnimationBlender.mockResolvedValue({ candidates: [] });
 });
 
 describe('PhotorealPanel', () => {
+  it('lets an installed Blender be selected, saved and checked inline before rendering', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: null });
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    findCodeAnimationBlender.mockResolvedValue({ candidates: [{ executable: blenderPath, version: '5.2.3' }] });
+    const saved = { ...execution(false), tools: { blender: { executable: blenderPath, engine: 'CYCLES', problem: null } },
+      lanes: { ...execution(false).lanes, blender: { ready: false, reason: 'Run the execution check.' } } };
+    updateCodeAnimationExecutionTools.mockResolvedValue(saved);
+    probeCodeAnimationExecution.mockResolvedValue(execution());
+    show();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Select Blender 5.2.3' }));
+    expect(screen.getByLabelText('Blender executable')).toHaveValue(blenderPath);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    await waitFor(() => expect(updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: {
+      executable: blenderPath, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false,
+    } }, { silent: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check Blender' }));
+    await waitFor(() => expect(probeCodeAnimationExecution).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
+  it('reopens inline setup when readiness changes before a render request', async () => {
+    getCodeAnimationExecution.mockResolvedValueOnce(execution()).mockResolvedValueOnce(execution(false));
+    startCatalogPhotorealRender.mockRejectedValueOnce(Object.assign(new Error('Blender: Not configured.'), { code: 'CODE_ANIMATION_BLENDER_NOT_READY' }));
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Render 2 cameras' }));
+    expect(await screen.findByText(/Select an installed Blender or enter its path/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+  });
+
+  it('keeps setup stable during a rejected render and explains that it must be retried', async () => {
+    let rejectRender;
+    startCatalogPhotorealRender.mockImplementation(() => new Promise((_resolve, reject) => { rejectRender = reject; }));
+    show();
+    const renderButton = screen.getByRole('button', { name: 'Render 2 cameras' });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    const field = screen.getByLabelText('Blender executable');
+    fireEvent.click(renderButton);
+    await waitFor(() => expect(rejectRender).toBeTypeOf('function'));
+    expect(field).toBeDisabled();
+    await act(async () => rejectRender(Object.assign(new Error('The check changed.'), { code: 'CODE_ANIMATION_BLENDER_NOT_READY' })));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check the setup, then try again.');
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    expect(screen.getByLabelText('Blender executable')).toHaveValue(blenderPath);
+  });
+
+  it('explains when the selected camera engine has not been checked', async () => {
+    show();
+    expect(await screen.findByText(/Blender was checked with Cycles CPU; EEVEE GPU has not been checked/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Blender setup' }));
+    expect(screen.getByLabelText('Render engine')).toHaveValue('CYCLES');
+    fireEvent.click(screen.getByRole('button', { name: 'Cycles final' }));
+    expect(screen.queryByText(/EEVEE GPU has not been checked/)).not.toBeInTheDocument();
+  });
+
+  it('says contained mode has no GPU and blocks an EEVEE render', async () => {
+    const notice = 'Contained mode has no GPU: EEVEE needs Trusted local mode.';
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(true), executionMode: 'contained', containedGpuNotice: notice });
+    show();
+    expect((await screen.findAllByText(notice)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/EEVEE GPU has not been checked/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Cycles final' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
+  it('asks for a check when Blender is already saved but not ready', async () => {
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(false), tools: { blender: { executable: blenderPath, engine: 'CYCLES', problem: null } } });
+    show();
+    expect(await screen.findByText('Blender is saved. Select Check Blender before rendering.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check Blender' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save Blender' })).toBeDisabled();
+  });
+
+  it('does not render with unsaved or in-flight Blender settings', async () => {
+    show();
+    const renderButton = screen.getByRole('button', { name: 'Render 2 cameras' });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.click(screen.getByText('Blender setup', { selector: 'summary', exact: false }));
+    const field = screen.getByLabelText('Blender executable');
+    fireEvent.change(field, { target: { value: '/Applications/Another.app/Contents/MacOS/Blender' } });
+    await waitFor(() => expect(renderButton).toBeDisabled());
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByText('Save the changes, then check Blender before rendering.')).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: blenderPath } });
+    await waitFor(() => expect(renderButton).toBeEnabled());
+    fireEvent.change(field, { target: { value: '/Applications/Another.app/Contents/MacOS/Blender' } });
+    let finishSave;
+    updateCodeAnimationExecutionTools.mockImplementation(() => new Promise(resolve => { finishSave = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    expect(renderButton).toBeDisabled();
+    expect(screen.getByText('Saving Blender…')).toBeInTheDocument();
+    await act(async () => finishSave({ ...execution(false), tools: { blender: { executable: '/Applications/Another.app/Contents/MacOS/Blender', engine: 'CYCLES', problem: null } } }));
+    expect(renderButton).toBeDisabled();
+    expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
+    expect(screen.getByText('Blender is saved. Select Check Blender before rendering.')).toBeInTheDocument();
+    probeCodeAnimationExecution.mockResolvedValue(execution());
+    fireEvent.click(screen.getByRole('button', { name: 'Check Blender' }));
+    await waitFor(() => expect(renderButton).toBeEnabled());
+  });
+
+  it('offers manual path entry when automatic discovery fails', async () => {
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    findCodeAnimationBlender.mockRejectedValue(new Error('Search unavailable'));
+    show();
+    expect(await screen.findByText(/Could not search for Blender: Search unavailable/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Blender executable')).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Download Blender' })).toHaveAttribute('href', 'https://www.blender.org/download/');
+  });
+
+  it('offers installation guidance and manual setup on other platforms', async () => {
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(false), platform: 'linux' });
+    show();
+    expect(await screen.findByText(/enter its executable path\./)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download Blender' })).toHaveAttribute('href', 'https://www.blender.org/download/');
+    expect(findCodeAnimationBlender).not.toHaveBeenCalled();
+  });
+
+  it('shows a save error beside the setup without losing the entered path', async () => {
+    getCodeAnimationExecution.mockResolvedValue(execution(false));
+    updateCodeAnimationExecutionTools.mockRejectedValue(new Error('The executable was not found.'));
+    show();
+    const field = await screen.findByLabelText('Blender executable');
+    fireEvent.change(field, { target: { value: blenderPath } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The executable was not found.');
+    expect(field).toHaveValue(blenderPath);
+    expect(probeCodeAnimationExecution).not.toHaveBeenCalled();
+  });
+
+  it('lets the user retry a failed Blender status read inline', async () => {
+    getCodeAnimationExecution.mockRejectedValueOnce(new Error('Server unavailable')).mockResolvedValueOnce(execution(false));
+    show();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server unavailable');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Blender executable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+  });
+
   it('keeps every camera deselected when the last checked camera is unchecked', async () => {
     show();
     const wide = await screen.findByLabelText(/Wide/);
@@ -89,6 +247,277 @@ describe('PhotorealPanel', () => {
     // One camera is not a path.
     fireEvent.click(screen.getByLabelText(/Booth/));
     expect(fly).toBeDisabled();
+  });
+
+  it('offers inline FFmpeg setup steps when a fly-through cannot start', async () => {
+    startCatalogPhotorealRender.mockRejectedValueOnce(Object.assign(new Error('FFmpeg is missing.'), { code: 'FFMPEG_MISSING' }));
+    show();
+    const fly = screen.getByRole('button', { name: /Render fly-through/ });
+    await waitFor(() => expect(fly).toBeEnabled());
+    fireEvent.click(fly);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Fly-throughs need FFmpeg');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy install command' }));
+    expect(copyToClipboard).toHaveBeenCalledWith('brew install ffmpeg', 'Install command copied');
+    expect(screen.getByRole('link', { name: 'FFmpeg install options' })).toHaveAttribute('href', 'https://ffmpeg.org/download.html');
+  });
+
+  it('opens the built scene in Blender from the tab', async () => {
+    openCatalogPhotorealBlend.mockResolvedValue({ opened: true, blenderVersion: '5.2.3' });
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Blender' }));
+    await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
+  });
+
+  it('warns that an active render will replace the scene before opening it', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: { id: 'pr-running', state: 'running', engine: 'cycles', shotIds: ['wide'] },
+      blendUrl: '/scene.blend', blenderVersion: '5.2.3' });
+    show();
+    expect(await screen.findByText(/current render will replace this scene/)).toHaveTextContent('File › Save As');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('builds and opens a scene without rendering cameras when none exists yet', async () => {
+    const files = { blend: '/srv/portos/data/scene.blend', renders: '/srv/portos/data/images' };
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3', files });
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(), containedGpuNotice: 'Contained mode has no GPU.' });
+    let finishOpen;
+    openCatalogPhotorealBlend.mockImplementation(() => new Promise((resolve) => { finishOpen = resolve; }));
+    show();
+    expect(await screen.findByText(files.blend)).toBeInTheDocument();
+    expect(screen.getByText(files.renders)).toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByText(/without rendering cameras/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    fireEvent.click(open);
+    await waitFor(() => expect(finishOpen).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: 'Building scene…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    await act(async () => finishOpen({ opened: true, blenderVersion: '5.2.3', blendUrl: '/scene.blend' }));
+    expect(screen.getByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy' })[0]);
+    expect(copyToClipboard).toHaveBeenCalledWith(files.blend, 'Path copied');
+  });
+
+  it('keeps a failed scene build visible with setup and retry actions', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    openCatalogPhotorealBlend.mockRejectedValueOnce(Object.assign(new Error('Blender exited with code 1.'), { code: 'PHOTOREAL_BUILD_FAILED' }))
+      .mockResolvedValueOnce({ opened: true, blendUrl: '/scene.blend' });
+    show();
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Blender exited with code 1.');
+    expect(screen.getByText(/Review the saved Greybox and try again/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Greybox' })).toHaveAttribute('href', '/environments/plc-example/greybox');
+    fireEvent.click(screen.getByRole('button', { name: 'Check Blender setup' }));
+    expect(await screen.findByLabelText('Blender executable')).toHaveValue(blenderPath);
+    fireEvent.click(screen.getByRole('button', { name: 'Try building scene again' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(screen.queryByRole('button', { name: 'Try building scene again' })).not.toBeInTheDocument();
+    expect(openCatalogPhotorealBlend).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a Look save before building the scene or rendering cameras', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    const look = { materials: [], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false } };
+    draftCatalogPhotorealLook.mockResolvedValue({ look, providerId: 'p1', sentPrompt: 'composed', promptAdditions: [] });
+    let finishSave;
+    saveCatalogPhotorealLook.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    show();
+    fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply look' }));
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
+    expect(screen.getByText(/Wait for the current changes to finish/)).toBeInTheDocument();
+    expect(openCatalogPhotorealBlend).not.toHaveBeenCalled();
+    await act(async () => finishSave({ ...record, payload: { ...record.payload, photoreal: look } }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeEnabled();
+  });
+
+  it('prevents applying a Look while building and explains which saved scene opens', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    const look = { materials: [], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false } };
+    draftCatalogPhotorealLook.mockResolvedValue({ look, providerId: 'p1', sentPrompt: 'composed', promptAdditions: [] });
+    let finishOpen;
+    openCatalogPhotorealBlend.mockImplementation(() => new Promise((resolve) => { finishOpen = resolve; }));
+    show();
+    fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    const apply = await screen.findByRole('button', { name: 'Apply look' });
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByText(/Later changes appear after the next camera render/)).toBeInTheDocument();
+    fireEvent.click(open);
+    await waitFor(() => expect(finishOpen).toBeTypeOf('function'));
+    expect(apply).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Use as photo plate' })).toBeDisabled();
+    expect(saveCatalogPhotorealLook).not.toHaveBeenCalled();
+    await act(async () => finishOpen({ opened: true, blendUrl: '/scene.blend' }));
+    await waitFor(() => expect(apply).toBeEnabled());
+  });
+
+  it('can open the saved greybox before any cameras have been added', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    show({ record: { ...record, payload: { greybox: { ...greybox, shots: [] } } } });
+    expect(await screen.findByText('Save a camera on the Greybox tab to render it here.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('refreshes the scene link when another tab builds this place', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: null, blenderVersion: '5.2.3' })
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3' });
+    show();
+    expect(await screen.findByText(/without rendering cameras/)).toBeInTheDocument();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'another-place' }));
+    expect(getCatalogPhotoreal).toHaveBeenCalledTimes(1);
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+  });
+
+  it('shows an in-flight scene build after opening the page and enables actions when it finishes', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true })
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByText(/A Blender scene is being built/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Building scene…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+  });
+
+  it('ignores an older status response after a scene refresh', async () => {
+    let finishInitial;
+    getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await act(async () => finishInitial({ job: null, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true }));
+    expect(screen.getByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(screen.queryByRole('button', { name: 'Building scene…' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { label: 'building', sceneBuilding: true, blendUrl: null },
+    { label: 'idle', sceneBuilding: false, blendUrl: '/old-scene.blend' },
+  ])('keeps a retry available when an old $label status arrives after a failed refresh', async (stale) => {
+    let finishInitial;
+    getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
+      .mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    await act(async () => finishInitial({ job: null, blenderVersion: '5.2.3', ...stale }));
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry status' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.queryByRole('button', { name: 'Retry status' })).not.toBeInTheDocument();
+  });
+
+  it('offers a retry when the scene status cannot be loaded', async () => {
+    getCatalogPhotoreal.mockRejectedValueOnce(new Error('Network unavailable'))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry status' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('times out a stalled refresh and offers a retry', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    vi.useFakeTimers();
+    try {
+      act(() => { handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }); });
+      expect(screen.getByText('Checking scene status…')).toBeInTheDocument();
+      await act(async () => { vi.advanceTimersByTime(15_000); });
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not refresh the scene status');
+      expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry status' })); });
+      expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a newer running-render frame when a reconnect status arrives late', async () => {
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }));
+    show();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: {
+      id: 'pr-running', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString(),
+    } }));
+    await act(async () => finishReconnect({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    expect(screen.getByText(/current render will replace this scene/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+  });
+
+  it('reconciles a missed render failure when a scene event interrupts reconnect', async () => {
+    const running = { id: 'pr-old', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    const failed = { ...running, state: 'failed', error: 'Render stopped.' };
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: running, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }))
+      .mockResolvedValueOnce({ job: failed, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true })
+      .mockResolvedValue({ job: failed, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByText('Render stopped.')).toBeInTheDocument();
+    expect((await import('../ui/Toast')).default.error).toHaveBeenCalledWith('Blender render failed: Render stopped.');
+    await act(async () => finishReconnect({ job: running, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: false }));
+    expect(screen.getByText('Render stopped.')).toBeInTheDocument();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
+  it.each(['done', 'failed'])('settles a missed %s render while keeping a newer render visible', async (state) => {
+    const oldRunning = { id: 'pr-old', state: 'running', engine: 'cycles', shotIds: ['wide'], startedAt: new Date().toISOString() };
+    const oldDone = { ...oldRunning, state, ...(state === 'failed' ? { error: 'Render failed.' } : {}) };
+    const newRunning = { ...oldRunning, id: 'pr-new' };
+    let finishReconnect;
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: oldRunning, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishReconnect = resolve; }))
+      .mockResolvedValue({ job: newRunning, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    const onRendered = vi.fn();
+    show({ onRendered });
+    expect(await screen.findByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    act(() => { handlers.get('connect')(); });
+    await waitFor(() => expect(finishReconnect).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal')({ ingredientId: 'plc-example', job: newRunning }));
+    await act(async () => finishReconnect({ job: oldDone, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false }));
+    if (state === 'done') await waitFor(() => expect(onRendered).toHaveBeenCalledOnce());
+    else expect((await import('../ui/Toast')).default.error).toHaveBeenCalledWith('Blender render failed: Render failed.');
+    expect(screen.getByRole('button', { name: 'Rendering…' })).toBeDisabled();
+    expect(screen.getByText(/current render will replace this scene/)).toBeInTheDocument();
   });
 
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
@@ -195,6 +624,33 @@ describe('PhotorealPanel', () => {
     expect(saveCatalogPhotorealLook).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Apply look' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', look, { source: 'refine', silent: true });
+    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', { ...look, textures: {} }, { source: 'refine', silent: true });
+  });
+
+  // Catches Apply restoring stale texture picks, or racing a texture download's save.
+  it('keeps the current texture picks on Apply and holds Apply while a texture downloads', async () => {
+    const saved = { materials: [{ id: 'maple', part: 'floor', preset: 'wood-floor', color: '#c89a5a', wear: 0, emission: 0 }], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false }, textures: { 'wood-floor': 'oak_planks' } };
+    const drafted = { ...saved, atmosphere: { haze: 0.5, exposure: 0, sun: false }, textures: {} };
+    getCatalogPhotorealTextures.mockResolvedValue({ installed: [] });
+    searchCatalogPhotorealTextures.mockResolvedValue({ results: [{ id: 'pine_floor', name: 'Pine Floor', thumbnail: 'https://example.com/p.png', installed: false }] });
+    let finishInstall;
+    installCatalogPhotorealTexture.mockReturnValue(new Promise((resolve) => { finishInstall = resolve; }));
+    draftCatalogPhotorealLook.mockResolvedValue({ look: drafted, edited: true, providerId: 'p1', model: 'm1', sentPrompt: 'composed', promptAdditions: [] });
+    saveCatalogPhotorealLook.mockResolvedValue({ id: 'plc-example', payload: { photoreal: saved } });
+    show({ record: { ...record, payload: { ...record.payload, photoreal: saved } } });
+
+    fireEvent.change(await screen.findByLabelText('What should change?'), { target: { value: 'more haze' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Draft the change' }));
+    expect(await screen.findByText(/Draft look, not saved yet/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Change/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Pine Floor/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply look' })).toBeDisabled());
+    await act(async () => finishInstall({ id: 'pine_floor', name: 'Pine Floor', sizeM: 2 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply look' })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply look' }));
+    await waitFor(() => expect(saveCatalogPhotorealLook).toHaveBeenLastCalledWith('plc-example',
+      expect.objectContaining({ atmosphere: expect.objectContaining({ haze: 0.5 }), textures: { 'wood-floor': 'oak_planks' } }), { source: 'refine', silent: true }));
   });
 });

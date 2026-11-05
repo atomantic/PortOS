@@ -82,6 +82,24 @@ def residual(observed, base, expected_delta):
 
 
 class RetentionTest(unittest.TestCase):
+    def test_reference_stage_switch_keeps_the_independent_user_adapter(self):
+        model = fixture_model()
+        x = mx.random.normal((4, IN))
+        base = model(x)
+        user = adapter(scale=2e-3)
+        reference = adapter(scale=4e-3)
+        runtime.attach_adapters(model, [("user.safetensors", user, 0.7)])
+        policy = {"stage": "stage-1", "multiplier": 1.0}
+        runtime.attach_adapters(model, [("reference.safetensors", reference, 1.0)], stage_policy=policy)
+        with_reference = model(x)
+        runtime.set_staged_adapter_multiplier(model, policy, 0.0)
+        without_reference = model(x)
+        expected_user = x @ delta_of(user, strength=0.7).T
+        expected_reference = x @ delta_of(reference).T
+        mx.eval(base, with_reference, without_reference, expected_user, expected_reference)
+        self.assertLess(residual(with_reference, base, expected_user + expected_reference), 0.02)
+        self.assertLess(residual(without_reference, base, expected_user), 0.02)
+
     def test_quantized_projection_keeps_a_delta_that_merge_and_requantize_loses(self):
         model = fixture_model()
         q = model.transformer_blocks[0].attn1.to_q

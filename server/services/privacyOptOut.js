@@ -377,6 +377,8 @@ export const DEFAULT_MAX_VERIFICATION_RECHECKS = 3;
  * `confirmed_removed` (not_found) — the ONLY path to that state — leaving a
  * still-listed case in place or transitioning it to `awaiting_processing` /
  * `human_task_queued` (optout_unfulfilled) after max recheck attempts.
+ * Due confirmed_removed cases are also re-probed: a hit reopens removal work,
+ * absence renews the 30-day check, and inconclusive probes preserve the case.
  * Deps injectable (no network in tests).
  */
 export async function runVerificationPass({
@@ -392,6 +394,7 @@ export async function runVerificationPass({
   const advanced = [];
   const confirmed = [];
   const unfulfilled = [];
+  const reappeared = [];
   // 1. submitted → verification_pending when a trusted confirmation email exists.
   const submitted = cases.filter((c) => c.state === 'submitted');
   if (submitted.length) {
@@ -411,8 +414,10 @@ export async function runVerificationPass({
       }
     }
   }
-  // 2. verifying re-scan → confirmed_removed (not_found only) for verification_pending/awaiting_processing.
-  const toVerify = (await listBrokerCases({ subjectId: resolvedSubjectId })).filter((c) => c.state === 'verification_pending' || c.state === 'awaiting_processing');
+  // 2. Verify pending removals and monitor settled removals once their recheck is due.
+  const toVerify = (await listBrokerCases({ subjectId: resolvedSubjectId })).filter((c) =>
+    c.state === 'verification_pending' || c.state === 'awaiting_processing' ||
+    (c.state === 'confirmed_removed' && (!c.nextRecheckAt || new Date(c.nextRecheckAt).getTime() <= now.getTime())));
   if (toVerify.length) {
     const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
     const vectors = buildSearchVectors(scanValues);
@@ -427,6 +432,16 @@ export async function runVerificationPass({
         if (probed.verdict === 'not_found') {
           await transitionCase(c.id, 'confirmed_removed', { viaRescan: true, evidence: { ...(c.evidence || {}), verifiedRemovedAt: now.toISOString() }, now });
           confirmed.push({ caseId: c.id, brokerId: c.brokerId });
+        } else if (c.state === 'confirmed_removed') {
+          // A blocked/unknown result is inconclusive; only exposure reopens a case.
+          if (probed.verdict === 'found' || probed.verdict === 'indirect_exposure') {
+            await transitionCase(c.id, 'reappeared', {
+              viaRescan: true, found: probed.found, reason: null,
+              evidence: { ...(c.evidence || {}), ...(probed.evidence || {}), verificationRechecks: 0 },
+              now,
+            });
+            reappeared.push({ caseId: c.id, brokerId: c.brokerId });
+          }
         } else {
           // Still listed (verdict === 'found' or similar). Track recheck count.
           const currentRechecks = c.evidence?.verificationRechecks ?? c.evidence?.recheckCount ?? 0;
@@ -448,8 +463,8 @@ export async function runVerificationPass({
       }
     }
   }
-  console.log(`✅ Verification pass: ${advanced.length} advanced, ${confirmed.length} confirmed removed, ${unfulfilled.length} unfulfilled → human task`);
-  return { advanced, confirmed, unfulfilled };
+  console.log(`✅ Verification pass: ${advanced.length} advanced, ${confirmed.length} confirmed removed, ${reappeared.length} reappeared, ${unfulfilled.length} unfulfilled → human task`);
+  return { advanced, confirmed, unfulfilled, reappeared };
 }
 
 // ─── Main run loop ──────────────────────────────────────────────────────────

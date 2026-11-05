@@ -5,10 +5,22 @@ import { join } from 'path';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
+let beforeWorkWrite = async () => {};
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   return makePathsProxy(actual, { dataRoot: () => tempRoot });
+});
+
+vi.mock('./store.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    writersRoomStore: () => {
+      const real = actual.writersRoomStore();
+      return { ...real, writeWork: async (manifest) => { await beforeWorkWrite(manifest); return real.writeWork(manifest); } };
+    },
+  };
 });
 
 const local = await import('./local.js');
@@ -25,6 +37,7 @@ const {
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-test-'));
+  beforeWorkWrite = async () => {};
 });
 
 afterEach(() => {
@@ -419,6 +432,22 @@ describe('exercise sessions', () => {
     await expect(promoteExercise('wr-ex-missing')).rejects.toThrow(/not found/i);
   });
 
+  it('appends a sprint once when concurrent promotion requests overlap', async () => {
+    const work = await createWork({ title: 'Concurrent promotion' });
+    await saveDraftBody(work.id, 'Existing draft', { referencedIngredientIds: ['cat-char-1'] });
+    const exercise = await createExercise({ workId: work.id });
+    await finishExercise(exercise.id, { appendedText: 'Sprint ending' });
+
+    const results = await Promise.allSettled([promoteExercise(exercise.id), promoteExercise(exercise.id)]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')?.reason.message).toMatch(/already promoted/i);
+    const { manifest, body } = await getWorkWithBody(work.id);
+    expect(body).toBe('Existing draft\n\nSprint ending\n');
+    expect(manifest.drafts[0]).toMatchObject({ wordCount: 4, referencedIngredientIds: ['cat-char-1'] });
+    expect((await listExercises({ workId: work.id }))[0].promotedDraftVersionId).toBe(manifest.activeDraftVersionId);
+  });
+
   it('discardExercise marks the session as discarded', async () => {
     const ex = await createExercise({});
     const discarded = await discardExercise(ex.id);
@@ -674,4 +703,76 @@ describe('library snapshot pages', () => {
     await expect(local.listWorksPage({ cursor: first.nextCursor })).rejects.toMatchObject({ code: 'CURSOR_EXPIRED' });
     expect((await local.listWorksPage({ limit: 100 })).items).toHaveLength(4);
   });
+});
+
+// These public workflow regressions hold the first write after its pre-image
+// read, so followers would deterministically overwrite it without serialization.
+describe('per-work mutation serialization', () => {
+  async function overlap(workId, first, following) {
+    let entered;
+    const reached = new Promise((resolve) => { entered = resolve; });
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    beforeWorkWrite = async (manifest) => {
+      if (manifest.id === workId) {
+        beforeWorkWrite = async () => {};
+        entered();
+        await held;
+      }
+    };
+    const pending = first();
+    await reached;
+    const followers = following();
+    // Let followers reach their reads if they aren't properly queued.
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    return Promise.all([pending, ...followers]);
+  }
+
+  it('snapshots the completed autosave and preserves concurrent metadata, links and usage', async () => {
+    const work = await createWork({ title: 'Original' });
+    const text = '# Chapter one\nFresh prose for the checkpoint.';
+    await overlap(work.id,
+      () => saveDraftBody(work.id, text, { referencedIngredientIds: ['ingredient-1'] }),
+      () => [
+        snapshotDraft(work.id, { label: 'Checkpoint' }),
+        updateWork(work.id, { title: 'Renamed' }),
+        local.linkToPipeline(work.id, { seriesId: 'series-1', issueId: 'issue-1' }),
+        local.linkToCreativeDirector(work.id, { projectId: 'project-1' }),
+        recordLiveModeUsage(work.id), recordLiveModeUsage(work.id),
+        recordLiveModeRenderUsage(work.id),
+      ]);
+    const { manifest, body } = await getWorkWithBody(work.id);
+    expect(body).toBe(text);
+    expect(manifest).toMatchObject({ title: 'Renamed', pipelineSeriesId: 'series-1', cdProjectId: 'project-1' });
+    expect(manifest.drafts).toHaveLength(2);
+    for (const draft of manifest.drafts) {
+      expect(draft).toMatchObject({ contentHash: contentHash(text), wordCount: countWords(text), referencedIngredientIds: ['ingredient-1'] });
+      expect(await getDraftBody(work.id, draft.id)).toBe(text);
+    }
+    expect(resolveLiveMode(manifest).usage.count).toBe(2);
+    expect(resolveLiveMode(manifest).renderUsage.count).toBe(1);
+  });
+
+  it('saves into the newly active snapshot and keeps draft switching ordered', async () => {
+    const work = await createWork({ title: 'Versions' });
+    await saveDraftBody(work.id, 'Original body');
+    await overlap(work.id,
+      () => snapshotDraft(work.id),
+      () => [saveDraftBody(work.id, 'Revised body'), setActiveDraft(work.id, work.activeDraftVersionId)]);
+    const manifest = await getWork(work.id);
+    expect(manifest.drafts).toHaveLength(2);
+    expect(manifest.activeDraftVersionId).toBe(work.activeDraftVersionId);
+    expect(await getDraftBody(work.id, manifest.drafts[0].id)).toBe('Original body');
+    expect(await getDraftBody(work.id, manifest.drafts[1].id)).toBe('Revised body');
+    expect(manifest.drafts[1].contentHash).toBe(contentHash('Revised body'));
+  });
+
+  it('serializes deletion behind saves and continues after rejected mutations', async () => {
+    const work = await createWork({ title: 'Delete' });
+    await expect(updateWork(work.id, { title: '' })).rejects.toThrow(/title required/i);
+    await overlap(work.id, () => saveDraftBody(work.id, 'Final body'), () => [deleteWork(work.id)]);
+    await expect(getWork(work.id)).rejects.toThrow(/not found/i);
+  });
+
 });

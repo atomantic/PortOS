@@ -36,6 +36,7 @@ class RunIcLoraBoundsTest(unittest.TestCase):
             name: sys.modules.get(name)
             for name in [
                 self.module_name,
+                "mlx",
                 "ltx_pipelines_mlx",
                 "ltx_pipelines_mlx.ic_lora",
                 "ltx_pipelines_mlx.extend",
@@ -45,6 +46,8 @@ class RunIcLoraBoundsTest(unittest.TestCase):
         }
         for name in self.original_modules:
             sys.modules.pop(name, None)
+        # These fake pipelines do not need a native MLX/Metal initialization.
+        sys.modules["mlx"] = None
 
         # Minimal fake of the runtime the helper imports at module load. The
         # TeaCache patches walk these, so they must exist even though these tests

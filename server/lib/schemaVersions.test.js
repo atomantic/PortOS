@@ -29,7 +29,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // v15 adds an optional place `greybox` layout; additive + version-gated.
     // v18 adds an optional `height` on canon forms.
     // v19 adds the film look weave/flicker speed a visual profile can carry.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(19);
+    // v20 adds an optional place `photoreal` look (#14946).
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(20);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -133,14 +134,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(19);
+    expect(meta.schemaVersions.universes).toBe(20);
     expect(meta.schemaVersions.pipelineIssues).toBe(6);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(19);
+    expect(meta.schemaVersions.universes).toBe(20);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

@@ -148,7 +148,9 @@ if you leave the tab.
 Blender comes from **Code Animation › Production › Blender execution**: set the
 executable there and run its check first (Blender 4.2 through 5.2; 5.2.3 is the
 target). The render runs PortOS's own script with the greybox passed as data, in
-the same contained or trusted-local worker mode as Code Animation. A greybox
+the same contained or trusted-local worker mode as Code Animation. Contained mode
+has no GPU, so it renders Cycles on the CPU and refuses EEVEE; a GPU render needs
+Trusted local mode. A greybox
 showing an attached .glb is not rebuilt yet; switch its layout source to the saved
 parts.
 
@@ -158,6 +160,12 @@ camera and replaces the camera's previous render unless that one is a photo plat
 **Download .blend** gives the latest built scene, with parts grouped by zone,
 landmarks and anchors as empties, and every saved camera, ready to dress in
 Blender.
+**Open in Blender** opens that scene in a new window of the checked Blender on
+the machine running PortOS (with scripts off, as in a render). If no scene exists,
+it first builds one from the saved greybox and look without rendering any cameras;
+the initial scene uses Cycles CPU. The next render replaces the kept file, so use
+**File › Save As** to keep your edits. Under the button the tab lists the paths of
+the kept `.blend` and of the folder the stills are saved in, each with **Copy**.
 
 ### Dress it (Look)
 
@@ -171,7 +179,25 @@ and choose **Dress with AI**. The result is a preview listing its materials and
 lights; **Apply look** saves it (as a revision of the Environment) and the next
 render uses it. With a look saved, the box edits it unless you choose to start
 over. The look never moves geometry; a rule for a part you later remove simply
-stops matching. **Remove look** goes back to flat zone colors and the sun.
+stops matching. **Remove look** goes back to flat zone colors and the sun. A
+linked universe's canon mirrors the look, but a canon sync never changes or
+removes it.
+
+#### Photo textures (CC0)
+
+Under the look, each surface material (wood floor, painted wall or metal,
+carpet, tile, concrete, plastic, vinyl, fabric) can use a photo texture from
+[Poly Haven](https://polyhaven.com), whose assets are all CC0. **Choose photo**
+searches Poly Haven by that material; nothing is downloaded until you tap a
+texture. The tap downloads its 2K color, roughness and normal maps once into
+`data/photoreal-textures/<id>/` (a few MB) and saves the pick on the look, so it
+is a revision you can roll back. The texture is laid out at its real-world size
+and box-projected. A natural material keeps the photo's color with a light tint
+toward the look's color, while a painted one takes the look's color over the
+photo's grain. **Procedural** goes back to PortOS's own surface. Glass, mirror,
+chrome and neon always stay procedural. AI drafts never see or change the picks.
+On a machine that hasn't downloaded a picked texture, that material renders
+procedurally until you pick the texture there.
 
 ### Fly-through
 

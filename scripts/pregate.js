@@ -17,7 +17,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
-import { ALWAYS_RUN_TESTS, structuralTestsFor } from './ci-test-plan.js';
+import { ALWAYS_RUN_TESTS, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -183,7 +183,11 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
   }
 
   const guardedFiles = { server: new Set(), client: new Set() };
-  const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1' }, client: {} };
+  // Single owner of each unit scope's env: guards, scoped runs and every full
+  // shard share it, so a re-run can never drift into a different memo key.
+  // CI_SHARD is cleared so an inherited value can only slice a stage that
+  // sets it below.
+  const scopeEnv = { server: { PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_TEST_QUIET: '1', CI_SHARD: undefined }, client: { CI_SHARD: undefined } };
   if (guardPlan) {
     for (const scope of ['server', 'client']) {
       const selected = plan[scope];
@@ -221,7 +225,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
       ? scoped.files.filter(file => !guardedFiles[scope].has(file))
       : scoped.files;
     if (scoped.mode === 'files' && files.length === 0 && scoped.sources.length === 0) return;
-    stages.push({
+    const stage = {
       name: `${scope} tests`,
       suite: scope,
       script: 'run-ci-tests.js',
@@ -237,7 +241,18 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
         // against a different ref than CI.
         ...base,
       },
-    });
+    };
+    // A full plan runs CI's documented shard split one shard at a time so a
+    // late failure keeps the earlier shards' official memo entries. Sequential
+    // stages also keep one writer per workspace's Vitest dependency record.
+    const count = scoped.mode === 'full' ? FULL_SUITE_SHARDS[scope] : 1;
+    if (count <= 1) {
+      stages.push(stage);
+      return;
+    }
+    for (let index = 1; index <= count; index += 1) {
+      stages.push({ ...stage, name: `${stage.name} (shard ${index}/${count})`, env: { ...stage.env, CI_SHARD: `${index}/${count}` } });
+    }
   });
 
   if (plan.build && !skip.build) {
@@ -262,6 +277,7 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
         PORTOS_BROWSER_TEST_PROFILE: 'smoke',
         PORTOS_REQUIRE_BROWSER_SUITES: '1',
         PORTOS_TEST_QUIET: '1',
+        CI_SHARD: undefined,
         ...base,
       },
     });

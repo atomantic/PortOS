@@ -61,9 +61,9 @@ const references = (value, ids) => {
   return value && typeof value === 'object' && Object.values(value).some(child => references(child, ids));
 };
 const size = async path => path ? stat(path).then(info => info.size, error => {
-  if (error.code === 'ENOENT') return 0;
+  if (error.code === 'ENOENT') return null;
   throw error;
-}) : 0;
+}) : null;
 const remove = async path => {
   if (!path) return;
   await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -73,6 +73,17 @@ const renderFiles = entry => [safeUnder(PATHS.videos, entry.filename),
   safeUnder(PATHS.videoThumbnails, entry.filename?.replace(/\.mp4$/, '-proof.png')),
   ...Array.from({ length: 9 }, (_, i) => safeUnder(PATHS.videoThumbnails, `${entry.id}-f${i + 1}.jpg`)),
 ].filter(Boolean);
+
+async function finalFileInventory(entry) {
+  const videoPath = safeUnder(PATHS.videos, entry.filename);
+  const [videoBytes, ...otherBytes] = await Promise.all([
+    size(videoPath), ...renderFiles(entry).filter(path => path !== videoPath).map(size),
+  ]);
+  return {
+    bytes: otherBytes.reduce((sum, value) => sum + (value ?? 0), videoBytes ?? 0),
+    videoStatus: !videoPath ? 'invalid' : videoBytes === null ? 'missing' : 'present',
+  };
+}
 
 async function finalInventory(projectId, history, pending = [], boardOwners = null, loomOwners = null) {
   const project = await requireProject(projectId);
@@ -103,7 +114,7 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
     if (entry.upscaledFrom) {
       if (pendingIds.has(entry.id) && entry.musicVideoProjectId === projectId) {
         const reason = await upscaleRecoveryReason(entry, history, pending);
-        finals.push({ id: entry.id, pending: true, filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), recoverable: !reason, reason: reason || 'Upscaled deliverable retained; ready to restore to video history' });
+        finals.push({ id: entry.id, pending: true, filename: entry.filename, createdAt: entry.createdAt, ...await finalFileInventory(entry), recoverable: !reason, reason: reason || 'Upscaled deliverable retained; ready to restore to video history' });
       }
       continue;
     }
@@ -117,9 +128,11 @@ async function finalInventory(projectId, history, pending = [], boardOwners = nu
     }
     const referenced = owners.some(owner => references(owner, ids))
       || [...history, ...pending].some(other => other.id !== entry.id && references(other, ids));
+    const fileInventory = await finalFileInventory(entry);
     const reason = identityConflict(entry, history, pending) ? 'Conflicting history or cleanup journal ID or filename'
-      : !hasCurrent ? 'No completed replacement' : kitActive ? 'In use by a publishing-kit or cinema-package build' : referenced ? 'Referenced by saved media or production records' : null;
-    finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, bytes: (await Promise.all(renderFiles(entry).map(size))).reduce((a, b) => a + b, 0), reason });
+      : fileInventory.videoStatus === 'invalid' ? 'Invalid render filename' : !hasCurrent ? 'No completed replacement'
+        : kitActive ? 'In use by a publishing-kit or cinema-package build' : referenced ? 'Referenced by saved media or production records' : null;
+    finals.push({ id: entry.id, pending: pendingIds.has(entry.id), filename: entry.filename, createdAt: entry.createdAt, ...fileInventory, reason });
   }
   return { project, finals };
 }

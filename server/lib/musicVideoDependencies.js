@@ -1,6 +1,7 @@
 /** Versioned Music Video provenance. Only pointers/checksums live on project rows. */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices } from './musicVideoConditioning.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -40,6 +41,21 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
     .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
+
+// Keep the project's selected clip guides with the take, so an in-flight clip
+// cannot fill an empty slot after the director changes those selections.
+export function captureClipReferenceDependency(project, scene) {
+  const ids = Array.isArray(scene?.clipReferenceIds) ? scene.clipReferenceIds : null;
+  const choices = musicVideoClipReferenceChoices(project, scene);
+  const selected = ids ? ids.map((id) => choices.find((ref) => ref.id === id) || { id })
+    : musicVideoClipConditioningReferences(project, scene, null, { limit: 8 });
+  // Catalog cast guides are loaded outside the project record. A synchronous
+  // project snapshot cannot tell if those external guide files later changed.
+  // Such a take must be explicitly reviewed before filling an empty slot.
+  const untrackedCastGuides = ids ? ids.some((id) => !choices.some((ref) => ref.id === id)) : !!scene.characterVariant;
+  return { role: 'clipReferences', sceneId: scene.sceneId, assetId: scene.sceneId,
+    untrackedCastGuides, revision: checksum({ ids, selected, characterVariant: scene.characterVariant || null }) };
+}
 
 /** Capture the actual submitted plate (and end frame), including optional crop/mask provenance. */
 export function captureTakeDependencies(scene, sourceImageId = scene?.referenceImageId, endImageId = null) {
@@ -118,7 +134,8 @@ function createDependencyReader(project) {
     let references = sceneReferences.get(scene);
     if (!references) sceneReferences.set(scene, references = new Map());
     if (!references.has(ref.role)) references.set(ref.role, slots[ref.role] ? assetRef(scene, ref.role)
-      : ref.role === 'layer' ? layerRef(scene) : null);
+      : ref.role === 'layer' ? layerRef(scene)
+        : ref.role === 'clipReferences' ? captureClipReferenceDependency(project, scene) : null);
     return references.get(ref.role);
   };
 }
@@ -132,7 +149,7 @@ function dependencyChanges(dependencies, readCurrent) {
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
     if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
     }
   }
   return changes;
@@ -253,6 +270,6 @@ export function remapMusicVideoDependencies(dependencies, sceneIdMap) {
       const sceneIds = ref.sceneIds.map((id) => sceneIdMap.get(id) || id).sort();
       return { ...ref, sceneIds, revision: checksum(sceneIds) };
     }
-    return { ...ref, ...(ref.sceneId ? { sceneId } : {}), ...(ref.role === 'layer' ? { assetId: sceneId } : {}) };
+    return { ...ref, ...(ref.sceneId ? { sceneId } : {}), ...(['layer', 'clipReferences'].includes(ref.role) ? { assetId: sceneId } : {}) };
   }) };
 }

@@ -202,7 +202,7 @@ export const startWhisper = async (cfg) => {
   const occupied = await probePortInUse(host, port);
   if (occupied) {
     if (/EADDRINUSE|in use/i.test(occupied)) {
-      throw new Error(`${occupied} — another service is bound to ${host}:${port}. Change voice.stt.endpoint (e.g. http://127.0.0.1:5563) under Settings → Voice.`);
+      throw new Error(`${occupied} — another service is bound to ${host}:${port}. Change voice.stt.endpoint to an unused loopback port under Settings → Voice.`);
     }
     throw new Error(`${occupied} — voice.stt.endpoint is misconfigured for ${host}:${port}. Check Settings → Voice and ensure the host/IP is valid and bindable on this machine.`);
   }

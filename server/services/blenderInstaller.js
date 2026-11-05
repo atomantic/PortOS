@@ -234,8 +234,7 @@ export async function startBlenderInstall({ io, acknowledgeBusy = false, deps = 
 }
 
 /** Installed Blender apps a managed or manual install left in the usual places, newest first. */
-export async function findInstalledBlenderApps({ home = homedir(), readVersion }) {
-  const roots = ['/Applications', join(home, 'Applications')];
+export async function findInstalledBlenderApps({ home = homedir(), readVersion, roots = ['/Applications', join(home, 'Applications')] }) {
   const found = [];
   for (const root of roots) {
     const names = await readdir(root).catch(() => []);

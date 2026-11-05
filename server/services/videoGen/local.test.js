@@ -4472,7 +4472,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
   it('rejects an IC render on a non-ltx2 runtime', async () => {
     await expect(generateVideo({
       ...baseIcRender, jobId: 'ic-wrong-runtime', modelId: 'ltx23_unified',
-    })).rejects.toThrow(/require an ltx2-runtime model/);
+    })).rejects.toThrow(/requires a ltx-2.3 model/);
   });
 
   // ── Ingredients: image-kind references (#3112) ─────────────────────────

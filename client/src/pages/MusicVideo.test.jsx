@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../hooks/useMediaUsages', () => ({ useMediaUsages: () => ({}), refreshMediaUsages: () => Promise.resolve() }));
+vi.mock('../services/apiCatalog.js', async (importOriginal) => ({ ...await importOriginal(), listCatalogIngredientMedia: vi.fn(async () => []) }));
 vi.mock('../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/apiMediaJobs.js', async (importOriginal) => ({ ...await importOriginal(), listQueueMediaJobs: vi.fn(async () => []) }));
 import { listQueueMediaJobs } from '../services/apiMediaJobs.js';
@@ -11,6 +12,8 @@ import { render, screen, waitFor, fireEvent, within, act } from '@testing-librar
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
+import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
+import { createTestPhaseDiagnostics } from '../../../server/test/testPhaseDiagnostics.js';
 
 
 const PROJECT_WITH_CLIP = {
@@ -414,12 +417,14 @@ const openStage = async (stage, selectFirstScene = true) => {
   }
 };
 
-const openProject = async (project, stage = null) => {
+// `phase` optionally labels each step for failure evidence (testPhaseDiagnostics).
+const untracked = (_name, operation) => operation();
+const openProject = async (project, stage = null, phase = untracked) => {
   listMusicVideoProjects.mockResolvedValue([project]);
   renderMV();
-  await selectProject(project.id);
-  await screen.findByRole('heading', { level: 2, name: project.name });
-  if (stage) await openStage(stage);
+  await phase('select-project', () => selectProject(project.id));
+  await phase('project-heading', () => screen.findByRole('heading', { level: 2, name: project.name }));
+  if (stage) await phase('open-stage', () => openStage(stage));
 };
 
 // The header hides New project / Autonomous while a project is open, so step
@@ -2544,15 +2549,17 @@ describe('MusicVideo media lightbox (#3718)', () => {
     expect(dialog.querySelector('img')?.getAttribute('src') || dialog.innerHTML).toMatch(/\/data\/images\/end1/);
   });
 
-  it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async () => {
-    await openProject(PROJECT_WITH_CLIP, 'produce');
+  it('opens the lightbox from a scene-clip expand control without hijacking play/pause', async ({ onTestFailed }) => {
+    const phase = createTestPhaseDiagnostics(onTestFailed);
+    await openProject(PROJECT_WITH_CLIP, 'produce', phase);
     // Inline thumb keeps its own controls attribute for native play/pause.
     const inlineVideo = document.querySelector('video[src="/data/videos/h1.mp4"]');
     expect(inlineVideo).toBeTruthy();
     expect(inlineVideo.hasAttribute('controls')).toBe(true);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 clip full size' }));
-    const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    const expand = await phase('find-expand-control', () => screen.findByRole('button', { name: 'View scene 1 clip full size' }));
+    fireEvent.click(expand);
+    const dialog = await phase('viewer-dialog', () => screen.findByRole('dialog', { name: /Media viewer/i }));
     const lightboxVideo = dialog.querySelector('video');
     expect(lightboxVideo?.getAttribute('src')).toBe('/data/videos/h1.mp4');
   });
@@ -2695,7 +2702,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     // The automatic set shows as chips; swap the flagged Lead for the Pier set.
     await showFrames();
-    const refs = within(screen.getByRole('group', { name: 'References sent with the frames' }));
+    const refs = within(screen.getByRole('group', { name: 'References selected for the frames' }));
     expect(refs.getByText('Auto: from the prompt')).toBeTruthy();
     fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());
@@ -3935,5 +3942,79 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
       expect(screen.queryByText(/Could not load universes/)).not.toBeInTheDocument();
     });
     expect(screen.getByRole('option', { name: 'Cyberverse' })).toBeInTheDocument();
+  });
+});
+
+describe('linked object look references', () => {
+  const project = () => ({
+    ...PROJECT_NO_CLIP,
+    id: 'mv-object', name: 'Object references',
+    concept: { subjects: [{ id: 'bike', kind: 'object', name: 'Bike', ingredientId: 'cat-bike' }] },
+    visualSpec: { references: [{ id: 'existing', imageId: 'existing.png', label: 'Existing', role: 'prop', condition: false }] },
+  });
+  const media = [
+    { kind: 'reference', mediaKey: 'one.png', caption: 'First bike' },
+    { kind: 'reference', mediaKey: 'two.png', caption: 'Second bike' },
+  ];
+
+  it('keeps later reference edits when an earlier object save resolves', async () => {
+    listCatalogIngredientMedia.mockResolvedValue(media);
+    const saves = [];
+    updateMusicVideoProject.mockReset();
+    updateMusicVideoProject.mockImplementation((id, patch) => new Promise((resolve) => {
+      saves.push(() => resolve({ id, visualSpec: patch.visualSpec }));
+    }));
+    await openProject(project(), 'cast-sets');
+    fireEvent.load(await screen.findByAltText('Bike reference 1'));
+    fireEvent.load(screen.getByAltText('Bike reference 2'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    fireEvent.click(screen.getByText('Visual guidance'));
+    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
+    const condition = guidance.getAllByLabelText('Condition frames')[0];
+    fireEvent.click(condition);
+    expect(condition).toBeChecked();
+    await act(async () => saves[0]());
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Bike image 2 to look references' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 2 to look references' }));
+    await act(async () => saves[1]());
+    await waitFor(() => expect(saves).toHaveLength(3));
+    const last = updateMusicVideoProject.mock.calls[2][1].visualSpec.references;
+    expect(last.map((ref) => ref.imageId)).toEqual(['existing.png', 'one.png', 'two.png']);
+    expect(last[0].condition).toBe(true);
+    await act(async () => saves[2]());
+  });
+
+  it('rolls back a failed addition so the image can be retried', async () => {
+    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
+    updateMusicVideoProject.mockReset();
+    updateMusicVideoProject.mockRejectedValueOnce(new Error('Save failed'));
+    await openProject(project(), 'cast-sets');
+    fireEvent.load(await screen.findByAltText('Bike reference 1'));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })));
+    expect(await screen.findByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
+    expect(toast.error).toHaveBeenCalledWith('Save failed');
+  });
+
+  it('restores the last saved references when two queued edits both fail', async () => {
+    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
+    const failures = [];
+    updateMusicVideoProject.mockReset();
+    updateMusicVideoProject.mockImplementation(() => new Promise((_, reject) => failures.push(() => reject(new Error('Save failed')))));
+    await openProject(project(), 'cast-sets');
+    fireEvent.load(await screen.findByAltText('Bike reference 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    await waitFor(() => expect(failures).toHaveLength(1));
+    fireEvent.click(screen.getByText('Visual guidance'));
+    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
+    fireEvent.click(guidance.getAllByLabelText('Condition frames')[0]);
+    await act(async () => failures[0]());
+    await waitFor(() => expect(failures).toHaveLength(2));
+    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
+    await act(async () => failures[1]());
+    expect(guidance.getByLabelText('Condition frames')).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
   });
 });

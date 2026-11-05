@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
+import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
 import MediaImage from '../components/MediaImage';
@@ -88,6 +89,27 @@ function moodBoardAddErrorMessage(err) {
     ? err.context.details.map((entry) => entry?.message).filter((message) => typeof message === 'string' && message)
     : [];
   return details.join('; ') || err?.message || 'Failed to add item';
+}
+
+function MoodBoardItemTextField({ item, displayText, isAnalyzed, hasPrompt, onUpdate }) {
+  const [draft, setDraft] = useState(displayText);
+
+  return (
+    <AutoSizeTextarea
+      aria-label={isAnalyzed ? 'Analyzed prompt' : hasPrompt ? 'Item prompt' : 'Item caption'}
+      value={draft}
+      title={displayText}
+      placeholder={hasPrompt ? 'Add a prompt…' : 'Add a caption…'}
+      maxLength={isAnalyzed ? 8000 : item.prompt ? 16000 : 2000}
+      rows={1}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => {
+        const next = event.target.value.trim();
+        if (next !== displayText) onUpdate(item, next);
+      }}
+      className="min-w-0 w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-300 focus:border-port-accent outline-none"
+    />
+  );
 }
 
 function MoodBoardEditor({ id }) {
@@ -1103,19 +1125,13 @@ function MoodBoardEditor({ id }) {
                           <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </div>
-                      <input
-                        type="text"
+                      <MoodBoardItemTextField
                         key={`${item.id}-${displayText}`}
-                        aria-label={isAnalyzed ? "Analyzed prompt" : hasPrompt ? "Item prompt" : "Item caption"}
-                        defaultValue={displayText}
-                        title={displayText}
-                        placeholder={hasPrompt ? "Add a prompt…" : "Add a caption…"}
-                        maxLength={isAnalyzed ? 8000 : item.prompt ? 16000 : 2000}
-                        onBlur={(e) => {
-                          const next = e.target.value.trim();
-                          if (next !== displayText) handleUpdateItemText(item, next);
-                        }}
-                        className="min-w-0 w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-xs text-gray-300 focus:border-port-accent outline-none"
+                        item={item}
+                        displayText={displayText}
+                        isAnalyzed={isAnalyzed}
+                        hasPrompt={hasPrompt}
+                        onUpdate={handleUpdateItemText}
                       />
                       {item.source ? (
                         <span className="min-w-0 text-[10px] text-gray-500 truncate" title={item.source}>{item.source}</span>

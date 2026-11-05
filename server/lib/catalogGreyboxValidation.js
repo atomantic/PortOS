@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { GREYBOX_LIMITS, greyboxSceneSchema } from './greyboxScene.js';
 import { GREYBOX_INSTRUCTION_MAX, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
 import { PHOTOREAL_ENGINES, PHOTOREAL_FLYTHROUGH_SECONDS, PHOTOREAL_MAX_SAMPLES } from './greyboxBlender.js';
-import { photorealLookSchema } from './photorealLook.js';
+import { PHOTOREAL_TEXTURE_ID, PHOTOREAL_TEXTURED_PRESETS, photorealLookSchema } from './photorealLook.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { emptyToNull } from './zodCompat.js';
 import { REVISION_SOURCES } from './catalogValidation.js';
@@ -45,9 +45,19 @@ export const catalogPhotorealRenderSchema = z.object({
   flythroughSeconds: z.number().finite().min(PHOTOREAL_FLYTHROUGH_SECONDS.MIN).max(PHOTOREAL_FLYTHROUGH_SECONDS.MAX).optional(),
 }).strict().refine((body) => !body.flythroughSeconds || body.shotIds.length >= 2, { message: 'a fly-through needs at least two cameras', path: ['shotIds'] });
 
+// Opening or building the scene takes no input: the data and executable are fixed.
+export const catalogPhotorealOpenSchema = z.object({}).strict();
+
 // Photoreal look: AI draft/preview reuse the greybox draft body; `look: null` clears it.
 export const catalogPhotorealLookDraftSchema = catalogGreyboxDraftSchema;
 export const catalogPhotorealLookSaveSchema = z.object({
   look: photorealLookSchema.nullable(),
   source: z.enum(REVISION_SOURCES).optional(),
 }).strict();
+
+// CC0 photo textures (Poly Haven): search when the picker opens, download on a tap.
+export const catalogPhotorealTextureSearchSchema = z.object({
+  preset: z.enum(PHOTOREAL_TEXTURED_PRESETS),
+  q: z.string().max(80).optional().default(''),
+}).strict();
+export const catalogPhotorealTextureIdSchema = z.string().regex(PHOTOREAL_TEXTURE_ID);

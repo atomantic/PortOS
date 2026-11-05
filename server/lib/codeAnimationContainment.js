@@ -108,10 +108,17 @@ const SYSTEM_READ_ROOTS = [
  *     and the staged input;
  *   - read/write of the workspace's output, scratch and private home only;
  *   - metadata (stat, not listing or content) of the ancestors of those roots,
- *     which path resolution needs.
+ *     which path resolution needs;
+ *   - open of the Apple GPU's device user client only. Blender's startup reads
+ *     the Metal device's name and segfaults when no device is listed (#14939).
+ *     This grant only lists the device: Metal still cannot compile or render,
+ *     and broad Mach access did not change that, so contained Blender stays
+ *     CPU-only. It does expose the GPU driver's kernel interface to contained
+ *     code, a cost accepted to keep every other denial.
  * Everything else is denied: network (including loopback and Unix sockets, so
  * PortOS's own API is unreachable), Mach/XPC services (keychain, pasteboard,
- * launchd), IPC, other files, device files beyond the null/random devices.
+ * launchd, the Metal compiler), IPC, other IOKit clients, other files, device
+ * files beyond the null/random devices.
  */
 export function codeAnimationSeatbeltProfile({ executable, toolRoots, workspace }) {
   const staged = join(workspace, 'input');
@@ -122,10 +129,27 @@ export function codeAnimationSeatbeltProfile({ executable, toolRoots, workspace 
 (deny default)
 (allow process-exec (literal ${sbplPath(executable)}))
 (allow sysctl-read)
+(allow iokit-open (iokit-user-client-class "AGXDeviceUserClient"))
 (allow file-read-metadata (literal "/") ${metadata.map((path) => `(literal ${sbplPath(path)})`).join(' ')})
 (allow file-read* (literal "/") (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
   ${readRoots.map((path) => `(subpath ${sbplPath(path)})`).join(' ')})
 (allow file-write* (literal "/dev/null") ${writable.map((path) => `(subpath ${sbplPath(path)})`).join(' ')})`;
+}
+
+/** Shown wherever contained Blender and an engine are chosen. Neither sandbox provides a usable GPU. */
+export const CONTAINED_BLENDER_GPU_NOTICE = 'Contained mode has no GPU: the sandbox does not give Blender a working graphics device, so only Cycles on the CPU can render. EEVEE needs Trusted local mode.';
+
+const WORKER_LIMIT_LABELS = { time: 'wall-time', disk: 'disk', files: 'file-count', memory: 'memory', 'file-size': 'file-size' };
+
+/** One operator-facing sentence on why a worker run did not complete. Never carries worker output. */
+export function codeAnimationWorkerFailure({ status, reason, signal, exitCode }) {
+  if (status === 'terminated') {
+    if (reason === 'canceled') return 'Blender was canceled.';
+    return WORKER_LIMIT_LABELS[reason] ? `Blender was stopped by the ${WORKER_LIMIT_LABELS[reason]} limit.` : 'Blender was stopped by its supervisor.';
+  }
+  if (signal) return `Blender crashed with ${signal}.`;
+  if (Number.isInteger(exitCode) && exitCode !== 0) return `Blender exited with code ${exitCode}.`;
+  return 'The worker failed before Blender finished.';
 }
 
 /**

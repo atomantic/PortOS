@@ -25,6 +25,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+import { toPgJson } from '../lib/pgJson.js';
 
 // Universe canon writes use the same disposable PostgreSQL as catalog rows.
 vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
@@ -101,6 +102,33 @@ afterAll(async () => {
 });
 
 describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () => {
+  it('reports old and new CLI driver inputs as unverified while preserving direct-provider provenance', async () => {
+    const prefix = `related-codex-${NONCE}-`;
+    const primary = `${prefix}source.png`;
+    const ing = await catalogDB.createIngredient({ type: 'place', name: 'Example reference', payload: { primaryImageRef: primary, imageRefs: [primary], locked: true } });
+    createdIngredientIds.add(ing.id);
+    expect(ing.payload.primaryImageRef).toBe(primary);
+    for (const [suffix, mode, inputProvenance] of [
+      ['old', 'codex', 'provider-inputs'], ['new', 'codex', 'cli-attachments'], ['grok', 'grok', 'provider-inputs'],
+      ['agy', 'agy', 'cli-requested'], ['other', 'fal', 'provider-inputs'],
+    ]) {
+      const filename = `${prefix}${suffix}.png`;
+      const key = `image:${filename}`;
+      relatedImageKeys.add(key);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
+        [key, 'image', filename, toPgJson({ mode, inputProvenance, referenceImageFilenames: [primary] }), '2026-01-01T00:00:00.000Z']);
+    }
+    const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
+    expect(result.status).toBe(200);
+    expect(result.body.items.map(item => [item.filename, item.provenanceStatus])).toEqual([
+      [`${prefix}agy.png`, 'provider-use-unverified'],
+      [`${prefix}grok.png`, 'provider-use-unverified'],
+      [`${prefix}new.png`, 'provider-use-unverified'],
+      [`${prefix}old.png`, 'provider-use-unverified'],
+      [`${prefix}other.png`, 'recorded'],
+    ]);
+  });
+
   it('pages only direct image provenance, excluding displayed, hidden, malformed and unrelated assets', async () => {
     const prefix = `related-${NONCE}-`;
     const primary = `${prefix}cover.png`;

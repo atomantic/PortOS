@@ -158,6 +158,11 @@ vi.mock('../services/apiImageVideo', () => ({
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+vi.mock('../components/catalog/PhotorealPanel', () => ({
+  default: ({ record, onSaved }) => (
+    <button type="button" onClick={() => onSaved({ ...record, payload: { ...record.payload, photoreal: { version: 1, lights: [{ id: 'key' }] } } })}>Apply stub look</button>
+  ),
+}));
 const { mediaAnnotationsFixture } = vi.hoisted(() => ({ mediaAnnotationsFixture: { current: {} } }));
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: mediaAnnotationsFixture.current, updateAnnotation: vi.fn() }) }));
 vi.mock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
@@ -623,8 +628,11 @@ describe('CatalogIngredient — character sheet', () => {
       { refKind: 'universe', refId: 'second', refName: 'Second world', role: 'canon-character' },
     ] }));
     await renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Universe: Needs review' }));
     expect(screen.getByText('Ownership needs review')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Usage (2)'));
     expect(screen.getByRole('link', { name: /First world/ })).toHaveAttribute('href', '/universes/first');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
     await screen.findByPlaceholderText(/Describe the image to render/);
     expect(getUniverse).not.toHaveBeenCalled();
@@ -929,9 +937,30 @@ describe('CatalogIngredient — character sheet', () => {
 
   it('keeps ownership controls after reloading the same character through a library route', async () => {
     const { router } = await renderPage('/catalog/character/cat-chr-1');
-    await screen.findByLabelText('Universe ownership and usage');
+    expect(await screen.findByRole('button', { name: 'Universe: My Cool Universe' })).toBeVisible();
     await act(async () => router.navigate('/casting/cat-chr-1'));
-    expect(await screen.findByLabelText('Universe ownership and usage')).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Universe: My Cool Universe' })).toBeVisible();
+  });
+
+  it.each([
+    ['character', 'casting', 'references'],
+    ['place', 'environments', 'plates'],
+    ['object', 'objects', 'images'],
+  ])('keeps the %s universe control in the header across library sections', async (type, library, tab) => {
+    const item = { ...CHAR_FIXTURE, id: 'item-1', type, name: 'Example item', payload: {}, refs: [
+      { refKind: 'universe', refId: 'u-1', refName: 'Example World', role: 'owner' },
+    ] };
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf(item));
+    const { router } = await renderPage(`/${library}/item-1`);
+    const header = screen.getByRole('heading', { name: 'Example item', level: 1 }).closest('header');
+    const control = within(header).getByRole('button', { name: 'Universe: Example World' });
+    expect(screen.queryByRole('dialog', { name: 'Universe ownership and usage' })).toBeNull();
+    fireEvent.click(control);
+    expect(screen.getByRole('dialog', { name: 'Universe ownership and usage' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await act(async () => router.navigate(`/${library}/item-1/${tab}`));
+    fireEvent.click(within(screen.getByRole('heading', { name: 'Example item', level: 1 }).closest('header')).getByRole('button', { name: 'Universe: Example World' }));
+    expect(screen.getByRole('dialog', { name: 'Universe ownership and usage' })).toBeVisible();
   });
 
   it('uses the latest physical description when reopening generation after cancelling an edited prompt', async () => {
@@ -1810,6 +1839,21 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       'cat-plc-1', { mediaKey: 'mood.png', kind: 'reference', role: 'plate', caption: null }, { silent: true },
     ));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Unmark plate' })).toHaveLength(2));
+  });
+
+  it('keeps a look applied on the Photoreal tab through the next profile Save (#14946)', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf({ ...HERO, id: 'cat-plc-1', type: 'place', name: 'Example Harbor', payload: { description: 'Old' }, refs: [] }),
+      media: [],
+    }));
+    updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ id: 'cat-plc-1', ...patch }));
+    const { router } = await renderPage('/environments/cat-plc-1/photoreal');
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply stub look' }));
+    await act(async () => { await router.navigate('/environments/cat-plc-1'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Harbor Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+    expect(updateCatalogIngredient.mock.calls[0][1].payload.photoreal).toEqual({ version: 1, lights: [{ id: 'key' }] });
   });
 
   it('keeps /catalog/:type/:id untabbed with every panel on one page', async () => {

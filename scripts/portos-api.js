@@ -250,8 +250,16 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
   }
   console.error(`❌ ${parsed.method} ${parsed.path} → ${status}`);
   if (out) console.error(out);
-  if (status === 401 && !token) {
-    console.error('No credential found. Turn on Settings > Security > Agent API key in PortOS, or set PORTOS_API_TOKEN.');
+  if (status === 401) {
+    if (!token) {
+      console.error('No credential found. Turn on Settings > Security > Agent API key in PortOS, or set PORTOS_API_TOKEN.');
+    } else {
+      const source = env.PORTOS_API_TOKEN ? 'PORTOS_API_TOKEN' : 'Agent API key';
+      console.error(`Authentication rejected the selected ${source} credential; the API responded. This does not establish expiry or revocation.`);
+      console.error(env.PORTOS_API_TOKEN
+        ? 'PORTOS_API_TOKEN takes precedence over the Agent API key; no fallback was attempted. Check the intended PORTOS_URL and obtain a fresh credential through the CoS launch flow.'
+        : 'Check the intended PORTOS_URL and refresh the Agent API key in Settings > Security. No alternate credential was attempted.');
+    }
   }
   return 1;
 };
