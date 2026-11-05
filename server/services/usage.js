@@ -364,6 +364,14 @@ export function getReconciledUsageRunIds() {
   return Object.keys(usageData?.reconciledRuns || {});
 }
 
+/** Exact observed Codex boundaries from nearby durable completions; legacy markers carry none. */
+export async function getRecentCodexUsageClaims(since) {
+  if (!usageData) await loadUsage();
+  return Object.values(usageData.reconciledRuns || {})
+    .filter((marker) => Array.isArray(marker?.codexHighWater) && Date.parse(marker.at) >= since)
+    .flatMap((marker) => structuredClone(marker.codexHighWater));
+}
+
 /**
  * Drop sibling markers that only guarded a single apply — the interactive scan's
  * synthetic ids, which its own watermark makes redundant once the batch lands.
@@ -822,7 +830,7 @@ export async function recordMessages(providerId, model, messageCount, outputToke
  *   cacheWriteTokens?: number, source?: 'measured'|'estimate' }
  *   | Array<object>} record
  */
-export async function recordRunUsage(record, { reconciledRunId = null, siblings = false } = {}) {
+export async function recordRunUsage(record, { reconciledRunId = null, siblings = false, codexHighWater = null } = {}) {
   // A single run can produce several records when its session switched models
   // mid-flight (see usageReconciler.reconcileRunUsage). Apply the full batch
   // in memory before saving so every model is priced independently without
@@ -861,7 +869,17 @@ export async function recordRunUsage(record, { reconciledRunId = null, siblings 
 
   // Marker and counts share one write: a crash between two saves would leave
   // counts that a later backfill treats as unrecorded and adds again.
-  if (reconciledRunId) setReconciledMarkers(reconciledRunId, siblings);
+  if (reconciledRunId) {
+    const existed = Boolean(usageData.reconciledRuns?.[reconciledRunId]);
+    setReconciledMarkers(reconciledRunId, siblings);
+    // The exact observed boundary commits with its counts, never in a second
+    // metadata write. Legacy timestamps remain valid idempotency markers.
+    if (!existed && codexHighWater?.length) {
+      usageData.reconciledRuns[reconciledRunId] = {
+        at: usageData.reconciledRuns[reconciledRunId], codexHighWater: structuredClone(codexHighWater)
+      };
+    }
+  }
   await saveUsage();
 }
 
