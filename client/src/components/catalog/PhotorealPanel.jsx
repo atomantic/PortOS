@@ -142,6 +142,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       setStatus((cur) => ({ ...(cur || {}), job: frame.job }));
       settle(frame.job);
     };
+    const onScene = (frame) => { if (frame?.ingredientId === record.id) refreshStatus(); };
     // A sleeping laptop or dropped socket can miss the one finish frame: re-read
     // the server's job and settle a render this tab saw running.
     reconcileRef.current = () => getCatalogPhotoreal(record.id, { silent: true })
@@ -153,11 +154,13 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       .catch(() => {});
     const onConnect = () => reconcileRef.current?.();
     socket.on('catalog:photoreal', onFrame);
+    socket.on('catalog:photoreal-scene', onScene);
     socket.on('connect', onConnect);
     return () => {
       live = false;
       reconcileRef.current = null;
       socket.off('catalog:photoreal', onFrame);
+      socket.off('catalog:photoreal-scene', onScene);
       socket.off('connect', onConnect);
     };
   }, [record.id]);
@@ -195,7 +198,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const render = async ({ flythrough = false } = {}) => {
-    if (chosen.length < (flythrough ? 2 : 1) || running || starting || !canRender) return;
+    if (chosen.length < (flythrough ? 2 : 1) || running || starting || opening || !canRender) return;
     setBlenderNotice('');
     setStarting(true);
     const body = { shotIds: chosen, engine, samples: samplesField.effective, ...(flythrough ? { flythroughSeconds: secondsField.effective } : {}) };
@@ -213,13 +216,16 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const openInBlender = async () => {
-    if (opening || !blenderReady) return;
+    if (!status || opening || starting || !blenderReady || (running && !status.blendUrl)) return;
     setBlenderNotice('');
     setOpening(true);
     const opened = await openCatalogPhotorealBlend(record.id, { silent: true })
       .catch((err) => { handleBlenderError(err, 'Could not open Blender'); return null; });
     setOpening(false);
-    if (opened) toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
+    if (opened) {
+      setStatus((cur) => ({ ...(cur || {}), blendUrl: opened.blendUrl || cur?.blendUrl }));
+      toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
+    }
   };
 
   const setPlate = async (shot, mediaKey) => {
@@ -262,8 +268,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         </div>
         <div className="flex flex-wrap gap-2">
           {!readOnly && (
-            <button type="button" onClick={openInBlender} disabled={!status?.blendUrl || opening || !blenderReady} className={actionButton}>
-              {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
+            <button type="button" onClick={openInBlender} disabled={!status || opening || starting || !blenderReady || (running && !status.blendUrl)} className={actionButton}>
+              {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />}
+              {opening ? (status?.blendUrl ? 'Opening Blender…' : 'Building scene…') : 'Open in Blender'}
             </button>
           )}
           {status?.blendUrl && (
@@ -273,7 +280,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
           )}
         </div>
       </div>
-      {status && !status.blendUrl && <p className="text-xs text-gray-400">The first render builds the Blender scene; Open in Blender works after that.</p>}
+      {status && !status.blendUrl && <p className="text-xs text-gray-400">{running
+        ? 'The current render is building the Blender scene. Open it when the render finishes.'
+        : 'Open in Blender will first build the scene from the saved greybox without rendering cameras, using Cycles CPU.'}</p>}
       {status?.files && (
         <dl className="space-y-1 text-xs" aria-label="Files">
           {[['Blender scene', status.files.blend], ['Renders', status.files.renders]].map(([label, path]) => (
@@ -355,7 +364,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || !canRender}
+              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || opening || !canRender}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
@@ -396,7 +405,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                   <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
-                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || !canRender} className={actionButton}>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || opening || !canRender} className={actionButton}>
                   <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}

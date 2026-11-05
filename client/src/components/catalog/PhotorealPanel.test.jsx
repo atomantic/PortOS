@@ -268,16 +268,46 @@ describe('PhotorealPanel', () => {
     await waitFor(() => expect(openCatalogPhotorealBlend).toHaveBeenCalledWith('plc-example', { silent: true }));
   });
 
-  it('shows Open in Blender and the file paths before the first render builds the scene', async () => {
+  it('builds and opens a scene without rendering cameras when none exists yet', async () => {
     const files = { blend: '/srv/portos/data/scene.blend', renders: '/srv/portos/data/images' };
     getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3', files });
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(), containedGpuNotice: 'Contained mode has no GPU.' });
+    let finishOpen;
+    openCatalogPhotorealBlend.mockImplementation(() => new Promise((resolve) => { finishOpen = resolve; }));
     show();
     expect(await screen.findByText(files.blend)).toBeInTheDocument();
     expect(screen.getByText(files.renders)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
-    expect(screen.getByText(/first render builds the Blender scene/)).toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByText(/without rendering cameras/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    fireEvent.click(open);
+    await waitFor(() => expect(finishOpen).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: 'Building scene…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    await act(async () => finishOpen({ opened: true, blenderVersion: '5.2.3', blendUrl: '/scene.blend' }));
+    expect(screen.getByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(startCatalogPhotorealRender).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole('button', { name: 'Copy' })[0]);
     expect(copyToClipboard).toHaveBeenCalledWith(files.blend, 'Path copied');
+  });
+
+  it('can open the saved greybox before any cameras have been added', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    show({ record: { ...record, payload: { greybox: { ...greybox, shots: [] } } } });
+    expect(await screen.findByText('Save a camera on the Greybox tab to render it here.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('refreshes the scene link when another tab builds this place', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: null, blenderVersion: '5.2.3' })
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3' });
+    show();
+    expect(await screen.findByText(/without rendering cameras/)).toBeInTheDocument();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'another-place' }));
+    expect(getCatalogPhotoreal).toHaveBeenCalledTimes(1);
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
   });
 
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {

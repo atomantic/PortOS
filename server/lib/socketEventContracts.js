@@ -426,6 +426,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'An Environments photoreal (Blender) render for a place started, finished or failed; carries the job state.',
     payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' }, job: { type: 'object' } }, required: ['ingredientId', 'job'], additionalProperties: false },
   },
+  'catalog:photoreal-scene': {
+    direction: 'server-to-client',
+    summary: 'A photoreal Blender scene was built without rendering; refresh the matching place status.',
+    payloadSchema: { type: 'object', properties: { ingredientId: { type: 'string' } }, required: ['ingredientId'], additionalProperties: false },
+  },
   'catalog:primitive-changed': {
     direction: 'server-to-client',
     summary: 'Refresh creative primitive ownership, membership and usage views after a durable change.',

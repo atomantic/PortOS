@@ -326,6 +326,7 @@ const SIMPLE_BRIDGES = [
   { emitter: catalogEvents, event: 'primitive-changed', channel: 'catalog:primitive-changed' },
   // An Environments photoreal (Blender) render started, finished or failed.
   { emitter: catalogEvents, event: 'photoreal', channel: 'catalog:photoreal' },
+  { emitter: catalogEvents, event: 'photoreal-scene', channel: 'catalog:photoreal-scene' },
   // A record's media rows changed (an image added, removed or re-roled).
   { emitter: catalogEvents, event: 'assets-changed', channel: 'catalog:assets-changed' },
   { emitter: catalogIdentityEvents, event: 'changed', channel: 'catalog:identity-changed' },
