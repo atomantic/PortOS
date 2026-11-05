@@ -113,7 +113,7 @@ export default function PhotorealTexturesSection({ record, look, readOnly = fals
             <label htmlFor="photoreal-texture-search" className="sr-only">Search textures</label>
             <input id="photoreal-texture-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${picking} textures`}
               className="min-h-[36px] min-w-0 flex-1 rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
-            <button type="button" className={smallButton} onClick={() => setPicking('')} aria-label="Close">
+            <button type="button" className={`${smallButton} min-h-[44px] min-w-[44px] justify-center`} onClick={() => setPicking('')} aria-label="Close">
               <X size={14} aria-hidden="true" />
             </button>
           </div>
