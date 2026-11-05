@@ -7,6 +7,10 @@ import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
 
+const sourceInventory = new Map();
+export const codexSessionClaimKey = id => `codex-session:v1:${id}`;
+export const codexIdentityHash = value => hash(value);
+
 const DAY_MS = 86_400_000;
 const CODEX_PREVIEW_LIMITS = Object.freeze({
   files: 10_000, entries: 100_000, decodedBytes: 256 * 1024 * 1024,
@@ -109,6 +113,7 @@ function unchanged(before, after) {
 }
 
 async function inspectFile(path, state, range, decompress) {
+  let cwd = null;
   const ids = new Set();
   const records = [];
   const fingerprint = createHash('sha256');
@@ -121,7 +126,9 @@ async function inspectFile(path, state, range, decompress) {
     try {
       const line = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim();
       if (!line) return;
-      const record = accountingRecord(JSON.parse(line), ids);
+      const entry = JSON.parse(line);
+      if (entry?.type === 'session_meta' && typeof entry.payload?.cwd === 'string') cwd = entry.payload.cwd;
+      const record = accountingRecord(entry, ids);
       if (!record) return;
       if (++state.coverage.recordsRead > state.limits.records) throw problem('record_limit');
       records.push(record);
@@ -174,16 +181,16 @@ async function inspectFile(path, state, range, decompress) {
   }
   if (ids.size !== 1) issues.add(ids.size ? 'conflicting_identity' : 'missing_identity');
   for (const issue of issues) state.issue(issue);
-  return { ids, valid: !issues.size, fingerprint: fingerprint.digest('hex'), byModel: issues.size ? {} : parseCodexRollout(records, range).byModel };
+  return { ids, records, cwd, issues: [...issues], valid: !issues.size, fingerprint: fingerprint.digest('hex'), byModel: issues.size ? {} : parseCodexRollout(records, range).byModel };
 }
 
 /** Explicit, read-only aggregate preview; no ledger or provider dependencies.
  * Limits may be lowered, never disabled. All returned fields are path/text-free.
  * An invalid copy taints every identity it names, including earlier good copies.
  */
-export async function previewCodexUsage({ from, to, home = homedir(), limits: overrides = {}, signal,
-  decompress = zlib.createZstdDecompress } = {}) {
-  const range = codexPreviewRange(from, to);
+async function scanCodexSources({ from, to, home = homedir(), limits: overrides = {}, signal,
+  decompress = zlib.createZstdDecompress, accounting = false, cache = false } = {}) {
+  const range = accounting ? {} : codexPreviewRange(from, to);
   const limits = scanLimits(overrides);
   if (typeof home !== 'string' || !home) throw problem('INVALID_HOME');
   const controller = new AbortController();
@@ -199,9 +206,11 @@ export async function previewCodexUsage({ from, to, home = homedir(), limits: ov
     issue(reason) { coverage.issues[reason] = (coverage.issues[reason] ?? 0) + 1; }
   };
   const sessions = new Map();
+  const revisions = [];
+  const visited = new Set();
   try {
     // Refuse symlinked source roots as well as symlinked descendants.
-    const codex = join(home, '.codex');
+    const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
     const root = await lstat(codex).catch(error => {
       if (error.code !== 'ENOENT') state.issue('unreadable_directory');
       return null;
@@ -209,14 +218,28 @@ export async function previewCodexUsage({ from, to, home = homedir(), limits: ov
     if (root && (!root.isDirectory() || root.isSymbolicLink())) state.issue('unsupported_entry');
     else if (root) for (const directory of ['sessions', 'archived_sessions']) {
       for await (const path of discover(join(codex, directory), state)) {
-        const source = await inspectFile(path, state, range, decompress);
+        const info = await lstat(path).catch(() => null);
+        const revision = info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : 'missing';
+        const cached = cache && sourceInventory.get(path);
+        visited.add(path);
+        const source = cached?.revision === revision && cached.decompress === decompress
+          ? cached.source : await inspectFile(path, state, range, decompress);
+        if (cached?.source === source) {
+          // Cached records still spend the bounded inventory budget.
+          state.coverage.recordsRead += source.records.length;
+          if (state.coverage.recordsRead > limits.records) throw problem('record_limit');
+        }
+        if (cache && source.valid) sourceInventory.set(path, { revision, source, decompress });
+        else if (cache) sourceInventory.delete(path);
+        revisions.push([hash(path), revision, source.fingerprint, source.valid]);
         coverage.filesInspected++;
         for (const id of source.ids) {
           const previous = sessions.get(id);
-          if (!previous) sessions.set(id, { valid: source.valid, fingerprint: source.fingerprint, byModel: source.byModel });
+          if (!previous) sessions.set(id, { id, valid: source.valid, fingerprint: source.fingerprint, byModel: source.byModel, records: source.records, cwd: source.cwd, paths: [path] });
           else {
             coverage.duplicateCopies++;
-            if (previous.fingerprint !== source.fingerprint) { state.issue('conflicting_copies'); previous.valid = false; }
+            previous.paths.push(path);
+            if (previous.fingerprint !== source.fingerprint || previous.cwd !== source.cwd) { state.issue('conflicting_copies'); previous.valid = false; }
             previous.valid &&= source.valid;
           }
         }
@@ -245,9 +268,26 @@ export async function previewCodexUsage({ from, to, home = homedir(), limits: ov
   const overflow = Object.values(totals).some(value => !Number.isSafeInteger(value));
   if (overflow) state.issue('counter_overflow');
   coverage.complete = !Object.keys(coverage.issues).length;
+  if (cache) {
+    const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
+    for (const path of sourceInventory.keys()) {
+      if (path.startsWith(`${codex}/`) && !visited.has(path)) sourceInventory.delete(path);
+    }
+  }
+  if (accounting) return {
+    sessions: [...sessions.values()].filter(session => session.valid), coverage, stopped: state.stopped,
+    revision: hash(JSON.stringify([revisions.sort((a, b) => a[0].localeCompare(b[0])), coverage.issues]))
+  };
   return { range: { from, to, timezone: 'UTC', inclusive: true }, limits,
     coverage, stopped: state.stopped, compressionSupported: typeof decompress === 'function',
     totals: overflow ? null : totals, byModel: overflow ? {} : byModel,
     ledgerOverlap: 'unknown', missingUsage: null,
     notice: 'Observed counters from resolved sources are not proven missing usage. Prior ledger attribution is unknown; incomplete coverage may hide additional copies or conflicts.' };
 }
+
+/** Internal accounting metadata only. Never expose paths/cwd/records in routes.
+ * The process-local inventory is disposable; persisted claims remain authoritative.
+ * Fresh scans are used by explicit preview/apply to reject changed evidence.
+ */
+export const readCodexAccountingSources = options => scanCodexSources({ ...options, accounting: true, cache: options?.cache ?? true });
+export const previewCodexUsage = options => scanCodexSources(options);

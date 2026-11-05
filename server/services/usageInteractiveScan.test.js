@@ -77,6 +77,28 @@ describe('refreshInteractiveUsage', () => {
     await rm(runsDir, { recursive: true, force: true });
   });
 
+  it('holds the Codex watermark on incomplete archives, then bills moved duplicate sources only once', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    const text = [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'archive-session', cwd: CWD, model: 'example-codex-model' } }),
+      JSON.stringify({ timestamp: new Date(P1).toISOString(), payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+    ].join('\n');
+    await writeFile(join(archive, 'one.jsonl'), text);
+    await writeFile(join(archive, 'copy.jsonl.zst'), Buffer.from('incomplete'));
+    const args = { home, runsDir, providers: [CODEX], now: NOW };
+    await expect(refreshInteractiveUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE' });
+    expect(ledger.scan).toBeNull();
+    expect(applied).toEqual([]);
+    await writeFile(join(archive, 'copy.jsonl.zst'), zstdCompressSync(text));
+    expect((await refreshInteractiveUsage(args)).families.codex.tokens).toBe(150);
+    await rm(join(archive, 'one.jsonl'));
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + HOUR });
+    expect(applied).toEqual([]);
+  });
+
   it('bills terminal sessions per UTC day, outside PortOS run windows, exactly once', async () => {
     // A PortOS run covers p3 in this cwd: the run path owns it, so the scan must not.
     const runDir = join(runsDir, 'run-1');

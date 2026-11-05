@@ -52,6 +52,28 @@ afterEach(async () => {
 });
 
 describe('historical usage worker', () => {
+  it('reads archived compressed Codex usage once and honors live claims after worker restart', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const dir = join(home, '.codex', 'archived_sessions');
+    await mkdir(dir, { recursive: true });
+    const text = [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'historical-codex', cwd: workspace, model: 'gpt-5.3-codex' } }),
+      JSON.stringify({ timestamp: '2026-07-01T10:05:00Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+    ].join('\n');
+    await writeFile(join(dir, 'copy.jsonl.zst'), zstdCompressSync(text));
+    await writeFile(join(dir, 'raw.jsonl'), text);
+    const metadata = { providerId: 'codex-cli', workspacePath: workspace, model: 'gpt-5.3-codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:10:00Z' };
+    await writeRun('archived', metadata);
+    const first = await scanHistoricalUsage({ runsDir: root, home });
+    expect(first.corrections).toHaveLength(1);
+    expect(first.corrections[0].measured[0]).toMatchObject({ tokensIn: 100, tokensOut: 50 });
+    __resetUsageClaims();
+    await readMeasuredUsage({ ...metadata, family: 'codex', home });
+    const claimsSeed = snapshotUsageClaims();
+    __resetUsageClaims();
+    expect((await scanHistoricalUsage({ runsDir: root, home, claimsSeed })).corrections).toEqual([]);
+  });
+
   it('correlates by run metadata and keeps the configured provider id', async () => {
     await writeRun('run-example-1', {
       providerId: 'claude-code-tui',
