@@ -16,7 +16,7 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, shotUsesEffect } from '../../../lib/musicVideoShotEffects.js';
-import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
+import { FOOTAGE_OPTIONAL_MODES, sceneShotName } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
 import { getStoryboard } from '../../../services/api';
@@ -102,9 +102,7 @@ export default function BoardStage({ board }) {
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const numbers = shotNumbers(scenes);
   const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
-  const shotName = (scene) => [coldNumbers.has(scene.sceneId) ? `Cold open ${coldNumbers.get(scene.sceneId)}`
-    : numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
-    scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
+  const shotName = (scene) => sceneShotName(scene, { number: numbers.get(scene.sceneId), coldOpen: coldNumbers.get(scene.sceneId) });
   const counts = { all: scenes.length, attention: 0, missing: 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
@@ -275,7 +273,7 @@ export default function BoardStage({ board }) {
               stepShot={stepShot}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
-              shotNumber={numbers.get(scene.sceneId)}
+              shotName={shotName(scene)}
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}
               generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
