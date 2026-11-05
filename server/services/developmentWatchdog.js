@@ -18,6 +18,7 @@ const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPS
 // and drive their own PR to merge. PortOS never creates that prefix, so a
 // watchdog coordinator there would only race the live session.
 const EXTERNAL_AGENT_BRANCH_RE = /^claude\//;
+const PR_QUIET_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 function withActiveAgentOwnership(tasks, peerTasks, agents) {
   const allTasks = [...tasks, ...peerTasks];
@@ -144,6 +145,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   for (const pr of prs.pullRequests) {
     const owner = active.find(task => sameDevelopmentWork(task, ownershipTask(app, pr)));
     let disposition = 'eligible';
+    let unknownReason = 'external-claim-owner-unverified';
     if (owner) disposition = owner.status === 'blocked' ? 'blocked' : 'actively-owned';
     else if (!pr.headSha) disposition = 'unknown';
     else if (pr.isDraft) disposition = 'draft';
@@ -165,8 +167,13 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
           || (claim.state === 'OPEN' && claim.labels.some(label => label.name === 'in-progress'))) disposition = 'unknown';
       }
     }
+    if (disposition === 'eligible') {
+      const updatedAt = typeof pr.updatedAt === 'string' ? Date.parse(pr.updatedAt) : NaN;
+      if (!Number.isFinite(updatedAt)) { disposition = 'unknown'; unknownReason = 'activity-time-unverified'; }
+      else if (Date.now() - updatedAt < PR_QUIET_WINDOW_MS) disposition = 'recently-active';
+    }
     row.pullRequests.push({ number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
-      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? 'external-claim-owner-unverified' : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
+      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? unknownReason : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
   }
   if (localReviewTasks.length) {
     const { getPullRequestState } = await import('./github.js');
@@ -449,7 +456,7 @@ function receiptCounts(receipt) {
     dispatched: receipt.decisions.filter(d => d.outcome === 'queued').length,
     ownedSkips: receipt.apps.reduce((n, app) => n + [...app.pullRequests, ...app.issues].filter(item => ['actively-owned', 'external-claim'].includes(item.disposition)).length, 0),
     duplicateAdmissionsPrevented: receipt.decisions.filter(d => d.duplicate).length,
-    deferred: receipt.decisions.filter(d => ['deferred', 'capacity-full'].includes(d.outcome)).length,
+    deferred: receipt.decisions.filter(d => ['deferred', 'capacity-full'].includes(d.outcome)).length + receipt.apps.reduce((n, app) => n + app.pullRequests.filter(pr => pr.disposition === 'recently-active').length, 0),
     deterministicActions: 0,
     modelCalls: 0,
   };
