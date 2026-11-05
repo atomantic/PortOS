@@ -61,7 +61,7 @@ import {
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
-import { recordRunUsage } from './usage.js';
+import { getRecentCodexUsageClaims, recordRunUsage } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -606,8 +606,9 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
       // overlapping runs must not both act on the pre-update value. `Math.max`
       // guards a rollout that was truncated/rewritten smaller, so the mark
       // never moves backwards and re-bills what it already charged.
-      codexHighWater.set(path, maxBuckets(billed, absolute));
-      codexReserved.push([path, billed]);
+      const boundary = maxBuckets(billed, absolute);
+      codexHighWater.set(path, boundary);
+      codexReserved.push([path, billed, boundary]);
       // Mirror the net into `byModel` — callers bill from the per-model records,
       // so leaving them at absolute totals would re-charge the billed portion.
       // Codex reports one model per rollout, so the whole net is that model's.
@@ -650,7 +651,7 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  *   died mid-turn, and Antigravity is always an estimate (it writes no token
  *   counts anywhere).
  */
-export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null } = {}) {
+export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null, onCodexClaims = null } = {}) {
   if (!workspacePath || !family) return null;
 
   const startMs = Date.parse(startTime || '');
@@ -741,6 +742,9 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     releaseReserved();
     return null;
   }
+  // Capture this read's boundaries now, not the global map after other runs
+  // have advanced it while subsequent family reads or persistence await.
+  if (codexReserved.length) onCodexClaims?.(codexReserved.map(([path, , boundary]) => [path, { ...boundary }]));
   totals.model = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   totals.byModel = Object.fromEntries(byModel);
   totals.source = sourcesSeen.size === 1 ? [...sourcesSeen][0] : 'mixed';
@@ -883,14 +887,14 @@ export function resolveFamilyProvider(providers, family, measured = null) {
  *   the provider's own count, its input still a chars estimate.
  * @returns {Promise<object|Array<object>>}
  */
-export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null, estimateSource = null } = {}) {
+export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null, estimateSource = null, onCodexClaims = null } = {}) {
   const workspacePath = run?.workspacePath;
   const startTime = run?.startTime;
   const endTime = run?.endTime;
 
   // Best-effort: an unreadable home dir, a permissions error, or a CLI format
   // change must degrade to the estimate, never throw into the completion hook.
-  const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home })
+  const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home, onCodexClaims })
     .catch((err) => {
       console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
       return null;
@@ -997,10 +1001,21 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
     .catch(() => null);
   // Same condition `reconcileRunUsage` scans siblings under.
   const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
+  // Restore only nearby completions from the existing ledger. Exact observed
+  // counters, unlike replaying a window through its later commit timestamp,
+  // cannot consume transcript growth that arrived while accounting awaited.
+  const since = Date.parse(metadata.startTime) - 2 * WINDOW_SLACK_MS;
+  if (Number.isFinite(since)) {
+    mergeUsageClaims({ codexHighWater: await getRecentCodexUsageClaims(since) });
+  }
+  const codexClaims = [];
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
-  await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
-    .then((records) => recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned }))
+  await reconcileRunUsage(metadata, estimate, {
+    home, providers: resolved, estimateSource,
+    onCodexClaims: (claims) => codexClaims.push(...claims)
+  })
+    .then((records) => recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned, codexHighWater: codexClaims }))
     .then(async () => {
       if (!metadata?.id) return;
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');

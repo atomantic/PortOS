@@ -4,11 +4,12 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 vi.mock('./usage.js', () => ({
+  getRecentCodexUsageClaims: vi.fn().mockResolvedValue([]),
   markUsageRunReconciled: vi.fn().mockResolvedValue(undefined),
   recordRunUsage: vi.fn().mockResolvedValue(undefined)
 }));
 
-const { markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
+const { getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
 const {
   transcriptFamily,
   isOpencodeRun,
@@ -506,6 +507,53 @@ describe('reconcileRunUsage', () => {
 });
 
 describe('recordCompletedRunUsage', () => {
+  it('restores the exact observed Codex boundary after restart, not growth before commit', async () => {
+    const first = {
+      providerId: 'codex-tui', model: 'gpt-5.3-codex', workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z'
+    };
+    const next = { ...first, startTime: '2026-07-01T10:10:20.000Z', endTime: '2026-07-01T10:10:50.000Z' };
+    const old = codexRollout({ timestamp: '2026-07-01T10:09:50.000Z', input: 10000, cached: 9000, output: 100 });
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-example.jsonl', old);
+    await recordCompletedRunUsage(first, '', { home, providers: [] });
+    const claims = recordRunUsage.mock.calls.at(-1)[1].codexHighWater;
+    expect(claims).toHaveLength(1);
+    expect(claims[0][1]).toMatchObject({ tokensOut: 100 });
+    __resetUsageClaims();
+    getRecentCodexUsageClaims.mockResolvedValueOnce(claims);
+    await recordCompletedRunUsage(next, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toMatchObject({ tokensIn: 0, tokensOut: 0 });
+
+    // New growth may arrive while the first completion scans siblings/saves,
+    // BEFORE its ledger timestamp. Its exact saved counters must not grow too.
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-example.jsonl', old + '\n' + codexRollout({
+      timestamp: '2026-07-01T10:10:03.000Z', input: 12000, cached: 10500, output: 150
+    }));
+    await readMeasuredUsage({ ...next, family: 'codex', home });
+    expect(claims[0][1].tokensOut).toBe(100);
+    __resetUsageClaims();
+    getRecentCodexUsageClaims.mockResolvedValueOnce(claims);
+    await recordCompletedRunUsage(next, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({
+      model: 'gpt-5.3-codex', tokensIn: 500, cacheReadTokens: 1500, tokensOut: 50, source: 'measured'
+    })]);
+  });
+
+  it('does not claim a transcript that was unavailable to an estimate-only completion', async () => {
+    const run = {
+      providerId: 'codex-tui', workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z'
+    };
+    await recordCompletedRunUsage(run, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[1].codexHighWater).toEqual([]);
+    __resetUsageClaims();
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-recovered.jsonl', codexRollout({
+      timestamp: '2026-07-01T10:09:50.000Z', input: 100, cached: 20, output: 10
+    }));
+    await recordCompletedRunUsage({ ...run, startTime: '2026-07-01T10:10:20.000Z', endTime: '2026-07-01T10:11:00.000Z' }, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({ source: 'measured', tokensOut: 10 })]);
+  });
+
   it('persists measured counts for a run with a transcript', async () => {
     await writeClaudeSession('a.jsonl', [
       claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
@@ -545,8 +593,8 @@ describe('recordCompletedRunUsage', () => {
     });
 
     // The marker travels with the counts, so both commit in one usage.json write.
-    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-live', siblings: false });
-    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-scanned', siblings: true });
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-live', siblings: false, codexHighWater: [] });
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-scanned', siblings: true, codexHighWater: [] });
     expect(markUsageRunReconciled).not.toHaveBeenCalled();
   });
 
