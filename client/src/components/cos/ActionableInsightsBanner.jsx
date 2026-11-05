@@ -267,7 +267,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
                   </span>
                   <button
                     onClick={() => handleUnblockTask(task.id, task.taskType)}
-                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-port-success/20 hover:bg-port-success/30 text-port-success rounded transition-colors shrink-0 min-h-[28px]"
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-port-success/20 hover:bg-port-success/30 text-port-success rounded transition-colors shrink-0 min-h-[28px] pointer-coarse:min-h-11 pointer-coarse:px-3"
                     title="Unblock and move to pending"
                   >
                     <Unlock size={11} />
@@ -297,7 +297,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
                   <button
                     onClick={() => handleRunReconcile(app)}
                     disabled={reconcileButton(app).disabled}
-                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors shrink-0 min-h-[28px] disabled:opacity-50"
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors shrink-0 min-h-[28px] pointer-coarse:min-h-11 pointer-coarse:px-3 disabled:opacity-50"
                     title={`Queue branch-reconcile for ${app.appName}`}
                   >
                     <Play size={11} />
@@ -331,7 +331,7 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
             <button
               onClick={() => handleAction(primaryInsight)}
               disabled={primaryButton.disabled}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/20 text-white rounded transition-colors min-h-[32px] disabled:opacity-50"
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/20 text-white rounded transition-colors min-h-[32px] pointer-coarse:min-h-11 pointer-coarse:px-3 disabled:opacity-50"
             >
               {primaryButton.label}
               {expandsInPlace
