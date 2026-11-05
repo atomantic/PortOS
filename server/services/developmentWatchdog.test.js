@@ -12,7 +12,11 @@ vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks:
 }, addTask: async task => { if (m.duplicate) return { id: 'existing', duplicate: true }; const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
 vi.mock('./instances.js', () => ({ getPeers: async () => m.peers }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: m.fullName, repoSpec: `github.com/${m.fullName}`, apiHost: 'github.com' } }) }));
-vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => ({ pullRequests: ++m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false }) }));
+vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => {
+  m.prReads++;
+  m.onPrRead?.(m.prReads);
+  return { pullRequests: m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false };
+} }));
 vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
 vi.mock('./cosTaskClaimWork.js', () => ({
   resolveClaimWorkMetadata: (...args) => m.metadata(...args),
@@ -49,7 +53,7 @@ import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanc
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.accountFailure = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.updates = []; m.branch = ''; m.account = 'atomantic'; m.fullName = 'atomantic/example'; m.execOptions = []; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.onPrRead = null; m.prStates = {}; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.accountFailure = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
   m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
@@ -441,9 +445,46 @@ describe('development watchdog scan bookkeeping', () => {
     let receipt = await runDevelopmentWatchdog({ force: true });
     expect(receipt.apps[0].pullRequests[0].disposition).toBe('actively-owned');
     m.tasks = [];
-    m.state.agents = { a: { status: 'running', taskId: 'gone', metadata: { app: 'app', reviewLoopPRUrl: orphan.url } } };
+    m.state.agents = { a: { status: 'running', taskId: 'gone', metadata: { taskApp: 'app', reviewLoopMergeTarget: { url: orphan.url, branch: orphan.headBranch } } } };
     receipt = await runDevelopmentWatchdog({ force: true });
     expect(receipt.apps[0].pullRequests[0].disposition).toBe('actively-owned');
+    m.tasks = [{ id: 'gone', status: 'completed', metadata: { app: 'app' } }];
+    receipt = await runDevelopmentWatchdog({ force: true });
+    expect(receipt.apps[0].pullRequests[0].disposition).toBe('actively-owned');
+    expect(m.adds).toEqual([]);
+  });
+
+  it('does not treat an active review owner for another PR as this PR\'s owner', async () => {
+    m.prs = [{ ...orphan, headBranch: 'fix' }];
+    m.state.agents = { a: { status: 'running', taskId: 'gone', metadata: { taskApp: 'app', reviewLoopMergeTarget: { url: 'https://github.com/atomantic/example/pull/6', branch: 'other' } } } };
+
+    const receipt = await runDevelopmentWatchdog({ force: true });
+
+    expect(receipt.counts.dispatched).toBe(1);
+  });
+
+  it('keeps a registered pinned claim from owning unrelated issues', async () => {
+    m.backlog = [{ ref: '42' }, { ref: '43' }];
+    m.tasks = [{ id: 'claim', status: 'in_progress', metadata: { app: 'app', claimFlow: true, claimTarget: '42', analysisType: 'claim-issue' } }];
+    m.state.agents = { a: { id: 'agent', status: 'running', taskId: 'claim', metadata: { taskApp: 'app', taskAnalysisType: 'claim-issue', configClaimFlow: true } } };
+
+    const receipt = await runDevelopmentWatchdog({ force: true });
+
+    expect(receipt.apps[0].issues).toEqual([
+      expect.objectContaining({ number: 42, disposition: 'actively-owned', taskId: 'claim' }),
+      expect.objectContaining({ number: 43, disposition: 'eligible', taskId: null }),
+    ]);
+  });
+
+  it('rechecks an active review owner that appears after the scan starts', async () => {
+    m.prs = [{ ...orphan, headBranch: 'fix' }];
+    m.onPrRead = count => {
+      if (count === 1) m.state.agents = { a: { status: 'running', taskId: 'gone', metadata: { taskApp: 'app', reviewLoopMergeTarget: { url: orphan.url, branch: 'fix' } } } };
+    };
+
+    const receipt = await runDevelopmentWatchdog({ force: true });
+
+    expect(receipt.decisions[0]).toMatchObject({ outcome: 'deferred', reason: 'evidence-changed' });
     expect(m.adds).toEqual([]);
   });
 
