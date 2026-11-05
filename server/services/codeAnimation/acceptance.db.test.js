@@ -84,6 +84,49 @@ async function finishedRun({ id, revision }, { verdict = 'pass', bytes = 'exampl
 }
 
 describe.skipIf(!ready)('Production acceptance', () => {
+  it('pages accepted assets without repeats when a newer acceptance arrives between requests', async () => {
+    const projectIds = Array.from({ length: 3 }, () => randomUUID());
+    const tied = '9998-01-01T00:00:00.000Z';
+    const accepted = acceptedAt => ({ acceptedAt, videoId: randomUUID(), revisionId: randomUUID() });
+    ids.push(...projectIds);
+    for (const [index, id] of projectIds.entries()) {
+      await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
+        [id, 'Synthetic accepted short', { acceptedOutput: accepted(index < 2 ? tied : '9997-01-01T00:00:00.000Z') }]);
+    }
+    const expected = projectIds.slice(0, 2).sort().reverse().concat(projectIds[2]);
+
+    const first = await get('/accepted-assets?limit=1');
+    expect(first.status).toBe(200);
+    expect(first.body.items.map(item => item.projectId)).toEqual([expected[0]]);
+    expect(first.body.nextCursor).toBeTruthy();
+
+    const newerId = randomUUID();
+    const missingTimestampId = randomUUID();
+    ids.push(newerId, missingTimestampId);
+    await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
+      [newerId, 'Newer accepted short', { acceptedOutput: accepted('9999-01-01T00:00:00.000Z') }]);
+    await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
+      [missingTimestampId, 'Older accepted short', { acceptedOutput: accepted(null) }]);
+    const seen = [expected[0]];
+    const cursors = new Set();
+    let cursor = first.body.nextCursor;
+    while (cursor) {
+      expect(cursors.has(cursor)).toBe(false);
+      cursors.add(cursor);
+      const response = await get(`/accepted-assets?limit=1&cursor=${encodeURIComponent(cursor)}`);
+      expect(response.status).toBe(200);
+      for (const item of response.body.items) {
+        expect(seen).not.toContain(item.projectId);
+        seen.push(item.projectId);
+      }
+      cursor = response.body.nextCursor;
+    }
+    expect(seen.slice(0, 3)).toEqual(expected);
+    expect(seen).toContain(missingTimestampId);
+    expect(seen).not.toContain(newerId);
+    expect((await get('/accepted-assets?cursor=NaN')).status).toBe(400);
+  });
+
   it('promotes a passing run, separates evidence dimensions, marks Media History and lists the short downstream', async () => {
     const p = await project();
     const run = await finishedRun(p);
@@ -134,7 +177,7 @@ describe.skipIf(!ready)('Production acceptance', () => {
     const restarted = await import('./acceptance.js?recovery');
     const recovered = failure === 'read'
       ? await restarted.getProductionAcceptance(p.id)
-      : (await restarted.listAcceptedAssets({ limit: 50, offset: 0 })).items.find(item => item.projectId === p.id);
+      : (await restarted.listAcceptedAssets({ limit: 50 })).items.find(item => item.projectId === p.id);
     expect(recovered.acceptanceProjection).toMatchObject({ status: 'synced', decisionId: durable.acceptanceProjection.decisionId });
     const after = await store.getProjectRecord(p.id);
     expect(after.acceptedOutput).toEqual(durable.acceptedOutput);
