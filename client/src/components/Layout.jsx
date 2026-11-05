@@ -806,7 +806,7 @@ export default function Layout() {
                             to={gc.to}
                             onClick={() => setMobileOpen(false)}
                             title={gc.title || gc.label}
-                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
+                            className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
                               gcActive
                                 ? 'text-port-accent'
                                 : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
@@ -1083,7 +1083,7 @@ export default function Layout() {
                                 to={gc.to}
                                 onClick={() => setFlyoutSection(null)}
                                 title={gc.title || gc.label}
-                                className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
+                                className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
                                   gcActive
                                     ? 'text-port-accent font-medium'
                                     : 'text-gray-400 hover:text-white hover:bg-port-border/30'

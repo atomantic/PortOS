@@ -530,6 +530,44 @@ describe('Layout — persistent mobile touch targets', () => {
 
     expect(screen.getByRole('link', { name: 'Authors' })).toHaveAttribute('href', '/authors');
   });
+
+  it('enlarges grandchild navigation links to at least 44px on mobile viewports while staying compact on desktop', async () => {
+    await renderLayout('/');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Create' }));
+
+    const castingLink = screen.getByRole('link', { name: 'Casting' });
+    const environmentsLink = screen.getByRole('link', { name: 'Environments' });
+    const objectsLink = screen.getByRole('link', { name: 'Objects' });
+
+    for (const link of [castingLink, environmentsLink, objectsLink]) {
+      expect(link.className).toContain('min-h-[44px]');
+      expect(link.className).toContain('flex');
+      expect(link.className).toContain('items-center');
+      expect(link.className).toContain('lg:min-h-0');
+      expect(link.className).toContain('lg:block');
+      expect(link.className).toContain('pointer-coarse:min-h-11');
+    }
+  });
+
+  it('enlarges collapsed flyout grandchild navigation links on coarse viewports while staying compact on desktop', async () => {
+    localStorage.setItem('portos-sidebar-collapsed', 'true');
+    await renderLayout('/');
+
+    const createButton = screen.getByRole('button', { name: 'Create' });
+    fireEvent.mouseEnter(createButton.parentElement);
+
+    const flyoutNav = screen.getByRole('navigation', { name: 'Create pages' });
+    const castingFlyoutLink = within(flyoutNav).getByRole('link', { name: 'Casting' });
+
+    expect(castingFlyoutLink.className).toContain('min-h-[44px]');
+    expect(castingFlyoutLink.className).toContain('flex');
+    expect(castingFlyoutLink.className).toContain('items-center');
+    expect(castingFlyoutLink.className).toContain('lg:min-h-0');
+    expect(castingFlyoutLink.className).toContain('lg:block');
+    expect(castingFlyoutLink.className).toContain('pointer-coarse:min-h-11');
+  });
 });
 
 describe('Layout — nav footer', () => {
