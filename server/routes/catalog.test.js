@@ -105,8 +105,9 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
   it('reports old and new CLI driver inputs as unverified while preserving direct-provider provenance', async () => {
     const prefix = `related-codex-${NONCE}-`;
     const primary = `${prefix}source.png`;
-    const ing = await catalogDB.createIngredient({ type: 'place', name: 'Example reference', payload: { primaryImageRef: primary, locked: true } });
+    const ing = await catalogDB.createIngredient({ type: 'place', name: 'Example reference', payload: { primaryImageRef: primary, imageRefs: [primary], locked: true } });
     createdIngredientIds.add(ing.id);
+    expect(ing.payload.primaryImageRef).toBe(primary);
     for (const [suffix, mode, inputProvenance] of [
       ['old', 'codex', 'provider-inputs'], ['new', 'codex', 'cli-attachments'], ['grok', 'grok', 'provider-inputs'],
       ['agy', 'agy', 'cli-requested'], ['other', 'fal', 'provider-inputs'],
