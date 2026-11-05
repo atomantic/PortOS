@@ -204,7 +204,10 @@ describe('Brain inbox capture', () => {
     );
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send to Catalog' })).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: 'Send to Catalog' }));
+    const sendButton = screen.getByRole('button', { name: 'Send to Catalog' });
+    expect(sendButton.className).toContain('pointer-coarse:min-h-11');
+    expect(sendButton.className).toContain('pointer-coarse:px-4');
+    fireEvent.click(sendButton);
 
     await waitFor(() => expect(JSON.parse(screen.getByTestId('location-state').textContent)).toMatchObject({
       prefill: expect.objectContaining({
@@ -332,6 +335,36 @@ describe('Brain inbox loaded history updates', () => {
     expect(screen.getByText('52')).toBeInTheDocument();
     await act(async () => classified({ entryId: 'not-loaded', status: 'needs_review' }));
     expect(getBrainInboxEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it('provides 44px coarse pointer minimum targets on Filed and Done toggles', async () => {
+    getBrainInbox.mockResolvedValue({
+      entries: [
+        {
+          id: 'inbox-filed-1',
+          capturedText: 'A filed note.',
+          status: 'filed',
+          capturedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'inbox-done-1',
+          capturedText: 'A done note.',
+          status: 'done',
+          capturedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      counts: { filed: 1, done: 1 },
+    });
+
+    render(<MemoryRouter><InboxTab /></MemoryRouter>);
+
+    const filedToggle = await screen.findByRole('button', { name: /^Filed \(\d+\)$/ });
+    expect(filedToggle.className).toContain('pointer-coarse:min-h-11');
+    expect(filedToggle.className).toContain('inline-flex');
+
+    const doneToggle = await screen.findByRole('button', { name: /^Done \(\d+\)$/ });
+    expect(doneToggle.className).toContain('pointer-coarse:min-h-11');
+    expect(doneToggle.className).toContain('inline-flex');
   });
 
   it('drops superseded targeted reads after a mutation or deletion', async () => {

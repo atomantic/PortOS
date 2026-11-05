@@ -512,7 +512,7 @@ export default function InboxTab({ onRefresh, settings }) {
           <button
             type="button"
             onClick={handleSendCreativeToCatalog}
-            className="px-3 py-1.5 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 border border-port-accent-2/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
+            className="px-3 py-1.5 pointer-coarse:min-h-11 pointer-coarse:px-4 bg-port-accent-2/20 hover:bg-port-accent-2/30 text-port-accent-2 border border-port-accent-2/40 rounded-lg text-sm transition-colors flex items-center gap-1.5 flex-shrink-0"
           >
             <Library className="w-4 h-4" /> Send to Catalog
           </button>
@@ -827,7 +827,7 @@ export default function InboxTab({ onRefresh, settings }) {
         <div>
           <button
             onClick={() => setShowFiled(!showFiled)}
-            className="flex items-center gap-2 text-port-success font-medium mb-2"
+            className="inline-flex items-center gap-2 text-port-success font-medium mb-2 pointer-coarse:min-h-11"
           >
             {showFiled ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
             <CheckCircle size={16} />
@@ -992,7 +992,7 @@ export default function InboxTab({ onRefresh, settings }) {
           <div className="mt-4">
             <button
               onClick={() => setShowDone(!showDone)}
-              className="flex items-center gap-2 text-gray-400 font-medium mb-2"
+              className="inline-flex items-center gap-2 text-gray-400 font-medium mb-2 pointer-coarse:min-h-11"
             >
               {showDone ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               <CheckCheck size={16} />
