@@ -5,6 +5,8 @@ import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
 import SceneCard from '../SceneCard.jsx';
+import useShotSheetMapFilter from '../../../hooks/useShotSheetMapFilter.js';
+import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../../../server/lib/musicVideoShotSheet.js';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
@@ -117,8 +119,11 @@ export default function BoardStage({ board }) {
     if (next) params.set('effect', next); else params.delete('effect');
     return params;
   }, { replace: true });
+  const [mapFilter, setMapFilter] = useShotSheetMapFilter();
+  const onMap = new Set(shotSheetMapRows(shotSheetRows(project), mapFilter).map((row) => row.scene.sceneId));
   // The open scene stays listed while it is edited, even once fixing it drops it from the filter.
   const visible = scenes.filter((scene) => scene.sceneId === activeSceneId || (sceneMatchesFilter(codesById.get(scene.sceneId), filter)
+    && onMap.has(scene.sceneId)
     && (!effectFilter || shotUsesEffect(effectsById.get(scene.sceneId), effectFilter))));
   const visibleIds = visible.map((scene) => scene.sceneId).join('\n');
   const thumbnailsRef = useRef(new Map());
@@ -205,6 +210,12 @@ export default function BoardStage({ board }) {
               {shotEffectLabel(effectFilter)} <X size={12} aria-hidden="true" />
             </button>
           )}
+          {mapFilter && (
+            <button type="button" onClick={() => setMapFilter(null)} aria-label="Clear the map filter"
+              className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent sm:min-h-0">
+              {SHOT_SHEET_MAP_BARS.find(([id]) => id === mapFilter.bar)[1]}: {mapFilter.value || 'Not set'} <X size={12} aria-hidden="true" />
+            </button>
+          )}
           <span className="hidden text-port-text-muted sm:inline">j / k to move between scenes</span>
         </div>
       )}
@@ -237,10 +248,10 @@ export default function BoardStage({ board }) {
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
             {PANEL_NOTICES[panelOf(scene)?.state] && <span className="block text-xs text-port-warning">{PANEL_NOTICES[panelOf(scene).state]}</span>}
           </button>)}
-          {scenes.length > 0 && filter === 'all' && (
+          {scenes.length > 0 && filter === 'all' && !mapFilter && (
             <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : () => openEnding('1')} />
           )}
-          {scenes.length > 0 && filter === 'all' && (
+          {scenes.length > 0 && filter === 'all' && !mapFilter && (
             <CreditsThumbnail project={project} open={creditsOpen} onOpen={creditsOpen ? closeEnding : () => openEnding('credits')} />
           )}
         </div>

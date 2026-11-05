@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
@@ -148,6 +148,11 @@ describe('camera output', () => {
     expect(shotSheetMediaEdits(shotSheetRows(project('generated-footage', 'footage', 'image')))).toEqual([{ sceneId: 's', medium: 'still', visualLayer: 'still' }]);
     expect(shotSheetMediaEdits(shotSheetRows(project('still', 'still', 'video')))).toEqual([{ sceneId: 's', medium: 'generated-footage', visualLayer: 'footage' }]);
   });
+  // Catches a match failing outright on a shot the treatment doesn't know yet.
+  it('only changes the layer of a shot with no compiled direction', () => {
+    const noDirection = { ...project('still', 'footage', 'image'), treatment: null };
+    expect(shotSheetMediaEdits(shotSheetRows(noDirection))).toEqual([{ sceneId: 's', visualLayer: 'still' }]);
+  });
   // Catches existing footage being replanned, or a camera that shoots both being constrained.
   it('leaves agreeing shots and unconstrained cameras alone', () => {
     expect(shotSheetMediaEdits(shotSheetRows(project('existing-footage', 'footage', 'video')))).toEqual([]);
@@ -157,6 +162,16 @@ describe('camera output', () => {
   it('reports a mismatch as a problem', () => {
     const [row] = shotSheetRows(project('still', 'footage', 'image'));
     expect(shotSheetProblems(row)).toContain('Snapshot shoots photos, but this shot is set to video');
+  });
+});
+
+describe('shotSheetMapRows', () => {
+  const rows = [{ scene: {}, sheet: { location: 'Mall' } }, { scene: {}, sheet: {} }];
+  // Catches the board and sheet disagreeing about a stretch, or "not set" matching everything.
+  it('narrows to a stretch\u2019s value, including not set, and passes everything with no filter', () => {
+    expect(shotSheetMapRows(rows, { bar: 'location', value: 'Mall' })).toEqual([rows[0]]);
+    expect(shotSheetMapRows(rows, { bar: 'location', value: '' })).toEqual([rows[1]]);
+    expect(shotSheetMapRows(rows, null)).toEqual(rows);
   });
 });
 

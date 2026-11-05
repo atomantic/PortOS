@@ -72,6 +72,7 @@ export function shotSheetRows(project) {
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
       frameOutdated: selectedFrameOutdated(scene),
+      hasDirection: directions.has(scene.sceneId),
       output: shotOutput(scene, directions.get(scene.sceneId)),
       // The picture layer can disagree with the plan, and a composed render reads the layer.
       layerOutput: scene.visualLayer === 'still' ? 'image' : 'video',
@@ -129,6 +130,12 @@ export const SHOT_SHEET_MAP_BARS = [
   ['timeOfDay', 'Time of day', (row) => row.sheet.timeOfDay?.trim() || ''],
 ];
 
+/** The rows a stretch tapped on the map stands for, whichever list is showing them. */
+export function shotSheetMapRows(rows, filter) {
+  const bar = filter && SHOT_SHEET_MAP_BARS.find(([id]) => id === filter.bar);
+  return bar ? rows.filter((row) => bar[2](row) === filter.value) : rows;
+}
+
 /**
  * One bar of the video's map: consecutive timed shots with the same value joined
  * into a stretch, with its span and shot count, for reading how the story moves
@@ -160,14 +167,15 @@ export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
 /**
  * The media changes that bring shots in line with their camera's output: the
  * planned medium and the picture layer. Footage already planned stays as it is
- * when it's on a video camera.
+ * when it's on a video camera. A shot with no compiled direction has no medium to
+ * plan yet, so only its layer changes.
  */
 export function shotSheetMediaEdits(rows) {
-  return rows.flatMap(({ scene, camera, output, layerOutput }) => {
+  return rows.flatMap(({ scene, camera, output, layerOutput, hasDirection }) => {
     if (!camera?.output || (output === camera.output && layerOutput === camera.output)) return [];
     return [{
       sceneId: scene.sceneId,
-      ...(output !== camera.output ? { medium: camera.output === 'image' ? 'still' : 'generated-footage' } : {}),
+      ...(hasDirection && output !== camera.output ? { medium: camera.output === 'image' ? 'still' : 'generated-footage' } : {}),
       ...(layerOutput !== camera.output ? { visualLayer: camera.output === 'image' ? 'still' : 'footage' } : {}),
     }];
   });

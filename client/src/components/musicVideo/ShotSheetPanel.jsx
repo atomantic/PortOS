@@ -6,8 +6,9 @@ import ScenePoster from './ScenePoster.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
+import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -239,7 +240,7 @@ export default function ShotSheetPanel({ board }) {
   const [query, setQuery] = useState('');
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
-  const [mapFilter, setMapFilter] = useState(null);
+  const [mapFilter, setMapFilter] = useShotSheetMapFilter();
   const [uncheckedOnly, setUncheckedOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
@@ -252,9 +253,8 @@ export default function ShotSheetPanel({ board }) {
   const checked = rows.filter((row) => row.sheet.checked).length;
   const withProblems = rows.filter((row) => row.problems.length).length;
   const needle = query.trim().toLowerCase();
-  const listed = rows.filter((row) => {
+  const listed = shotSheetMapRows(rows, mapFilter).filter((row) => {
     if (outdatedOnly && !row.frameOutdated) return false;
-    if (mapFilter && SHOT_SHEET_MAP_BARS.find(([bar]) => bar === mapFilter.bar)[2](row) !== mapFilter.value) return false;
     if (uncheckedOnly && row.sheet.checked) return false;
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;

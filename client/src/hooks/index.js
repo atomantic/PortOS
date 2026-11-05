@@ -48,6 +48,7 @@ export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useSlotInFlight } from './useSlotInFlight.js';
 export { default as useSseJobSlot } from './useSseJobSlot.js';
 export { default as useSingToScore } from './useSingToScore.js';
+export { default as useShotSheetMapFilter } from './useShotSheetMapFilter.js';
 export * from './useSingToScore.js';
 export { default as useSingToVerify } from './useSingToVerify.js';
 export * from './useSingToVerify.js';

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import ShotSheetPanel from './ShotSheetPanel.jsx';
+import { MemoryRouter } from 'react-router';
+import RealShotSheetPanel from './ShotSheetPanel.jsx';
+
+const ShotSheetPanel = (props) => <MemoryRouter><RealShotSheetPanel {...props} /></MemoryRouter>;
 
 const boardFor = (over = {}) => ({
   project: {
