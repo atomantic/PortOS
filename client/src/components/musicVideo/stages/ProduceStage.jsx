@@ -1,5 +1,6 @@
 import BoardStage from './BoardStage.jsx';
 import ShotTimingTools from '../ShotTimingTools.jsx';
+import ShotSheetPanel from '../ShotSheetPanel.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import StageSection from '../StageSection.jsx';
 import { GenerationActions } from '../ProjectActionGroups.jsx';
@@ -24,6 +25,7 @@ export default function ProduceStage({ board }) {
   const hasScenes = (project.scenes || []).length > 0;
   return (
     <div className="min-w-0 space-y-3">
+      {hasScenes && <ShotSheetPanel board={board} />}
       <BoardStage board={board} />
       <ShotTimingTools board={board} />
       <fieldset disabled={locked} className="min-w-0 space-y-3">
