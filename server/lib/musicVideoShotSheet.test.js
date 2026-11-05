@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetRows } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch } from '../services/musicVideo/projectsLogic.js';
 
@@ -44,7 +44,7 @@ describe('shotSheetRows', () => {
 describe('shot sheet storage', () => {
   // Catches an emptied sheet being kept as a planned shot.
   it('stores a sheet with nothing filled in as null', () => {
-    expect(normalizeShotSheet({ view: '  ', characters: [], cameraId: null })).toBeNull();
+    expect(normalizeShotSheet({ view: '  ', characters: [], cameraId: null, checked: false })).toBeNull();
     expect(normalizeShotSheet({ view: 'Low', characters: ['Renee'] })).toEqual({ view: 'Low', characters: ['Renee'] });
   });
   // Catches the sheet being dropped by the update schema, or a sheet edit losing the storyboard approval.
@@ -62,6 +62,39 @@ describe('shot sheet storage', () => {
     expect(musicVideoProjectUpdateSchema.safeParse({ cameras }).success).toBe(true);
     expect(musicVideoProjectUpdateSchema.safeParse({ cameras: [{ id: 'x', name: 'X', kind: 'drone' }] }).success).toBe(false);
     expect(applyProjectPatch({ id: 'p', scenes: [] }, { cameras }).cameras).toEqual(cameras);
+  });
+});
+
+describe('shotSheetProblems', () => {
+  const full = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', light: 'Dusk', emotion: 'Joy', action: 'Rides', characters: ['Renee'] };
+  const vhs = { id: 'vhs', name: 'VHS', kind: 'in-world' };
+  // Catches a complete plan being nagged about.
+  it('has nothing to say about a complete plan', () => {
+    expect(shotSheetProblems({ sheet: full, camera: vhs })).toEqual([]);
+  });
+  // Catches the empty columns not being named.
+  it('names the empty columns', () => {
+    expect(shotSheetProblems({ sheet: {}, camera: null })).toEqual(['Missing camera, location, time and light, emotion, action, who']);
+  });
+  // Catches an observer being asked for a holder, or an in-world camera escaping the rule.
+  it('asks who holds an in-world camera but never an observer', () => {
+    const { holder: _holder, ...noHolder } = full;
+    expect(shotSheetProblems({ sheet: noHolder, camera: vhs })).toEqual(['Nobody holds the VHS']);
+    expect(shotSheetProblems({ sheet: noHolder, camera: { id: 'vhs', name: 'Observer', kind: 'observer' } })).toEqual([]);
+  });
+  // Catches a deleted camera or a re-cut's copied action going unnoticed.
+  it('flags a removed camera and an action copied from the shot before', () => {
+    expect(shotSheetProblems({ sheet: full, camera: null })).toContain('Its camera was removed from this video');
+    expect(shotSheetProblems({ sheet: full, camera: vhs }, { sheet: { action: ' Rides ' } })).toEqual(['Same action as the shot before']);
+  });
+});
+
+describe('shotSheetOptions', () => {
+  // Catches sets missing from the location list, or a typed value not coming back as a choice.
+  it('offers places, the starting list and earlier wording without repeats', () => {
+    const project = { concept: { subjects: [{ kind: 'place', name: 'Mall' }, { kind: 'character', name: 'Renee' }] }, scenes: [{ shotSheet: { location: 'Mall' } }, { shotSheet: { location: 'Field' } }, { shotSheet: { emotion: 'Scared' } }] };
+    expect(shotSheetOptions(project, 'location')).toEqual(['Mall', 'Field']);
+    expect(shotSheetOptions(project, 'emotion').filter((value) => value === 'Scared')).toHaveLength(1);
   });
 });
 

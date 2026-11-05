@@ -20,7 +20,7 @@ export const SHOT_SHEET_TEXT_FIELDS = [
   ['view', 1000], ['location', 200], ['light', 300], ['action', 2000], ['emotion', 300], ['notes', 2000],
 ];
 
-const hasSheetValue = (value) => (Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim() !== '' : value != null);
+const hasSheetValue = (value) => (Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim() !== '' : typeof value === 'boolean' ? value : value != null);
 
 /** A sheet with nothing filled in is stored as null, so "not planned yet" stays one state. */
 export function normalizeShotSheet(sheet) {
@@ -62,6 +62,45 @@ export function shotSheetRows(project) {
       frameOutdated: selectedFrameOutdated(scene),
     };
   });
+}
+
+// Starting choices for the sheet's pick lists. The director can type anything; what they type is offered on other shots.
+export const SHOT_SHEET_SUGGESTIONS = {
+  view: ['Wide', 'Medium', 'Close-up', 'Point of view', 'Over the shoulder', 'Low angle', 'High angle', 'Side-on tracking', 'Following from behind', 'Arm\u2019s-length selfie', 'Locked off', 'Handheld'],
+  light: ['Golden hour', 'Sunset', 'Dusk', 'Blue hour', 'Night', 'Deep night', 'Dawn', 'Daylight', 'Flash', 'Streetlight', 'Headlights'],
+  emotion: ['Joyful', 'Playful', 'Laughing', 'Free', 'Tender', 'Contemplative', 'Melancholy', 'Longing', 'Focused', 'Serious', 'Scared', 'Urgent', 'Defiant', 'Awed', 'At peace'],
+};
+
+/**
+ * The choices a sheet column offers: the project's places for location, its
+ * starting list for the others, then everything already typed on any shot,
+ * so a video's own wording stays one pick away and spelled the same.
+ */
+export function shotSheetOptions(project, field) {
+  const places = field === 'location'
+    ? (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'place' && subject.name).map((subject) => subject.name) : [];
+  const used = (project?.scenes || []).map((scene) => scene?.shotSheet?.[field]).filter((value) => typeof value === 'string' && value.trim());
+  return [...new Set([...places, ...(SHOT_SHEET_SUGGESTIONS[field] || []), ...used.map((value) => value.trim())])];
+}
+
+// The columns every shot needs before its plan is complete, with the label shown when one is empty.
+const SHOT_SHEET_REQUIRED = [['cameraId', 'camera'], ['location', 'location'], ['light', 'time and light'], ['emotion', 'emotion'], ['action', 'action']];
+
+/**
+ * What's wrong with a shot's plan, by rule alone: empty columns, an in-world
+ * camera nobody holds or has set down, a camera since removed from the video,
+ * and the same action as the shot before it, which is what a re-cut leaves.
+ */
+export function shotSheetProblems(row, previous = null) {
+  const { sheet, camera } = row;
+  const missing = SHOT_SHEET_REQUIRED.filter(([field]) => !sheet[field] || (typeof sheet[field] === 'string' && !sheet[field].trim())).map(([, label]) => label);
+  if (!sheet.characters?.length) missing.push('who');
+  const problems = missing.length ? [`Missing ${missing.join(', ')}`] : [];
+  if (sheet.cameraId && !camera) problems.push('Its camera was removed from this video');
+  if (camera?.kind === 'in-world' && !sheet.holder) problems.push(`Nobody holds the ${camera.name}`);
+  const action = sheet.action?.trim();
+  if (action && action === previous?.sheet?.action?.trim()) problems.push('Same action as the shot before');
+  return problems;
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */

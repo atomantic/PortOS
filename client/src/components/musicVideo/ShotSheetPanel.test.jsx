@@ -28,7 +28,7 @@ describe('ShotSheetPanel', () => {
   it('shows each shot with its time, lyric, camera and outdated frame warning', () => {
     render(<ShotSheetPanel board={boardFor()} />);
     openPanel();
-    expect(screen.getByText('1 of 2 shots planned · 1 frame older than its prompt')).toBeInTheDocument();
+    expect(screen.getByText('0 of 2 shots checked · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
     expect(within(row).getByText('Hold still')).toBeInTheDocument();
     expect(within(row).getByText('Prompt changed since this frame')).toBeInTheDocument();
@@ -57,6 +57,36 @@ describe('ShotSheetPanel', () => {
     openPanel();
     fireEvent.change(screen.getByLabelText('Shot 1 camera'), { target: { value: 'obs' } });
     expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'obs', emotion: 'Focused' } });
+  });
+
+  // Catches the human review not saving with the plan, or the filters ignoring it.
+  it('saves a Checked tick with the sheet and narrows to unchecked and incomplete shots', () => {
+    const board = boardFor();
+    board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', light: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    expect(screen.getByLabelText('Shot 1 checked')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Shot 2 checked'));
+    expect(board.saveScene).toHaveBeenCalledWith('b', { shotSheet: { checked: true } });
+    fireEvent.click(screen.getByLabelText('Only not checked'));
+    expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Only not checked'));
+    fireEvent.click(screen.getByLabelText('Only incomplete'));
+    expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Missing camera, location/)).toBeInTheDocument();
+  });
+
+  // Catches a column losing its pick list.
+  it('offers the project\u2019s places and earlier wording as pick lists', () => {
+    const board = boardFor();
+    board.project.concept.subjects.push({ kind: 'place', name: 'Dead mall' });
+    board.project.scenes[0].shotSheet.light = 'Sodium streetlight';
+    const { container } = render(<ShotSheetPanel board={board} />);
+    openPanel();
+    expect(screen.getByLabelText('Shot 2 location')).toHaveAttribute('list', 'mv-sheet-location');
+    expect(container.querySelector('#mv-sheet-location option[value="Dead mall"]')).not.toBeNull();
+    expect(container.querySelector('#mv-sheet-light option[value="Sodium streetlight"]')).not.toBeNull();
+    expect(container.querySelector('#mv-sheet-emotion option[value="Contemplative"]')).not.toBeNull();
   });
 
   // Catches a camera edit not persisting to the project.
