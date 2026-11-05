@@ -692,6 +692,77 @@ describe('MoodBoardDetail item analysis (#4188 Phase 3)', () => {
     const input = screen.getByLabelText('Item caption');
     expect(input).toHaveValue('simple pin description');
   });
+
+  it.each([
+    {
+      name: 'analyzed prompt',
+      item: { id: 'analyzed', type: 'image', analysis: { prompt: 'Original', negativePrompt: 'blur' }, caption: 'Original' },
+      label: 'Analyzed prompt',
+      maxLength: '8000',
+      patch: { analysis: { prompt: 'Updated line one\nUpdated line two', negativePrompt: 'blur' }, prompt: 'Updated line one\nUpdated line two', caption: 'Updated line one\nUpdated line two' },
+    },
+    {
+      name: 'explicit prompt with a separate caption',
+      item: { id: 'prompt', type: 'image', prompt: 'Original', caption: 'Keep this caption' },
+      label: 'Item prompt',
+      maxLength: '16000',
+      patch: { prompt: 'Updated line one\nUpdated line two' },
+    },
+    {
+      name: 'gallery caption used as a prompt',
+      item: { id: 'gallery', type: 'image', mediaKey: 'image:example.png', caption: 'Original' },
+      label: 'Item prompt',
+      maxLength: '2000',
+      patch: { caption: 'Updated line one\nUpdated line two' },
+    },
+    {
+      name: 'caption',
+      item: { id: 'caption', type: 'text', text: 'A note', caption: 'Original' },
+      label: 'Item caption',
+      maxLength: '2000',
+      patch: { caption: 'Updated line one\nUpdated line two' },
+    },
+    {
+      name: 'empty caption',
+      item: { id: 'empty', type: 'text', text: 'A note', caption: null },
+      label: 'Item caption',
+      initial: '',
+      maxLength: '2000',
+      patch: { caption: 'Updated line one\nUpdated line two' },
+    },
+  ])('edits the $name as multiline text and saves only on a changed blur', async ({ item, label, initial = 'Original', maxLength, patch }) => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [item] });
+    mockUpdateMoodBoardItem.mockResolvedValueOnce({ ...item, ...patch });
+    renderPage();
+    const field = await screen.findByLabelText(label);
+
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(field).toHaveAttribute('maxlength', maxLength);
+    expect(field).toHaveValue(initial);
+    fireEvent.blur(field);
+    expect(mockUpdateMoodBoardItem).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: '  Updated line one\nUpdated line two  ' } });
+    expect(field).toHaveValue('  Updated line one\nUpdated line two  ');
+    expect(mockUpdateMoodBoardItem).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    await waitFor(() => expect(mockUpdateMoodBoardItem).toHaveBeenCalledWith('a', item.id, patch, { silent: true }));
+  });
+
+  it('keeps an edited card draft when the board rerenders or its save fails', async () => {
+    const item = { id: 'prompt', type: 'image', prompt: 'Original' };
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [item] });
+    mockUpdateMoodBoardItem.mockRejectedValueOnce(new Error('Save failed'));
+    renderPage();
+    const field = await screen.findByLabelText('Item prompt');
+
+    fireEvent.change(field, { target: { value: 'Draft\nsecond line' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed board' } });
+    expect(field).toHaveValue('Draft\nsecond line');
+    fireEvent.blur(field);
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Failed to update'));
+    expect(field).toHaveValue('Draft\nsecond line');
+  });
 });
 
 describe('MoodBoardDetail layout', () => {

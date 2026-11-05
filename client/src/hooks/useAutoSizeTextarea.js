@@ -4,10 +4,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
  * Grow a <textarea> to fit its content so the field never scrolls or has to be
  * hand-resized. Attach the returned `ref` to the textarea; the height is
  * recomputed before paint whenever `value` changes, AND whenever the element's
- * width changes (responsive grid breakpoint, viewport resize) — a narrower box
- * rewraps the text to more lines without `value` changing, which would
- * otherwise clip the bottom behind `overflow-hidden`. `resize` is also returned
- * for any other programmatic mutation the two triggers can't see.
+ * width or theme font changes, or a font finishes loading. Any of these can
+ * rewrap text without `value` changing and otherwise clip it behind
+ * `overflow-hidden`. `resize` is also returned for other programmatic changes.
  *
  * Set a floor with a `min-h-*` class on the textarea (CSS `min-height` floors
  * the inline height this hook sets), and pair it with `resize-none` /
@@ -31,25 +30,35 @@ export default function useAutoSizeTextarea(value, externalRef) {
 
   useLayoutEffect(() => { resize(); }, [value, resize]);
 
-  // Re-fit on width changes only. Gating on width is essential: resize() mutates
-  // the element's height, which would otherwise re-trigger the observer into a
-  // feedback loop.
+  // Ignore height-only observations: resize() itself changes the height.
   useEffect(() => {
     const el = localRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    if (!el) return undefined;
+    let active = true;
     let lastWidth = el.clientWidth;
     let frame = null;
-    const ro = new ResizeObserver(() => {
+    // Batch theme changes and avoid writing height during ResizeObserver delivery.
+    const scheduleResize = () => {
+      if (frame === null) frame = requestAnimationFrame(() => { frame = null; resize(); });
+    };
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
       if (el.clientWidth !== lastWidth) {
         lastWidth = el.clientWidth;
-        // Changing an observed element's height inside the observer can trigger
-        // an undelivered-notification warning. Re-fit in the next frame instead.
-        if (frame === null) frame = requestAnimationFrame(() => { frame = null; resize(); });
+        scheduleResize();
       }
     });
-    ro.observe(el);
+    ro?.observe(el);
+    const root = el.ownerDocument.documentElement;
+    const themeObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(scheduleResize);
+    themeObserver?.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-port-theme'] });
+    const fonts = el.ownerDocument.fonts;
+    fonts?.addEventListener?.('loadingdone', scheduleResize);
+    fonts?.ready?.then(() => { if (active) scheduleResize(); });
     return () => {
-      ro.disconnect();
+      active = false;
+      ro?.disconnect();
+      themeObserver?.disconnect();
+      fonts?.removeEventListener?.('loadingdone', scheduleResize);
       if (frame !== null) cancelAnimationFrame(frame);
     };
   }, [resize]);
