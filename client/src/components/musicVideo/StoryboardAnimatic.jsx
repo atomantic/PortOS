@@ -697,7 +697,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     if (!unchanged()) throw new Error('Preview changed during capture');
     const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages });
     if (!unchanged()) throw new Error('Preview changed during capture');
-    const shotLabel = basis.outro ? 'Ending' : selected ? sceneShotName(selected, { number: timedShots(scenes).indexOf(selected) + 1 }) : null;
+    const selectedIndex = selected ? timedShots(scenes).findIndex((scene) => scene.sceneId === selected.sceneId) : -1;
+    const shotLabel = basis.outro ? 'Ending' : selected ? sceneShotName(selected, { number: Math.max(1, selectedIndex + 1) }) : null;
     return { blob, time: at, fps: ANIMATIC_FPS, label: [project.name, shotLabel].filter(Boolean).join(' · ') };
   };
   // Cut effects (beat toggles, dissolves, fades through black), on the frames the final

@@ -362,8 +362,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
-  const shotIndex = shotNav ? shotSteps(project.scenes, t).index : 0;
-  const activeShot = shotIndex ? project.scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec)[shotIndex - 1] : null;
+  const shotStep = shotNav ? shotSteps(project.scenes, t) : null;
+  const shotIndex = shotStep?.index || 0;
+  const activeShot = shotStep?.scene || null;
   const failed = preview.status === 'error' || preview.status === 'unavailable' || !!audioError;
   const timeLabel = failed
     ? 'Preview unavailable'

@@ -32,8 +32,9 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   const startSec = source.startSec || 0;
   const range = { startSec, endSec: source.endSec ?? null };
   const songTime = startSec + time;
-  const shot = shotSteps(scenes, songTime, range).index;
-  const activeShot = shot ? scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec)[shot - 1] : null;
+  const shotStep = shotSteps(scenes, songTime, range);
+  const shot = shotStep.index;
+  const activeShot = shotStep.scene;
   const stepFrame = (t) => {
     videoRef.current?.pause?.();
     seekTo(t - startSec);
