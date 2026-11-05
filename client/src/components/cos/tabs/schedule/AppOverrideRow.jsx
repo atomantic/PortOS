@@ -158,7 +158,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           ) : hasCron ? (
             <button
               onClick={() => setCronEditing(true)}
-              className="px-2 py-1 text-xs text-gray-400 font-mono bg-port-bg border border-port-border rounded hover:border-port-accent cursor-pointer"
+              className="px-2 py-1 text-xs text-gray-400 font-mono bg-port-bg border border-port-border rounded hover:border-port-accent cursor-pointer min-h-[40px] pointer-coarse:min-h-11 inline-flex items-center"
               title={describeCron(currentInterval)}
             >
               {currentInterval}
