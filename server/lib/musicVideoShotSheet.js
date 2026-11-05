@@ -130,6 +130,16 @@ export function shotSheetStretches(rows, readValue) {
   return stretches;
 }
 
+/**
+ * An AI backfill of a shot's sheet, filling only the columns that are empty:
+ * whatever the director has set stays theirs, and Checked is never touched.
+ * Returns the merged sheet and which columns it filled.
+ */
+export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
+  const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
+  return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
+}
+
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */
 export function shotSheetCast(project) {
   return (project?.concept?.subjects || [])
