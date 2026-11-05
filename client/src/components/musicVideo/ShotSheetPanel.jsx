@@ -30,12 +30,28 @@ function SheetPick({ label, field, value = '', disabled, onCommit, maxLength }) 
 }
 
 // A value keeps its color wherever it comes back along its bar.
+const MAP_TICK_SEC = 30;
 const MAP_COLORS = ['bg-port-accent/30', 'bg-port-success/30', 'bg-port-warning/30', 'bg-port-error/30', 'bg-port-accent/60', 'bg-port-success/60', 'bg-port-warning/60', 'bg-port-error/60'];
 
 /** The video's map: a bar each for location, camera and time of day, each stretch sized by its length in the song. Tapping one lists only its shots. */
 function ShotSheetMap({ rows, active, onPick }) {
+  const timed = rows.filter(({ scene }) => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec));
+  const startSec = timed.length ? Math.min(...timed.map(({ scene }) => scene.startSec)) : 0;
+  const span = timed.length ? Math.max(...timed.map(({ scene }) => scene.endSec)) - startSec : 0;
+  const ticks = [];
+  if (span > 0) for (let at = Math.ceil(startSec / MAP_TICK_SEC) * MAP_TICK_SEC; at < startSec + span; at += MAP_TICK_SEC) ticks.push(at);
   return (
     <div role="group" aria-label="Video map" className="min-w-0 space-y-1">
+      {ticks.length > 0 && (
+        <div aria-hidden="true" className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-1.5">
+          <span />
+          <div data-testid="map-ruler" className="relative h-4 min-w-0 overflow-hidden text-xs tabular-nums text-port-text-muted">
+            {ticks.map((at) => (
+              <span key={at} className="absolute top-0 border-l border-port-border pl-1" style={{ left: `${((at - startSec) / span) * 100}%` }}>{`${Math.floor(at / 60)}:${String(Math.round(at % 60)).padStart(2, '0')}`}</span>
+            ))}
+          </div>
+        </div>
+      )}
       {SHOT_SHEET_MAP_BARS.map(([bar, label, readValue]) => {
         const stretches = shotSheetStretches(rows, readValue);
         // A camera keeps one color whoever has it; the label says who.
