@@ -5,6 +5,7 @@ import { applyProcessAction } from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
 import ProcessLogLines, { LogStreamBadge } from '../../ui/ProcessLogLines';
+import ListLoadError from '../../ui/ListLoadError';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import useFocusTrap from '../../../hooks/useFocusTrap';
@@ -84,6 +85,10 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
 
   if (loading) {
     return <div className="text-center py-8"><BrailleSpinner text="Loading processes" /></div>;
+  }
+
+  if (error && data === null) {
+    return <ListLoadError what="process status" error={error} onRetry={refetch} />;
   }
 
   return (
