@@ -93,9 +93,9 @@ async function pruneTombstonedRows(table, olderThanMs) {
 // ---------- folders ----------
 
 /** Every LIVE folder row's `data` JSONB, ordered for the library tree. */
-export async function listFolders() {
+export async function listFolders({ includeDeleted = false } = {}) {
   const { rows } = await query(
-    `SELECT data FROM writers_room_folders WHERE deleted = FALSE ORDER BY sort_order, created_at`,
+    `SELECT data FROM writers_room_folders ${includeDeleted ? '' : 'WHERE deleted = FALSE'} ORDER BY sort_order, created_at`,
   );
   return rows.map((r) => r.data);
 }
@@ -194,9 +194,9 @@ export async function pruneTombstonedFolders(olderThanMs) {
 // ---------- exercises ----------
 
 /** Every LIVE exercise row's `data` JSONB, newest sprint first. */
-export async function listExercises() {
+export async function listExercises({ includeDeleted = false } = {}) {
   const { rows } = await query(
-    `SELECT data FROM writers_room_exercises WHERE deleted = FALSE ORDER BY started_at DESC NULLS LAST`,
+    `SELECT data FROM writers_room_exercises ${includeDeleted ? '' : 'WHERE deleted = FALSE'} ORDER BY started_at DESC NULLS LAST`,
   );
   return rows.map((r) => r.data);
 }
@@ -331,9 +331,9 @@ export async function readWorksPage(ids) {
 }
 
 /** Every live work's manifest, rebuilt with its drafts[] — one pair of queries. */
-export async function listWorks() {
+export async function listWorks({ includeDeleted = false } = {}) {
   const works = await query(
-    `SELECT id, data FROM writers_room_works WHERE deleted = FALSE`,
+    `SELECT id, data FROM writers_room_works ${includeDeleted ? '' : 'WHERE deleted = FALSE'}`,
   );
   return hydrateWorks(works.rows);
 }

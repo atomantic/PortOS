@@ -15,6 +15,7 @@ vi.mock('../../lib/peerUrl.js', async () => ({
 // Mock instances.js — peer list is controlled per test.
 vi.mock('../instances.js', async () => ({
   getPeers: vi.fn(),
+  resolveEffectiveCategories: vi.fn(),
 }));
 
 // Mock instanceIdentity.js — deterministic local id for manifest assertions.
@@ -40,6 +41,23 @@ vi.mock('../universeBuilder.js', async () => ({
 vi.mock('../pipeline/series.js', async () => ({
   listSeries: vi.fn(),
 }));
+vi.mock('../fableLoom/index.js', () => ({ listLooms: vi.fn() }));
+vi.mock('../authors/index.js', () => ({ listAuthors: vi.fn() }));
+vi.mock('../artists/index.js', () => ({ listArtists: vi.fn() }));
+vi.mock('../albums/index.js', () => ({ listAlbums: vi.fn() }));
+vi.mock('../tracks/index.js', () => ({ listTracks: vi.fn() }));
+vi.mock('../creativeDirector/local.js', () => ({ listProjects: vi.fn() }));
+vi.mock('../moodBoard/index.js', () => ({ listBoards: vi.fn() }));
+vi.mock('../musicVideo/projects.js', () => ({ listProjects: vi.fn() }));
+vi.mock('../writersRoom/sync.js', () => ({
+  listWorksForIntegrity: vi.fn(), listFoldersForIntegrity: vi.fn(), listExercisesForIntegrity: vi.fn(),
+  buildWorkBodyManifest: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../writersRoom/bibleSync.js', () => ({ buildWorkBibleManifest: vi.fn().mockResolvedValue([]) }));
+vi.mock('../creativeCommissions/feedbackStore.js', () => ({ listCommissionFeedbackForIntegrity: vi.fn() }));
+vi.mock('../creativeCommissions/store.js', () => ({ listCommissionsForIntegrity: vi.fn() }));
+vi.mock('../decks.js', () => ({ listDecksForIntegrity: vi.fn() }));
+vi.mock('../storyboards/sync.js', () => ({ listStoryboardsForIntegrity: vi.fn() }));
 
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { getPeers } from '../instances.js';
@@ -47,6 +65,21 @@ import { assetIntegrityForRecord } from './peerSync.js';
 import { listCollections } from '../mediaCollections.js';
 import { listUniverses } from '../universeBuilder.js';
 import { listSeries } from '../pipeline/series.js';
+import { listLooms } from '../fableLoom/index.js';
+import { listAuthors } from '../authors/index.js';
+import { listArtists } from '../artists/index.js';
+import { listAlbums } from '../albums/index.js';
+import { listTracks } from '../tracks/index.js';
+import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
+import { listBoards } from '../moodBoard/index.js';
+import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.js';
+import { listWorksForIntegrity, listFoldersForIntegrity, listExercisesForIntegrity, buildWorkBodyManifest } from '../writersRoom/sync.js';
+import { buildWorkBibleManifest } from '../writersRoom/bibleSync.js';
+import { listCommissionFeedbackForIntegrity } from '../creativeCommissions/feedbackStore.js';
+import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
+import { listDecksForIntegrity } from '../decks.js';
+import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
+import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 import { buildLocalManifest, getPeerIntegrity } from './integrity.js';
 import { INTEGRITY_STATUS } from '../../lib/syncIntegrity.js';
 
@@ -61,15 +94,60 @@ const makeCollection = (overrides = {}) => ({
 
 const makePeer = (id = 'peer-x') => ({ instanceId: id, name: `Peer ${id}` });
 
+const kindListers = {
+  universe: listUniverses, series: listSeries, mediaCollection: listCollections,
+  author: listAuthors, artist: listArtists, album: listAlbums, track: listTracks,
+  creativeDirectorProject: listCreativeDirectorProjects, moodBoard: listBoards, fableLoom: listLooms,
+  writersRoomWork: listWorksForIntegrity, writersRoomFolder: listFoldersForIntegrity,
+  writersRoomExercise: listExercisesForIntegrity, musicVideoProject: listMusicVideoProjects,
+  commissionFeedback: listCommissionFeedbackForIntegrity, creativeCommission: listCommissionsForIntegrity,
+  deck: listDecksForIntegrity, storyboard: listStoryboardsForIntegrity,
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getPeers).mockResolvedValue([]);
   vi.mocked(listCollections).mockResolvedValue([]);
   vi.mocked(listUniverses).mockResolvedValue([]);
   vi.mocked(listSeries).mockResolvedValue([]);
+  for (const lister of Object.values(kindListers)) vi.mocked(lister).mockResolvedValue([]);
+  vi.mocked(assetIntegrityForRecord).mockResolvedValue({ assetHashes: [], metadataMissing: false });
+  vi.mocked(buildWorkBodyManifest).mockResolvedValue([]);
+  vi.mocked(buildWorkBibleManifest).mockResolvedValue([]);
 });
 
 describe('buildLocalManifest', () => {
+  it('covers each subscribable kind with live records and tombstones', async () => {
+    expect(Object.keys(kindListers).sort()).toEqual([...PEER_SUBSCRIBABLE_KINDS].sort());
+    for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+      const live = { id: `${kind}-live`, title: 'Title', updatedAt: '2026-01-01', cards: [{ imageRefs: ['card.png'] }] };
+      const tombstone = { id: `${kind}-deleted`, updatedAt: '2026-01-02', deleted: true };
+      vi.mocked(kindListers[kind]).mockResolvedValue([live, tombstone]);
+      const manifest = await buildLocalManifest(kind);
+      expect(manifest).toEqual([
+        { id: live.id, name: 'Title', updatedAt: live.updatedAt, deleted: false, assetHashes: [], metadataMissing: false },
+        { id: tombstone.id, name: undefined, updatedAt: tombstone.updatedAt, deleted: true, assetHashes: [], metadataMissing: false },
+      ]);
+      if (kind !== 'writersRoomWork') expect(assetIntegrityForRecord).toHaveBeenCalledWith(kind, live);
+      expect(assetIntegrityForRecord).not.toHaveBeenCalledWith(kind, tombstone);
+    }
+  });
+
+  it('omits live ephemeral records without hashing them but retains their tombstones', async () => {
+    const live = makeCollection({ id: 'private', ephemeral: true });
+    const tombstone = makeCollection({ id: 'deleted', ephemeral: true, deleted: true });
+    vi.mocked(listUniverses).mockResolvedValue([live, tombstone]);
+    expect(await buildLocalManifest('universe')).toEqual([expect.objectContaining({ id: 'deleted', deleted: true })]);
+    expect(assetIntegrityForRecord).not.toHaveBeenCalled();
+  });
+
+  it('includes draft and bible hashes for live works in sorted asset hashes', async () => {
+    vi.mocked(listWorksForIntegrity).mockResolvedValue([{ id: 'work', updatedAt: '2026-01-01' }]);
+    vi.mocked(buildWorkBodyManifest).mockResolvedValue([{ sha256: 'z' }, { sha256: 'a' }]);
+    vi.mocked(buildWorkBibleManifest).mockResolvedValue([{ sha256: 'm' }]);
+    expect(await buildLocalManifest('writersRoomWork')).toEqual([expect.objectContaining({ assetHashes: ['a', 'm', 'z'] })]);
+    expect(assetIntegrityForRecord).not.toHaveBeenCalled();
+  });
   it('returns an empty array when no records exist', async () => {
     vi.mocked(listCollections).mockResolvedValue([]);
     const result = await buildLocalManifest('mediaCollection');
@@ -144,6 +222,33 @@ describe('buildLocalManifest', () => {
 
 describe('getPeerIntegrity', () => {
   afterEach(() => vi.useRealTimers());
+
+  it('treats unsupported older peer inventories as unavailable while accepting current manifests', async () => {
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    vi.mocked(listAuthors).mockResolvedValue([{ id: 'author-1', updatedAt: '2026-01-01' }]);
+    vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ records: [] }) });
+    expect(await getPeerIntegrity({ peerId: 'peer-x', kind: 'author' })).toEqual({
+      available: false, reason: 'peer-too-old', records: [],
+    });
+    expect(listAuthors).not.toHaveBeenCalled();
+    vi.mocked(peerFetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ manifestVersion: 1, records: [] }) });
+    expect(await getPeerIntegrity({ peerId: 'peer-x', kind: 'author' })).toEqual({
+      available: true, records: [{ id: 'author-1', name: 'author-1', status: INTEGRITY_STATUS.LOCAL_ONLY }],
+    });
+  });
+
+  it('reports differing work bibles even when the work clock matches', async () => {
+    vi.mocked(getPeers).mockResolvedValue([makePeer()]);
+    vi.mocked(listWorksForIntegrity).mockResolvedValue([{ id: 'work', updatedAt: '2026-01-01' }]);
+    vi.mocked(buildWorkBibleManifest).mockResolvedValue([{ sha256: 'local-bible' }]);
+    vi.mocked(peerFetch).mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ manifestVersion: 1, records: [{ id: 'work', updatedAt: '2026-01-01', assetHashes: ['peer-bible'] }] }),
+    });
+    expect(await getPeerIntegrity({ peerId: 'peer-x', kind: 'writersRoomWork' })).toEqual({
+      available: true, records: [{ id: 'work', name: 'work', status: INTEGRITY_STATUS.ASSETS_MISSING }],
+    });
+  });
 
   it.each(['stalled', 'oversized'])('rejects a %s manifest body without computing a misleading diff', async (failure) => {
     vi.useFakeTimers();
@@ -296,7 +401,7 @@ describe('getPeerIntegrity', () => {
     });
   });
 
-  it('treats malformed peer body (no records array) as empty remote list', async () => {
+  it('reports a malformed peer body as unavailable instead of an empty inventory', async () => {
     const peer = makePeer('peer-x');
     vi.mocked(getPeers).mockResolvedValue([peer]);
     vi.mocked(listCollections).mockResolvedValue([]);
@@ -308,8 +413,8 @@ describe('getPeerIntegrity', () => {
     });
 
     const result = await getPeerIntegrity({ peerId: 'peer-x', kind: 'mediaCollection' });
-    expect(result.available).toBe(true);
-    expect(result.records).toEqual([]);
+    expect(result).toEqual({ available: false, reason: 'fetch-failed', records: [] });
+    expect(listCollections).not.toHaveBeenCalled();
   });
 
   it('returns unavailable when peer json parsing fails', async () => {

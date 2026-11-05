@@ -170,6 +170,7 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     // readWork({ includeDeleted }) surfaces the tombstone for the federation push.
     const tomb = await db.readWork('wr-work-2', { includeDeleted: true });
     expect(tomb.deleted).toBe(true);
+    expect(await db.listWorks({ includeDeleted: true })).toContainEqual(expect.objectContaining({ id: 'wr-work-2', deleted: true, drafts: expect.any(Array) }));
     expect(await db.listWorkIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-work-1', 'wr-work-2']));
   });
 
@@ -227,6 +228,7 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect((await query(`SELECT deleted FROM writers_room_folders WHERE id = 'wr-folder-2'`)).rows[0].deleted).toBe(true);
     const tomb = await db.readFolder('wr-folder-2', { includeDeleted: true });
     expect(tomb.deleted).toBe(true);
+    expect(await db.listFolders({ includeDeleted: true })).toContainEqual(expect.objectContaining({ id: 'wr-folder-2', deleted: true }));
     expect(await db.listFolderIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-folder-1', 'wr-folder-2']));
   });
 
@@ -257,6 +259,7 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     // Tombstone + prune.
     await db.mergeExercisesFromSync([ex({ status: 'finished', deleted: true, deletedAt: '2026-02-05T00:00:00.000Z', updatedAt: '2026-02-05T00:00:00.000Z', finishedAt: '2026-01-03T01:00:00.000Z' })]);
     expect(await db.readExercise('wr-ex-1')).toBeNull();
+    expect(await db.listExercises({ includeDeleted: true })).toContainEqual(expect.objectContaining({ id: 'wr-ex-1', deleted: true }));
     expect(await db.pruneTombstonedExercises(Date.parse('2026-02-04T00:00:00.000Z'))).toEqual({ pruned: 0, ids: [] });
     expect(await db.pruneTombstonedExercises(Date.parse('2026-03-01T00:00:00.000Z'))).toEqual({ pruned: 1, ids: ['wr-ex-1'] });
     expect((await query(`SELECT 1 FROM writers_room_exercises WHERE id = 'wr-ex-1'`)).rows).toHaveLength(0);

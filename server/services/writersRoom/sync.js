@@ -21,6 +21,7 @@ import { writersRoomStore } from './store.js';
 import {
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND, draftAssetEntries,
   WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND,
+  sanitizeWorkForSync, sanitizeFolderForSync, sanitizeExerciseForSync,
 } from './syncLogic.js';
 import {
   WORK_ID_RE, DRAFT_ID_RE, FOLDER_ID_RE, EXERCISE_ID_RE, wrWorkDir, wrDraftPath,
@@ -49,6 +50,12 @@ export async function listWorksForSync() {
   return works
     .filter((w) => w && typeof w.id === 'string')
     .map((w) => ({ id: w.id, updatedAt: w.updatedAt }));
+}
+
+/** Full works, including tombstones, for the on-demand integrity manifest. */
+export async function listWorksForIntegrity() {
+  const works = await store().listWorks({ includeDeleted: true, strict: true });
+  return works.map(sanitizeWorkForSync).filter(Boolean);
 }
 
 /** Merge an incoming batch of work records from a peer (LWW, tombstone-aware). */
@@ -119,6 +126,12 @@ export async function listFoldersForSync() {
     .map((f) => ({ id: f.id, updatedAt: f.updatedAt }));
 }
 
+export async function listFoldersForIntegrity() {
+  const folders = await store().listFolders({ includeDeleted: true });
+  return folders.map(sanitizeFolderForSync).filter(Boolean)
+    .map(({ id, name, updatedAt, deleted }) => ({ id, name, updatedAt, deleted }));
+}
+
 /** Merge an incoming batch of folder records from a peer (LWW, tombstone-aware). */
 export async function mergeFoldersFromSync(remoteFolders, options = {}) {
   return store().mergeFoldersFromSync(remoteFolders, options);
@@ -154,6 +167,12 @@ export async function listExercisesForSync() {
   return exercises
     .filter((e) => e && typeof e.id === 'string')
     .map((e) => ({ id: e.id, updatedAt: e.updatedAt ?? e.finishedAt ?? e.startedAt }));
+}
+
+export async function listExercisesForIntegrity() {
+  const exercises = await store().listExercises({ includeDeleted: true });
+  return exercises.map(sanitizeExerciseForSync).filter(Boolean)
+    .map(({ id, updatedAt, deleted }) => ({ id, updatedAt, deleted }));
 }
 
 /** Merge an incoming batch of exercise records from a peer (LWW, tombstone-aware). */

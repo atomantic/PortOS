@@ -45,6 +45,10 @@ export async function listStoryboardsForSync() {
     .map(({ id, updatedAt }) => ({ id, updatedAt }));
 }
 
+export async function listStoryboardsForIntegrity() {
+  return (await listRaw()).map(sanitizeStoryboard).filter(Boolean);
+}
+
 /** Board ids — live only by default, or all (incl. tombstones) for the sweep. */
 export async function listStoryboardIdsForSync({ includeDeleted = false } = {}) {
   return includeDeleted ? listIds() : listLiveIds();

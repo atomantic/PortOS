@@ -34,7 +34,7 @@ const sync = await import('./sync.js');
 const { writersRoomStore, _resetWritersRoomStore } = await import('./store.js');
 const cj = await import('../../lib/conflictJournal.js');
 const { WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_FOLDER_KIND } = await import('./syncLogic.js');
-const { wrWorkDir, wrDraftPath } = await import('./_shared.js');
+const { wrWorkDir, wrDraftPath, wrManifestPath } = await import('./_shared.js');
 
 const WR = join(TEST_DATA_ROOT, 'writers-room');
 const WORK = 'wr-work-11111111-1111-1111-1111-111111111111';
@@ -92,8 +92,18 @@ describe('Writers Room federation facade — file backend', () => {
     expect(await writersRoomStore().readWork(WORK)).toBeNull(); // live read filters it
     const tomb = await sync.getWorkForSync(WORK);
     expect(tomb.deleted).toBe(true);
+    expect(await sync.listWorksForIntegrity()).toContainEqual(expect.objectContaining({ id: WORK, deleted: true, drafts: expect.any(Array) }));
     expect((await writersRoomStore().listWorkIds())).not.toContain(WORK); // live-only listing
     expect((await sync.listWorkIdsForSync({ includeDeleted: true }))).toContain(WORK);
+  });
+
+  it('uses the sync clock for legacy works and does not hide a corrupt work in the integrity inventory', async () => {
+    const legacy = work();
+    delete legacy.updatedAt;
+    await writersRoomStore().writeWork(legacy);
+    expect(await sync.listWorksForIntegrity()).toContainEqual(expect.objectContaining({ id: WORK, updatedAt: legacy.createdAt }));
+    writeFileSync(wrManifestPath(WORK), '{');
+    await expect(sync.listWorksForIntegrity()).rejects.toMatchObject({ code: 'CORRUPTED_MANIFEST' });
   });
 
   it('pruneTombstonedWorks rm\'s the dir for an old tombstone and leaves a fresh one', async () => {
@@ -196,9 +206,17 @@ describe('Writers Room folder federation facade — file backend', () => {
     expect(await writersRoomStore().readFolder(FOLDER)).toBeNull(); // live read filters it
     expect((await sync.listFolderIdsForSync())).not.toContain(FOLDER);
     expect((await sync.listFolderIdsForSync({ includeDeleted: true }))).toContain(FOLDER);
+    expect(await sync.listFoldersForIntegrity()).toContainEqual(expect.objectContaining({ id: FOLDER, deleted: true }));
     expect(await sync.pruneTombstonedFolders(Date.parse('2026-01-04T00:00:00.000Z'))).toEqual({ pruned: 0 });
     expect(await sync.pruneTombstonedFolders(Date.parse('2026-02-01T00:00:00.000Z'))).toEqual({ pruned: 1 });
     expect(await sync.getFolderForSync(FOLDER)).toBeNull();
+  });
+
+  it('uses the sync clock for legacy folders without updatedAt', async () => {
+    const legacy = folder();
+    delete legacy.updatedAt;
+    await writersRoomStore().writeFolder(legacy);
+    expect(await sync.listFoldersForIntegrity()).toContainEqual(expect.objectContaining({ id: FOLDER, updatedAt: legacy.createdAt }));
   });
 
   it('pruneTombstonedFolders batches base-hash eviction for multiple tombstones', async () => {
@@ -244,5 +262,12 @@ describe('Writers Room exercise federation facade — file backend', () => {
     // A stale "running" push (older derived key) must not resurrect the running state.
     expect(await sync.mergeExercisesFromSync([exercise()])).toEqual({ applied: false, count: 0 });
     expect((await sync.getExerciseForSync(EXERCISE)).status).toBe('finished');
+  });
+
+  it('lists exercise tombstones with the same clock used by sync', async () => {
+    await sync.mergeExercisesFromSync([exercise({ status: 'finished', finishedAt: '2026-01-01T00:10:00.000Z' })]);
+    await sync.mergeExercisesFromSync([exercise({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z' })]);
+    expect(await sync.listExercisesForIntegrity()).toEqual([expect.objectContaining({ id: EXERCISE, deleted: true, updatedAt: '2026-01-02T00:00:00.000Z' })]);
+    expect(await sync.listExercisesForSync()).toEqual([]);
   });
 });

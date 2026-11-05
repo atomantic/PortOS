@@ -16,7 +16,7 @@ import { sanitizeRecordForWire } from '../lib/syncWire.js';
 import { contentHashForRecord, flushBaseHashes, __resetBaseHashCacheForTests } from '../lib/conflictJournal.js';
 import {
   DECK_KIND, createDeck, getDeck, updateDeck, updateCard, deleteDeck,
-  getDeckForSync, listDecksForSync, listDeckIdsForSync,
+  getDeckForSync, listDecksForSync, listDecksForIntegrity, listDeckIdsForSync,
   markCardsRenderQueued, markCardRenderTerminal, attachCardRender,
   mergeDecksFromSync, pruneTombstonedDecks, restoreDeck,
 } from './decks.js';
@@ -115,6 +115,8 @@ describe.skipIf(!ready)('deck federation', () => {
     const card = deck.cards[0];
     await updateCard(deck.id, card.id, { imageRefs: ['local-render.png'], primaryImageRef: 'local-render.png' });
     const withRender = await getDeck(deck.id);
+    const inventory = (await listDecksForIntegrity()).find((entry) => entry.id === deck.id);
+    expect(inventory.cards).toContainEqual(expect.objectContaining({ imageRefs: ['local-render.png'], primaryImageRef: 'local-render.png' }));
 
     // A remote that HAS the render keeps it; the refs are wire-visible, so
     // this is the round-trip a real peer performs.
@@ -131,6 +133,7 @@ describe.skipIf(!ready)('deck federation', () => {
 
     await expect(getDeck(deck.id)).rejects.toThrow(/not found/i);
     expect((await listDecksForSync()).some((d) => d.id === deck.id)).toBe(false);
+    expect(await listDecksForIntegrity()).toContainEqual(expect.objectContaining({ id: deck.id, deleted: true, cards: [] }));
     expect(await listDeckIdsForSync()).not.toContain(deck.id);
     expect(await listDeckIdsForSync({ includeDeleted: true })).toContain(deck.id);
 

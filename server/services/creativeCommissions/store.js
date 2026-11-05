@@ -964,6 +964,12 @@ export async function listCommissionsForSync() {
   return raw.map(sanitizeCommissionForSync).filter(Boolean).map((r) => ({ id: r.id, updatedAt: r.briefUpdatedAt }));
 }
 
+export async function listCommissionsForIntegrity() {
+  const raw = await commissionStore().listRaw({ includeDeleted: true });
+  return raw.map(sanitizeCommissionForSync).filter(Boolean)
+    .map(({ id, name, briefUpdatedAt, deleted }) => ({ id, name, updatedAt: briefUpdatedAt, deleted }));
+}
+
 /** Every commission id — live only by default, or all (incl. tombstones) for the sweep. */
 export async function listCommissionIdsForSync(options = {}) {
   return commissionStore().listIds(options);

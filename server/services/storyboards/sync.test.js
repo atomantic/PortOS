@@ -107,11 +107,16 @@ describe('storyboard federation', () => {
     ]);
     // No bytes on disk in this test → the hashed manifest drops the unreadable entry.
     expect(await buildStoryboardAssetManifest(await svc.getStoryboard(id))).toEqual([]);
+    const inventory = await svc.listStoryboardsForIntegrity();
+    expect(referenceStoryboardAssetManifest(inventory.find((board) => board.id === id))).toEqual([
+      expect.objectContaining({ kind: 'image', filename: 'example.png' }),
+    ]);
   });
 
   it('prunes a tombstone only past the grace cutoff and restore brings a board back', async () => {
     const { id } = await boardWithArt();
     await svc.deleteStoryboard(id);
+    expect(await svc.listStoryboardsForIntegrity()).toContainEqual(expect.objectContaining({ id, deleted: true }));
     expect(await svc.listStoryboardIdsForSync({ includeDeleted: true })).toContain(id);
     expect(await svc.listStoryboardIdsForSync()).not.toContain(id);
     expect(await svc.pruneTombstonedStoryboards(Date.now() - 86_400_000)).toEqual({ pruned: 0 });
