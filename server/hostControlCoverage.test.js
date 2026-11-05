@@ -771,6 +771,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/media/stop', REDUCES_EXECUTION],
   // /api/media-jobs
   ['DELETE /api/media-jobs/:id', REMOVES_RECORD],
+  ['DELETE /api/media-jobs/failed-canceled', REMOVES_RECORD],
   ['POST /api/media-jobs/:id/cancel', REDUCES_EXECUTION],
   ['POST /api/media-jobs/cancel-queued', REDUCES_EXECUTION],
   // /api/media/annotations

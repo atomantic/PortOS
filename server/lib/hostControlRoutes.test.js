@@ -431,6 +431,7 @@ describe('auxiliary media mutation inventory (#9672)', () => {
   // never hands caller text to an agent. A new mutation needs a new decision.
   const recordOrContained = [
     'DELETE /api/media-jobs/:id',
+    'DELETE /api/media-jobs/failed-canceled',
     'POST /api/lora-datasets/:id/caption-runs/:runId/cancel',
     'POST /api/media-jobs/:id/cancel',
     'POST /api/media-jobs/cancel-queued',

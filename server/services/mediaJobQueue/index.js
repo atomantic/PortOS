@@ -783,24 +783,32 @@ async function persistTerminalTransition(job) {
 // writer off preserves the file for the user to recover or delete. Admission
 // and dispatch stay disabled because no transition can be made durable.
 let persistBlocked = false;
-function persist() {
+function notifyQueueChanged() {
+  try { mediaJobEvents.emit('changed', {}); }
+  catch (error) { console.error(`❌ media-job queue change notification failed: ${error.message}`); }
+}
+function queuePersist(operation) {
   // A blocked writer cannot satisfy admission or transition durability.
   if (persistBlocked) {
-    mediaJobEvents.emit('changed', {});
+    notifyQueueChanged();
     return Promise.reject(new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts'));
   }
   // Every queue mutation, including holds, deletion and debounced progress,
   // converges here. Invalidate after the write settles so readers see the final
   // in-memory state even when persistence is unavailable.
-  persistChain = persistChain.then(persistImpl, persistImpl).finally(() => {
-    mediaJobEvents.emit('changed', {});
+  persistChain = persistChain.then(operation, operation).finally(() => {
+    notifyQueueChanged();
   });
   return persistChain;
 }
-async function persistImpl() {
-  trimArchiveForSnapshot();
+function persist() {
+  return queuePersist(() => persistImpl());
+}
+async function persistImpl({ onSnapshotWritten, trimArchive = true } = {}) {
+  if (trimArchive) trimArchiveForSnapshot();
   const snapshot = captureQueueSnapshot();
   await atomicWrite(JOBS_FILE, snapshot.data);
+  onSnapshotWritten?.();
   await acknowledgeWrittenTransitions(snapshot.transitions);
   if (snapshot.hasDeferredCompletion) recoverCompletionsUnderAdmission();
 }
@@ -1622,15 +1630,12 @@ export async function importArchivedJobs(records) {
   return added;
 }
 
-// Drop a job from the archive (e.g. after a successful retry — the old failed
-// row shouldn't keep cluttering the recent-reel UI now that a fresh job has
-// inherited its work). Returns true if removed, false if the id wasn't found
-// or was still live. Live jobs are deliberately left alone — the caller
-// should cancel them first.
-export function removeArchivedJob(jobId) {
-  const idx = archive.findIndex((j) => j.id === jobId);
-  if (idx < 0 || resultUpdates.has(jobId) || archive[idx].durabilityPending || archive[idx].params?.remotePeerReservation === true || archive[idx].result?.topazUncertain === true) return false;
-  archive.splice(idx, 1);
+function canRemoveArchivedJob(job) {
+  return !resultUpdates.has(job.id) && !job.durabilityPending
+    && job.params?.remotePeerReservation !== true && job.result?.topazUncertain !== true;
+}
+
+function closeArchivedJobSse(jobId) {
   // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
   // window before dropping the entry — a bare `sseJobs.delete()` here would
   // leave their HTTP responses dangling because closeJobAfterDelay's pending
@@ -1640,8 +1645,60 @@ export function removeArchivedJob(jobId) {
     for (const c of sseEntry.clients) c.end();
     sseJobs.delete(jobId);
   }
+}
+
+// Drop an eligible archived row after deletion or a successful retry.
+export function removeArchivedJob(jobId) {
+  const idx = archive.findIndex((j) => j.id === jobId);
+  if (idx < 0 || !canRemoveArchivedJob(archive[idx])) return false;
+  archive.splice(idx, 1);
+  closeArchivedJobSse(jobId);
   persist().catch((e) => console.error(`❌ media-job [${jobId.slice(0, 8)}] mediaJobQueue persist on archive prune failed: ${e.message}`));
   return true;
+}
+
+export function removeFailedCanceledJobs({ kind }) {
+  if (!['image', 'video', 'video-upscale'].includes(kind)) throw new TypeError('An image, video or video-upscale kind is required');
+  // Remove inside the persistence chain: earlier snapshots must not observe an
+  // uncommitted prune, and later snapshots must wait for success or rollback.
+  return queuePersist(async () => {
+    const matches = archive.map((job, index) => ({ job, index }))
+      .filter(({ job }) => job.kind === kind && (job.status === 'failed' || job.status === 'canceled'));
+    // Production attempts may still need their queue receipt during recovery,
+    // even when the provider submission itself is known to have failed.
+    const removed = matches.filter(({ job }) => canRemoveArchivedJob(job)
+      && job.result?.topazRecoveryAvailable !== true && !job.params?.videoProduction);
+    const skipped = matches.length - removed.length;
+    if (!removed.length) return { deletedIds: [], skipped };
+
+    const removedIds = new Set(removed.map(({ job }) => job.id));
+    for (let i = archive.length - 1; i >= 0; i -= 1) {
+      if (removedIds.has(archive[i].id)) archive.splice(i, 1);
+    }
+    let snapshotWritten = false;
+    let warning;
+    try {
+      await persistImpl({ trimArchive: false, onSnapshotWritten: () => { snapshotWritten = true; } });
+    } catch (error) {
+      if (!snapshotWritten) {
+        for (const { job, index } of removed) {
+          if (!archive.includes(job)) archive.splice(Math.min(index, archive.length), 0, job);
+        }
+        throw new ServerError(`Could not remove jobs from the media queue: ${error.message}`, {
+          status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
+        });
+      }
+      console.error(`❌ media-job queue archive prune saved but another queue update failed: ${error.message}`);
+      warning = 'Another queue update could not finish. Check the queue.';
+    }
+    for (const { job } of removed) closeArchivedJobSse(job.id);
+    return { deletedIds: [...removedIds], skipped, ...(warning ? { warning } : {}) };
+  }).catch((error) => {
+    if (error.code === MEDIA_QUEUE_PERSIST_FAILED) throw error;
+    throw new ServerError(`Could not remove jobs from the media queue: ${error.message}`, {
+      status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
+    });
+  });
 }
 
 // "Run now" bypass — start a queued cloud-CLI image job immediately

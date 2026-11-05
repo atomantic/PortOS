@@ -2070,7 +2070,7 @@ export default function VideoGen() {
       />
 
       <MediaJobsQueue kind="video" />
-      <MediaJobsQueue kind="video-upscale" />
+      <MediaJobsQueue kind="video-upscale" allowClearFailed />
 
       <VideoGenGallery
         galleryVisible={galleryVisibleItems}
