@@ -15,6 +15,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 import EmptyState from '../components/EmptyState';
+import ListLoadError from '../components/ui/ListLoadError';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 
 const INTERVAL_PRESETS = [
@@ -350,8 +351,8 @@ function LoopsContent() {
   const promptRef = useRef(null);
   const [providers, setProviders] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
-  const loadLoops = useCallback(() => api.getLoops(), []);
-  const { data, loading, refetch: fetchLoops } = useSocketResource(loadLoops, {
+  const loadLoops = useCallback(() => api.getLoops({ silent: true }), []);
+  const { data, loading, error, refetch: fetchLoops } = useSocketResource(loadLoops, {
     namespace: 'loops', events: LOOP_EVENTS,
   });
   const loops = data ?? [];
@@ -394,12 +395,14 @@ function LoopsContent() {
         </div>
       </div>
 
-      <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />
+      {!error && <CreateLoopForm providers={providers} onCreated={fetchLoops} promptRef={promptRef} />}
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-gray-500">
           <Loader2 size={20} className="animate-spin mr-2" /> Loading loops...
         </div>
+      ) : error && data === null ? (
+        <ListLoadError what="loops" error={error} onRetry={fetchLoops} />
       ) : loops.length === 0 ? (
         <EmptyState
           icon={RefreshCw}

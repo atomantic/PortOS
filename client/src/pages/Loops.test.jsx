@@ -17,7 +17,7 @@ vi.mock('../services/socket', () => ({
 }));
 
 vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn() },
+  default: { success: vi.fn(), error: vi.fn() },
 }));
 
 import Loops from './Loops';
@@ -96,5 +96,36 @@ describe('Loops index empty state', () => {
     const cta = screen.getByRole('button', { name: 'Describe your first loop' });
     await userEvent.click(cta);
     expect(screen.getByLabelText('Loop prompt')).toHaveFocus();
+  });
+});
+
+
+describe('Loops initial list loading', () => {
+  it('shows a retryable error instead of inviting a new loop, then recovers on retry', async () => {
+    api.getLoops.mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce([]);
+    toast.error.mockClear();
+    render(<Loops />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load loops — Network unavailable');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByText('No loops yet')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Loop prompt')).not.toBeInTheDocument();
+    expect(api.getLoops).toHaveBeenCalledWith({ silent: true });
+    expect(toast.error).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No loops yet')).toBeInTheDocument();
+    expect(screen.getByLabelText('Loop prompt')).toBeInTheDocument();
+  });
+
+  it('renders cards after a successful non-empty list load', async () => {
+    api.getLoops.mockResolvedValueOnce([{
+      id: 'loop-loaded', name: 'Loaded loop', isRunning: false, intervalMs: 60_000,
+      currentIteration: 0, lastRun: null,
+    }]);
+    render(<Loops />);
+
+    expect(await screen.findByText('Loaded loop')).toBeInTheDocument();
+    expect(screen.queryByText('No loops yet')).not.toBeInTheDocument();
   });
 });
