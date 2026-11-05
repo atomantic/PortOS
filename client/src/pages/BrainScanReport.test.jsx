@@ -75,13 +75,46 @@ describe('BrainScanReport', () => {
     await act(async () => {});
   });
 
-  it('scrolls its own content in the unavailable state', async () => {
-    api.getBrainLink.mockRejectedValue(new Error('nope'));
-    api.getBrainScanReport.mockRejectedValue(new Error('nope'));
+  it('shows the read error and retries both resources without a toast', async () => {
+    api.getBrainLink.mockRejectedValueOnce(new Error('link read failed'));
+    api.getBrainScanReport.mockRejectedValueOnce(new Error('report read failed'));
+    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com', malwareScan: { verdict: 'CLEAN' } });
+    api.getBrainScanReport.mockResolvedValue('# Recovered report');
 
     const { container } = await renderPage();
-    await waitFor(() => expect(screen.getByText('This scan report is unavailable.')).toBeInTheDocument());
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('link read failed');
+    expect(alert).toHaveTextContent('Retry');
+    expect(screen.queryByText('This scan report is unavailable.')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to links' })).toBeInTheDocument();
     expectOwnScrollContainer(container);
+
+    await act(async () => { screen.getByRole('button', { name: 'Retry' }).click(); });
+    expect(await screen.findByText('Example Link', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByText('CLEAN')).toBeInTheDocument();
+    expect(screen.getByTestId('markdown')).toHaveTextContent('Recovered report');
+    expect(api.getBrainLink).toHaveBeenCalledTimes(2);
+    expect(api.getBrainScanReport).toHaveBeenCalledTimes(2);
+    expect(api.getBrainLink).toHaveBeenLastCalledWith('abc', { silent: true });
+    expect(api.getBrainScanReport).toHaveBeenLastCalledWith('abc', { silent: true });
+  });
+
+  it('reserves unavailable copy for a successful response without a report body', async () => {
+    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+    api.getBrainScanReport.mockResolvedValue(null);
+
+    await renderPage();
+    expect(await screen.findByText('This scan report is unavailable.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a report read failure even when the link read succeeds', async () => {
+    api.getBrainLink.mockResolvedValue({ title: 'Example Link', url: 'https://example.com' });
+    api.getBrainScanReport.mockRejectedValue(new Error('report read failed'));
+
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('report read failed');
+    expect(screen.queryByText('This scan report is unavailable.')).not.toBeInTheDocument();
   });
 
   it('fetches the new link immediately and ignores a late response from the previous link', async () => {
