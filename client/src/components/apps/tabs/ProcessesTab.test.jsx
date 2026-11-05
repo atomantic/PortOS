@@ -7,11 +7,7 @@ vi.mock('../../../services/api', () => ({
 }));
 
 vi.mock('../../../hooks/useProcessSnapshot', () => ({
-  useProcessSnapshot: () => ({
-    data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
-    loading: false,
-    refetch: vi.fn(),
-  }),
+  useProcessSnapshot: vi.fn(),
 }));
 
 vi.mock('../../../hooks/useProcessLogs', () => ({
@@ -32,6 +28,7 @@ vi.mock('../../../utils/formatters', async (importOriginal) => ({
 }));
 
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
+import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { copyToClipboard } from '../../../lib/clipboard';
 import ProcessesTab from './ProcessesTab';
 
@@ -39,6 +36,50 @@ describe('ProcessesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useProcessLogs.mockReturnValue({ logs: [], status: 'connecting', retry: vi.fn(), clear: vi.fn() });
+    useProcessSnapshot.mockReturnValue({
+      data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  });
+
+  it('shows Retry after the initial snapshot fails without claiming there are no processes', () => {
+    const refetch = vi.fn();
+    useProcessSnapshot.mockReturnValue({ data: null, loading: false, error: new Error('offline'), refetch });
+
+    render(<ProcessesTab appId="app-1" />);
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load process status — offline');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByText('No PM2 processes found')).toBeNull();
+    expect(screen.queryByText(/processes$/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(refetch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the last snapshot and unavailable warning after a refresh failure', () => {
+    useProcessSnapshot.mockReturnValue({
+      data: [{ name: 'example-api', status: 'online', pid: 1, cpu: 0, memory: 0, uptime: null, restarts: 0, pm_id: 1 }],
+      loading: false,
+      error: new Error('offline'),
+      refetch: vi.fn(),
+    });
+
+    render(<ProcessesTab appId="app-1" />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Process status unavailable; showing the last known state.');
+    expect(screen.getByText('example-api')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy();
+  });
+
+  it('shows the empty state for a successful empty snapshot', () => {
+    useProcessSnapshot.mockReturnValue({ data: [], loading: false, error: null, refetch: vi.fn() });
+
+    render(<ProcessesTab appId="app-1" />);
+
+    expect(screen.getByText('No PM2 processes found')).toBeTruthy();
+    expect(screen.getByText('0 processes')).toBeTruthy();
   });
 
   it('passes its app id to the expanded process log subscription', () => {
