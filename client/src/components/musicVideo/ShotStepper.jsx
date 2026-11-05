@@ -11,12 +11,11 @@ const ON_START_SEC = 0.05;
 // A shot before the song (the cold open) keeps no place on the song's clock.
 const onSongClock = (scene) => Number.isFinite(scene?.startSec) && !isPreMusicShot(scene);
 
-const startsIn = (scenes, range) => (scenes || [])
+const shotsIn = (scenes, range) => (scenes || [])
   .filter(onSongClock)
-  .map((scene) => scene.startSec)
-  .filter((start) => Number.isFinite(start)
-    && (!range || (start >= range.startSec - ON_START_SEC && (range.endSec == null || start < range.endSec))))
-  .sort((a, b) => a - b);
+  .filter((scene) => Number.isFinite(scene.startSec)
+    && (!range || (scene.startSec >= range.startSec - ON_START_SEC && (range.endSec == null || scene.startSec < range.endSec))))
+  .sort((a, b) => a.startSec - b.startSec);
 
 /**
  * Where Back and Next go from song time `t`: Back to the current shot's start
@@ -25,14 +24,15 @@ const startsIn = (scenes, range) => (scenes || [])
  * excerpt. `index`/`count` name the shot on screen (1-based; 0 before the first).
  */
 export function shotSteps(scenes, t, range = null) {
-  const starts = startsIn(scenes, range);
+  const shots = shotsIn(scenes, range);
+  const starts = shots.map((scene) => scene.startSec);
   let current = -1;
   starts.forEach((start, i) => { if (start <= t + ON_START_SEC) current = i; });
   const back = current < 0
     ? null
     : t - starts[current] > RESTART_SEC || current === 0 ? starts[current] : starts[current - 1];
   const next = starts[current + 1] ?? null;
-  return { back, next, index: current + 1, count: starts.length };
+  return { back, next, index: current + 1, count: starts.length, scene: current < 0 ? null : shots[current] };
 }
 
 /**
