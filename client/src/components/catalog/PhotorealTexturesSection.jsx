@@ -72,10 +72,14 @@ export default function PhotorealTexturesSection({ record, look, readOnly = fals
     onBusyChange?.(false);
   };
 
+  // Every texture save goes through busyId, so a second click can't save a stale snapshot.
   const procedural = async (preset) => {
+    if (busyId) return;
     const { [preset]: _dropped, ...rest } = chosen;
+    setBusyId(`procedural:${preset}`);
     onBusyChange?.(true);
     await save(rest);
+    setBusyId('');
     onBusyChange?.(false);
   };
 

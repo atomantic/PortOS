@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealTexturesSection from './PhotorealTexturesSection';
 import { getCatalogPhotorealTextures, installCatalogPhotorealTexture, saveCatalogPhotorealLook, searchCatalogPhotorealTextures } from '../../services/apiCatalog';
@@ -46,10 +46,18 @@ describe('PhotorealTexturesSection', () => {
       expect.objectContaining({ textures: { 'painted-wall': 'old_plaster', 'wood-floor': 'oak_planks' } }), { silent: true });
   });
 
-  it('returns a material to the procedural surface', async () => {
-    saveCatalogPhotorealLook.mockResolvedValue({ id: 'plc-example' });
-    render(<PhotorealTexturesSection record={record} look={look} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Procedural' }));
-    await waitFor(() => expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', expect.objectContaining({ textures: {} }), { silent: true }));
+  // Catches a second texture save starting from the same stale snapshot.
+  it('returns a material to the procedural surface, one save at a time', async () => {
+    let finish;
+    saveCatalogPhotorealLook.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<PhotorealTexturesSection record={record} look={{ ...look, textures: { ...look.textures, 'wood-floor': 'old_plaster' } }} />);
+    const [first, second] = await screen.findAllByRole('button', { name: 'Procedural' });
+    fireEvent.click(first);
+    await waitFor(() => expect(second).toBeDisabled());
+    fireEvent.click(second);
+    expect(saveCatalogPhotorealLook).toHaveBeenCalledTimes(1);
+    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', expect.objectContaining({ textures: { 'painted-wall': 'old_plaster' } }), { silent: true });
+    await act(async () => finish({ id: 'plc-example' }));
+    await waitFor(() => expect(second).toBeEnabled());
   });
 });
