@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
+import { CONTAINED_BLENDER_GPU_NOTICE, codeAnimationWorkerFailure } from '../lib/codeAnimationContainment.js';
 import { H264_ENCODE_ARGS } from '../lib/ffmpeg.js';
 import { launchDetached } from '../lib/launchDetached.js';
 import { resolveGreybox } from '../lib/greyboxScene.js';
@@ -114,6 +115,7 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
   // Checked before Blender starts, so a missing encoder never costs a render.
   if (flythroughSeconds && !(await deps.findFfmpeg())) throw refuse('A fly-through needs ffmpeg to make its MP4; install ffmpeg first.', 'FFMPEG_MISSING', 503);
   const tool = await deps.resolveTool();
+  if (engine === 'eevee' && tool.executionMode === 'contained') throw refuse(CONTAINED_BLENDER_GPU_NOTICE, 'PHOTOREAL_CONTAINED_NO_GPU', 409);
   // Validation can overlap another request; claim the slot only after its awaits.
   if (jobs.get(ingredientId)?.state === 'running') throw refuse('A render is already running for this place.', 'PHOTOREAL_BUSY', 409);
   const job = {
@@ -132,7 +134,7 @@ export async function startPhotorealRender(ingredientId, { shotIds, engine, samp
 
 async function runRender({ place, scene, tool, job, samples }) {
   // The look dresses parts by id; a rule for a part since removed just matches nothing.
-  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look: resolvePhotorealLook(place.payload), flythroughSeconds: job.flythroughSeconds });
+  const config = greyboxBlenderJob(scene, { shotIds: job.shotIds, engine: job.engine, samples, look: resolvePhotorealLook(place.payload), flythroughSeconds: job.flythroughSeconds, useGpu: tool.executionMode !== 'contained' });
   const fly = config.flythrough;
   let report = null;
   const outputs = {};
@@ -167,7 +169,8 @@ async function runRender({ place, scene, tool, job, samples }) {
         }
       },
     });
-    if (run.status !== 'completed' || !report) throw new Error(`Blender stopped before finishing (${run.status}${run.reason ? `: ${run.reason}` : ''})`);
+    if (run.status !== 'completed') throw new Error(codeAnimationWorkerFailure(run));
+    if (!report) throw new Error('Blender finished without its report');
     let video = null;
     if (fly) {
       const labels = job.shotIds.map((id) => scene.shots.find((s) => s.id === id)?.label || id);

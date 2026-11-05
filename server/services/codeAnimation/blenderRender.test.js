@@ -21,7 +21,7 @@ async function fixture(change = {}) {
   const report = { version: '4.2.0', engine: 'CYCLES', device: 'CPU', backend: 'CPU', width: 64, height: 64, fps: 24,
     frames: [1], frameCount: 24, samples: 4, seed: 17, baked: true, cameraSmooth: true,
     cadence: [{ name: 'Synthetic subject', step: 2, holdsVerified: true, motionBlur: false }], ...change.report };
-  const output = { 'frame-000001.png': change.corrupt ? Buffer.from('broken') : png, 'scene.blend': Buffer.from('BLENDER-fixture'), 'report.json': Buffer.from(JSON.stringify(report)) };
+  const output = { 'frame-000001.png': change.corrupt ? Buffer.from('broken') : png, 'scene.blend': change.blend ?? Buffer.from('BLENDER-fixture'), 'report.json': Buffer.from(JSON.stringify(report)) };
   for (const [name, bytes] of Object.entries(output)) await writeFile(join(directory, name), bytes);
   const worker = vi.fn(async options => {
     if (change.canceled) { options.signal.throwIfAborted(); }
@@ -66,6 +66,15 @@ describe('Blender production artifact boundary', () => {
     const { options, deps } = await fixture(change);
     await expect(renderBlenderSequence(options, deps)).rejects.toThrow();
     expect(deps.retain).not.toHaveBeenCalled();
+  });
+  it('refuses a scene file that is not a .blend', async () => {
+    const { options, deps } = await fixture({ blend: Buffer.from('not a blend') });
+    await expect(renderBlenderSequence(options, deps)).rejects.toThrow('Baked scene artifact is invalid');
+  });
+  it('accepts the zstd-compressed scene file Blender 5 saves by default', async () => {
+    const { options, deps } = await fixture({ blend: Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0x41]) });
+    const result = await renderBlenderSequence(options, deps);
+    expect(result.artifacts.map(file => file.name)).toContain('scene.blend');
   });
   it('retains old-bound artifacts but refuses acceptance if settings change during the worker', async () => {
     const { options, deps, worker } = await fixture();

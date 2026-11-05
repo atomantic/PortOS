@@ -14,7 +14,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
 import {
-  codeAnimationExecutionToolsSchema, codeAnimationToolRoots, codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
+  CONTAINED_BLENDER_GPU_NOTICE, codeAnimationExecutionToolsSchema, codeAnimationToolRoots, codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
 } from '../../lib/codeAnimationContainment.js';
 import { getSettings, updateSettings } from '../settings.js';
 import { cdpRequest } from '../browserService.js';
@@ -91,7 +91,7 @@ function blenderLane(mechanism, blender) {
     || evidence.executionMode !== blender.executionMode || evidence.engine !== blender.engine) {
     return { ready: false, reason: 'The Blender executable, engine or execution mode changed since the last check.' };
   }
-  if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode.` };
+  if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode.${evidence.failure ? ` ${evidence.failure}` : ''}` };
   return { ready: true, reason: null };
 }
 
@@ -103,6 +103,7 @@ export async function getCodeAnimationExecution() {
     platform: process.platform, mechanism, probe: lastProbe, executionMode: blender.executionMode,
     contained: blender.executionMode === 'contained',
     trustedLocalWarning: 'Trusted-local Blender runs with this account’s host filesystem, network and process access. Only run source you trust. Environment scrubbing and process/resource supervision are not containment; code can act outside the supervised workspace or escape its process group.',
+    containedGpuNotice: CONTAINED_BLENDER_GPU_NOTICE,
     tools: { blender },
     lanes: { browser: BROWSER_LANE, blender: blenderLane(mechanism, blender) },
     defaultLimits: codeAnimationWorkerLimitsSchema.parse({}),

@@ -111,7 +111,7 @@ research access belong to the authoring route, never to execution.
 
 | Platform | Mechanism | Status |
 |---|---|---|
-| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported for the synthetic containment check; the official Blender 4.2.0 arm64 build cannot start under it, so Blender runs use Trusted local |
+| macOS | Seatbelt kernel sandbox (`/usr/bin/sandbox-exec`, deny-by-default profile) | Supported on Apple silicon for Cycles on the CPU (official Blender 5.2.3 arm64). No GPU: EEVEE needs Trusted local. Intel Macs have a different GPU client and are untested |
 | Linux x64 / arm64 | bubblewrap namespaces and seccomp | Requires executable `/usr/bin/bwrap`, permitted unprivileged user namespaces and seccomp; proven on demand. Not a project target: never run with real Blender |
 | Windows | None implemented | Refused |
 
@@ -206,9 +206,12 @@ host-access adversarial checks as passing. Contained mode still requires all
 adversarial checks. Cycles CPU can be substantially slower than GPU rendering.
 EEVEE availability must be established by its own actual render; no engine or
 execution mode is substituted silently. Seatbelt is deprecated by Apple and a
-host or Blender build may not work inside its profile; that lane stays refused.
+host or Blender build may not work inside its profile; that lane stays refused,
+and the check names the crash signal, exit code or limit that stopped the render.
 
-**Supported Blender path.** macOS (Apple silicon) in **Trusted local** mode is the supported way to run Blender code animations. Contained Blender is not a goal on macOS: the Seatbelt profile (no fork, no Mach services) cannot run the official build, and relaxing it would weaken the containment this mode exists to guarantee. Windows has no containment mechanism and no Blender lane; Linux is untested. Trusted local runs scene code with the operator's full host access, so run only source you trust.
+**Supported Blender paths.** On macOS (Apple silicon), **Contained** mode runs Cycles on the CPU and **Trusted local** mode adds the GPU (EEVEE and GPU Cycles). Trusted local runs scene code with the operator's full host access, so run only source you trust. Windows has no containment mechanism and no Blender lane; Linux is untested.
+
+**Why contained Blender needs one IOKit grant (#14939).** Blender's startup reads the Metal device's name and segfaults when no device is listed, before any script runs. The profile allows opening `AGXDeviceUserClient`, the Apple GPU's user client, and nothing else in IOKit; `AGXSharedUserClient` or `iokit-get-properties` alone still crash. Fork, Mach services, network and every other denial stay in place. The cost is that contained code can reach the GPU driver's kernel interface, a real but narrower exposure than the alternatives. Metal rendering stays unavailable: adding the compiler service or unrestricted `mach-lookup` still crashed during the render, and broad Mach access would undercut the profile's guarantees, so contained mode stays CPU-only.
 Memory and disk limits are watchdog-enforced, so brief overshoots are possible.
 
 ## Blender production adapter
@@ -267,7 +270,7 @@ node scripts/code-animation-blender-acceptance.js ... --engine BLENDER_EEVEE_NEX
 **Blender 5 compatibility.** PortOS keeps `BLENDER_EEVEE_NEXT` as its EEVEE engine id;
 the driver and probe map it to Blender 5's renamed `BLENDER_EEVEE`. Blender 5 also removed
 `Action.fcurves`, so the driver gives scene code an `action_fcurves(obj)` helper that reads
-an object's keyframe curves on either API; the starter uses it. The starter and the rigging
+an object's keyframe curves on either API; the starter uses it. Blender 5 also compresses a saved `.blend` with zstd by default, so the render boundary accepts that header as well as the plain `BLENDER` magic. The starter and the rigging
 workers were run against `bpy` 5.2.3 (Cycles CPU) on 2026-11-03; EEVEE on 5.x and the full
 acceptance sequence still need a run on a GPU host.
 
@@ -304,15 +307,21 @@ backend came from Blender itself, and no engine was substituted.
   (16 GiB; Cycles CPU stays on the default). The watchdog still applies.
 - **Missing or unsupported runtime.** The script refuses a missing executable
   before starting a worker, and the readiness gate refuses an unchecked or
-  mismatched runtime. Contained mode on this macOS host fails closed: the Seatbelt
-  profile cannot start Blender, so nothing is accepted and no mode is substituted.
+  mismatched runtime. Contained EEVEE on macOS fails closed: Metal cannot render
+  inside the Seatbelt profile, so nothing is accepted and no mode is substituted.
 - **Malformed output.** Truncated, missing and mismatched output is exercised by
   the fixtures in `blenderRender.test.js`; the real runtime was not made to emit
   malformed output.
 
-Not demonstrated, and not planned: contained-mode Blender acceptance on any platform
-(macOS Seatbelt cannot start Blender; Linux bubblewrap is not a project target) and a
-GPU backend other than Metal. Cross-machine repeatability is also unverified. The Cycles pilot was produced by the first revision of
+**Contained run, 2026-11-05 (#14939).** Official Blender 5.2.3 macOS arm64, Apple silicon, contained mode.
+The execution check passed all 15 boundary and limit checks and its fixed Cycles CPU scene; contained
+EEVEE failed the check with `SIGABRT`. A 320 × 180, 2 s pilot of the starter (48 frames, encoded MP4) and a
+Photoreal greybox camera both rendered on the CPU. From inside Blender's Python under the same profile, file
+reads and writes outside the workspace, spawn, fork, loopback, network, a Mach service lookup, and opening
+other IOKit clients were all refused. A full 1080p contained sequence was not run.
+
+Not demonstrated, and not planned: contained GPU rendering, contained-mode Blender on
+Linux (bubblewrap is not a project target) and a GPU backend other than Metal. Cross-machine repeatability is also unverified. The Cycles pilot was produced by the first revision of
 the acceptance script; the remaining runs used the current one, which calls the same
 `renderBlenderSequence`.
 

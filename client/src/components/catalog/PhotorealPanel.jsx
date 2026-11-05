@@ -98,6 +98,8 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const blenderReady = blenderExecution?.lanes?.blender?.ready === true;
   const checkedEngine = blenderExecution?.tools?.blender?.engine;
   const requestedEngine = engine === 'eevee' ? 'BLENDER_EEVEE_NEXT' : 'CYCLES';
+  // Contained Blender has no GPU, so the server refuses EEVEE there; say so before the click.
+  const noGpuNotice = engine === 'eevee' && blenderExecution?.executionMode === 'contained' ? blenderExecution.containedGpuNotice : null;
   const engineInfo = ENGINES.find((e) => e.id === engine);
   const sampleValue = samples ?? engineInfo.defaultSamples;
 
@@ -310,7 +312,8 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               </label>
             </div>
             <p className="text-[11px] text-gray-500">{engineInfo.note}</p>
-            {blenderReady && checkedEngine && checkedEngine !== requestedEngine && <div className="space-y-2 rounded border border-port-warning p-3 text-sm">
+            {noGpuNotice && <p role="status" className="rounded border border-port-warning p-3 text-sm">{noGpuNotice}</p>}
+            {!noGpuNotice && blenderReady && checkedEngine && checkedEngine !== requestedEngine && <div className="space-y-2 rounded border border-port-warning p-3 text-sm">
               <p>Blender was checked with {checkedEngine === 'CYCLES' ? 'Cycles CPU' : 'EEVEE GPU'}; {engine === 'eevee' ? 'EEVEE GPU' : 'Cycles CPU'} has not been checked. To verify it, select that engine in Blender setup, save, and check it. This changes the Blender check for all PortOS uses.</p>
               <button type="button" className={actionButton} onClick={() => setBlenderOpenRequest(value => value + 1)}>Open Blender setup</button>
             </div>}
@@ -351,7 +354,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || !blenderReady}
+              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || !blenderReady || Boolean(noGpuNotice)}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
@@ -392,7 +395,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                   <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
-                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || !blenderReady} className={actionButton}>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || !blenderReady || Boolean(noGpuNotice)} className={actionButton}>
                   <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}

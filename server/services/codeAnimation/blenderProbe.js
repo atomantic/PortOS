@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { BLENDER_COMPAT_PY, MIN_BLENDER_SERIES, isSupportedBlenderVersion } from '../../lib/blenderVersion.js';
+import { CONTAINED_BLENDER_GPU_NOTICE, codeAnimationWorkerFailure } from '../../lib/codeAnimationContainment.js';
 import { runContainedWorker } from './containedWorker.js';
 
 const SUPPORTED = `Blender ${MIN_BLENDER_SERIES.join('.')} or newer`;
@@ -93,12 +94,16 @@ export async function probeBlenderRender({ executable, fingerprint }, workspaceR
     },
   }).catch(() => ({ status: 'failed', reason: 'probe-or-output-failed', processGroupClear: false }));
   const passed = run.status === 'completed' && run.processGroupClear === true && !invalidOutput && Boolean(evidence);
+  const failure = passed ? null : run.status === 'completed' && run.processGroupClear === true
+    ? 'Blender finished, but its output failed validation.'
+    : codeAnimationWorkerFailure(run);
+  const gpuNotice = !passed && executionMode === 'contained' && engine !== 'CYCLES' ? ` ${CONTAINED_BLENDER_GPU_NOTICE}` : '';
   return {
-    executable, fingerprint, executionMode, contained: executionMode === 'contained', engine, passed, version: passed ? evidence.version : null,
+    failure, executable, fingerprint, executionMode, contained: executionMode === 'contained', engine, passed, version: passed ? evidence.version : null,
     render: passed ? evidence : null,
     durationMs: run.durationMs ?? null,
     detail: passed
       ? `Blender ${evidence.version} rendered a 64 × 64 scene with ${engine} / ${evidence.device} / ${evidence.backend} in ${executionMode} mode. ${executionMode === 'trusted-local' ? 'Host access is not contained. ' : ''}This proves fixed-scene readiness; production-sequence acceptance remains separate. CPU Cycles may be slow.`
-      : `Blender render check failed: expected ${SUPPORTED}, ${engine} and a valid nonblank 64 × 64 PNG in ${executionMode} mode. A version banner or bpy import is insufficient; no fallback was attempted.`,
+      : `Blender render check failed: ${failure}${gpuNotice} Expected ${SUPPORTED}, ${engine} and a valid nonblank 64 × 64 PNG in ${executionMode} mode. A version banner or bpy import is insufficient; no fallback was attempted.`,
   };
 }

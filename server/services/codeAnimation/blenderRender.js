@@ -13,6 +13,9 @@ import { writeRunArtifact } from './projectFiles.js';
 import { resolveBlenderExecution } from './execution.js';
 import { BLENDER_DRIVER } from './blenderDriver.js';
 
+// Blender 5 compresses saved scenes with zstd by default; older saves start with the plain magic.
+const BLEND_ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+const isBlendFile = bytes => bytes.subarray(0, 7).toString() === 'BLENDER' || bytes.subarray(0, 4).equals(BLEND_ZSTD_MAGIC);
 const fail = message => new ServerError(message, { status: 422, code: 'CODE_ANIMATION_BLENDER_RENDER_FAILED' });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 // A measured full 1080p EEVEE Next/Metal pilot peaked near 9.7 GiB resident, over the 8 GiB worker default
@@ -84,7 +87,7 @@ export async function renderBlenderSequence({ revision, runtime, projectId, runI
         await persist(frameName(frame), bytes);
       }
       const blend = await readFile(join(directory, 'scene.blend'));
-      if (blend.subarray(0, 7).toString() !== 'BLENDER') throw fail('Baked scene artifact is invalid');
+      if (!isBlendFile(blend)) throw fail('Baked scene artifact is invalid');
       await persist('scene.blend', blend);
       await persist('report.json', Buffer.from(JSON.stringify(report)));
       if (phase !== 'style') {

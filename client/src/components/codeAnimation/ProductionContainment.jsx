@@ -164,6 +164,7 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
       <p>{execution.trustedLocalWarning || 'Trusted-local Blender can access this account’s host filesystem, network and processes. Environment scrubbing and process supervision are not containment.'}</p>
       <label htmlFor="cap-blender-ack" className="flex items-start gap-2"><input id="cap-blender-ack" type="checkbox" checked={acknowledged} disabled={busy} onChange={event => setAcknowledged(event.target.checked)} />I understand the host access and trust the source I will run.</label>
     </div>}
+    {mode === 'contained' && execution.containedGpuNotice && <p className={engine === 'CYCLES' ? 'text-xs text-gray-400' : 'text-sm text-port-warning'}>{execution.containedGpuNotice}</p>}
     <p className="text-xs text-gray-400">Cycles CPU can take substantial time for a full sequence.</p>
     <details className="text-xs text-gray-400">
       <summary className="cursor-pointer">Execution notes</summary>

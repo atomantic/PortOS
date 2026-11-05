@@ -148,7 +148,9 @@ if you leave the tab.
 Blender comes from **Code Animation › Production › Blender execution**: set the
 executable there and run its check first (Blender 4.2 through 5.2; 5.2.3 is the
 target). The render runs PortOS's own script with the greybox passed as data, in
-the same contained or trusted-local worker mode as Code Animation. A greybox
+the same contained or trusted-local worker mode as Code Animation. Contained mode
+has no GPU, so it renders Cycles on the CPU and refuses EEVEE; a GPU render needs
+Trusted local mode. A greybox
 showing an attached .glb is not rebuilt yet; switch its layout source to the saved
 parts.
 
