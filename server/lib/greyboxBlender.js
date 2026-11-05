@@ -137,6 +137,13 @@ for part in grey['parts']:
     rotation = Matrix.Rotation(rx, 4, 'X') @ Matrix.Rotation(ry, 4, 'Y') @ Matrix.Rotation(rz, 4, 'Z')
     obj.matrix_world = Y_UP @ Matrix.Translation(Vector(part['position'])) @ rotation
     collection(zone['label'] if zone else 'Unzoned', parts_root).objects.link(obj)
+    # Real edges catch a highlight; a knife-sharp one reads as CG (#14941).
+    if kind != 'plane':
+        dims = part['size'] if kind == 'box' else [part['radius'] * 2, part['height']] if kind == 'cylinder' else [part['height']]
+        bevel = obj.modifiers.new('Bevel', 'BEVEL')
+        bevel.width = min(0.012, 0.15 * min(dims))
+        bevel.segments = 2
+        bevel.limit_method = 'ANGLE'
     part_objects.append((part, obj))
 
 marks = collection('Landmarks and anchors')
@@ -165,7 +172,7 @@ for shot in grey['shots']:
 
 # Photoreal look: allowlisted presets mapped to procedural node setups.
 PRESETS = {
-    'wood-floor': dict(roughness=0.35, coat=0.6, grain='wood'),
+    'wood-floor': dict(roughness=0.45, coat=0.5, grain='wood'),
     'painted-wall': dict(roughness=0.8),
     'painted-metal': dict(roughness=0.35, metallic=0.0, coat=0.3),
     'carpet': dict(roughness=1.0, grain='pile'),
@@ -202,16 +209,64 @@ def look_material(rule):
     color_out = None
     grain = preset.get('grain')
     if grain == 'wood':
-        wave = nodes.new('ShaderNodeTexWave')
-        wave.inputs['Scale'].default_value = 1.2
-        wave.inputs['Distortion'].default_value = 6.0
-        links.new(coord.outputs['Object'], wave.inputs['Vector'])
+        # Narrow maple strips laid along the part's long X axis, in metres (#14941).
+        # Mesh-local X/Z is the floor plane; the mapping turns it onto the texture's X/Y.
+        boards = nodes.new('ShaderNodeMapping')
+        boards.inputs['Rotation'].default_value = (math.radians(90), 0, 0)
+        links.new(coord.outputs['Object'], boards.inputs['Vector'])
+        brick = nodes.new('ShaderNodeTexBrick')
+        brick.offset = 0.37
+        brick.offset_frequency = 1
+        brick.squash = 1.0
+        brick.inputs['Scale'].default_value = 1.0
+        brick.inputs['Brick Width'].default_value = 1.8
+        brick.inputs['Row Height'].default_value = 0.057
+        brick.inputs['Mortar Size'].default_value = 0.0012
+        brick.inputs['Mortar Smooth'].default_value = 0.4
+        brick.inputs['Bias'].default_value = 0.0
+        brick.inputs['Color1'].default_value = base
+        brick.inputs['Color2'].default_value = tuple(c * 0.8 for c in base[:3]) + (1.0,)
+        brick.inputs['Mortar'].default_value = tuple(c * 0.35 for c in base[:3]) + (1.0,)
+        links.new(boards.outputs['Vector'], brick.inputs['Vector'])
+        # Fine grain streaks run with each strip: noise stretched along X.
+        streak = nodes.new('ShaderNodeMapping')
+        streak.inputs['Scale'].default_value = (0.6, 60.0, 1.0)
+        links.new(boards.outputs['Vector'], streak.inputs['Vector'])
+        fibre = nodes.new('ShaderNodeTexNoise')
+        fibre.inputs['Scale'].default_value = 3.0
+        fibre.inputs['Detail'].default_value = 6.0
+        links.new(streak.outputs['Vector'], fibre.inputs['Vector'])
         mix = nodes.new('ShaderNodeMix')
         mix.data_type = 'RGBA'
-        mix.inputs['A'].default_value = tuple(c * 0.7 for c in base[:3]) + (1.0,)
-        mix.inputs['B'].default_value = base
-        links.new(wave.outputs['Fac'], mix.inputs['Factor'])
+        mix.blend_type = 'MULTIPLY'
+        mix.inputs['Factor'].default_value = 0.25
+        links.new(brick.outputs['Color'], mix.inputs['A'])
+        links.new(fibre.outputs['Color'], mix.inputs['B'])
         color_out = mix.outputs['Result']
+        # Seams sink a little and scuffs break up the lacquer, so lights smear
+        # into soft streaks instead of mirroring as hard rectangles.
+        seam = nodes.new('ShaderNodeBump')
+        seam.invert = True
+        seam.inputs['Strength'].default_value = 0.4
+        seam.inputs['Distance'].default_value = 0.002
+        links.new(brick.outputs['Fac'], seam.inputs['Height'])
+        scuff = nodes.new('ShaderNodeTexNoise')
+        scuff.inputs['Scale'].default_value = 9.0
+        scuff.inputs['Detail'].default_value = 10.0
+        links.new(coord.outputs['Object'], scuff.inputs['Vector'])
+        scuff_bump = nodes.new('ShaderNodeBump')
+        scuff_bump.inputs['Strength'].default_value = 0.04
+        links.new(scuff.outputs['Fac'], scuff_bump.inputs['Height'])
+        links.new(seam.outputs['Normal'], scuff_bump.inputs['Normal'])
+        links.new(scuff_bump.outputs['Normal'], bsdf.inputs['Normal'])
+        if 'Coat Normal' in bsdf.inputs:
+            links.new(scuff_bump.outputs['Normal'], bsdf.inputs['Coat Normal'])
+        coat_rough = nodes.new('ShaderNodeMapRange')
+        coat_rough.inputs['To Min'].default_value = 0.04
+        coat_rough.inputs['To Max'].default_value = 0.22
+        links.new(scuff.outputs['Fac'], coat_rough.inputs['Value'])
+        if 'Coat Roughness' in bsdf.inputs:
+            links.new(coat_rough.outputs['Result'], bsdf.inputs['Coat Roughness'])
     elif grain == 'tile':
         brick = nodes.new('ShaderNodeTexBrick')
         brick.inputs['Scale'].default_value = 3.0
