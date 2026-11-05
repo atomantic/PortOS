@@ -39,14 +39,16 @@ function ShotSheetMap({ rows, active, onPick }) {
     <div role="group" aria-label="Video map" className="min-w-0 space-y-1">
       {SHOT_SHEET_MAP_BARS.map(([bar, label, readValue]) => {
         const stretches = shotSheetStretches(rows, readValue);
-        const values = [...new Set(stretches.map((stretch) => stretch.value).filter(Boolean))];
+        // A camera keeps one color whoever has it; the label says who.
+        const colorKey = (value) => value.split(' · ')[0];
+        const values = [...new Set(stretches.map((stretch) => stretch.value).filter(Boolean).map(colorKey))];
         return (
           <div key={bar} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] items-stretch gap-1.5">
             <span className="self-center text-xs text-port-text-muted">{label}</span>
             <div role="group" aria-label={label} className="flex min-h-[44px] min-w-0 overflow-hidden rounded border border-port-border">
               {stretches.map((stretch) => {
                 const name = stretch.value || 'Not set';
-                const color = stretch.value ? MAP_COLORS[values.indexOf(stretch.value) % MAP_COLORS.length] : 'bg-port-bg';
+                const color = stretch.value ? MAP_COLORS[values.indexOf(colorKey(stretch.value)) % MAP_COLORS.length] : 'bg-port-bg';
                 const on = active?.bar === bar && active.value === stretch.value;
                 const detail = `${formatTimecode(stretch.startSec)}, ${stretch.shots} shot${stretch.shots === 1 ? '' : 's'}`;
                 return (

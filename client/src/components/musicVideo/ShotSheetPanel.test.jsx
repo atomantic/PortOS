@@ -109,6 +109,17 @@ describe('ShotSheetPanel', () => {
     expect(screen.getByRole('button', { name: 'Open Shot 1' })).toBeInTheDocument();
   });
 
+  // Catches a borrowed camera changing color, which would read as a different camera.
+  it('keeps one color per camera whoever holds it', () => {
+    const board = boardFor();
+    board.project.scenes[1].shotSheet = { cameraId: 'vhs', holder: 'Renee' };
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const bar = within(screen.getByRole('group', { name: 'Camera' }));
+    const color = (button) => button.className.match(/bg-port-\S+/)[0];
+    expect(color(bar.getByRole('button', { name: /VHS · Renee/ }))).toBe(color(bar.getByRole('button', { name: /VHS · Kevin/ })));
+  });
+
   // Catches a camera edit not persisting to the project.
   it('adds a camera to the project', () => {
     const board = boardFor();
