@@ -170,8 +170,8 @@ export async function startHistoricalUsageBackfill({
       }
       if (message?.type !== 'complete') return;
       const result = message.result || {};
-      if (result.claimsSnapshot) mergeUsageClaims(result.claimsSnapshot);
       const applied = await applyHistoricalUsageCorrections(result.corrections || []);
+      if (result.claimsSnapshot) mergeUsageClaims(result.claimsSnapshot);
       const appliedCorrections = (result.corrections || [])
         .filter((correction) => applied.correctedRunIds.includes(correction.runId));
       await markRunMetadata(appliedCorrections);

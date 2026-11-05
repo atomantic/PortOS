@@ -39,6 +39,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  */
 
 import { homedir } from 'os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
@@ -102,6 +103,21 @@ export const CLAIM_RETENTION_MS = 48 * 60 * 60 * 1000;
 // across that boundary; see `usageBackfill.js`. A restart loses the ledger,
 // but a run that already completed is never reconciled again.
 const claimedMessages = new Map();
+const completionClaims = new AsyncLocalStorage();
+const pendingCompletions = new Set();
+
+function admitCompletion(metadata, opts, work) {
+  const home = opts?.home ?? homedir();
+  const workspace = metadata?.workspacePath ?? null;
+  // cwdMatches includes child directories: a parent-workspace completion can
+  // consume the same Codex cumulative stream as a child-workspace completion.
+  const predecessors = [...pendingCompletions].filter(entry => entry.home === home
+    && (cwdMatches(entry.workspace, workspace) || cwdMatches(workspace, entry.workspace)));
+  const done = Promise.allSettled(predecessors.map(entry => entry.done)).then(work);
+  const entry = { home, workspace, done };
+  pendingCompletions.add(entry);
+  return done.finally(() => pendingCompletions.delete(entry));
+}
 
 const isClaimed = (fileKey, messageKey) => claimedMessages.get(fileKey)?.has(messageKey) === true;
 
@@ -735,12 +751,18 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   };
 
   const scan = { home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim, codexReserved };
-  await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
+  try {
+    await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
+  } catch (error) {
+    releaseReserved();
+    throw error;
+  }
 
   if (totals.sessions === 0) {
     releaseReserved();
     return null;
   }
+  completionClaims.getStore()?.push(releaseReserved);
   totals.model = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   totals.byModel = Object.fromEntries(byModel);
   totals.source = sourcesSeen.size === 1 ? [...sourcesSeen][0] : 'mixed';
@@ -957,7 +979,10 @@ export async function recordCompletedRunUsage(metadata, output, opts) {
   // The synchronous estimate prefix in the body runs before its inner catch
   // chain, so own the whole call here (#12978).
   try {
-    await recordCompletedRunUsageUnguarded(metadata, output, opts);
+    // Only completions that can claim the same transcripts wait for each other.
+    // Otherwise a later Codex delta could depend on an uncommitted high-water
+    // mark and make rolling back the earlier failed write impossible.
+    await admitCompletion(metadata, opts, () => recordCompletedRunUsageUnguarded(metadata, output, opts));
   } catch (err) {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Failed to record usage: ${err.message}`);
@@ -999,8 +1024,16 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
-  await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
-    .then((records) => recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned }))
+  const releases = [];
+  await completionClaims.run(releases, async () => {
+    try {
+      const records = await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource });
+      await recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned });
+    } catch (error) {
+      for (const release of releases.reverse()) release();
+      throw error;
+    }
+  })
     .then(async () => {
       if (!metadata?.id) return;
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');
