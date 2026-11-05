@@ -602,14 +602,19 @@ function IngredientEditor() {
     return true;
   }, [record, refreshRevisions, identityReadOnly]);
 
-  // The Greybox tab saves straight onto the SAVED payload; copy just `greybox`
-  // into the draft so the next profile Save does not write the old layout back.
+  // The Greybox and Photoreal tabs save straight onto the SAVED payload; copy just
+  // those keys into the draft so the next profile Save does not write the old
+  // layout or look back.
   const handleGreyboxSaved = useCallback((updated) => {
     const persisted = ingredientPayload(updated.payload);
     setRecord((prev) => (prev?.id === updated.id ? { ...prev, ...updated, payload: persisted } : prev));
     setPayload((cur) => {
-      const { greybox: _previous, ...rest } = cur;
-      return persisted.greybox ? { ...rest, greybox: persisted.greybox } : rest;
+      const { greybox: _greybox, photoreal: _photoreal, ...rest } = cur;
+      return {
+        ...rest,
+        ...(persisted.greybox ? { greybox: persisted.greybox } : {}),
+        ...(persisted.photoreal ? { photoreal: persisted.photoreal } : {}),
+      };
     });
     refreshRevisions();
   }, [refreshRevisions]);

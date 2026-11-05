@@ -13,6 +13,7 @@ import { pgvectorToArray } from '../../lib/db.js';
 import { ingredientIdPrefix } from '../../lib/catalogTypes.js';
 import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../../lib/storyBible.js';
 import { greyboxSceneSchema } from '../../lib/greyboxScene.js';
+import { photorealLookSchema } from '../../lib/photorealLook.js';
 
 // Story-bible sanitizers keyed by catalog type, for the registry
 // `extractionShape: 'bible'` types ONLY (character/place/object). The catalog
@@ -33,6 +34,8 @@ export const BIBLE_SANITIZERS = Object.freeze({
 // the sanitized entry so the stored payload stays shape-stable across the
 // catalog↔canon projection round-trip.
 const SANITIZED_NON_PAYLOAD_KEYS = ['id', 'name', 'createdAt', 'updatedAt'];
+
+const VALIDATED_PAYLOAD_KEYS = Object.freeze({ greybox: greyboxSceneSchema, photoreal: photorealLookSchema });
 
 /**
  * Run a bible-type ingredient payload through its storyBible sanitizer so the
@@ -58,15 +61,16 @@ export function sanitizeBiblePayload(type, name, payload) {
   if (payload && typeof payload === 'object' && payload.schemaVersion !== undefined) {
     out.schemaVersion = payload.schemaVersion;
   }
-  // A place's greybox is normalized by its scene schema (defaults applied) on
-  // every ordinary write; one that does not parse is dropped, as the other
+  // A place's greybox and look are normalized by their schemas (defaults applied)
+  // on every ordinary write; one that does not parse is dropped, as the other
   // sanitizers drop a malformed row, so it can never reach a reader.
-  if (out.greybox !== undefined) {
-    const parsed = greyboxSceneSchema.safeParse(out.greybox);
-    if (parsed.success) out.greybox = parsed.data;
+  for (const [key, schema] of Object.entries(VALIDATED_PAYLOAD_KEYS)) {
+    if (out[key] === undefined) continue;
+    const parsed = schema.safeParse(out[key]);
+    if (parsed.success) out[key] = parsed.data;
     else {
-      delete out.greybox;
-      console.log(`🚫 Dropped an invalid greybox from a ${type} payload: ${parsed.error.issues[0]?.message || 'invalid scene'}`);
+      delete out[key];
+      console.log(`🚫 Dropped an invalid ${key} from a ${type} payload: ${parsed.error.issues[0]?.message || 'invalid value'}`);
     }
   }
   return out;

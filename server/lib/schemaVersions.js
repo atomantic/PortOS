@@ -98,7 +98,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v19 = film look weave and flicker speed (`weaveRate`/`flickerRate`). An older
   // strict film-look schema refuses the profile's finishing look; an older
   // normalizer drops the rates. Optional, no backfill: absent = original speed.
-  universes: 19,
+  // v20 = canon places may carry a `photoreal` look, mirrored like the greybox
+  // (v15). A <=v19 peer's `sanitizePlace` would strip it on an unrelated Universe
+  // edit and LWW the loss back. The catalog gate stays put, as for v15.
+  universes: 20,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

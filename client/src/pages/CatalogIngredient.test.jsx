@@ -158,6 +158,11 @@ vi.mock('../services/apiImageVideo', () => ({
   })),
 }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+vi.mock('../components/catalog/PhotorealPanel', () => ({
+  default: ({ record, onSaved }) => (
+    <button type="button" onClick={() => onSaved({ ...record, payload: { ...record.payload, photoreal: { version: 1, lights: [{ id: 'key' }] } } })}>Apply stub look</button>
+  ),
+}));
 const { mediaAnnotationsFixture } = vi.hoisted(() => ({ mediaAnnotationsFixture: { current: {} } }));
 vi.mock('../hooks/useMediaAnnotations', () => ({ useMediaAnnotations: () => ({ annotations: mediaAnnotationsFixture.current, updateAnnotation: vi.fn() }) }));
 vi.mock('../components/media/AddToCollectionMenu', () => ({ default: () => null }));
@@ -1834,6 +1839,21 @@ describe('CatalogIngredient — tabbed library record pages', () => {
       'cat-plc-1', { mediaKey: 'mood.png', kind: 'reference', role: 'plate', caption: null }, { silent: true },
     ));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Unmark plate' })).toHaveLength(2));
+  });
+
+  it('keeps a look applied on the Photoreal tab through the next profile Save (#14946)', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf({ ...HERO, id: 'cat-plc-1', type: 'place', name: 'Example Harbor', payload: { description: 'Old' }, refs: [] }),
+      media: [],
+    }));
+    updateCatalogIngredient.mockImplementation(async (_id, patch) => ({ id: 'cat-plc-1', ...patch }));
+    const { router } = await renderPage('/environments/cat-plc-1/photoreal');
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply stub look' }));
+    await act(async () => { await router.navigate('/environments/cat-plc-1'); });
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Example Harbor Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledTimes(1));
+    expect(updateCatalogIngredient.mock.calls[0][1].payload.photoreal).toEqual({ version: 1, lights: [{ id: 'key' }] });
   });
 
   it('keeps /catalog/:type/:id untabbed with every panel on one page', async () => {

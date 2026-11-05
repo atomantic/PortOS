@@ -296,12 +296,16 @@ export async function updateIngredient(id, patch = {}, { client, source = 'user'
  * The trigger also bumps `sync_sequence` on every content change, so a match
  * proves nobody else wrote since.
  *
+ * The canon entry only mirrors a place's Photoreal look, and an entry saved
+ * before universes v20 lost it to the sanitizer, so the locked row's look always
+ * wins: only the look endpoint and catalog edits change or remove one (#14946).
+ *
  * Returns `{ status: 'written' | 'stale' | 'missing', ingredient }`.
  */
 export async function updateIngredientIfFresh(id, patch, { sourceUpdatedAt, priorWrite = null, source = 'user', actor = null } = {}) {
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT updated_at, sync_sequence FROM catalog_ingredients
+      `SELECT updated_at, sync_sequence, payload->'photoreal' AS photoreal FROM catalog_ingredients
         WHERE id = catalog_resolve_ingredient_id($1) AND deleted = false FOR UPDATE`,
       [id],
     );
@@ -309,7 +313,12 @@ export async function updateIngredientIfFresh(id, patch, { sourceUpdatedAt, prio
     const ownRow = priorWrite?.syncSequence != null && String(rows[0].sync_sequence) === String(priorWrite.syncSequence);
     const rowAt = ownRow ? Date.parse(priorWrite.sourceUpdatedAt || '') || 0 : Date.parse(rows[0].updated_at.toISOString());
     if ((Date.parse(sourceUpdatedAt || '') || 0) < rowAt) return { status: 'stale', ingredient: null };
-    const ingredient = await updateIngredient(id, patch, { client, source, actor });
+    const { photoreal: _mirrored, ...payload } = patch.payload || {};
+    const lookedPatch = patch.payload === undefined ? patch : {
+      ...patch,
+      payload: rows[0].photoreal == null ? payload : { ...payload, photoreal: rows[0].photoreal },
+    };
+    const ingredient = await updateIngredient(id, lookedPatch, { client, source, actor });
     return ingredient ? { status: 'written', ingredient } : { status: 'missing', ingredient: null };
   });
 }

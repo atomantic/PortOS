@@ -251,6 +251,13 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(sanitizePlace({ name: 'Rink' })).not.toHaveProperty('greybox');
   });
 
+  it('keeps a place photoreal look through the sanitizer so a canon edit does not drop it (#14946)', () => {
+    const photoreal = { version: 1, materials: [], lights: [], atmosphere: { haze: 0.2 } };
+    expect(sanitizePlace({ name: 'Rink', photoreal }).photoreal).toEqual(photoreal);
+    expect(sanitizePlace({ name: 'Rink', photoreal: ['junk'] })).not.toHaveProperty('photoreal');
+    expect(sanitizePlace({ name: 'Rink' })).not.toHaveProperty('photoreal');
+  });
+
   it('extras apply identically to settings + objects', () => {
     const s = sanitizePlace({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
     expect(s.tags).toEqual(['indoor']);

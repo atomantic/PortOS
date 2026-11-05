@@ -179,7 +179,9 @@ and choose **Dress with AI**. The result is a preview listing its materials and
 lights; **Apply look** saves it (as a revision of the Environment) and the next
 render uses it. With a look saved, the box edits it unless you choose to start
 over. The look never moves geometry; a rule for a part you later remove simply
-stops matching. **Remove look** goes back to flat zone colors and the sun.
+stops matching. **Remove look** goes back to flat zone colors and the sun. A
+linked universe's canon mirrors the look, but a canon sync never changes or
+removes it.
 
 ### Fly-through
 
