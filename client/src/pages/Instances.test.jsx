@@ -251,6 +251,93 @@ describe('PeerCard removal confirmation', () => {
   });
 });
 
+describe('PeerCard host and credential button touch targets', () => {
+  const basePeer = {
+    id: 'peer-1',
+    name: 'Living Room',
+    address: '192.0.2.10',
+    port: 5555,
+    status: 'online',
+    enabled: true,
+    directions: [],
+    lastSeen: new Date().toISOString(),
+    consecutiveFailures: 0,
+  };
+
+  it('provides 44px coarse touch target classes on host and credential buttons', () => {
+    const peerWithHostAndAuth = {
+      ...basePeer,
+      host: 'peer.tailnet.ts.net',
+      auth: { username: 'alice' },
+    };
+    const tailnetInfo = {
+      suffix: 'tailnet.ts.net',
+      peers: [{ ips: ['192.0.2.10'], dnsName: 'peer-sugg.tailnet.ts.net' }],
+    };
+
+    const view = renderUI(
+      <PeerCard peer={peerWithHostAndAuth} onRefresh={vi.fn()} tailnetInfo={tailnetInfo} />,
+    );
+
+    const editHostBtn = screen.getByRole('button', { name: 'edit' });
+    const clearHostBtn = screen.getByRole('button', { name: 'use IP only' });
+    const editCredBtn = screen.getByRole('button', { name: 'edit credential' });
+
+    for (const btn of [editHostBtn, clearHostBtn, editCredBtn]) {
+      expect(btn.className).toMatch(/pointer-coarse:min-h-11/);
+      expect(btn.className).toMatch(/pointer-coarse:px-2/);
+      expect(btn.className).toMatch(/pointer-coarse:inline-flex/);
+      expect(btn.className).toMatch(/pointer-coarse:items-center/);
+    }
+
+    // Entering edit credential mode renders remove button with coarse touch classes
+    fireEvent.click(editCredBtn);
+    const removeCredBtn = screen.getByRole('button', { name: 'remove' });
+    expect(removeCredBtn.className).toMatch(/pointer-coarse:min-h-11/);
+    expect(removeCredBtn.className).toMatch(/pointer-coarse:px-2/);
+    expect(removeCredBtn.className).toMatch(/pointer-coarse:inline-flex/);
+    expect(removeCredBtn.className).toMatch(/pointer-coarse:items-center/);
+
+    // Entering edit host mode renders suggestion button with coarse touch classes
+    fireEvent.click(editHostBtn);
+    const suggestionBtn = screen.getByRole('button', { name: 'use peer-sugg.tailnet.ts.net' });
+    expect(suggestionBtn.className).toMatch(/pointer-coarse:min-h-11/);
+    expect(suggestionBtn.className).toMatch(/pointer-coarse:px-2/);
+    expect(suggestionBtn.className).toMatch(/pointer-coarse:inline-flex/);
+    expect(suggestionBtn.className).toMatch(/pointer-coarse:items-center/);
+    view.unmount();
+
+    // Unconfigured host and auth buttons ("set DNS", "use <suggestion>", and "set credential")
+    const peerWithoutHostOrAuth = {
+      ...basePeer,
+      id: 'peer-unconfigured',
+      host: null,
+      auth: null,
+    };
+    const { unmount } = renderUI(<PeerCard peer={peerWithoutHostOrAuth} onRefresh={vi.fn()} />);
+    const setDnsBtn = screen.getByRole('button', { name: 'set DNS' });
+    const setCredBtn = screen.getByRole('button', { name: 'set credential' });
+    for (const btn of [setDnsBtn, setCredBtn]) {
+      expect(btn.className).toMatch(/pointer-coarse:min-h-11/);
+      expect(btn.className).toMatch(/pointer-coarse:px-2/);
+      expect(btn.className).toMatch(/pointer-coarse:inline-flex/);
+      expect(btn.className).toMatch(/pointer-coarse:items-center/);
+    }
+    unmount();
+
+    // When auto-detected DNS suggestion exists and host is unconfigured: "use <suggestion>"
+    const { unmount: unmountSugg } = renderUI(
+      <PeerCard peer={peerWithoutHostOrAuth} onRefresh={vi.fn()} tailnetInfo={tailnetInfo} />,
+    );
+    const useSuggBtn = screen.getByRole('button', { name: 'use peer-sugg.tailnet.ts.net' });
+    expect(useSuggBtn.className).toMatch(/pointer-coarse:min-h-11/);
+    expect(useSuggBtn.className).toMatch(/pointer-coarse:px-2/);
+    expect(useSuggBtn.className).toMatch(/pointer-coarse:inline-flex/);
+    expect(useSuggBtn.className).toMatch(/pointer-coarse:items-center/);
+    unmountSugg();
+  });
+});
+
 describe('PeerCard snapshot progress', () => {
   const peer = {
     id: 'peer-snapshot', instanceId: 'remote-snapshot', name: 'Snapshot peer',
