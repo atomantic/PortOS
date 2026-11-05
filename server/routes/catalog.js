@@ -11,6 +11,7 @@ import * as catalogSync from '../services/catalogSync.js';
 import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
 import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
+import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
 import {
@@ -58,6 +59,7 @@ import {
   catalogStoryDraftSchema,
   catalogVideoSubjectsQuerySchema,
   catalogVideoSubjectLinksSchema,
+  catalogVideoDescriptionRestoreSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
@@ -77,7 +79,7 @@ import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaK
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
-import { linkVideoSubjects, listVideoSubjectLinks } from '../services/musicVideo/catalogCast.js';
+import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription } from '../services/musicVideo/catalogCast.js';
 import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
@@ -300,6 +302,12 @@ router.post('/stories/music-video/:id/subjects/link', asyncHandler(async (req, r
   res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null, linked, unlinked });
 }));
 
+router.post('/stories/music-video/:id/subjects/restore-description', asyncHandler(async (req, res) => {
+  const input = validateRequest(catalogVideoDescriptionRestoreSchema, req.body ?? {});
+  const { project } = await restoreVideoSubjectDescription(req.params.id, input);
+  res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null });
+}));
+
 router.post('/stories/:kind/:id/members', asyncHandler(async (req, res) => {
   const { kind, id } = validateRequest(catalogStoryParamsSchema, req.params);
   const { ingredientId } = validateRequest(catalogStoryJoinSchema, req.body ?? {});
@@ -439,6 +447,12 @@ router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
   if (fieldPatch.name !== undefined || fieldPatch.payload !== undefined) {
     const current = await catalogDB.getIngredient(req.params.id);
     if (!current) throw new ServerError('Ingredient not found', { status: 404 });
+    if (fieldPatch.payload !== undefined && ['character', 'place', 'object'].includes(current.type)) {
+      const violation = changedMusicVideoDescriptionOverLimit(current.type, current.payload, fieldPatch.payload);
+      if (violation && (await catalogDB.listRefsForIngredient(req.params.id)).some((ref) => ref.refKind === 'music-video')) {
+        throw new ServerError(`A description used by a music video holds at most ${MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX.toLocaleString('en-US')} characters; this one has ${violation.length.toLocaleString('en-US')}. Shorten it before saving.`, { status: 400, code: 'DESCRIPTION_TOO_LONG' });
+      }
+    }
     embeddingPatch = await embedIngredient({
       name: fieldPatch.name ?? current.name,
       payload: fieldPatch.payload ?? current.payload,

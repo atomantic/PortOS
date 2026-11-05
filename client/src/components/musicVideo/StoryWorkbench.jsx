@@ -4,6 +4,8 @@ import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { applyMusicVideoStory, applyMusicVideoStoryBeats, getMusicVideoStoryContext, proposeMusicVideoStory, saveMusicVideoStorySummary } from '../../services/apiMusicVideo.js';
 import { STORYBOARD_LIMITS, STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS } from '../../../../server/lib/storyboardVocabulary.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
+import { formatCount } from '../../utils/formatters.js';
 
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 const button = 'min-h-[44px] rounded border border-port-border px-3 py-1.5 text-sm text-port-accent disabled:opacity-50';
@@ -217,7 +219,10 @@ export default function StoryWorkbench({ project, disabled, onProject, onBoardCh
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2"><label className="text-xs">Kind<select className={input} disabled={!!subject.id} value={subject.kind} onChange={(e) => setArray('subjects', i, { kind: e.target.value })}><option value="character">Character</option><option value="place">Place</option><option value="object">Object</option></select></label>
           <label className="text-xs">Name<input className={input} value={subject.name} maxLength={120} onChange={(e) => setArray('subjects', i, { name: e.target.value })} /></label></div>
         {subject.kind === 'character' && <label className="block text-xs">Role<select className={input} value={effective(subject, existing, 'role') || ''} onChange={(e) => setArray('subjects', i, { role: e.target.value })}><option value="" disabled>Not specified</option><option value="protagonist">Protagonist</option><option value="band">Band</option><option value="supporting">Supporting</option></select></label>}
-        <label className="block text-xs">Description<textarea className={input} value={effective(subject, existing, 'description') || ''} maxLength={1000} onChange={(e) => setArray('subjects', i, { description: e.target.value })} /></label>
+        <div><label className="block text-xs" htmlFor={`mv-story-subject-description-${i}`}>Description</label>
+          <textarea id={`mv-story-subject-description-${i}`} aria-describedby={`mv-story-subject-count-${i}`} className={input} value={effective(subject, existing, 'description') || ''} maxLength={MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX} onChange={(e) => setArray('subjects', i, { description: e.target.value })} />
+          <p id={`mv-story-subject-count-${i}`} className="text-xs text-port-text-muted">{formatCount((effective(subject, existing, 'description') || '').length)} / {formatCount(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX)} characters</p>
+        </div>
       </div>; })}
       <button type="button" className={button} disabled={disabled || busy || !Object.keys(selectedProject()).length} onClick={applyProject}>Apply selected direction and cast</button>
       {(proposal.beats || []).map((beat, i) => {

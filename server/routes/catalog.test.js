@@ -101,6 +101,23 @@ afterAll(async () => {
   await close();
 });
 
+describe.skipIf(!runDb)('music-video description limit on catalog edits', () => {
+  it('rejects a new overlong linked description while allowing unrelated legacy edits and a shorter repair', async () => {
+    const long = 'x'.repeat(1001);
+    const ing = await catalogDB.createIngredient({ type: 'object', name: 'Example prop', payload: { description: long } });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'music-video', `mv-example-${NONCE}`, 'prop');
+    const unchanged = await request(makeApp()).patch(`/api/catalog/ingredients/${ing.id}`).send({ name: 'Renamed prop', payload: { ...ing.payload } });
+    expect(unchanged.status).toBe(200);
+    const overlong = await request(makeApp()).patch(`/api/catalog/ingredients/${ing.id}`).send({ payload: { ...ing.payload, description: `${long}x` } });
+    expect(overlong.status).toBe(400);
+    expect((await catalogDB.getIngredient(ing.id)).payload.description).toBe(long);
+    const repaired = await request(makeApp()).patch(`/api/catalog/ingredients/${ing.id}`).send({ payload: { ...ing.payload, description: 'Short description' } });
+    expect(repaired.status).toBe(200);
+    expect(repaired.body.payload.description).toBe('Short description');
+  });
+});
+
 describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () => {
   it('reports old and new CLI driver inputs as unverified while preserving direct-provider provenance', async () => {
     const prefix = `related-codex-${NONCE}-`;

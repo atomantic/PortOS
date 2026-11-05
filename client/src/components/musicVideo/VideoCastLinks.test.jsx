@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VideoCastLinks from './VideoCastLinks.jsx';
-import { linkVideoSubjects, listCatalogIngredientsByIds, listVideoSubjectLinks, updateCatalogIngredient } from '../../services/api';
+import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription } from '../../services/api';
 
-vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), listCatalogIngredientsByIds: vi.fn(), updateCatalogIngredient: vi.fn() }));
+vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), restoreVideoSubjectDescription: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, onSelect }) => (isOpen ? (
@@ -65,18 +65,17 @@ describe('linking a music video’s cast to the catalog', () => {
       castForm: { id: 'teen', label: 'Teen', age: 17 },
       linked: { id: 'cat-chr-1', name: 'Example Lead', forms: [{ id: 'teen', label: 'Teen' }], appearance: { field: 'form', formId: 'teen', text: 'Long black braids.' } } };
     listVideoSubjectLinks.mockResolvedValue({ subjects: [linked] });
-    listCatalogIngredientsByIds.mockResolvedValue([{ id: 'cat-chr-1', payload: { physicalDescription: 'Adult.', forms: [{ id: 'teen', label: 'Teen', age: '17', description: 'Long black braids.' }] } }]);
-    updateCatalogIngredient.mockResolvedValue({ id: 'cat-chr-1' });
+    restoreVideoSubjectDescription.mockResolvedValue({ concept: { subjects: [] } });
     render(<MemoryRouter><VideoCastLinks projectId="mv-1" universeId="u-1" /></MemoryRouter>);
-    expect(await screen.findByText('Description differs from Example Lead · Teen in the catalog')).toBeInTheDocument();
+    expect(await screen.findByText('The catalog description for Example Lead · Teen is in use; an older video snapshot differs')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Casting' })).toHaveAttribute('href', '/casting?scope=u-1&story=music-video%3Amv-1');
 
     fireEvent.click(screen.getByRole('button', { name: 'Use the catalog description for Example Lead (17)' }));
     await waitFor(() => expect(linkVideoSubjects).toHaveBeenCalledWith('mv-1', [{ subjectId: 'mvc-a', ingredientId: 'cat-chr-1', formId: 'teen', useCatalogText: true }], { silent: true }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Update the catalog from Example Lead (17)' }));
-    await waitFor(() => expect(updateCatalogIngredient).toHaveBeenCalledWith('cat-chr-1', { payload: {
-      physicalDescription: 'Adult.', forms: [{ id: 'teen', label: 'Teen', age: '17', description: 'Short red hair.' }],
-    } }, { silent: true }));
+    await waitFor(() => expect(restoreVideoSubjectDescription).toHaveBeenCalledWith('mv-1', {
+      subjectId: 'mvc-a', ingredientId: 'cat-chr-1', formId: 'teen', videoDescription: 'Short red hair.', catalogDescription: 'Long black braids.',
+    }, { silent: true }));
   });
 });

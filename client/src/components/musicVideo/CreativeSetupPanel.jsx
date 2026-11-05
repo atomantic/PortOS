@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
 import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -44,10 +45,12 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [selectedCanon, setSelectedCanon] = useState([]);
+  const [descriptionBases, setDescriptionBases] = useState({});
   const [catalogKind, setCatalogKind] = useState(null);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
   const universeReady = !universeId || (!loading && universe?.id === universeId);
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
+  const overlongSubjects = subjects.filter((subject) => (subject.description || '').length > SUBJECT_DESCRIPTION_MAX);
   const idFor = (name) => `mv-creative-${project.id}-${name}`;
   // The saved tools and policy disagree (no video tool, yet generated footage is still planned).
   // Shown, never auto-fixed: approved plans and sheets stay as saved until the director replans.
@@ -81,6 +84,8 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
 
   const begin = () => {
     setDraft({ universeId: project.concept?.universeId || '', characterStyleId: project.concept?.characterStyleId || '', subjects: project.concept?.subjects || [] });
+    setDescriptionBases(Object.fromEntries((project.concept?.subjects || []).filter((subject) => subject.ingredientId)
+      .map((subject) => [subject.id, subject.description || ''])));
     setSelectedCanon([]);
     setNewName('');
     setNewDescription('');
@@ -89,8 +94,9 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   };
   const add = (kind, name, description, canon) => {
     if (!name.trim() || subjects.length >= 24) return;
-    const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: (description || '').slice(0, 1000), ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) };
+    const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: description || '', ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) };
     setDraft((d) => ({ ...d, subjects: [...d.subjects, subject] }));
+    if (subject.ingredientId) setDescriptionBases((bases) => ({ ...bases, [subject.id]: subject.description }));
     if (canon) setSelectedCanon((items) => [...items, { subjectId: subject.id, kind, entry: canon }]);
   };
   const replan = () => {
@@ -102,6 +108,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   };
   const save = async () => {
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
+    if (overlongSubjects.length) { setError('Shorten the highlighted descriptions before saving.'); return; }
     setSaving(true);
     setError('');
     const concept = { subjects: draft.subjects, universeId: draft.universeId || null, characterStyleId: draft.characterStyleId || null };
@@ -110,7 +117,9 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
       if (draft.subjects.some((s) => s.id === item.subjectId)) canon[fields[item.kind]].push(item.entry);
     }
     const pulled = pullUniverseCanonReferences(canon, project.visualSpec?.references || []);
-    return onSave({ concept, ...(pulled.added ? { visualSpec: { references: pulled.next } } : {}) }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
+    const catalogDescriptionBases = draft.subjects.filter((subject) => subject.ingredientId && Object.hasOwn(descriptionBases, subject.id))
+      .map((subject) => ({ subjectId: subject.id, description: descriptionBases[subject.id] }));
+    return onSave({ concept, catalogDescriptionBases, ...(pulled.added ? { visualSpec: { references: pulled.next } } : {}) }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
@@ -120,7 +129,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     </div>
     {!editing && project.concept?.characterStyleId && <p className="text-xs">Character style: {project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId}</p>}
     {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
-      <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Canon and style are copied into this project; source records stay independent.</p>
+      <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Editing a linked description also updates its catalog record; other canon and style settings remain snapshots.</p>
       <div className="grid grid-cols-1 gap-3">
         <CharacterStylePicker project={project} idFor={idFor} value={draft.characterStyleId} onChange={(characterStyleId) => setDraft((d) => ({ ...d, characterStyleId }))} />
         <div><label htmlFor={idFor('universe')} className="text-xs">Universe</label>
@@ -174,16 +183,22 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
           ? <Link className="text-xs text-port-accent" target="_blank" to={ingredientPath({ id: subject.ingredientId, type: subject.kind })}>Open in catalog</Link>
           : <div className="flex items-center gap-2 min-h-[32px]"><input id={idFor(`local-${subject.id}`)} type="checkbox" checked={!!subject.localOnly} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, localOnly: e.target.checked || undefined } : s)) }))} /><label htmlFor={idFor(`local-${subject.id}`)} className="text-xs text-port-text-muted">Don&apos;t save to {catalogPages[subject.kind]}</label></div>}
         <label htmlFor={idFor(`description-${subject.id}`)} className="sr-only">Description for {subject.name}</label>
-        <textarea id={idFor(`description-${subject.id}`)} rows={2} maxLength={1000} className={inputClass} value={subject.description || ''} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, description: e.target.value } : s) }))} />
+        <textarea id={idFor(`description-${subject.id}`)} aria-describedby={idFor(`description-count-${subject.id}`)} rows={2} className={inputClass} value={subject.description || ''} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, description: e.target.value } : s) }))} />
+        <p id={idFor(`description-count-${subject.id}`)} className={`text-xs ${(subject.description || '').length > SUBJECT_DESCRIPTION_MAX ? 'text-port-error' : 'text-port-text-muted'}`}>
+          {formatCount((subject.description || '').length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{(subject.description || '').length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before saving' : ''}
+        </p>
       </li>)}</ul>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div><label htmlFor={idFor('kind')} className="text-xs">Create for this video</label><select id={idFor('kind')} className={inputClass} value={newKind} onChange={(e) => setNewKind(e.target.value)}>{kinds.map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></div>
         <div><label htmlFor={idFor('name')} className="text-xs">Name</label><input id={idFor('name')} maxLength={120} className={inputClass} value={newName} onChange={(e) => setNewName(e.target.value)} /></div>
       </div>
-      <label htmlFor={idFor('description')} className="block text-xs">Appearance / description</label><textarea id={idFor('description')} rows={2} maxLength={1000} className={inputClass} value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
-      <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= 24} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
+      <label htmlFor={idFor('description')} className="block text-xs">Appearance / description</label><textarea id={idFor('description')} aria-describedby={idFor('description-count')} rows={2} className={inputClass} value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
+      <p id={idFor('description-count')} className={`text-xs ${newDescription.length > SUBJECT_DESCRIPTION_MAX ? 'text-port-error' : 'text-port-text-muted'}`}>
+        {formatCount(newDescription.length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{newDescription.length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before adding' : ''}
+      </p>
+      <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= 24 || newDescription.length > SUBJECT_DESCRIPTION_MAX} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
-      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim()} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim() || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
     {!editing && subjects.length > 0 && <VideoCastLinksDisclosure
       summary={`Catalog links (${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked)`}

@@ -101,8 +101,8 @@ async function mutateLocked(id, transform) {
 // `transform(project)` returns `{ project, ...result }`; resolves to that
 // outcome with `project` replaced by the persisted record.
 async function mutateProjectRecordUnqueued(id, transform) {
-  const { project, result } = await withLockedProject(id, async (current) => {
-    const outcome = await transform(current);
+  const { project, result } = await withLockedProject(id, async (current, client) => {
+    const outcome = await transform(current, { client });
     return { project: outcome.project, result: outcome, skipPersist: outcome.skipPersist === true };
   });
   return { ...result, project };

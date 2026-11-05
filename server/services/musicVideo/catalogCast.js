@@ -15,6 +15,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideoSubjectLimits.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
 import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
@@ -23,7 +24,6 @@ const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', ob
 const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'objects' };
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
-const SUBJECT_DESCRIPTION_MAX = 1000;
 const queueCheckinSave = createKeyCachedQueue();
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
@@ -334,7 +334,7 @@ async function defaultDeps() {
     import('./catalogLinks.js'),
     import('../catalogPrimitives.js'),
   ]);
-  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
+  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }
 
 async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
@@ -486,7 +486,7 @@ const loadVideo = async (projectId, d) => {
  */
 export async function listVideoSubjectLinks(projectId, { type } = {}, deps = null) {
   const d = deps || await defaultDeps();
-  const project = await loadVideo(projectId, d);
+  const project = d.getStoredProject ? await loadVideo(projectId, { ...d, getProject: d.getStoredProject }) : await loadVideo(projectId, d);
   const universeId = project.concept?.universeId || null;
   const subjects = (project.concept?.subjects || []).filter((s) => s?.id && TYPE_PREFIX[s.kind] && (!type || s.kind === type));
   const records = new Map();
@@ -558,12 +558,37 @@ export async function linkVideoSubjects(projectId, links, deps = null) {
         }),
       },
     },
-  }));
+  }), { commitSubjectIds: [...stamps].filter(([, stamp]) => stamp?.description !== undefined).map(([subjectId]) => subjectId) });
   // Awaited so the catalog's story filter shows the change when this returns.
   await d.queueProjectCatalogLinkSync(projectId);
   const linked = [...stamps.values()].filter(Boolean).length;
   console.log(`🎭 Music video ${String(projectId).slice(0, 11)}: ${linked} subject(s) linked, ${stamps.size - linked} unlinked`);
   return { project: saved, linked, unlinked: stamps.size - linked };
+}
+
+/** Restore a reviewed legacy video snapshot to its linked catalog look. */
+export async function restoreVideoSubjectDescription(projectId, input, deps = null) {
+  const d = deps || await defaultDeps();
+  const descriptions = await import('./subjectDescriptionSync.js');
+  const { project } = await d.mutateProjectRecord(projectId, async (current, { client, storedProject } = {}) => {
+    const raw = (storedProject?.concept?.subjects || []).find((subject) => subject.id === input.subjectId);
+    const subject = (current.concept?.subjects || []).find((item) => item.id === input.subjectId);
+    if (!client || !raw || !subject || raw.ingredientId !== input.ingredientId || subject.ingredientId !== input.ingredientId
+      || raw.kind !== subject.kind || (raw.castForm?.id || '') !== (input.formId || '')
+      || (subject.castForm?.id || '') !== (input.formId || '') || (raw.description || '') !== input.videoDescription) {
+      throw new ServerError('The video or its catalog link changed. Review the latest descriptions first.', { status: 409, code: 'CATALOG_DESCRIPTION_CONFLICT' });
+    }
+    const before = { concept: { subjects: [{ ...subject, description: input.catalogDescription }] } };
+    const after = { concept: { subjects: [{ ...subject, description: input.videoDescription }] } };
+    const result = await descriptions.syncEditedSubjectDescriptions(before, after, {
+      client, bases: [{ subjectId: subject.id, description: input.catalogDescription }], catalogDB: d.catalogDB,
+    });
+    return {
+      project: { ...current, concept: { ...current.concept, subjects: current.concept.subjects.map((item) => item.id === subject.id ? { ...item, description: input.videoDescription } : item) } },
+      catalogRecords: result.records,
+    };
+  }, { skipDescriptionSync: true, commitSubjectIds: [input.subjectId] });
+  return { project };
 }
 
 /**

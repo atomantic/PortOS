@@ -81,7 +81,8 @@ import {
   isSheetMedia, isPlateMedia, isDesignMedia, isReferenceTabMedia, lookIdOf,
 } from '../lib/creativeLibraries';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
-import { timeAgo, formatDateTime } from '../utils/formatters';
+import { timeAgo, formatDateTime, formatCount } from '../utils/formatters';
+import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../server/lib/musicVideoSubjectLimits.js';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { formsOf } from '../lib/catalogForms';
@@ -215,6 +216,8 @@ function IngredientEditor() {
   const [contextRequested, setContextRequested] = useState(false);
   const onCharacterPageChange = useCallback(page => { if (page === 'story' || page === 'voice') setContextRequested(true); }, []);
   const ownerUniverseId = record?.universeContext?.owner?.refId || null;
+  const videoDescriptionLimit = record?.refs?.some((ref) => ref.refKind === 'music-video') ? MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX : null;
+  const overlongVideoDescription = videoDescriptionLimit ? changedMusicVideoDescriptionOverLimit(record.type, record.payload, payload) : null;
   useEffect(() => {
     let active = true;
     setOwnerUniverse(null); setOwnerEntryId(null); setOwnerContextError(null); setOwnerCanonMissing(false);
@@ -682,6 +685,7 @@ function IngredientEditor() {
 
   const handleSave = async () => {
     if (!record || identityReadOnly || unlocking || characterActionBusy) return;
+    if (overlongVideoDescription) { toast.error('Shorten the description for linked music videos before saving.'); return; }
     const submittedId = record.id;
     const submittedGeneration = activeVisitRef.current.generation;
     const submittedName = name;
@@ -900,7 +904,8 @@ function IngredientEditor() {
             {FORM_TYPES.has(record.type) && <CatalogLockButton key={record.id} record={record}
               disabled={saving || lookSaving || unlocking || characterActionBusy || mergeBusy} onPendingChange={setUnlocking} onChanged={applyLock} />}
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
-            <button type="button" onClick={handleSave} disabled={saving || lookSaving || greyboxBusy || unlocking || characterActionBusy || mergeBusy || identityReadOnly || !!externalDetails}
+            {overlongVideoDescription && <span className="text-xs text-port-error" role="alert">Shorten the description for linked music videos before saving.</span>}
+            <button type="button" onClick={handleSave} disabled={saving || lookSaving || greyboxBusy || unlocking || characterActionBusy || mergeBusy || identityReadOnly || !!externalDetails || !!overlongVideoDescription}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
@@ -989,11 +994,11 @@ function IngredientEditor() {
                   : sections
                   ? sections.map((section) => (
                       <SheetSection key={section.title} title={section.title}
-                        fields={section.fields} payload={payload} onChange={updatePayload} />
+                        fields={section.fields} payload={payload} onChange={updatePayload} videoDescriptionLimit={videoDescriptionLimit} />
                     ))
                   : fields.map(([key, label, kind]) => (
                       <SheetField key={key} fieldKey={key} label={label} kind={kind}
-                        value={payload[key] ?? ''} onChange={updatePayload} />
+                        value={payload[key] ?? ''} onChange={updatePayload} videoDescriptionLimit={videoDescriptionLimit} />
                     ))}
               </fieldset>
 
@@ -1008,7 +1013,7 @@ function IngredientEditor() {
 
             {record.type !== 'character' && FORM_TYPES.has(record.type) && (
               <fieldset disabled={identityReadOnly} className="min-w-0">
-                <CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} />
+                <CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} videoDescriptionLimit={videoDescriptionLimit} />
               </fieldset>
             )}
             {record.type !== 'character' && FORM_TYPES.has(record.type) && <RevealTimingField entry={{ ...payload, id: record.id }}
@@ -1016,6 +1021,7 @@ function IngredientEditor() {
 
             {record.type === 'character' && <CharacterDetailEditor
               draftMode="change" navigationId={record.id} onPageChange={onCharacterPageChange}
+              videoDescriptionLimit={videoDescriptionLimit}
               entry={{ ...payload, id: ownerCharacter?.id || record.id, name }}
               universeId={ownerCharacter ? ownerUniverseId : null} characters={ownerUniverse?.characters || []}
               contextLoading={!!ownerUniverseId && !ownerUniverse && !ownerContextError}
@@ -1066,7 +1072,7 @@ function IngredientEditor() {
                   inbound={relations.inbound.filter((r) => isFamilyRelationKind(r.kind)).map((r) => ({ kind: r.kind, id: r.fromId, name: r.other?.name }))}
                   onAdd={(kind, target) => handleAddRelation(target, kind)} onRemove={(item) => handleRemoveRelation(item.id, item.kind)} />
               </div>
-              <fieldset disabled={identityReadOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} /></fieldset>
+              <fieldset disabled={identityReadOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} videoDescriptionLimit={videoDescriptionLimit} /></fieldset>
               <RevealTimingField entry={{ ...payload, id: record.id }} editable={!identityReadOnly && !characterActionBusy && payload.locked !== true}
                 onPatch={patch => setPayload(previous => ({ ...previous, ...patch }))} />
               {!tabs && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
@@ -1277,8 +1283,9 @@ function IngredientEditor() {
 // line) or 'textarea' (multi-line). Edits write straight through to the shared
 // payload via `onChange(key, value)` — the same durable catalog row the
 // Universe Builder canon surface edits.
-function SheetField({ fieldKey, label, kind, value, onChange }) {
+function SheetField({ fieldKey, label, kind, value, onChange, videoDescriptionLimit }) {
   const inputId = `ingredient-${fieldKey}`;
+  const showVideoCount = fieldKey === 'description' && videoDescriptionLimit;
   const shared = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent';
   return (
     <div>
@@ -1289,15 +1296,18 @@ function SheetField({ fieldKey, label, kind, value, onChange }) {
             {(kind === 'intExt' ? ['INT', 'EXT'] : ['dawn', 'day', 'dusk', 'night']).map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         : kind === 'textarea'
-        ? <textarea id={inputId} rows={3} value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />
+        ? <textarea id={inputId} aria-describedby={showVideoCount ? `${inputId}-video-count` : undefined} rows={3} value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />
         : <input id={inputId} type="text" value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />}
+      {showVideoCount && <p id={`${inputId}-video-count`} className={`text-xs ${value.length > videoDescriptionLimit ? 'text-port-error' : 'text-port-text-muted'}`}>
+        {formatCount(value.length)} / {formatCount(videoDescriptionLimit)} characters for linked music videos
+      </p>}
     </div>
   );
 }
 
 // One collapsible "sheet section" — a labeled group of scalar fields. Open by
 // default; collapsing keeps the long character sheet manageable above the fold.
-function SheetSection({ title, fields, payload, onChange }) {
+function SheetSection({ title, fields, payload, onChange, videoDescriptionLimit }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="border border-port-border rounded-lg overflow-hidden">
@@ -1311,7 +1321,7 @@ function SheetSection({ title, fields, payload, onChange }) {
         <div className="p-3 space-y-3">
           {fields.map(([key, label, kind]) => (
             <SheetField key={key} fieldKey={key} label={label} kind={kind}
-              value={payload[key] ?? ''} onChange={onChange} />
+              value={payload[key] ?? ''} onChange={onChange} videoDescriptionLimit={videoDescriptionLimit} />
           ))}
         </div>
       )}

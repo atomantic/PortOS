@@ -77,6 +77,23 @@ describe('creative setup', () => {
     expect(saved.visualSpec.references).toEqual([expect.objectContaining({ imageId: 'diner.png', role: 'set', label: 'Night diner', condition: false })]);
   });
 
+  it('keeps an overlong imported description intact and asks the director to shorten it before saving', async () => {
+    const longDescription = 'x'.repeat(1001);
+    getUniverse.mockResolvedValue({ id: 'u1', name: 'Example universe', characters: [{ id: 'c1', name: 'Example singer', physicalDescription: longDescription }], places: [], objects: [] });
+    const onSave = open();
+    await screen.findByText('Example universe');
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    await screen.findByText('Example singer');
+    fireEvent.change(screen.getByLabelText('Select cast'), { target: { value: 'c1' } });
+    const description = screen.getByLabelText('Description for Example singer');
+    expect(description.value).toBe(longDescription);
+    expect(screen.getByText('1,001 / 1,000 characters — shorten before saving')).toBeInTheDocument();
+    expect(screen.getByText('Save creative setup')).toBeDisabled();
+    fireEvent.change(description, { target: { value: 'A concise description' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave.mock.calls[0][0].concept.subjects[0].description).toBe('A concise description'));
+  });
+
   it('links a catalog subject to its record and lets the director keep a new one in this video only', async () => {
     const onSave = vi.fn(async () => {});
     const cast = { ...project, concept: { subjects: [
@@ -90,6 +107,21 @@ describe('creative setup', () => {
     fireEvent.click(screen.getByText('Save creative setup'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0].concept.subjects[1]).toEqual(expect.objectContaining({ id: 'mvc-2', localOnly: true }));
+  });
+
+  it('sends the linked description and its original value together when saving an edit', async () => {
+    const onSave = vi.fn(async () => {});
+    const cast = { ...project, concept: { subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Example singer', ingredientId: 'cat-chr-1', description: 'Original look' },
+    ] } };
+    render(<MemoryRouter><CreativeSetupPanel project={cast} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByText('Edit'));
+    fireEvent.change(screen.getByLabelText('Description for Example singer'), { target: { value: 'Updated look' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      concept: expect.objectContaining({ subjects: [expect.objectContaining({ description: 'Updated look' })] }),
+      catalogDescriptionBases: [{ subjectId: 'mvc-1', description: 'Original look' }],
+    })));
   });
 
   it('discards an unsaved cast when the director cancels setup', async () => {

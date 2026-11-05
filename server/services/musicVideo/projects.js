@@ -68,8 +68,13 @@ function announceNewProject(id) {
   autoSubscribeRecordToAllPeers('musicVideoProject', id).catch(() => {});
 }
 
+const hasLinkedSubjects = (project) => Array.isArray(project?.concept?.subjects) && project.concept.subjects.some((subject) => subject?.ingredientId);
+
 export async function listProjects(options = {}) {
-  return (await selectBackend()).listProjects(options);
+  const projects = await (await selectBackend()).listProjects(options);
+  if (getBackendName() !== 'postgres' || !projects.some(hasLinkedSubjects)) return projects;
+  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return resolveProjectsCatalogDescriptions(projects);
 }
 
 /** Live `{ id, name }` rows for the sidebar's Music Video sub-nav. */
@@ -78,12 +83,27 @@ export async function listProjectNames() {
 }
 
 export async function listProjectPage(options = {}) {
-  return (await selectBackend()).listProjectPage(options);
+  const page = await (await selectBackend()).listProjectPage(options);
+  if (getBackendName() !== 'postgres' || !page.items.some(hasLinkedSubjects)) return page;
+  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
 }
 
-/** Null when missing; a caller that answers 404 for that uses requireProject.js. */
-export async function getProject(id, options = {}) {
+/** The stored snapshots, used when offering a legacy difference for review. */
+export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
+}
+
+async function withCatalogDescriptions(project) {
+  if (getBackendName() !== 'postgres' || !hasLinkedSubjects(project)) return project;
+  const { resolveProjectCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return resolveProjectCatalogDescriptions(project);
+}
+
+/** Null when missing; linked descriptions come from the catalog when usable. */
+export async function getProject(id, options = {}) {
+  const backend = await selectBackend();
+  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, options)));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -195,36 +215,37 @@ export async function createProject(input) {
   const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);
-  return project;
+  return withCatalogDescriptions(project);
 }
 
 export async function cloneProject(id, options = {}) {
   const project = await (await selectBackend()).cloneProject(id, options);
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);
-  return project;
+  return withCatalogDescriptions(project);
 }
 
 export async function updateProject(id, patch) {
   const backend = await selectBackend();
   const seeded = await seedTrackMetadataOnUpdate(id, patch);
-  const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
-    || seeded?.visualSpec?.moodBoardId !== undefined;
-  const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
+  const { catalogDescriptionBases = [], ...projectPatch } = seeded;
+  const needsSnapshot = projectPatch?.concept?.universeId !== undefined || projectPatch?.concept?.characterStyleId !== undefined
+    || projectPatch?.visualSpec?.moodBoardId !== undefined;
+  const resolved = needsSnapshot ? await withStyleSnapshots(projectPatch, await backend.getProject(id)) : projectPatch;
   const castChanged = resolved?.concept?.subjects !== undefined;
   // A reference added from the gallery or a mood board takes its catalog record's name.
   // Linking the cast alone leaves approvals current, so naming then must not stale them.
   const referencesChanged = resolved?.visualSpec?.references !== undefined;
   const nameReferences = async (saved) => (referencesChanged || castChanged
     ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);
-  if (!Array.isArray(resolved.scenes)) {
+  if (!castChanged && !Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
-    if (castChanged) queueProjectCatalogLinkSync(id);
-    return nameReferences(next);
+    return nameReferences(await withCatalogDescriptions(next));
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
-  const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
+  const { project } = await mutateProjectRecord(id, (current) => ({ project: applyProjectPatch(current, resolved) }),
+    { catalogDescriptionBases, includeNewLinks: true });
   if (castChanged) queueProjectCatalogLinkSync(id);
   return nameReferences(project);
 }
@@ -528,19 +549,38 @@ export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
-async function mutateProjectRecordAdmitted(id, transform, _options = {}, mutate = null) {
+async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate = null) {
   let dropped = null;
+  let catalogRecords = [];
+  let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
-  const outcome = await write(id, async (current) => {
+  const outcome = await write(id, async (stored, context = {}) => {
+    if (context.client && hasLinkedSubjects(stored)) descriptions = await import('./subjectDescriptionSync.js');
+    const current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
-    const outcome = await transform(current);
-    await assertNewMediaSelections(current, outcome.project);
-    dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
-    return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
+    const outcome = await transform(current, { ...context, storedProject: stored });
+    // A newly linked subject may be the first catalog link on this project.
+    if (context.client && !descriptions && hasLinkedSubjects(outcome.project)) descriptions = await import('./subjectDescriptionSync.js');
+    const bases = options.catalogDescriptionBases ?? (current.concept?.subjects || []).map((subject) => ({ subjectId: subject.id, description: subject.description || '' }));
+    const synced = descriptions && !outcome.skipPersist && !options.skipDescriptionSync
+      ? await descriptions.syncEditedSubjectDescriptions(current, outcome.project, { client: context.client, bases, includeNewLinks: options.includeNewLinks })
+      : { project: outcome.project, records: [] };
+    catalogRecords = [...(outcome.catalogRecords || []), ...synced.records];
+    const next = descriptions ? descriptions.preserveUnchangedDescriptionSnapshots(stored, current, synced.project, options.commitSubjectIds) : synced.project;
+    await assertNewMediaSelections(stored, next);
+    dropped = { project: stored, assets: droppedTakeAssets(stored, next) };
+    return { ...outcome, project: retainMusicVideoDependencies(stored, next) };
   });
   emitRecordUpdated('musicVideoProject', id);
   // A cut shot, a merge or a re-plan drops takes from the board: they stay findable in the project's collection.
   if (dropped?.assets.length) await fileMusicVideoMedia(dropped.project, dropped.assets);
+  if (descriptions) {
+    // The project and catalog are already committed; a notification failure
+    // must not report the saved edit as failed and invite a conflicting retry.
+    await descriptions.announceDescriptionEdits(catalogRecords)
+      .catch((err) => console.error(`🔁 catalog change notification failed: ${err.message}`));
+    return { ...outcome, project: await descriptions.resolveProjectCatalogDescriptions(outcome.project) };
+  }
   return outcome;
 }
 
