@@ -1,7 +1,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,25 +62,42 @@ function addedExportNamesFromDiff(diff) {
   return new Set([...added].filter(name => !removed.has(name)));
 }
 
-function addedExportNames() {
+function addedExportNames(root = ROOT, baseOverride = null) {
   // Pull-request CI supplies its exact merge-ref base. A workflow_dispatch
   // full run has no origin/main ref in actions/checkout's depth-2 clone; use
   // the previous commit there so this guard still examines the new exports.
-  const hasOriginMain = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/main'], { cwd: ROOT, stdio: 'ignore' }).status === 0;
-  const base = process.env.CI_BASE_SHA || execFileSync('git', hasOriginMain ? ['merge-base', 'HEAD', 'origin/main'] : ['rev-parse', 'HEAD^1'], { cwd: ROOT, encoding: 'utf8' }).trim();
-  const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: ROOT, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
-  return addedExportNamesFromDiff(diff);
+  const hasOriginMain = spawnSync('git', ['show-ref', '--verify', '--quiet', 'refs/remotes/origin/main'], { cwd: root, stdio: 'ignore' }).status === 0;
+  const base = baseOverride || (root === ROOT && process.env.CI_BASE_SHA
+    ? process.env.CI_BASE_SHA
+    : execFileSync('git', hasOriginMain ? ['merge-base', 'HEAD', 'origin/main'] : ['rev-parse', 'HEAD^1'], { cwd: root, encoding: 'utf8' }).trim());
+  const diff = execFileSync('git', ['diff', '--unified=0', base, '--', 'server/services', 'server/lib'], { cwd: root, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const candidates = addedExportNamesFromDiff(diff);
+  // `git diff` omits files that have not been staged. Pregate checks the whole
+  // working tree, so collect declarations from new service/lib modules too.
+  const untracked = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
+    .toString('utf8').split('\0').filter(file => /^server\/(?:services|lib)\/.*\.js$/.test(file) && !file.endsWith('.test.js'));
+  for (const file of untracked) {
+    const source = readFileSync(join(root, file), 'utf8');
+    for (const match of source.matchAll(EXPORT)) {
+      if (!excluded(file, match[1])) candidates.add(match[1]);
+    }
+  }
+  return candidates;
 }
 
 // Untracked (non-ignored) files count as callers too: addedExportNames diffs the
 // working tree, and pregate validates uncommitted work, so a new caller file
 // that is not yet `git add`ed must not make its import look orphaned.
 function trackedFiles() {
-  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, maxBuffer: GIT_MAX_BUFFER })
+  return trackedFilesFrom(ROOT);
+}
+
+function trackedFilesFrom(root) {
+  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
     .toString('utf8').split('\0').filter(Boolean)
     .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
-    .filter(file => existsSync(join(ROOT, file)))
-    .map(file => [file, readFileSync(join(ROOT, file), 'utf8')]);
+    .filter(file => existsSync(join(root, file)))
+    .map(file => [file, readFileSync(join(root, file), 'utf8')]);
 }
 
 describe('server dead exports', () => {
@@ -112,6 +130,42 @@ describe('server dead exports', () => {
     expect(deadExports(files, candidates)).toEqual([
       { file: 'server/services/example.js', name: 'orphan' },
     ]);
+  });
+
+  it('collects untracked declarations and callers before staging with staged and committed parity', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-dead-exports-'));
+    const git = (...args) => execFileSync('git', args, { cwd: fixture, encoding: 'utf8' }).trim();
+    const write = (path, content) => {
+      const fullPath = join(fixture, path);
+      mkdirSync(dirname(fullPath), { recursive: true });
+      writeFileSync(fullPath, content);
+    };
+    try {
+      git('init', '-q');
+      git('config', 'user.email', 'guard@example.invalid');
+      git('config', 'user.name', 'Guard Fixture');
+      write('.gitignore', 'server/services/ignored.js\n');
+      write('server/services/existing.js', 'export function legacy() {}\n');
+      git('add', '.');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      write('server/services/existing.js', 'export function legacy(options = {}) {}\n');
+      write('server/services/new.js', 'export function orphan() {}\nexport function called() {}\nexport function _fixtureHook() {}\n');
+      write('server/services/beeperClient.js', 'export function standaloneClient() {}\n');
+      write('server/services/ignored.js', 'export function ignoredByGit() {}\n');
+      const candidates = addedExportNames(fixture, base);
+      expect([...candidates].sort()).toEqual(['called', 'orphan']);
+      expect(deadExports(trackedFilesFrom(fixture), candidates)).toContainEqual({ file: 'server/services/new.js', name: 'orphan' });
+      write('server/routes/caller.js', "import { called } from '../services/new.js';\ncalled();\n");
+      expect(deadExports(trackedFilesFrom(fixture), addedExportNames(fixture, base))).not.toContainEqual({ file: 'server/services/new.js', name: 'called' });
+      git('add', 'server/services/new.js', 'server/routes/caller.js');
+      expect(deadExports(trackedFilesFrom(fixture), addedExportNames(fixture, base))).toContainEqual({ file: 'server/services/new.js', name: 'orphan' });
+      git('commit', '-qm', 'stage equivalent inputs');
+      expect(deadExports(trackedFilesFrom(fixture), addedExportNames(fixture, base))).toContainEqual({ file: 'server/services/new.js', name: 'orphan' });
+      expect(git('rev-parse', 'HEAD^')).toBe(base);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
   });
 
   it('keeps newly added server function exports reachable', () => {

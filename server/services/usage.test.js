@@ -1720,3 +1720,46 @@ describe('Grok long-context and Imagine pricing', () => {
     expect(report.totals.estimatedCost).toBeCloseTo(1.11);
   });
 });
+
+describe('durable Codex boundaries', () => {
+  const claims = [['/example/rollout.jsonl', { tokensIn: 20, tokensOut: 10 }]];
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    readJSONFile.mockImplementation(async () => makeUsage({}, { reconciledRuns: { legacy: '2026-07-01T10:00:00.000Z' } }));
+    await loadUsage();
+  });
+
+  it('commits exact claims with counts while preserving legacy and estimate-only markers', async () => {
+    const { getRecentCodexUsageClaims, getReconciledUsageRunIds } = await import('./usage.js');
+    await recordRunUsage({ providerId: 'codex-tui', tokensIn: 20, tokensOut: 10, source: 'measured' }, {
+      reconciledRunId: 'measured-example', siblings: true, codexHighWater: claims
+    });
+    await recordRunUsage({ providerId: 'example-cli', tokensOut: 3, source: 'estimate' }, {
+      reconciledRunId: 'estimated-example', codexHighWater: []
+    });
+    const saved = atomicWrite.mock.calls.at(-1)[1];
+    expect(saved.totalTokens.output).toBe(13);
+    expect(saved.reconciledRuns['measured-example']).toMatchObject({ codexHighWater: claims });
+    expect(saved.reconciledRuns.legacy).toBe('2026-07-01T10:00:00.000Z');
+    expect(typeof saved.reconciledRuns['estimated-example']).toBe('string');
+    expect(getReconciledUsageRunIds()).toEqual(expect.arrayContaining(['legacy', 'measured-example', 'estimated-example']));
+    expect(await getRecentCodexUsageClaims(0)).toEqual(claims);
+    expect(await getRecentCodexUsageClaims(Date.now() + 60_000)).toEqual([]);
+    const restored = await getRecentCodexUsageClaims(0);
+    restored[0][1].tokensOut = 1000;
+    expect(await getRecentCodexUsageClaims(0)).toEqual(claims);
+  });
+
+  it('cannot restore uncommitted claims after a failed save and process reload', async () => {
+    const { getRecentCodexUsageClaims } = await import('./usage.js');
+    const record = { providerId: 'codex-tui', tokensOut: 10, source: 'measured' };
+    const options = { reconciledRunId: 'retry-example', codexHighWater: claims };
+    atomicWrite.mockRejectedValueOnce(new Error('simulated disk failure'));
+    await expect(recordRunUsage(record, options)).rejects.toThrow('simulated disk failure');
+    await loadUsage();
+    expect(await getRecentCodexUsageClaims(0)).toEqual([]);
+    await recordRunUsage(record, options);
+    expect(getUsage().totalTokens.output).toBe(10);
+    expect(await getRecentCodexUsageClaims(0)).toEqual(claims);
+  });
+});

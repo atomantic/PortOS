@@ -972,6 +972,22 @@ describe('recovery output-hook dispatch (#3182)', () => {
     } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
   });
 
+  it('retains an unsafe required-CI blocker as an unsuccessful claim within its recovery budget', async () => {
+    isProgrammaticIoTaskType.mockReturnValue(false);
+    const task = { ...TASK, metadata: { ...TASK.metadata, claimFlow: true, claimTarget: '42', failureCount: MAX_TASK_RETRIES - 1 } };
+    const taskOutcome = { status: 'blocked', reason: 'Required CI logs need unavailable credentials; no safe rerun is authorized.' };
+    persistedAgent.taskId = task.id;
+    claimVerifier.verifyClaimDisposition.mockResolvedValue({ status: 'unverified', reason: 'claim-still-open' });
+    try {
+      await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0,
+        finalSummary: JSON.stringify({ summary: taskOutcome.reason, taskOutcome }) });
+      expect(completeAgent).toHaveBeenLastCalledWith(persistedAgent.id, expect.objectContaining({ success: false, taskOutcome }));
+      expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'blocked',
+        metadata: expect.objectContaining({ blockedCategory: 'task-recovery-exhausted' }) }), task.taskType);
+      expect(addTask).not.toHaveBeenCalled();
+    } finally { isProgrammaticIoTaskType.mockReturnValue(true); }
+  });
+
   it('preserves a failed delivery gate during claim no-op recovery', async () => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42' } };
