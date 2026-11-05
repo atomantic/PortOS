@@ -109,6 +109,17 @@ describe('ShotSheetPanel', () => {
     expect(screen.getByRole('button', { name: 'Open Shot 1' })).toBeInTheDocument();
   });
 
+  // Catches ruler marks drifting from the bars' shared time scale.
+  it('marks the song\u2019s time above the bars', () => {
+    const board = boardFor();
+    board.project.scenes[1].endSec = 80;
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const marks = [...screen.getByTestId('map-ruler').children];
+    expect(marks.map((mark) => mark.textContent)).toEqual(['0:00', '0:30', '1:00']);
+    expect(marks[2].style.left).toBe('75%');
+  });
+
   // Catches a borrowed camera changing color, which would read as a different camera.
   it('keeps one color per camera whoever holds it', () => {
     const board = boardFor();
