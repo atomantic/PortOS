@@ -646,6 +646,8 @@ function carryOver(prior, fresh) {
     referenceImageId: prior.referenceImageId ?? null,
     videoHistoryId: prior.videoHistoryId ?? null,
     ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    // The director's own plan: a planner never sees it, so it can't recreate it.
+    ...(prior.shotSheet ? { shotSheet: prior.shotSheet } : {}),
     ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
     ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
     ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
