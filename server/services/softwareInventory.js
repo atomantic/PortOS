@@ -166,6 +166,13 @@ async function readBlenderVersion(executable, { read = readFile } = {}) {
   return executable.match(/blender-(\d+\.\d+(?:\.\d+)?)/i)?.[1] || null;
 }
 
+/** Find installed macOS Blender apps without launching them or changing the selected tool. */
+export async function getInstalledBlenderCandidates({ platform = process.platform, roots } = {}) {
+  if (platform !== 'darwin') return [];
+  const { findInstalledBlenderApps } = await import('./blenderInstaller.js');
+  return findInstalledBlenderApps({ roots, readVersion: (path) => readBlenderVersion(path) });
+}
+
 const versionBehind = (version, target) => {
   const [x, y] = [version, target].map((v) => v.split('.').map(Number));
   for (let i = 0; i < 3; i += 1) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);

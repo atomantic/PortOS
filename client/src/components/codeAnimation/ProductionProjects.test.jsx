@@ -7,7 +7,7 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({
   preflightCodeAnimationProject: vi.fn(), getCodeAnimationBlenderStarter: vi.fn(),
-  getCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(), probeCodeAnimationExecution: vi.fn(),
+  findCodeAnimationBlender: vi.fn(), getCodeAnimationExecution: vi.fn(), updateCodeAnimationExecutionTools: vi.fn(), probeCodeAnimationExecution: vi.fn(),
   listCodeAnimationProjects: vi.fn(), createCodeAnimationProject: vi.fn(), getCodeAnimationProject: vi.fn(),
   updateCodeAnimationProject: vi.fn(), importCodeAnimationPackage: vi.fn(), acceptCodeAnimationSource: vi.fn(),
   getCodeAnimationProjectBrief: vi.fn(), getCodeAnimationRevisionPackage: vi.fn(), listCodeAnimationProjectHistory: vi.fn(),
@@ -51,6 +51,7 @@ beforeEach(() => {
   api.getCodeAnimationProject.mockResolvedValue(project);
   api.listCodeAnimationProjectHistory.mockResolvedValue(page());
   api.getCodeAnimationExecution.mockResolvedValue(execution());
+  api.findCodeAnimationBlender.mockResolvedValue({ candidates: [] });
   api.getCodeAnimationAcceptance.mockResolvedValue({ accepted: null, runs: [] });
 });
 

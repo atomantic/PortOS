@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { Aperture, Box, Check, Download, Film, Loader2, Wrench } from 'lucide-react';
+import { Aperture, Box, Check, Download, Film, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
 import MediaImage from '../MediaImage';
 import PhotorealLookSection from './PhotorealLookSection';
+import ProductionContainment from '../codeAnimation/ProductionContainment';
 import { getCatalogPhotoreal, openCatalogPhotorealBlend, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { withShot } from '../../lib/greybox';
 import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
@@ -12,6 +13,7 @@ import { formatDurationSec } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
+import { copyToClipboard } from '../../lib/clipboard';
 
 const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(Number(value) || min)));
 
@@ -83,10 +85,19 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
   const [opening, setOpening] = useState(false);
+  const [blenderExecution, setBlenderExecution] = useState(null);
+  const [blenderRefresh, setBlenderRefresh] = useState(0);
+  const [blenderRefreshing, setBlenderRefreshing] = useState(false);
+  const [blenderOpenRequest, setBlenderOpenRequest] = useState(0);
+  const [blenderNotice, setBlenderNotice] = useState('');
+  const [missingFfmpeg, setMissingFfmpeg] = useState(false);
   // Finish frames already acted on; the server sends one per transition.
   const finished = useRef(new Set());
   const job = status?.job || null;
   const running = job?.state === 'running';
+  const blenderReady = blenderExecution?.lanes?.blender?.ready === true;
+  const checkedEngine = blenderExecution?.tools?.blender?.engine;
+  const requestedEngine = engine === 'eevee' ? 'BLENDER_EEVEE_NEXT' : 'CYCLES';
   const engineInfo = ENGINES.find((e) => e.id === engine);
   const sampleValue = samples ?? engineInfo.defaultSamples;
 
@@ -171,23 +182,39 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
     onCommit: (next) => { setFlySeconds(next); writePrefs({ engine, samples, flySeconds: next }); },
   });
 
+  const handleBlenderError = (err, fallback) => {
+    if (err?.code === 'CODE_ANIMATION_BLENDER_NOT_READY') {
+      setBlenderNotice(`Blender setup changed before this action started. Check the setup, then try again.${err.message ? ` ${err.message}` : ''}`);
+      setBlenderExecution(null);
+      setBlenderRefreshing(true);
+      setBlenderRefresh((value) => value + 1);
+    } else toast.error(err?.message || fallback);
+  };
+
   const render = async ({ flythrough = false } = {}) => {
-    if (chosen.length < (flythrough ? 2 : 1) || running || starting) return;
+    if (chosen.length < (flythrough ? 2 : 1) || running || starting || !blenderReady) return;
+    setBlenderNotice('');
     setStarting(true);
     const body = { shotIds: chosen, engine, samples: samplesField.effective, ...(flythrough ? { flythroughSeconds: secondsField.effective } : {}) };
     const started = await startCatalogPhotorealRender(record.id, body, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Could not start the Blender render'); return null; });
+      .catch((err) => {
+        if (flythrough && err?.code === 'FFMPEG_MISSING') setMissingFfmpeg(true);
+        else handleBlenderError(err, 'Could not start the Blender render');
+        return null;
+      });
     setStarting(false);
+    if (started && flythrough) setMissingFfmpeg(false);
     if (started?.state === 'running') seenRunning.current.add(started.id);
     // Keep a finish frame for this job that beat the response here.
     if (started) setStatus((cur) => (cur?.job?.id === started.id && cur.job.state !== 'running' ? cur : { ...(cur || {}), job: started }));
   };
 
   const openInBlender = async () => {
-    if (opening) return;
+    if (opening || !blenderReady) return;
+    setBlenderNotice('');
     setOpening(true);
     const opened = await openCatalogPhotorealBlend(record.id, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Could not open Blender'); return null; });
+      .catch((err) => { handleBlenderError(err, 'Could not open Blender'); return null; });
     setOpening(false);
     if (opened) toast.success('Opened in Blender. The next render replaces this scene, so use File › Save As to keep your changes.');
   };
@@ -233,7 +260,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         {status?.blendUrl && (
           <div className="flex flex-wrap gap-2">
             {!readOnly && (
-              <button type="button" onClick={openInBlender} disabled={opening} className={actionButton}>
+              <button type="button" onClick={openInBlender} disabled={opening || !blenderReady} className={actionButton}>
                 {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />} Open in Blender
               </button>
             )}
@@ -244,14 +271,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="text-xs text-gray-400">
-          {status?.blenderVersion ? `Blender ${status.blenderVersion} checked.` : 'Blender not checked yet.'}
-        </p>
-        <Link to="/code-animation/production#blender-execution" className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-port-accent bg-port-accent/10 px-3 text-sm font-medium text-port-accent hover:bg-port-accent/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent">
-          <Wrench size={16} aria-hidden="true" /> {status?.blenderVersion ? 'Blender settings' : 'Set up and check Blender'}
-        </Link>
-      </div>
+      <ProductionContainment inline rendererKind="blender" onExecutionChange={next => { setBlenderExecution(next); if (next) setBlenderRefreshing(false); }} refreshKey={blenderRefresh}
+        openRequest={blenderOpenRequest} locked={starting || opening || blenderRefreshing} />
+      {blenderNotice && <p role="alert" className="rounded border border-port-warning p-3 text-sm text-port-warning">{blenderNotice}</p>}
 
       <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running}
         onBusyChange={onBusyChange} onSaved={onSaved} />
@@ -276,6 +298,10 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               </label>
             </div>
             <p className="text-[11px] text-gray-500">{engineInfo.note}</p>
+            {blenderReady && checkedEngine && checkedEngine !== requestedEngine && <div className="space-y-2 rounded border border-port-warning p-3 text-sm">
+              <p>Blender was checked with {checkedEngine === 'CYCLES' ? 'Cycles CPU' : 'EEVEE GPU'}; {engine === 'eevee' ? 'EEVEE GPU' : 'Cycles CPU'} has not been checked. To verify it, select that engine in Blender setup, save, and check it. This changes the Blender check for all PortOS uses.</p>
+              <button type="button" className={actionButton} onClick={() => setBlenderOpenRequest(value => value + 1)}>Open Blender setup</button>
+            </div>}
           </fieldset>
 
           <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-label="Cameras">
@@ -313,7 +339,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
 
           {!readOnly && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting}
+              <button type="button" onClick={() => render()} disabled={!chosen.length || running || starting || !blenderReady}
                 className="min-h-[40px] inline-flex items-center gap-1.5 rounded-lg bg-port-accent px-4 text-sm font-medium text-white disabled:opacity-40">
                 {running || starting ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Aperture size={16} aria-hidden="true" />}
                 {running ? 'Rendering…' : `Render ${chosen.length} camera${chosen.length === 1 ? '' : 's'}`}
@@ -340,13 +366,21 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
               <p className="text-xs text-gray-400">
                 One camera glides through the chosen cameras in the order listed, with the same engine and samples. The MP4 is saved to Media History, where you can pick it as a video reference.
               </p>
+              {missingFfmpeg && <div role="alert" className="space-y-2 rounded border border-port-warning p-3 text-sm">
+                <p>Fly-throughs need FFmpeg on the computer running PortOS. Install it, then try the fly-through again.</p>
+                {blenderExecution?.platform === 'darwin' && <div className="flex flex-wrap items-center gap-2">
+                  <code>brew install ffmpeg</code>
+                  <button type="button" className={actionButton} onClick={() => copyToClipboard('brew install ffmpeg', 'Install command copied')}>Copy install command</button>
+                </div>}
+                <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener noreferrer" className={actionButton}>FFmpeg install options</a>
+              </div>}
               <div className="flex flex-wrap items-center gap-3">
                 <label htmlFor="photoreal-fly-seconds" className="inline-flex items-center gap-1.5 text-xs text-gray-400">
                   Seconds
                   <input id="photoreal-fly-seconds" type="number" min={FLY_SECONDS.min} max={FLY_SECONDS.max} disabled={running} {...secondsField.inputProps}
                     className="w-20 min-h-[40px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white" />
                 </label>
-                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting} className={actionButton}>
+                <button type="button" onClick={() => render({ flythrough: true })} disabled={chosen.length < 2 || running || starting || !blenderReady} className={actionButton}>
                   <Film size={16} aria-hidden="true" /> Render fly-through ({secondsField.effective * FLY_FPS} frames)
                 </button>
                 {chosen.length < 2 && <span className="text-xs text-gray-500">Choose at least two cameras.</span>}
