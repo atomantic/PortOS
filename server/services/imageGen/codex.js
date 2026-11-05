@@ -60,6 +60,7 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { conformImageAspect } from './aspectConform.js';
 import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
 import { resolveInputImages } from './inputImages.js';
+import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { agentInstructionsAddition, carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
@@ -238,7 +239,13 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
     referenceCount: inputImages.referencePaths.length,
     initImageStrength,
   });
-  const buildWith = (text) => `$imagegen ${editPrefix}${text}${sizeHint}${qualityHint}${avoidHint}`;
+  // CLI attachments reach the Codex conversation, but image_gen does not
+  // automatically receive them just because its prompt describes them.
+  const inputCount = inputImages.paths.length;
+  const toolInputs = inputCount
+    ? `When calling image_gen, pass the ${inputCount} attached image${inputCount === 1 ? '' : 's'} as image inputs, in attachment order, using their local paths in referenced_image_paths. Describing the images in the prompt alone does not include them.\n`
+    : '';
+  const buildWith = (text) => `$imagegen ${toolInputs}${editPrefix}${text}${sizeHint}${qualityHint}${avoidHint}`;
   const fullPrompt = buildWith(prompt) + '\n' + noFabricationClause('image_gen');
   return {
     fullPrompt,
@@ -339,7 +346,9 @@ async function generateImagePrepared({
     id: jobId, prompt, negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
     filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
-    inputProvenance: 'provider-inputs',
+    // The CLI's attachments are visible to its driver; whether that driver
+    // forwards them to image_gen is not exposed as a structured receipt.
+    inputProvenance: CLI_IMAGE_INPUT_PROVENANCE[IMAGE_GEN_MODE.CODEX],
     initImageFilename: inputImages.initPath ? basename(inputImages.initPath) : null,
     referenceImageFilenames: inputImages.referencePaths.map(path => basename(path)),
     ...(visualConditioning ? { visualConditioning } : {}),

@@ -342,6 +342,8 @@ describe('codex provider — generateImage', () => {
     expect(args).toContain('--');
     expect(args[args.length - 1]).toMatch(/edit the FIRST attached image/i);
     expect(args[args.length - 1]).toMatch(/other 2 attached images as visual references/i);
+    expect(args[args.length - 1]).toMatch(/pass the 3 attached images as image inputs, in attachment order, using their local paths in referenced_image_paths/i);
+    expect(args[args.length - 1]).toMatch(/describing the images in the prompt alone does not include them/i);
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
     await flush();
@@ -355,10 +357,23 @@ describe('codex provider — generateImage', () => {
     expect(args.slice(args.indexOf('-i') + 1, args.indexOf('-i') + 2))
       .toEqual([join(FAKE_IMAGES_DIR, 'ref-a.png')]);
     expect(args[args.length - 1]).toMatch(/conditioned on the attached image/i);
+    expect(args[args.length - 1]).toMatch(/pass the 1 attached image as image inputs, in attachment order, using their local paths in referenced_image_paths/i);
     expect(args[args.length - 1]).not.toMatch(/^\$imagegen Edit /);
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
     await flush();
+  });
+
+  it('marks previewed reference inputs as CLI attachments rather than confirmed image-tool inputs', async () => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'ref.png'), 'fake');
+    const { previewPreparedImagePrompt } = await import('./promptPreview.js');
+    const preview = await previewPreparedImagePrompt({
+      params: { mode: 'codex', prompt: 'a fox', referenceImagePaths: ['ref.png'] },
+      settings: { imageGen: { codex: { enabled: true } } },
+    });
+    expect(preview.referenceInputProvenance).toBe('cli-attachments');
+    expect(preview.sentPrompt).toContain('referenced_image_paths');
   });
 
   it('rejects when prompt is empty and there is no init image', async () => {
@@ -424,6 +439,7 @@ describe('codex provider — generateImage', () => {
     expect(args).not.toContain('-i');
     const promptArg = args[args.length - 1];
     expect(promptArg).not.toMatch(/edit the attached reference image/i);
+    expect(promptArg).not.toContain('referenced_image_paths');
     spawnCalls[0].child.exitCode = 1;
     spawnCalls[0].child.emit('close', 1, null);
     await flush();
@@ -490,7 +506,7 @@ describe('codex provider — image harvest', () => {
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
     expect(JSON.parse(await readFile(sidecar, 'utf8'))).toMatchObject({
-      inputProvenance: 'provider-inputs',
+      inputProvenance: 'cli-attachments',
       initImageFilename: 'source.png', referenceImageFilenames: ['reference.png'],
     });
   });

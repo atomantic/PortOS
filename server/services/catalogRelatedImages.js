@@ -1,6 +1,7 @@
 import { query } from '../lib/db.js';
 import { listSheetPointers } from '../lib/sheetPointers.js';
 import { resolveGalleryImage, resolveImageRef } from '../lib/pathSafety.js';
+import { CLI_IMAGE_INPUT_PROVENANCE } from '../lib/imageInputProvenance.js';
 
 // Only structured, direct provenance is evidence of a relationship. Prompts can
 // contain a whole production bible, and universe/collection membership does not
@@ -42,7 +43,7 @@ export async function listRelatedImages(ingredient, media, { limit, offset }) {
         AND NOT (ref = ANY($1::text[]))
     ), linked AS MATERIALIZED (
       SELECT ref AS filename, created_at,
-        jsonb_build_object('filename', ref, 'width', data->'width',
+        jsonb_build_object('filename', ref, '_mode', data->>'mode', 'width', data->'width',
           'height', data->'height', 'createdAt', data->'createdAt',
           'provenanceStatus', CASE WHEN derived OR (supplied AND data->>'inputProvenance' = 'provider-inputs')
             THEN 'recorded' WHEN omitted THEN 'not-supplied'
@@ -60,7 +61,16 @@ export async function listRelatedImages(ingredient, media, { limit, offset }) {
   `, [filenames, limit, offset]);
   const { items, total } = result.rows[0];
   return {
-    items: items.map(item => ({ ...item, missing: !(resolveGalleryImage(item.filename) || resolveImageRef(item.filename)) })),
+    // Older CLI sidecars called their driver inputs provider inputs too. The
+    // driver can omit them from its image-tool call, so neither old nor new
+    // CLI metadata establishes provider use. Derived images are a
+    // separate, directly recorded relationship and keep their status.
+    items: items.map(({ _mode, ...item }) => ({
+      ...item,
+      provenanceStatus: Object.hasOwn(CLI_IMAGE_INPUT_PROVENANCE, _mode) && item.association === 'reference-input' && item.provenanceStatus !== 'not-supplied'
+        ? 'provider-use-unverified' : item.provenanceStatus,
+      missing: !(resolveGalleryImage(item.filename) || resolveImageRef(item.filename)),
+    })),
     total, limit, offset,
   };
 }
