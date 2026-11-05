@@ -80,6 +80,39 @@ describe('ActionableInsightsBanner (presentational)', () => {
     expect(api.updateCosTask).not.toHaveBeenCalled();
   });
 
+  it('gives the primary CTA and expanded inline actions coarse-pointer touch targets', () => {
+    const { container, rerender } = renderBanner({
+      insights: [{ type: 'approval', priority: 'high', icon: 'AlertCircle', title: '1 approval waiting', action: { label: 'Review', route: '/cos/tasks' } }],
+    });
+    expect(screen.getByRole('button', { name: 'Review' }).className)
+      .toContain('pointer-coarse:min-h-11 pointer-coarse:px-3');
+
+    rerender(
+      <MemoryRouter>
+        <ActionableInsightsBanner insights={[{
+          type: 'blocked', priority: 'high', icon: 'AlertTriangle', title: '1 blocked task', action: {},
+          tasks: [{ id: 't1', description: 'stuck task', taskType: 'user' }],
+        }]} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText('View Tasks'));
+    expect(screen.getByRole('button', { name: 'Unblock' }).className)
+      .toContain('pointer-coarse:min-h-11 pointer-coarse:px-3');
+
+    rerender(
+      <MemoryRouter>
+        <ActionableInsightsBanner insights={[leftoverInsight([
+          { appId: 'app-acme', appName: 'Acme', leftoverCount: 4, states: { NEEDS_PR: 4 }, branches: [], lastUserReconcileAt: null },
+          { appId: 'app-beta', appName: 'Beta', leftoverCount: 1, states: { WIP: 1 }, branches: [], lastUserReconcileAt: null },
+        ])]} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText('View 2 Apps'));
+    expect(within(screen.getByText('Acme').closest('div')).getByRole('button', { name: /Run Now/ }).className)
+      .toContain('pointer-coarse:min-h-11 pointer-coarse:px-3');
+    expect(container).toBeTruthy();
+  });
+
   it('navigates feedback reminders to the URL-backed review queue', () => {
     renderBanner({
       insights: [{
