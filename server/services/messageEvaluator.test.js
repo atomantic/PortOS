@@ -7,7 +7,15 @@ const gateResult = ({ decided = [], pending = [], skipped = [] } = {}) => ({
 });
 vi.mock('./settings.js', () => ({ getSettings: mocks.settings }));
 vi.mock('./providers.js', () => ({ getProviderById: mocks.provider }));
-vi.mock('./messageTriageRules.js', () => ({ getTriageRules: async () => [{ senderPattern: 'rule sender instruction', correctedAction: 'review' }] }));
+vi.mock('./messageTriageRules.js', () => ({ getTriageRules: async () => [{
+  senderPattern: 'rule sender instruction', correctedAction: 'review',
+  exampleSubject: 'historical subject sentinel', originalAction: 'archive', count: 2,
+  createdAt: '2026-01-01T00:00:00.000Z', lastSeen: '2026-02-01T00:00:00.000Z', futureField: 'other private data',
+}, {
+  senderPattern: 'rule sender instruction', correctedAction: 'delete',
+  exampleSubject: 'another historical subject', originalAction: 'review', count: 5,
+  createdAt: '2026-01-02T00:00:00.000Z', lastSeen: '2026-03-01T00:00:00.000Z',
+}] }));
 // The jev rung stubs to "feature off", which is the shipped default: these
 // assertions are the proof that nothing about the chat path moved.
 vi.mock('./untrustedContent.js', () => ({
@@ -24,6 +32,23 @@ beforeEach(() => {
   mocks.analyze.mockResolvedValue({ ok: true, value: [{ id: message.id, action: 'review', reason: 'Meeting', priority: 'medium' }] });
 });
 describe('message trust boundary', () => {
+  it('omits historical subjects while retaining rule signals and current message evidence', async () => {
+    await evaluateMessages([message]);
+    const gateContent = JSON.parse(mocks.jevGate.mock.calls[0][0].content);
+    const providerContent = JSON.parse(mocks.analyze.mock.calls[0][0].content);
+    for (const content of [gateContent, providerContent]) {
+      expect(content.triageCorrections).toEqual([{
+        senderPattern: 'rule sender instruction', correctedAction: 'review', originalAction: 'archive', count: 2,
+        createdAt: '2026-01-01T00:00:00.000Z', lastSeen: '2026-02-01T00:00:00.000Z',
+      }, {
+        senderPattern: 'rule sender instruction', correctedAction: 'delete', originalAction: 'review', count: 5,
+        createdAt: '2026-01-02T00:00:00.000Z', lastSeen: '2026-03-01T00:00:00.000Z',
+      }]);
+      expect(content.messages[0]).toMatchObject({ subject: message.subject, bodyText: message.bodyText });
+      expect(JSON.stringify(content)).not.toContain('historical subject sentinel');
+      expect(JSON.stringify(content)).not.toContain('another historical subject');
+    }
+  });
   it('screens complete text and requires exact unique response identities', async () => {
     const bodyText = `${'a'.repeat(500)} external instructions at the end`;
     const result = await evaluateMessages([{ ...message, bodyText }]);
