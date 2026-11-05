@@ -824,7 +824,7 @@ export async function finishExercise(id, { endingWords, appendedText = null } = 
   return finished;
 }
 
-export async function promoteExercise(id) {
+async function requirePromotableExercise(id) {
   const all = await store().listExercises();
   const existing = all.find((exercise) => exercise.id === id);
   if (!existing) throw notFound('Exercise');
@@ -833,21 +833,30 @@ export async function promoteExercise(id) {
   if (!existing.workId) throw badRequest('Exercise is not linked to a work');
   const text = typeof existing.appendedText === 'string' ? existing.appendedText.trim() : '';
   if (!text) throw badRequest('Exercise has no text to promote');
+  return { exercise: existing, text };
+}
 
-  const { manifest: updatedManifest, body: nextBody } = await queueWorkWrite(existing.workId, async () => {
+export async function promoteExercise(id) {
+  const { exercise: initial } = await requirePromotableExercise(id);
+  // Re-read the exercise after earlier work writes finish, and retain the turn
+  // until its promotion marker is saved. A duplicate request must see that
+  // marker before it can append the same sprint to the draft again.
+  return queueWorkWrite(initial.workId, async () => {
+    const { exercise: existing, text } = await requirePromotableExercise(id);
+    if (existing.workId !== initial.workId) throw badRequest('Exercise work changed; retry promotion');
     const { body } = await getWorkWithBody(existing.workId);
     const nextBody = body.trimEnd() === '' ? text : `${body.trimEnd()}\n\n${text}\n`;
-    return saveDraftBodyNow(existing.workId, nextBody);
+    const { manifest: updatedManifest } = await saveDraftBodyNow(existing.workId, nextBody);
+    const promoted = {
+      ...existing,
+      promotedAt: nowIso(),
+      promotedDraftVersionId: updatedManifest.activeDraftVersionId,
+      updatedAt: nowIso(),
+    };
+    await store().writeExercise(promoted);
+    emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
+    return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
   });
-  const promoted = {
-    ...existing,
-    promotedAt: nowIso(),
-    promotedDraftVersionId: updatedManifest.activeDraftVersionId,
-    updatedAt: nowIso(),
-  };
-  await store().writeExercise(promoted);
-  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
-  return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
 }
 
 export async function discardExercise(id) {

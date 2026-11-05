@@ -62,6 +62,7 @@ const finished = (id) => vi.waitFor(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __setPhotorealDepsForTests({ stageTextures: async () => ({ files: [], job: {}, missing: [] }) });
   seq += 1;
   frames.length = 0;
   sceneFrames.length = 0;
@@ -266,6 +267,25 @@ describe('openPhotorealBlend', () => {
     expect(sceneFrames).toEqual([{ ingredientId: record.id }, { ingredientId: record.id }]);
     expect(upload).not.toHaveBeenCalled();
     expect(db.detachMedia).not.toHaveBeenCalled();
+  });
+
+  it('opens a newly built scene with its saved photo textures staged for Blender', async () => {
+    const record = place();
+    record.payload.photoreal = { textures: { 'wood-floor': 'oak_planks' } };
+    db.getIngredient.mockResolvedValue(record);
+    const texture = { id: 'oak_planks', sizeM: 2.4, maps: { color: 'textures/oak_planks/color.jpg' } };
+    const file = { path: texture.maps.color, content: Buffer.from('jpg') };
+    const stageTextures = vi.fn(async () => ({ files: [file], job: { 'wood-floor': texture }, missing: [] }));
+    const worker = fakeWorker({ 'report.json': '{"sceneOnly":true}', 'blockout.blend': 'BLENDER' });
+    const launch = vi.fn(async () => {});
+    __setPhotorealDepsForTests({ resolveTool: async () => ({ executable: '/opt/blender', version: '5.2.3', worker }), stageTextures, launch });
+
+    await expect(openPhotorealBlend(record.id)).resolves.toMatchObject({ opened: true });
+    expect(stageTextures).toHaveBeenCalledWith({ 'wood-floor': 'oak_planks' });
+    expect(JSON.parse(fakeWorker.lastFiles.find((entry) => entry.path === 'greybox-blender.json').content))
+      .toMatchObject({ sceneOnly: true, textures: { 'wood-floor': texture } });
+    expect(fakeWorker.lastFiles).toContainEqual(file);
+    expect(launch).toHaveBeenCalledWith('/opt/blender', ['--disable-autoexec', join(PATHS.data, 'photoreal-blends', `${record.id}.blend`)]);
   });
 
   it('shares a scene build and refuses an overlapping render for the same place', async () => {

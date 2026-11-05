@@ -320,7 +320,7 @@ describe('PhotorealPanel', () => {
     expect(openCatalogPhotorealBlend).toHaveBeenCalledTimes(2);
   });
 
-  it('waits for a Look save before building the scene', async () => {
+  it('waits for a Look save before building the scene or rendering cameras', async () => {
     getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
     const look = { materials: [], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false } };
     draftCatalogPhotorealLook.mockResolvedValue({ look, providerId: 'p1', sentPrompt: 'composed', promptAdditions: [] });
@@ -332,10 +332,14 @@ describe('PhotorealPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Apply look' }));
     await waitFor(() => expect(finishSave).toBeTypeOf('function'));
     expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
     expect(screen.getByText(/Wait for the current changes to finish/)).toBeInTheDocument();
     expect(openCatalogPhotorealBlend).not.toHaveBeenCalled();
     await act(async () => finishSave({ ...record, payload: { ...record.payload, photoreal: look } }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeEnabled();
   });
 
   it('prevents applying a Look while building and explains which saved scene opens', async () => {

@@ -133,7 +133,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   return (
     <>
     <button type="button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog" aria-expanded={detailsOpen} aria-label={`Universe: ${ownerSummary}`} title={`Universe: ${ownerSummary}`}
-      className="inline-flex min-h-[40px] w-10 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 py-2 text-sm text-gray-300 hover:border-port-accent/40 hover:text-white sm:w-auto sm:max-w-56 sm:px-3">
+      className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 py-2 text-sm text-gray-300 hover:border-port-accent/40 hover:text-white sm:w-auto sm:max-w-56 sm:px-3">
       <Globe size={14} className="shrink-0" aria-hidden="true" />
       {!owner && <span className="text-port-warning sm:hidden" aria-hidden="true">!</span>}
       <span className={`hidden truncate sm:block ${owner ? '' : 'text-port-warning'}`}>Universe: {ownerSummary}</span>

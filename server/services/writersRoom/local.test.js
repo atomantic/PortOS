@@ -432,6 +432,22 @@ describe('exercise sessions', () => {
     await expect(promoteExercise('wr-ex-missing')).rejects.toThrow(/not found/i);
   });
 
+  it('appends a sprint once when concurrent promotion requests overlap', async () => {
+    const work = await createWork({ title: 'Concurrent promotion' });
+    await saveDraftBody(work.id, 'Existing draft', { referencedIngredientIds: ['cat-char-1'] });
+    const exercise = await createExercise({ workId: work.id });
+    await finishExercise(exercise.id, { appendedText: 'Sprint ending' });
+
+    const results = await Promise.allSettled([promoteExercise(exercise.id), promoteExercise(exercise.id)]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')?.reason.message).toMatch(/already promoted/i);
+    const { manifest, body } = await getWorkWithBody(work.id);
+    expect(body).toBe('Existing draft\n\nSprint ending\n');
+    expect(manifest.drafts[0]).toMatchObject({ wordCount: 4, referencedIngredientIds: ['cat-char-1'] });
+    expect((await listExercises({ workId: work.id }))[0].promotedDraftVersionId).toBe(manifest.activeDraftVersionId);
+  });
+
   it('discardExercise marks the session as discarded', async () => {
     const ex = await createExercise({});
     const discarded = await discardExercise(ex.id);
