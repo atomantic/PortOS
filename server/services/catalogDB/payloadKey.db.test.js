@@ -47,6 +47,16 @@ describe.skipIf(!ready)('setIngredientPayloadKey', () => {
     expect(dropped.payload).not.toHaveProperty('greybox');
   });
 
+  it('keeps a photoreal look on a place with no canon link through a profile save, and drops a malformed one (#14946)', async () => {
+    const created = await createIngredient({ id: `${P}-look`, type: 'place', name: 'Unlinked', payload: { description: 'd' } });
+    const look = { version: 1, materials: [], lights: [{ id: 'key', type: 'point', position: [0, 3, 0], watts: 100 }] };
+    const set = await setIngredientPayloadKey(created.id, 'photoreal', look);
+    const saved = await updateIngredient(created.id, { payload: { ...set.payload, notes: 'edited' } });
+    expect(saved.payload.photoreal.lights).toEqual([expect.objectContaining({ id: 'key', watts: 100 })]);
+    const dropped = await updateIngredient(created.id, { payload: { description: 'd', photoreal: { materials: 'bad' } } });
+    expect(dropped.payload).not.toHaveProperty('photoreal');
+  });
+
   it('keeps the lock behavior: type guard and idempotent write', async () => {
     const place = await createIngredient({ id: `${P}-lock`, type: 'place', name: 'Lockable' });
     await setIngredientLock(place.id, true);

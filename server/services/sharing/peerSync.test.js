@@ -4965,7 +4965,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(19);
+        expect(body.portosMeta.schemaVersions.universes).toBe(20);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 
