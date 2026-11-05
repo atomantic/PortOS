@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { artGuideProposeSchema, storyApplySchema, storyBeatsApplySchema, storyProposeSchema, storySummarySchema } from '../lib/musicVideoStoryValidation.js';
+import { artGuideProposeSchema, shotSheetProposeSchema, storyApplySchema, storyBeatsApplySchema, storyProposeSchema, storySummarySchema } from '../lib/musicVideoStoryValidation.js';
 import { applyStory, applyStoryBeats, proposeArtGuides, proposeStory, saveStorySummary, storyContext } from '../services/musicVideo/story.js';
+import { proposeShotSheet } from '../services/musicVideo/shotSheetProposals.js';
 
 const router = Router();
 let authGateModule;
@@ -19,6 +20,10 @@ router.post('/:id/story/propose', asyncHandler(async (req, res) => {
 router.post('/:id/story/art-guides', asyncHandler(async (req, res) => {
   const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
   res.json(await proposeArtGuides(req.params.id, validateRequest(artGuideProposeSchema, req.body), { hasHostControl: requestHasHostControl(req) }));
+}));
+router.post('/:id/shot-sheet/propose', asyncHandler(async (req, res) => {
+  const { requestHasHostControl } = await (authGateModule ??= import('../services/authGate.js'));
+  res.json(await proposeShotSheet(req.params.id, validateRequest(shotSheetProposeSchema, req.body), { hasHostControl: requestHasHostControl(req) }));
 }));
 router.post('/:id/story/apply', asyncHandler(async (req, res) => {
   res.json(await applyStory(req.params.id, validateRequest(storyApplySchema, req.body)));

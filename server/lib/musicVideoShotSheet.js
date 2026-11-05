@@ -12,6 +12,8 @@ import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
 export const SHOT_CAMERA_KINDS = ['in-world', 'observer'];
 export const SHOT_CAMERA_MAX = 12;
 export const SHOT_SHEET_CHARACTERS_MAX = 24;
+// Shots per AI request, so one reply stays short enough to read and retry.
+export const SHOT_SHEET_PROPOSE_BATCH = 15;
 // A holder value for an in-world camera left running with nobody behind it.
 export const SHOT_CAMERA_SET_DOWN = 'Set down';
 
@@ -101,6 +103,16 @@ export function shotSheetProblems(row, previous = null) {
   const action = sheet.action?.trim();
   if (action && action === previous?.sheet?.action?.trim()) problems.push('Same action as the shot before');
   return problems;
+}
+
+/**
+ * An AI backfill of a shot's sheet, filling only the columns that are empty:
+ * whatever the director has set stays theirs, and Checked is never touched.
+ * Returns the merged sheet and which columns it filled.
+ */
+export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
+  const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
+  return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */
