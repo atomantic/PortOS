@@ -38,4 +38,16 @@ describe('ShotStepper', () => {
     fireEvent.keyDown(screen.getByLabelText('Scrub'), { key: 'ArrowRight' });
     expect(onSeek).not.toHaveBeenCalled();
   });
+
+  it('jumps to the start of the song, or of a rendered excerpt, and rests there', () => {
+    const onSeek = vi.fn();
+    const { rerender } = render(<ShotStepper scenes={scenes} time={6} onSeek={onSeek} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to start' }));
+    expect(onSeek).toHaveBeenLastCalledWith(0);
+    rerender(<ShotStepper scenes={scenes} time={6} onSeek={onSeek} range={{ startSec: 4, endSec: 8 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to start' }));
+    expect(onSeek).toHaveBeenLastCalledWith(4);
+    rerender(<ShotStepper scenes={scenes} time={4} onSeek={onSeek} range={{ startSec: 4, endSec: 8 }} />);
+    expect(screen.getByRole('button', { name: 'Jump to start' }).disabled).toBe(true);
+  });
 });
