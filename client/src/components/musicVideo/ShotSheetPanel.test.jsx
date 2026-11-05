@@ -62,7 +62,7 @@ describe('ShotSheetPanel', () => {
   // Catches the human review not saving with the plan, or the filters ignoring it.
   it('saves a Checked tick with the sheet and narrows to unchecked and incomplete shots', () => {
     const board = boardFor();
-    board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', light: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
+    board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
     render(<ShotSheetPanel board={board} />);
     openPanel();
     expect(screen.getByLabelText('Shot 1 checked')).toBeChecked();
@@ -92,8 +92,8 @@ describe('ShotSheetPanel', () => {
   // Catches a bar missing from the map, a bar not following the sheet, or a stretch not narrowing the list.
   it('maps location, camera and time of day and filters to a tapped stretch', () => {
     const board = boardFor();
-    Object.assign(board.project.scenes[0].shotSheet, { location: 'Street', light: 'Dusk' });
-    board.project.scenes[1].shotSheet = { location: 'Dead mall', light: 'Dusk', cameraId: 'obs' };
+    Object.assign(board.project.scenes[0].shotSheet, { location: 'Street', timeOfDay: 'Dusk' });
+    board.project.scenes[1].shotSheet = { location: 'Dead mall', timeOfDay: 'Dusk', cameraId: 'obs' };
     render(<ShotSheetPanel board={board} />);
     openPanel();
     const mall = within(screen.getByRole('group', { name: 'Location' })).getByRole('button', { name: /^Location Dead mall, 0:02/ });
@@ -140,6 +140,18 @@ describe('ShotSheetPanel', () => {
     const images = [...container.querySelectorAll('img')].map((image) => image.getAttribute('src'));
     expect(images.some((src) => src.includes('selected.png'))).toBe(true);
     expect(images.some((src) => src.includes('storyboard.png'))).toBe(false);
+  });
+
+  // Catches a bulk set reaching shots outside the list, overwriting the director's values, or not saving.
+  it('sets a column across the listed shots, leaving set values unless told otherwise', () => {
+    const board = boardFor();
+    board.project.scenes[0].shotSheet.location = 'Street';
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.change(screen.getByLabelText('Value to set'), { target: { value: 'Mall' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Set on 1 listed shot' }));
+    expect(board.saveScene).toHaveBeenCalledTimes(1);
+    expect(board.saveScene).toHaveBeenCalledWith('b', { shotSheet: { location: 'Mall' } });
   });
 
   // Catches a camera edit not persisting to the project.

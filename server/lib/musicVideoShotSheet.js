@@ -19,7 +19,7 @@ export const SHOT_CAMERA_SET_DOWN = 'Set down';
 
 // The sheet's free-text columns, in reading order, with their character limits.
 export const SHOT_SHEET_TEXT_FIELDS = [
-  ['view', 1000], ['location', 200], ['light', 300], ['action', 2000], ['emotion', 300], ['notes', 2000],
+  ['view', 1000], ['location', 200], ['timeOfDay', 100], ['light', 300], ['action', 2000], ['emotion', 300], ['notes', 2000],
 ];
 
 const hasSheetValue = (value) => (Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim() !== '' : typeof value === 'boolean' ? value : value != null);
@@ -69,7 +69,8 @@ export function shotSheetRows(project) {
 // Starting choices for the sheet's pick lists. The director can type anything; what they type is offered on other shots.
 export const SHOT_SHEET_SUGGESTIONS = {
   view: ['Wide', 'Medium', 'Close-up', 'Point of view', 'Over the shoulder', 'Low angle', 'High angle', 'Side-on tracking', 'Following from behind', 'Arm\u2019s-length selfie', 'Locked off', 'Handheld'],
-  light: ['Golden hour', 'Sunset', 'Dusk', 'Blue hour', 'Night', 'Deep night', 'Dawn', 'Daylight', 'Flash', 'Streetlight', 'Headlights'],
+  timeOfDay: ['Pre-sunset', 'Golden hour', 'Sunset', 'Dusk', 'Blue hour', 'Night', 'Deep night', 'Dawn', 'Daylight'],
+  light: ['Available light', 'Flash', 'Streetlight', 'Headlights', 'Porch light', 'Skylight', 'Lamp', 'Dark'],
   emotion: ['Joyful', 'Playful', 'Laughing', 'Free', 'Tender', 'Contemplative', 'Melancholy', 'Longing', 'Focused', 'Serious', 'Scared', 'Urgent', 'Defiant', 'Awed', 'At peace'],
 };
 
@@ -86,7 +87,7 @@ export function shotSheetOptions(project, field) {
 }
 
 // The columns every shot needs before its plan is complete, with the label shown when one is empty.
-const SHOT_SHEET_REQUIRED = [['cameraId', 'camera'], ['location', 'location'], ['light', 'time and light'], ['emotion', 'emotion'], ['action', 'action']];
+const SHOT_SHEET_REQUIRED = [['cameraId', 'camera'], ['location', 'location'], ['timeOfDay', 'time of day'], ['emotion', 'emotion'], ['action', 'action']];
 
 /**
  * What's wrong with a shot's plan, by rule alone: empty columns, an in-world
@@ -109,7 +110,7 @@ export function shotSheetProblems(row, previous = null) {
 export const SHOT_SHEET_MAP_BARS = [
   ['location', 'Location', (row) => row.sheet.location?.trim() || ''],
   ['camera', 'Camera', (row) => (row.camera ? [row.camera.name, row.sheet.holder].filter(Boolean).join(' · ') : '')],
-  ['light', 'Time of day', (row) => row.sheet.light?.trim() || ''],
+  ['timeOfDay', 'Time of day', (row) => row.sheet.timeOfDay?.trim() || ''],
 ];
 
 /**
@@ -138,6 +139,20 @@ export function shotSheetStretches(rows, readValue) {
 export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
   const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
   return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
+}
+
+/**
+ * A column set across a run of shots: the sheet each one saves, leaving out shots
+ * it wouldn't change. With `onlyEmpty`, a value the director already set stays.
+ * Clearing a column (a blank value) removes it. Checked is left as it was.
+ */
+export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}) {
+  const next = typeof value === 'string' ? value.trim() : value;
+  return rows.flatMap(({ scene, sheet }) => {
+    if (onlyEmpty && hasSheetValue(sheet[field])) return [];
+    if ((sheet[field] ?? '') === (next ?? '')) return [];
+    return [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, [field]: next }) }];
+  });
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */

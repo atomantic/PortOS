@@ -7,7 +7,7 @@ import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -82,6 +82,32 @@ function ShotSheetMap({ rows, active, onPick }) {
         );
       })}
     </div>
+  );
+}
+
+const BULK_FIELDS = [['location', 'Location'], ['timeOfDay', 'Time of day'], ['light', 'Light'], ['emotion', 'Emotion'], ['view', 'View']];
+
+/** Set one column across the shots listed, so a stretch of the video can be planned in one go. */
+function BulkFill({ rows, disabled, onApply }) {
+  const [field, setField] = useState('location');
+  const [value, setValue] = useState('');
+  const [onlyEmpty, setOnlyEmpty] = useState(true);
+  const edits = shotSheetBulkEdits(rows, field, value, { onlyEmpty });
+  const apply = () => { onApply(edits); setValue(''); };
+  return (
+    <fieldset disabled={disabled} className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+      <legend className="sr-only">Set a column across the shots listed</legend>
+      <select aria-label="Column to set" value={field} onChange={(event) => setField(event.target.value)} className={`${inputCls} max-w-[9rem]`}>
+        {BULK_FIELDS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+      </select>
+      <input aria-label="Value to set" list={`mv-sheet-${field}`} value={value} onChange={(event) => setValue(event.target.value)} className={`${inputCls} max-w-xs`} placeholder="Value" />
+      <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <input type="checkbox" checked={onlyEmpty} onChange={(event) => setOnlyEmpty(event.target.checked)} /> Only empty
+      </label>
+      <button type="button" disabled={!value.trim() || !edits.length} onClick={apply} className="min-h-[44px] rounded border border-port-border px-2 py-1 disabled:opacity-50 sm:min-h-0">
+        Set on {edits.length} listed shot{edits.length === 1 ? '' : 's'}
+      </button>
+    </fieldset>
   );
 }
 
@@ -166,7 +192,8 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
       <td className="w-44 p-1.5"><SheetPick label={`${label} view`} field="view" value={sheet.view} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
       <td className="w-36 space-y-1 p-1.5">
         <SheetPick label={`${label} location`} field="location" value={sheet.location} maxLength={200} disabled={disabled} onCommit={(value) => setField('location', value)} />
-        <SheetPick label={`${label} time and light`} field="light" value={sheet.light} maxLength={300} disabled={disabled} onCommit={(value) => setField('light', value)} />
+        <SheetPick label={`${label} time of day`} field="timeOfDay" value={sheet.timeOfDay} maxLength={100} disabled={disabled} onCommit={(value) => setField('timeOfDay', value)} />
+        <SheetPick label={`${label} light`} field="light" value={sheet.light} maxLength={300} disabled={disabled} onCommit={(value) => setField('light', value)} />
       </td>
       <td className="w-28 p-1.5">
         <div role="group" aria-label={`${label} characters`} className="flex flex-wrap gap-1">
@@ -213,7 +240,7 @@ export default function ShotSheetPanel({ board }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiApplying, setAiApplying] = useState(false);
   const rows = useMemo(() => shotSheetRows(project).map((row, at, all) => ({ ...row, problems: shotSheetProblems(row, all[at - 1]) })), [project]);
-  const options = useMemo(() => ['view', 'location', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
+  const options = useMemo(() => ['view', 'location', 'timeOfDay', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
   const cast = useMemo(() => shotSheetCast(project), [project]);
   const outdated = rows.filter((row) => row.frameOutdated).length;
   const checked = rows.filter((row) => row.sheet.checked).length;
@@ -226,8 +253,8 @@ export default function ShotSheetPanel({ board }) {
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;
     if (!needle) return true;
-    const { characters = [], view, location, light, action, emotion, notes } = row.sheet;
-    return [row.scene.label, row.lyric, row.scene.framePrompt, row.scene.prompt, ...characters, view, location, light, action, emotion, notes]
+    const { characters = [], view, location, timeOfDay, light, action, emotion, notes } = row.sheet;
+    return [row.scene.label, row.lyric, row.scene.framePrompt, row.scene.prompt, ...characters, view, location, timeOfDay, light, action, emotion, notes]
       .some((text) => typeof text === 'string' && text.toLowerCase().includes(needle));
   });
   const editSheet = (sceneId, sheet) => {
@@ -264,6 +291,7 @@ export default function ShotSheetPanel({ board }) {
         </label>
         <span className="text-port-text-muted">{listed.length} shown</span>
       </div>
+      <BulkFill rows={listed} disabled={locked} onApply={(edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); })} />
       <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Checked when it’s right. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
@@ -285,7 +313,7 @@ export default function ShotSheetPanel({ board }) {
         <table className="w-full min-w-[78rem] border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-port-card text-xs text-port-text-muted">
             <tr>
-              {['Shot', 'Frame', 'Lyric', 'Camera', 'View', 'Where, time and light', 'Who', 'Action', 'Emotion', 'Notes', ...(showPrompts ? ['Prompts'] : [])]
+              {['Shot', 'Frame', 'Lyric', 'Camera', 'View', 'Where, time, light', 'Who', 'Action', 'Emotion', 'Notes', ...(showPrompts ? ['Prompts'] : [])]
                 .map((heading) => <th key={heading} scope="col" className="border-b border-port-border p-1.5 font-medium">{heading}</th>)}
             </tr>
           </thead>
