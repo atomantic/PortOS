@@ -277,6 +277,61 @@ describe('GitLab selected claim delivery', () => {
   const mr = { iid: 7, project_id: 5, target_project_id: 5, state: 'merged', target_branch: 'main',
     merge_commit_sha: 'b'.repeat(40), merged_at: '2026-10-01T10:00:00Z' };
 
+  it.each(['blocked', 'needs-input'])('verifies a GitLab %s park with trusted current label and clean contained checkout', async label => {
+    resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
+    resolveForgeForRepo.mockResolvedValue({ cli: 'glab' });
+    let current = { ...issue, state: 'opened', labels: [label] };
+    let events = [{ id: 1, action: 'add', label: { name: label }, user: { id: 9, username: 'operator' }, created_at: '2026-10-01T11:00:00Z' }];
+    let member = { id: 9, access_level: 30 };
+    execGlab.mockImplementation(async args => {
+      const endpoint = args.at(-1);
+      return JSON.stringify(endpoint.includes('resource_label_events') ? events
+        : endpoint.includes('/members/all/') ? member : endpoint.includes('/repository/branches/') ? { commit: { id: 'c'.repeat(40) } }
+          : endpoint.endsWith('/42') ? current : project);
+    });
+    expect(await verify()).toMatchObject({ status: 'verified', issues: [{ disposition: 'operator-blocked', blockedBy: 'operator' }] });
+    const event = events[0];
+    events = [];
+    expect(await verify()).toMatchObject({ status: 'unverified' });
+    events = [{ ...event, action: 'remove' }];
+    expect(await verify()).toMatchObject({ status: 'unverified' });
+    events = [event];
+    member = { id: 9, access_level: 20 };
+    expect(await verify()).toMatchObject({ status: 'unverified' });
+    member = null;
+    expect(await verify()).toMatchObject({ status: 'unverified' });
+    member = { id: 9, access_level: 30 };
+    current = { ...current, labels: [] };
+    expect(await verify()).toMatchObject({ status: 'unverified' });
+    current = { ...current, labels: [label] };
+    execGit.mockResolvedValueOnce({ exitCode: 0, stdout: ' M file' });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+    execGit.mockResolvedValueOnce({ exitCode: 0, stdout: '' }).mockResolvedValueOnce({ exitCode: 1, stdout: '' });
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+  });
+
+  it('proves remote GitLab ancestry using compare and merge base', async () => {
+    resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
+    resolveForgeForRepo.mockResolvedValue({ cli: 'glab' });
+    const head = 'd'.repeat(40);
+    let base = head;
+    execGit.mockImplementation(async args => args[0] === 'status' ? { exitCode: 0, stdout: '' }
+      : args[0] === 'rev-parse' ? { exitCode: 0, stdout: head } : { exitCode: 128, stdout: '' });
+    execGlab.mockImplementation(async args => {
+      const endpoint = args.at(-1);
+      return JSON.stringify(endpoint.includes('resource_label_events') ? [{ id: 1, action: 'add', label: { name: 'blocked' }, user: { id: 9 }, created_at: '2026-10-01T11:00:00Z' }]
+        : endpoint.includes('/members/all/') ? { id: 9, access_level: 30 }
+          : endpoint.includes('/repository/branches/') ? { commit: { id: 'c'.repeat(40) } }
+            : endpoint.includes('/repository/compare?') ? { commit: { id: 'c'.repeat(40) } }
+              : endpoint.includes('/repository/merge_base?') ? { id: base }
+                : endpoint.endsWith('/42') ? { ...issue, state: 'opened', labels: ['blocked'] } : project);
+    });
+    expect(await verify()).toMatchObject({ status: 'verified' });
+    expect(execGlab).toHaveBeenCalledWith(expect.arrayContaining([`projects/example%2Fproject/repository/compare?from=${head}&to=${'c'.repeat(40)}`]), '/example/project', undefined, expect.anything());
+    base = 'e'.repeat(40);
+    expect(await verify()).toMatchObject({ status: 'unverified', reason: 'checkout-has-undelivered-work' });
+  });
+
   it('requires a same-project merged MR that explicitly closes this issue, or a verified operator closure', async () => {
     resolveAppForgeTarget.mockResolvedValue({ tracker: 'gitlab', target: { ...target, forge: 'gitlab' } });
     resolveForgeForRepo.mockResolvedValue({ cli: 'glab', env: { GITLAB_TOKEN: 'invented-token' } });

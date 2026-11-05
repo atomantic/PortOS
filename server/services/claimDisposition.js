@@ -120,8 +120,35 @@ async function gitlabDisposition({ number, target, run }) {
   const repository = await read(project);
   const issue = await read(`${project}/issues/${number}`);
   if (!sameRepo(repository?.path_with_namespace, target.fullName) || !Number.isSafeInteger(repository?.id)
-    || issue?.iid !== number || issue.project_id !== repository.id || issue.state !== 'closed'
-    || !Number.isFinite(Date.parse(issue.closed_at))) return unverified('issue-not-closed-or-mismatched');
+    || issue?.iid !== number || issue.project_id !== repository.id) return unverified('issue-not-closed-or-mismatched');
+  const parkLabels = new Set((Array.isArray(issue.labels) ? issue.labels : []).filter(label => PARK_LABELS.has(label)));
+  if (issue.state === 'opened' && parkLabels.size) {
+    const events = [];
+    for (let page = 1; ; page++) {
+      const rows = await read(`${project}/issues/${number}/resource_label_events?per_page=100&page=${page}`);
+      if (!Array.isArray(rows)) return unverified('block-authority-unverified');
+      events.push(...rows);
+      if (rows.length < 100) break;
+    }
+    const relevant = events.filter(event => parkLabels.has(event?.label?.name));
+    if (relevant.some(event => !Number.isSafeInteger(event.id) || !Number.isFinite(Date.parse(event.created_at)))) {
+      return unverified('block-authority-unverified');
+    }
+    relevant.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id);
+    const blocked = relevant.at(-1);
+    const actorId = blocked?.user?.id;
+    if (blocked?.action !== 'add' || !Number.isSafeInteger(actorId) || actorId < 1) return unverified('block-authority-unverified');
+    const member = await read(`${project}/members/all/${actorId}`);
+    if (member?.id !== actorId || !Number.isInteger(member.access_level) || member.access_level < 30) {
+      return unverified('block-authority-unverified');
+    }
+    if (!repository.default_branch) return unverified('default-branch-unavailable');
+    const branch = await read(`${project}/repository/branches/${encodeURIComponent(repository.default_branch)}`);
+    return { status: 'verified', disposition: 'operator-blocked', issue: number,
+      blockedAt: blocked.created_at, blockedBy: blocked.user.username,
+      defaultBranch: repository.default_branch, defaultCommit: branch?.commit?.id };
+  }
+  if (issue.state !== 'closed' || !Number.isFinite(Date.parse(issue.closed_at))) return unverified('issue-not-closed-or-mismatched');
   const requests = await read(`${project}/issues/${number}/related_merge_requests?per_page=100`);
   if (!Array.isArray(requests)) return unverified('merged-delivery-unavailable');
   for (const mr of requests) {
@@ -219,10 +246,18 @@ async function inspectClaimDisposition(task, agent) {
     // these exact commits instead of fetching or retrying a correct stand-down.
     const head = (await execGit(['rev-parse', '--verify', 'HEAD'], workspace)).stdout.trim();
     if (!/^[a-f0-9]{40,64}$/i.test(head)) return unverified('checkout-has-undelivered-work');
-    const comparison = safeJSONParse(await run(['api', '--hostname', target.apiHost, '--method', 'GET',
-      `repos/${target.fullName}/compare/${head}...${issue.defaultCommit}`]), null, { logError: false });
-    if (!['ahead', 'identical'].includes(comparison?.status) || comparison.base_commit?.sha !== head
-      || comparison.merge_base_commit?.sha !== head) return unverified('checkout-has-undelivered-work');
+    if (tracker === 'gitlab') {
+      const project = `projects/${encodeURIComponent(target.fullName)}`;
+      const read = async endpoint => safeJSONParse(await run(['api', '--hostname', target.webHost, '--method', 'GET', endpoint]), null, { logError: false });
+      const comparison = await read(`${project}/repository/compare?from=${head}&to=${issue.defaultCommit}`);
+      const base = await read(`${project}/repository/merge_base?refs[]=${head}&refs[]=${issue.defaultCommit}`);
+      if (comparison?.commit?.id !== issue.defaultCommit || base?.id !== head) return unverified('checkout-has-undelivered-work');
+    } else {
+      const comparison = safeJSONParse(await run(['api', '--hostname', target.apiHost, '--method', 'GET',
+        `repos/${target.fullName}/compare/${head}...${issue.defaultCommit}`]), null, { logError: false });
+      if (!['ahead', 'identical'].includes(comparison?.status) || comparison.base_commit?.sha !== head
+        || comparison.merge_base_commit?.sha !== head) return unverified('checkout-has-undelivered-work');
+    }
   }
   return { status: 'verified', tracker, repository: `${target.webHost}/${target.fullName}`, taskId: task.id, issues };
 }
