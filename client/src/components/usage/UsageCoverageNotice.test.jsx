@@ -19,6 +19,7 @@ describe('chart coverage recovery', () => {
     expect(screen.getByText(/Observed 2026-10-03 to 2026-10-29 UTC/)).toBeVisible();
     expect(screen.getByText('Models: example-model.')).toBeVisible();
     expect(screen.getByText(/older peer version/)).toBeVisible();
+    expect(screen.getByText(/monthly token totals can count some activity twice/)).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open instance sync' })).toHaveAttribute('href', '/instances');
     expect(screen.getByText(/Local reconciliation does not repair another machine/)).toBeVisible();
   });

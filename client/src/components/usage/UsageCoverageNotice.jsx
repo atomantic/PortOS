@@ -39,7 +39,7 @@ export default function UsageCoverageNotice({ coverage, pricingIncomplete = fals
         <summary className="min-h-11 py-3 cursor-pointer text-port-text">What’s missing and how to fix it</summary>
         <div className="space-y-3 text-gray-400">
           {coverage?.range && <p>Accounting window: {coverage.range.from || 'beginning of recorded history'} to {coverage.range.to || 'latest recorded history'} (UTC). Observed dates below identify affected buckets, not a continuous period of missing activity.</p>}
-          {unpriced && <p>These ledger tokens are recorded, but their API cost is excluded until their billing classification is known. They may overlap Claude transcript totals; unknown overlap is not treated as zero or automatically added as extra spend.</p>}
+          {unpriced && <p>These ledger tokens are recorded, but their API cost is excluded until their billing classification is known. They may overlap Claude transcript totals, so monthly token totals can count some activity twice. Receiving classifications can raise the cost estimate while reducing duplicate tokens; missing cost cannot be inferred safely.</p>}
           {gaps.length > 0 ? <ul className="space-y-3 max-h-72 overflow-y-auto" aria-label="Unclassified usage by instance and provider">
             {gaps.map((gap) => <li key={`${gap.instanceId}:${gap.providerId}`} className="border-l-2 border-port-warning/40 pl-3 space-y-1 break-words">
               <p className="font-medium text-port-text">{gap.instanceName}{gap.self ? ' (this machine)' : ''} · {gap.providerName || gap.providerId}</p>
