@@ -68,7 +68,7 @@ describe.skipIf(!['darwin', 'linux'].includes(process.platform))('Blender execut
     const failed = await request(app).post('/execution/probe');
     expect(failed.status).toBe(200);
     expect(failed.body.probe).toMatchObject({ passed: true, tools: { blender: { passed: false, detail: expect.stringContaining('Blender render check failed') } } });
-    expect(failed.body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in trusted-local mode.' });
+    expect(failed.body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in trusted-local mode. Blender exited with code 1.' });
     expect(state.renderCalls).toBe(1);
     expect(JSON.stringify(failed.body)).not.toContain('private worker output');
   });

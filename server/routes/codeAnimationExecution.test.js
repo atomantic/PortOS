@@ -131,7 +131,7 @@ describe('Code Animation execution capability', () => {
     });
     expect(body.probe.passed).toBe(true);
     expect(body.probe.tools.blender).toMatchObject({ passed: false, version: null });
-    expect(body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in contained mode.' });
+    expect(body.lanes.blender).toEqual({ ready: false, reason: expect.stringMatching(/^Blender did not render the supported test scene in contained mode\. Blender (exited with code \d+|crashed with SIG\w+)\.$/) });
     // Every owned workspace was removed, including the terminated ones.
     expect(await readdir(join(PATHS.data, 'code-animation-workspaces'))).toEqual([]);
   }, 60_000);

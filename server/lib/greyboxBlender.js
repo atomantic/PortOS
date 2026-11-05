@@ -30,13 +30,14 @@ export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).pa
  * With `flythroughSeconds`, one camera glides through `shotIds` in order and
  * the script writes numbered frames instead of one still per camera.
  */
-export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null } = {}) {
+export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu } = {}) {
   return {
     look,
     flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
     samples: samples ?? PHOTOREAL_DEFAULT_SAMPLES[engine],
     longEdge: PHOTOREAL_LONG_EDGE[engine],
+    useGpu,
     shotIds,
     greybox: { parts: scene.parts, zones: scene.zones, landmarks: scene.landmarks, anchors: scene.anchors, shots: scene.shots },
   };
@@ -409,7 +410,7 @@ portos_set_engine(scene, job['engine'])
 device, backend = 'CPU', 'CPU'
 if job['engine'] == 'CYCLES':
     prefs = bpy.context.preferences.addons['cycles'].preferences
-    for kind in ('METAL', 'OPTIX', 'CUDA', 'HIP', 'ONEAPI'):
+    for kind in ('METAL', 'OPTIX', 'CUDA', 'HIP', 'ONEAPI') if job['useGpu'] else ():
         try:
             prefs.compute_device_type = kind
         except TypeError:

@@ -206,6 +206,19 @@ describe('Production project rendered interactions', () => {
     expect(api.probeCodeAnimationExecution).not.toHaveBeenCalled();
   });
 
+  it('says contained mode has no GPU, and warns when EEVEE is selected', async () => {
+    const user = userEvent.setup();
+    const notice = 'Contained mode has no GPU: EEVEE needs Trusted local mode.';
+    api.getCodeAnimationExecution.mockResolvedValue(execution({ containedGpuNotice: notice }));
+    renderPage('/code-animation/production');
+    await screen.findByLabelText('Execution mode');
+    expect(screen.getByText(notice)).not.toHaveClass('text-port-warning');
+    await user.selectOptions(screen.getByLabelText('Render engine'), 'BLENDER_EEVEE_NEXT');
+    expect(screen.getByText(notice)).toHaveClass('text-port-warning');
+    await user.selectOptions(screen.getByLabelText('Execution mode'), 'trusted-local');
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  });
+
   it('makes clear that passed supervision checks did not test an unconfigured Blender', async () => {
     const user = userEvent.setup();
     api.getCodeAnimationExecution.mockResolvedValue(execution({

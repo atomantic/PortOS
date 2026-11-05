@@ -103,6 +103,17 @@ describe('PhotorealPanel', () => {
     expect(screen.queryByText(/EEVEE GPU has not been checked/)).not.toBeInTheDocument();
   });
 
+  it('says contained mode has no GPU and blocks an EEVEE render', async () => {
+    const notice = 'Contained mode has no GPU: EEVEE needs Trusted local mode.';
+    getCodeAnimationExecution.mockResolvedValue({ ...execution(true), executionMode: 'contained', containedGpuNotice: notice });
+    show();
+    expect((await screen.findAllByText(notice)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/EEVEE GPU has not been checked/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Cycles final' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled());
+  });
+
   it('asks for a check when Blender is already saved but not ready', async () => {
     getCodeAnimationExecution.mockResolvedValue({ ...execution(false), tools: { blender: { executable: blenderPath, engine: 'CYCLES', problem: null } } });
     show();
