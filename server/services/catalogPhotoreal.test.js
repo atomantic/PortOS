@@ -9,6 +9,12 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 const db = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn(), detachMedia: vi.fn() }));
 const upload = vi.hoisted(() => vi.fn());
 const maintenanceRun = vi.hoisted(() => vi.fn());
+const copyScene = vi.hoisted(() => vi.fn());
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  copyScene.mockImplementation(actual.copyFile);
+  return { ...actual, copyFile: copyScene };
+});
 vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { run: maintenanceRun } }));
 vi.mock('./catalogDB.js', () => db);
 vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
@@ -309,6 +315,41 @@ describe('openPhotorealBlend', () => {
     await opening;
     expect(await readFile(path, 'utf8')).toBe('EXISTING');
     expect(launch).toHaveBeenCalledWith('/opt/blender', ['--disable-autoexec', path]);
+  });
+
+  it('keeps a scene private while copying and waits for the build before opening', async () => {
+    const record = place();
+    db.getIngredient.mockResolvedValue(record);
+    let releaseCopy;
+    let copying;
+    const copyStarted = new Promise((resolve) => { copying = resolve; });
+    const copyGate = new Promise((resolve) => { releaseCopy = resolve; });
+    copyScene.mockImplementationOnce(async (_source, target) => {
+      await writeFile(target, 'PARTIAL');
+      copying();
+      await copyGate;
+      await writeFile(target, 'GENERATED');
+    });
+    const worker = fakeWorker({ 'report.json': '{"sceneOnly":true}', 'blockout.blend': 'GENERATED' });
+    const launch = vi.fn(async () => {});
+    const resolveTool = vi.fn(async () => ({ executable: '/opt/blender', version: '5.2.3', worker }));
+    __setPhotorealDepsForTests({ resolveTool, launch, lastCheckedVersion: async () => '5.2.3' });
+    const first = openPhotorealBlend(record.id);
+    let second;
+    try {
+      await copyStarted;
+      expect((await getPhotorealStatus(record.id)).blendUrl).toBeNull();
+      const path = join(PATHS.data, 'photoreal-blends', `${record.id}.blend`);
+      await writeFile(path, 'EXISTING');
+      second = openPhotorealBlend(record.id);
+      await vi.waitFor(() => expect(resolveTool).toHaveBeenCalledTimes(2));
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      releaseCopy();
+    }
+    await Promise.all([first, second]);
+    expect(await readFile(join(PATHS.data, 'photoreal-blends', `${record.id}.blend`), 'utf8')).toBe('EXISTING');
+    expect(launch).toHaveBeenCalledTimes(2);
   });
 
   it('reports a failed build without launching Blender and allows a retry', async () => {

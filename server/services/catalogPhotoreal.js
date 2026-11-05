@@ -11,8 +11,7 @@
  * One render per place at a time; progress goes out as `catalog:photoreal` frames.
  */
 
-import { constants } from 'node:fs';
-import { access, readFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises';
+import { access, readFile, mkdir, mkdtemp, copyFile, link, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PATHS } from '../lib/fileUtils.js';
@@ -71,7 +70,9 @@ export async function openPhotorealBlend(ingredientId) {
   if (!SAFE_ID.test(ingredientId)) throw refuse('This place id cannot name a scene file.', 'PHOTOREAL_BAD_ID');
   let path = await photorealBlendPath(ingredientId);
   const tool = await deps.resolveTool();
-  if (!path) path = await ensurePhotorealScene(ingredientId, tool);
+  const active = sceneBuilds.get(ingredientId);
+  if (active) path = await active;
+  else if (!path) path = await ensurePhotorealScene(ingredientId, tool);
   // The file is PortOS's own build; scripts stay off as in every render.
   await deps.launch(tool.executable, ['--disable-autoexec', path]).catch((err) => {
     throw refuse(`Blender did not start: ${err.message}`, 'PHOTOREAL_OPEN_FAILED', 500);
@@ -119,9 +120,18 @@ async function buildPhotorealScene(ingredientId, tool) {
       }
       const report = JSON.parse(await readFile(join(directory, 'report.json'), 'utf8'));
       if (report.sceneOnly !== true) throw new Error('Blender did not report a scene-only build');
-      await mkdir(join(PATHS.data, BLEND_DIR), { recursive: true });
-      await copyFile(join(directory, 'blockout.blend'), destination, constants.COPYFILE_EXCL)
-        .catch((error) => { if (error.code !== 'EEXIST') throw error; });
+      const blendDir = join(PATHS.data, BLEND_DIR);
+      await mkdir(blendDir, { recursive: true });
+      // Publish a complete file atomically without replacing a scene saved in
+      // the meantime. The temporary copy must be on the destination filesystem.
+      const staging = await mkdtemp(join(blendDir, '.scene-build-'));
+      try {
+        const stagedScene = join(staging, 'blockout.blend');
+        await copyFile(join(directory, 'blockout.blend'), stagedScene);
+        await link(stagedScene, destination).catch((error) => { if (error.code !== 'EEXIST') throw error; });
+      } finally {
+        await rm(staging, { recursive: true, force: true });
+      }
       saved = true;
     },
   }), { continuation: true }).catch((error) => {

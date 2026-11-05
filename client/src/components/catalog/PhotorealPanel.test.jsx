@@ -300,6 +300,65 @@ describe('PhotorealPanel', () => {
     expect(copyToClipboard).toHaveBeenCalledWith(files.blend, 'Path copied');
   });
 
+  it('keeps a failed scene build visible with setup and retry actions', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    openCatalogPhotorealBlend.mockRejectedValueOnce(Object.assign(new Error('Blender exited with code 1.'), { code: 'PHOTOREAL_BUILD_FAILED' }))
+      .mockResolvedValueOnce({ opened: true, blendUrl: '/scene.blend' });
+    show();
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Blender exited with code 1.');
+    expect(screen.getByText(/Review the saved Greybox and try again/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review Greybox' })).toHaveAttribute('href', '/environments/plc-example/greybox');
+    fireEvent.click(screen.getByRole('button', { name: 'Check Blender setup' }));
+    expect(await screen.findByLabelText('Blender executable')).toHaveValue(blenderPath);
+    fireEvent.click(screen.getByRole('button', { name: 'Try building scene again' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(screen.queryByRole('button', { name: 'Try building scene again' })).not.toBeInTheDocument();
+    expect(openCatalogPhotorealBlend).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a Look save before building the scene', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    const look = { materials: [], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false } };
+    draftCatalogPhotorealLook.mockResolvedValue({ look, providerId: 'p1', sentPrompt: 'composed', promptAdditions: [] });
+    let finishSave;
+    saveCatalogPhotorealLook.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    show();
+    fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply look' }));
+    await waitFor(() => expect(finishSave).toBeTypeOf('function'));
+    expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
+    expect(screen.getByText(/Wait for the current changes to finish/)).toBeInTheDocument();
+    expect(openCatalogPhotorealBlend).not.toHaveBeenCalled();
+    await act(async () => finishSave({ ...record, payload: { ...record.payload, photoreal: look } }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+  });
+
+  it('prevents applying a Look while building and explains which saved scene opens', async () => {
+    getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
+    const look = { materials: [], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false } };
+    draftCatalogPhotorealLook.mockResolvedValue({ look, providerId: 'p1', sentPrompt: 'composed', promptAdditions: [] });
+    let finishOpen;
+    openCatalogPhotorealBlend.mockImplementation(() => new Promise((resolve) => { finishOpen = resolve; }));
+    show();
+    fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    const apply = await screen.findByRole('button', { name: 'Apply look' });
+    const open = screen.getByRole('button', { name: 'Open in Blender' });
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByText(/Later changes appear after the next camera render/)).toBeInTheDocument();
+    fireEvent.click(open);
+    await waitFor(() => expect(finishOpen).toBeTypeOf('function'));
+    expect(apply).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Use as photo plate' })).toBeDisabled();
+    expect(saveCatalogPhotorealLook).not.toHaveBeenCalled();
+    await act(async () => finishOpen({ opened: true, blendUrl: '/scene.blend' }));
+    await waitFor(() => expect(apply).toBeEnabled());
+  });
+
   it('can open the saved greybox before any cameras have been added', async () => {
     getCatalogPhotoreal.mockResolvedValue({ job: null, blendUrl: null, blenderVersion: '5.2.3' });
     show({ record: { ...record, payload: { greybox: { ...greybox, shots: [] } } } });

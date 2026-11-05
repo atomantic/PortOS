@@ -8,7 +8,7 @@ import PhotorealLookSection from './PhotorealLookSection';
 import ProductionContainment from '../codeAnimation/ProductionContainment';
 import { getCatalogPhotoreal, openCatalogPhotorealBlend, saveCatalogGreybox, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { withShot } from '../../lib/greybox';
-import { PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
+import { detailTabPath, libraryById, PHOTOREAL_ROLE_PREFIX } from '../../lib/creativeLibraries';
 import { formatDurationSec } from '../../utils/formatters';
 import { useTimeTick } from '../../hooks/useTimeTick';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
@@ -84,12 +84,14 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   const [flySeconds, setFlySeconds] = useState(() => readPrefs()?.flySeconds ?? FLY_SECONDS.default);
   const [starting, setStarting] = useState(false);
   const [platingShot, setPlatingShot] = useState('');
+  const [lookBusy, setLookBusy] = useState(false);
   const [opening, setOpening] = useState(false);
   const [blenderExecution, setBlenderExecution] = useState(null);
   const [blenderRefresh, setBlenderRefresh] = useState(0);
   const [blenderRefreshing, setBlenderRefreshing] = useState(false);
   const [blenderOpenRequest, setBlenderOpenRequest] = useState(0);
   const [blenderNotice, setBlenderNotice] = useState('');
+  const [sceneBuildError, setSceneBuildError] = useState('');
   const [missingFfmpeg, setMissingFfmpeg] = useState(false);
   // Finish frames already acted on; the server sends one per transition.
   const finished = useRef(new Set());
@@ -216,11 +218,16 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const openInBlender = async () => {
-    if (!status || opening || starting || !blenderReady || (running && !status.blendUrl)) return;
+    if (!status || opening || starting || disabled || lookBusy || platingShot || !blenderReady || (running && !status.blendUrl)) return;
     setBlenderNotice('');
+    setSceneBuildError('');
     setOpening(true);
     const opened = await openCatalogPhotorealBlend(record.id, { silent: true })
-      .catch((err) => { handleBlenderError(err, 'Could not open Blender'); return null; });
+      .catch((err) => {
+        if (err?.code === 'PHOTOREAL_BUILD_FAILED') setSceneBuildError(err.message || 'Could not build the Blender scene.');
+        else handleBlenderError(err, 'Could not open Blender');
+        return null;
+      });
     setOpening(false);
     if (opened) {
       setStatus((cur) => ({ ...(cur || {}), blendUrl: opened.blendUrl || cur?.blendUrl }));
@@ -229,7 +236,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
   };
 
   const setPlate = async (shot, mediaKey) => {
-    if (!scene || platingShot || disabled) return;
+    if (!scene || platingShot || disabled || opening || lookBusy) return;
     setPlatingShot(shot.id);
     onBusyChange?.(true);
     const { plate: _previous, ...rest } = shot;
@@ -268,7 +275,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
         </div>
         <div className="flex flex-wrap gap-2">
           {!readOnly && (
-            <button type="button" onClick={openInBlender} disabled={!status || opening || starting || !blenderReady || (running && !status.blendUrl)} className={actionButton}>
+            <button type="button" onClick={openInBlender} disabled={!status || opening || starting || disabled || lookBusy || !!platingShot || !blenderReady || (running && !status.blendUrl)} className={actionButton}>
               {opening ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Box size={16} aria-hidden="true" />}
               {opening ? (status?.blendUrl ? 'Opening Blender…' : 'Building scene…') : 'Open in Blender'}
             </button>
@@ -282,7 +289,9 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       </div>
       {status && !status.blendUrl && <p className="text-xs text-gray-400">{running
         ? 'The current render is building the Blender scene. Open it when the render finishes.'
-        : 'Open in Blender will first build the scene from the saved greybox without rendering cameras, using Cycles CPU.'}</p>}
+        : 'Open in Blender will first build the scene from the saved greybox and Look without rendering cameras, using Cycles CPU.'}</p>}
+      {status && <p className="text-xs text-gray-400">The scene reflects the Greybox and Look saved when it was built. Later changes appear after the next camera render.</p>}
+      {(disabled || lookBusy || platingShot) && <p role="status" className="text-xs text-port-warning">Wait for the current changes to finish before opening the scene.</p>}
       {running && status?.blendUrl && !readOnly && <p role="status" className="text-xs text-port-warning">The current render will replace this scene when it finishes. In Blender, use File › Save As before editing to keep your changes.</p>}
       {status?.files && (
         <dl className="space-y-1 text-xs" aria-label="Files">
@@ -299,9 +308,18 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
       <ProductionContainment inline rendererKind="blender" onExecutionChange={next => { setBlenderExecution(next); if (next) setBlenderRefreshing(false); }} refreshKey={blenderRefresh}
         openRequest={blenderOpenRequest} locked={starting || opening || blenderRefreshing} />
       {blenderNotice && <p role="alert" className="rounded border border-port-warning p-3 text-sm text-port-warning">{blenderNotice}</p>}
+      {sceneBuildError && <div role="alert" className="space-y-2 rounded border border-port-warning p-3 text-sm">
+        <p>{sceneBuildError}</p>
+        <p>Review the saved Greybox and try again. If the build still fails, open Blender setup and run Check Blender.</p>
+        <div className="flex flex-wrap gap-2">
+          <Link to={detailTabPath(libraryById('environments'), record.id, 'greybox')} className={actionButton}>Review Greybox</Link>
+          <button type="button" className={actionButton} onClick={() => setBlenderOpenRequest(value => value + 1)}>Check Blender setup</button>
+          <button type="button" className={actionButton} onClick={openInBlender} disabled={opening || starting || disabled || lookBusy || !!platingShot || !blenderReady || (running && !status?.blendUrl)}>Try building scene again</button>
+        </div>
+      </div>}
 
-      <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running}
-        onBusyChange={onBusyChange} onSaved={onSaved} />
+      <PhotorealLookSection record={record} scene={scene} readOnly={readOnly} disabled={disabled || running || opening || !!platingShot}
+        onBusyChange={(busy) => { setLookBusy(busy); onBusyChange?.(busy); }} onSaved={onSaved} />
 
       {shots.length === 0 ? (
         <p className="text-sm text-gray-400">Save a camera on the Greybox tab to render it here.</p>
@@ -348,7 +366,7 @@ export default function PhotorealPanel({ record, media, readOnly = false, disabl
                         className="w-full rounded bg-black object-contain" />
                       <p className="text-[11px] text-gray-500 line-clamp-2">{latest.caption}</p>
                       {!readOnly && (
-                        <button type="button" className={actionButton} disabled={!!platingShot || disabled}
+                        <button type="button" className={actionButton} disabled={!!platingShot || disabled || opening || lookBusy}
                           aria-pressed={!!isPlate} onClick={() => setPlate(shot, isPlate ? null : latest.mediaKey)}>
                           {platingShot === shot.id ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
                           {isPlate ? 'Photo plate (tap to clear)' : 'Use as photo plate'}
