@@ -370,9 +370,16 @@ if job['engine'] == 'CYCLES':
     scene.cycles.adaptive_threshold = 0.02
     scene.cycles.use_denoising = True
 else:
-    import gpu
     scene.eevee.taa_render_samples = job['samples']
-    device, backend = 'GPU', gpu.platform.backend_type_get()
+    # The GPU module starts with the first render; it is read after rendering (#14937).
+    device, backend = 'GPU', None
+
+def eevee_backend():
+    try:
+        import gpu
+        return gpu.platform.backend_type_get()
+    except Exception:
+        return None
 scene.view_settings.view_transform = 'AgX'
 scene.render.image_settings.file_format = 'PNG'
 scene.render.image_settings.color_mode = 'RGB'
@@ -447,6 +454,8 @@ else:
         rendered.append(dict(shotId=shot_id, seconds=round(time.time() - started, 2),
             width=scene.render.resolution_x, height=scene.render.resolution_y))
     report.update(shots=rendered)
+if backend is None:
+    report['backend'] = eevee_backend()
 with open(os.path.join(out, 'report.json'), 'w') as handle:
     json.dump(report, handle)
 `;
