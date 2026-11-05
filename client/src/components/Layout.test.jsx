@@ -52,7 +52,11 @@ vi.mock('./ThemeContext', () => ({
 
 // --- Heavy child widgets: render nothing so they don't open sockets / fetch. ---
 vi.mock('./Logo', () => ({ default: () => null }));
-vi.mock('./NotificationDropdown', () => ({ default: () => null }));
+vi.mock('./NotificationDropdown', () => ({
+  default: ({ position = 'above' }) => (
+    <div data-testid="notification-dropdown" data-position={position} />
+  ),
+}));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('./voice/VoiceWidget', () => ({ default: () => null }));
 vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
@@ -519,6 +523,19 @@ describe('Layout — persistent mobile touch targets', () => {
 
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
     dispatchSpy.mockRestore();
+  });
+
+  it('renders NotificationDropdown in both mobile topbar and desktop sidebar footer with correct placement', async () => {
+    await renderLayout();
+
+    const mobileDropdown = within(screen.getByRole('banner')).getByTestId('notification-dropdown');
+    expect(mobileDropdown).toBeInTheDocument();
+    expect(mobileDropdown).toHaveAttribute('data-position', 'below');
+
+    const sidebar = document.getElementById('app-sidebar');
+    const desktopDropdown = within(sidebar).getByTestId('notification-dropdown');
+    expect(desktopDropdown).toBeInTheDocument();
+    expect(desktopDropdown).toHaveAttribute('data-position', 'above');
   });
 
   it('expands section children when the mobile sidebar opens from a collapsed desktop preference', async () => {
