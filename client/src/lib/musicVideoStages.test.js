@@ -58,6 +58,8 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(waiting).current).toBe('board');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', board: 'active', 'cast-sets': 'todo' });
     expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
+    expect(deriveNextAction({ ...waiting, castAndSets: { status: 'review', feedbackRenderPlan: { phase: 'ready', keys: ['character'] } } }))
+      .toMatchObject({ id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin' });
 
     const notStarted = { ...waiting, castAndSets: null };
     expect(deriveNextAction(notStarted)).toMatchObject({ id: 'kickoff' });

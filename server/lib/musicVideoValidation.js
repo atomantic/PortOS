@@ -1512,6 +1512,20 @@ export const musicVideoCastAndSetsFeedbackSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+export const musicVideoCastAndSetsFeedbackPlanSchema = z.object({
+  revision: z.number().int().positive(),
+}).strict();
+
+export const musicVideoCastAndSetsFeedbackRenderSchema = musicVideoCastAndSetsFeedbackPlanSchema.extend({
+  count: z.number().int().nonnegative(),
+}).strict();
+
+export const musicVideoCastAndSetsImageNoteRemovalSchema = z.object({
+  key: z.string().min(1).max(80),
+  index: z.number().int().nonnegative(),
+  text: z.string().min(1).max(2000),
+}).strict();
+
 // Direct edits to a direction. A present text field replaces the current value
 // (empty clears it); an absent one keeps it. List items are patched by id (or
 // a test by its 1-based index); `remove: true` drops one.
