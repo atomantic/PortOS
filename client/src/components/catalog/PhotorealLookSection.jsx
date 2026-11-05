@@ -90,12 +90,20 @@ export default function PhotorealLookSection({ record, scene, readOnly = false, 
     if (res) setDraft(res);
   });
   const apply = () => run('apply', async () => {
-    if (await persist(draft.look, 'refine')) {
+    // Texture picks made after the draft was generated win; the model never sets them.
+    if (await persist({ ...draft.look, textures: saved?.textures ?? {} }, 'refine')) {
       setDraft(null);
       setInstruction('');
       toast.success('Look saved; render to see it');
     }
   });
+  // A texture download and its save hold the whole card, so Apply or Remove
+  // can't land in between and be overwritten by the picker's save.
+  const textureBusy = (on) => {
+    inFlight.current = on;
+    setBusy(on ? 'texture' : '');
+    onBusyChange?.(on);
+  };
   const clear = () => run('clear', async () => {
     if (await persist(null)) setConfirmClear(false);
   });
@@ -110,8 +118,8 @@ export default function PhotorealLookSection({ record, scene, readOnly = false, 
       </div>
       {saved ? <LookSummary look={saved} scene={scene} /> : <p className="text-xs text-gray-400">No look yet: renders use flat zone colors and a daylight sun.</p>}
       {saved && (
-        <PhotorealTexturesSection record={record} look={saved} readOnly={readOnly} disabled={blocked}
-          onBusyChange={onBusyChange} onSaved={onSaved} />
+        <PhotorealTexturesSection record={record} look={saved} readOnly={readOnly} disabled={disabled || (!!busy && busy !== 'texture')}
+          onBusyChange={textureBusy} onSaved={onSaved} />
       )}
 
       {draft && (

@@ -204,6 +204,9 @@ def photo_texture(nodes, links, coord, bsdf, tex, base, painted):
         if not path:
             return None
         img = bpy.data.images.load(os.path.join(root, path), check_existing=True)
+        # Packed into the kept .blend: the worker's input folder is gone once the render ends.
+        if img.packed_file is None:
+            img.pack()
         if non_color:
             img.colorspace_settings.name = 'Non-Color'
         node = nodes.new('ShaderNodeTexImage')

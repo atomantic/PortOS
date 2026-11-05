@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PhotorealPanel from './PhotorealPanel';
-import { draftCatalogPhotorealLook, getCatalogPhotoreal, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
+import { draftCatalogPhotorealLook, getCatalogPhotoreal, getCatalogPhotorealTextures, installCatalogPhotorealTexture, searchCatalogPhotorealTextures, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -385,6 +385,33 @@ describe('PhotorealPanel', () => {
     expect(saveCatalogPhotorealLook).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Apply look' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', look, { source: 'refine', silent: true });
+    expect(saveCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', { ...look, textures: {} }, { source: 'refine', silent: true });
+  });
+
+  // Catches Apply restoring stale texture picks, or racing a texture download's save.
+  it('keeps the current texture picks on Apply and holds Apply while a texture downloads', async () => {
+    const saved = { materials: [{ id: 'maple', part: 'floor', preset: 'wood-floor', color: '#c89a5a', wear: 0, emission: 0 }], lights: [], atmosphere: { haze: 0, exposure: 0, sun: false }, textures: { 'wood-floor': 'oak_planks' } };
+    const drafted = { ...saved, atmosphere: { haze: 0.5, exposure: 0, sun: false }, textures: {} };
+    getCatalogPhotorealTextures.mockResolvedValue({ installed: [] });
+    searchCatalogPhotorealTextures.mockResolvedValue({ results: [{ id: 'pine_floor', name: 'Pine Floor', thumbnail: 'https://example.com/p.png', installed: false }] });
+    let finishInstall;
+    installCatalogPhotorealTexture.mockReturnValue(new Promise((resolve) => { finishInstall = resolve; }));
+    draftCatalogPhotorealLook.mockResolvedValue({ look: drafted, edited: true, providerId: 'p1', model: 'm1', sentPrompt: 'composed', promptAdditions: [] });
+    saveCatalogPhotorealLook.mockResolvedValue({ id: 'plc-example', payload: { photoreal: saved } });
+    show({ record: { ...record, payload: { ...record.payload, photoreal: saved } } });
+
+    fireEvent.change(await screen.findByLabelText('What should change?'), { target: { value: 'more haze' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Draft the change' }));
+    expect(await screen.findByText(/Draft look, not saved yet/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Change/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Pine Floor/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply look' })).toBeDisabled());
+    await act(async () => finishInstall({ id: 'pine_floor', name: 'Pine Floor', sizeM: 2 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Apply look' })).toBeEnabled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply look' }));
+    await waitFor(() => expect(saveCatalogPhotorealLook).toHaveBeenLastCalledWith('plc-example',
+      expect.objectContaining({ atmosphere: expect.objectContaining({ haze: 0.5 }), textures: { 'wood-floor': 'oak_planks' } }), { source: 'refine', silent: true }));
   });
 });
