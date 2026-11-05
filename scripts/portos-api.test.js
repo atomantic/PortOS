@@ -149,6 +149,7 @@ describe('API request lifecycle', () => {
       expect(requests).toEqual(['Bearer synthetic-rejected-token']);
       expect(error).toHaveBeenCalledWith(expect.stringContaining('selected PORTOS_API_TOKEN credential; the API responded'));
       expect(error).toHaveBeenCalledWith(expect.stringContaining('no fallback was attempted'));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('shell_environment_policy.set.PORTOS_API_TOKEN'));
       expect(error.mock.calls.flat().join(' ')).not.toMatch(/synthetic-rejected-token|synthetic-working-key/);
       await expect(main(['get', '/api/cos/agents/example'], env)).resolves.toBe(0);
       expect(requests).toEqual(['Bearer synthetic-rejected-token', 'Bearer synthetic-working-key']);
@@ -157,6 +158,7 @@ describe('API request lifecycle', () => {
       await writeFile(file, JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-rejected-key' }));
       await expect(main(['get', '/api/cos/agents/example'], env)).resolves.toBe(1);
       expect(error).toHaveBeenCalledWith(expect.stringContaining('selected Agent API key credential; the API responded'));
+      expect(error.mock.calls.flat().join(' ')).not.toContain('shell_environment_policy.set.PORTOS_API_TOKEN');
       expect(error.mock.calls.flat().join(' ')).not.toContain('synthetic-rejected-key');
     } finally {
       await rm(dir, { recursive: true, force: true });

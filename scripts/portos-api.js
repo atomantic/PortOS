@@ -259,6 +259,9 @@ export const main = async (argv = process.argv.slice(2), env = process.env) => {
       console.error(env.PORTOS_API_TOKEN
         ? 'PORTOS_API_TOKEN takes precedence over the Agent API key; no fallback was attempted. Check the intended PORTOS_URL and obtain a fresh credential through the CoS launch flow.'
         : 'Check the intended PORTOS_URL and refresh the Agent API key in Settings > Security. No alternate credential was attempted.');
+      if (env.PORTOS_API_TOKEN) {
+        console.error('If using Codex, check shell_environment_policy.set.PORTOS_API_TOKEN in its configuration: a static override can replace the CoS-injected token. If the override is stale, remove only that entry and start a fresh agent.');
+      }
     }
   }
   return 1;
