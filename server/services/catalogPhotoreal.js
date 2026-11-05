@@ -140,7 +140,6 @@ async function buildPhotorealScene(ingredientId, tool) {
   });
   if (run.status !== 'completed') throw refuse(`Could not build the Blender scene: ${codeAnimationWorkerFailure(run)}`, 'PHOTOREAL_BUILD_FAILED', 500);
   if (!saved) throw refuse('Blender finished without a scene file.', 'PHOTOREAL_BUILD_FAILED', 500);
-  catalogEvents.emit('photoreal-scene', { ingredientId });
   return destination;
 }
 
@@ -148,8 +147,12 @@ function ensurePhotorealScene(ingredientId, tool) {
   const active = sceneBuilds.get(ingredientId);
   if (active) return active;
   if (jobs.get(ingredientId)?.state === 'running') throw refuse('A Photoreal render is already building this scene. Wait for it to finish.', 'PHOTOREAL_BUSY', 409);
-  const task = buildPhotorealScene(ingredientId, tool).finally(() => sceneBuilds.delete(ingredientId));
+  const task = buildPhotorealScene(ingredientId, tool).finally(() => {
+    sceneBuilds.delete(ingredientId);
+    catalogEvents.emit('photoreal-scene', { ingredientId });
+  });
   sceneBuilds.set(ingredientId, task);
+  catalogEvents.emit('photoreal-scene', { ingredientId });
   return task;
 }
 
@@ -159,6 +162,7 @@ export async function getPhotorealStatus(ingredientId) {
     job: jobs.get(ingredientId) || null,
     blendUrl: (await photorealBlendPath(ingredientId)) ? blendUrl(ingredientId) : null,
     blenderVersion: await deps.lastCheckedVersion(),
+    sceneBuilding: sceneBuilds.has(ingredientId),
     // Where this machine keeps the scene and the stills, shown so the operator can find them.
     files: SAFE_ID.test(ingredientId) ? { blend: blendPath(ingredientId), renders: PATHS.images } : null,
   };

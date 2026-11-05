@@ -257,7 +257,7 @@ describe('openPhotorealBlend', () => {
       .toMatchObject({ sceneOnly: true, engine: 'CYCLES', useGpu: false, shotIds: [] });
     expect(await readFile(path, 'utf8')).toBe('BLENDER');
     expect(launch).toHaveBeenCalledWith('/opt/blender', ['--disable-autoexec', path]);
-    expect(sceneFrames).toEqual([{ ingredientId: record.id }]);
+    expect(sceneFrames).toEqual([{ ingredientId: record.id }, { ingredientId: record.id }]);
     expect(upload).not.toHaveBeenCalled();
     expect(db.detachMedia).not.toHaveBeenCalled();
   });
@@ -274,9 +274,13 @@ describe('openPhotorealBlend', () => {
     const first = openPhotorealBlend(record.id);
     const second = openPhotorealBlend(record.id);
     await vi.waitFor(() => expect(worker).toHaveBeenCalledOnce());
+    await expect(getPhotorealStatus(record.id)).resolves.toMatchObject({ sceneBuilding: true, blendUrl: null });
+    expect(sceneFrames).toEqual([{ ingredientId: record.id }]);
     await expect(startPhotorealRender(record.id, { shotIds: ['wide'], engine: 'cycles' })).rejects.toMatchObject({ code: 'PHOTOREAL_BUSY' });
     release();
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    await expect(getPhotorealStatus(record.id)).resolves.toMatchObject({ sceneBuilding: false, blendUrl: `/api/catalog/ingredients/${record.id}/photoreal/blend` });
+    expect(sceneFrames).toEqual([{ ingredientId: record.id }, { ingredientId: record.id }]);
     expect(worker).toHaveBeenCalledOnce();
     expect(launch).toHaveBeenCalledTimes(2);
   });
@@ -362,6 +366,7 @@ describe('openPhotorealBlend', () => {
 
     await expect(openPhotorealBlend(record.id)).rejects.toMatchObject({ code: 'PHOTOREAL_BUILD_FAILED', message: expect.stringContaining('wall-time limit') });
     expect(launch).not.toHaveBeenCalled();
+    await expect(getPhotorealStatus(record.id)).resolves.toMatchObject({ sceneBuilding: false });
     await expect(openPhotorealBlend(record.id)).resolves.toMatchObject({ opened: true });
     expect(worker).toHaveBeenCalledTimes(2);
     expect(launch).toHaveBeenCalledOnce();

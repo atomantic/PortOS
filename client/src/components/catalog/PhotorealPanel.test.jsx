@@ -377,6 +377,33 @@ describe('PhotorealPanel', () => {
     expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
   });
 
+  it('shows an in-flight scene build after opening the page and enables actions when it finishes', async () => {
+    getCatalogPhotoreal.mockResolvedValueOnce({ job: null, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true })
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    expect(await screen.findByText(/A Blender scene is being built/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Building scene…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Render fly-through/ })).toBeDisabled();
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Render 2 cameras' })).toBeEnabled();
+  });
+
+  it('ignores an older status response after a scene refresh', async () => {
+    let finishInitial;
+    getCatalogPhotoreal.mockImplementationOnce(() => new Promise((resolve) => { finishInitial = resolve; }))
+      .mockResolvedValue({ job: null, blendUrl: '/scene.blend', blenderVersion: '5.2.3', sceneBuilding: false });
+    show();
+    await waitFor(() => expect(finishInitial).toBeTypeOf('function'));
+    await act(async () => handlers.get('catalog:photoreal-scene')({ ingredientId: 'plc-example' }));
+    expect(await screen.findByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    await act(async () => finishInitial({ job: null, blendUrl: null, blenderVersion: '5.2.3', sceneBuilding: true }));
+    expect(screen.getByRole('link', { name: 'Download .blend' })).toHaveAttribute('href', '/scene.blend');
+    expect(screen.queryByRole('button', { name: 'Building scene…' })).not.toBeInTheDocument();
+  });
+
   it('lets 10-19 seconds and multi-digit samples be typed, clamping only on blur or render', async () => {
     show();
     const seconds = await screen.findByLabelText('Seconds');
