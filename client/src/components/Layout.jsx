@@ -216,7 +216,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
         end={entry.end}
         onClick={onNavigate}
         title={entry.label}
-        className={`flex items-start gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
+        className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
           isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
       >
@@ -245,7 +245,7 @@ export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onN
         to={item.to}
         end={item.to === '/'}
         onClick={onNavigate}
-        className={`flex items-start gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+        className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
           collapsed ? 'lg:justify-center lg:px-2' : 'pr-9'
         } ${
           active
@@ -626,7 +626,7 @@ export default function Layout() {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className={`flex items-start gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          className={`flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
             sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
           } text-gray-400 hover:text-white hover:bg-port-border/50`}
           title={item.label}
@@ -675,7 +675,7 @@ export default function Layout() {
       setMobileOpen(false);
     };
 
-    const sectionRowClasses = `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+    const sectionRowClasses = `flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
       isSectionActive(item)
         ? 'bg-port-accent/10 text-port-accent'
         : 'text-gray-400 hover:text-white hover:bg-port-border/50'
@@ -750,7 +750,7 @@ export default function Layout() {
                     target="_blank"
                     rel="noopener noreferrer"
                     title={child.label}
-                    className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
+                    className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
                   >
                     <div className="flex items-start gap-3 min-w-0">
                       <ChildIcon size={16} className="shrink-0 mt-0.5" />
@@ -1042,7 +1042,7 @@ export default function Layout() {
                         rel="noopener noreferrer"
                         onClick={() => setFlyoutSection(null)}
                         title={child.label}
-                        className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                        className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
                       >
                         <div className="flex items-start gap-3 min-w-0">
                           <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
