@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRoute, shotSheetRows } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, selectedFrameOutdated, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch } from '../services/musicVideo/projectsLogic.js';
 
@@ -98,17 +98,26 @@ describe('shotSheetOptions', () => {
   });
 });
 
-describe('shotSheetRoute', () => {
-  const row = (startSec, endSec, location) => ({ scene: { startSec, endSec }, sheet: location ? { location } : {} });
-  // Catches a return to an earlier place merging with its first visit, or an untimed shot stretching the route.
-  it('joins consecutive shots by location and keeps a return as its own stretch', () => {
-    const rows = [row(0, 2, 'Street'), row(2, 4, ' Street '), row(4, 6, 'Mall'), row(6, 8), row(8, 9, 'Street'), { scene: {}, sheet: { location: 'Field' } }];
-    expect(shotSheetRoute(rows)).toEqual([
-      { location: 'Street', startSec: 0, endSec: 4, shots: 2 },
-      { location: 'Mall', startSec: 4, endSec: 6, shots: 1 },
-      { location: '', startSec: 6, endSec: 8, shots: 1 },
-      { location: 'Street', startSec: 8, endSec: 9, shots: 1 },
+describe('shotSheetStretches', () => {
+  const bar = (id) => SHOT_SHEET_MAP_BARS.find(([key]) => key === id)[2];
+  const row = (startSec, endSec, sheet = {}, camera = null) => ({ scene: { startSec, endSec }, sheet, camera });
+  // Catches a return to an earlier place merging with its first visit, or an untimed shot stretching the map.
+  it('joins consecutive shots by value and keeps a return as its own stretch', () => {
+    const rows = [row(0, 2, { location: 'Street' }), row(2, 4, { location: ' Street ' }), row(4, 6, { location: 'Mall' }), row(6, 8), row(8, 9, { location: 'Street' }), { scene: {}, sheet: { location: 'Field' } }];
+    expect(shotSheetStretches(rows, bar('location'))).toEqual([
+      { value: 'Street', startSec: 0, endSec: 4, shots: 2 },
+      { value: 'Mall', startSec: 4, endSec: 6, shots: 1 },
+      { value: '', startSec: 6, endSec: 8, shots: 1 },
+      { value: 'Street', startSec: 8, endSec: 9, shots: 1 },
     ]);
+  });
+  // Catches a borrowed camera reading as no change, an observer gaining a holder, or the light bar reading the wrong column.
+  it('shows who has each camera and reads time of day from the light column', () => {
+    const vhs = { name: 'VHS' };
+    const observer = { name: 'Observer' };
+    const rows = [row(0, 1, { holder: 'Kevin', light: 'Dusk' }, vhs), row(1, 2, { holder: 'Renee', light: 'Dusk' }, vhs), row(2, 3, { light: 'Night' }, observer)];
+    expect(shotSheetStretches(rows, bar('camera')).map((stretch) => stretch.value)).toEqual(['VHS · Kevin', 'VHS · Renee', 'Observer']);
+    expect(shotSheetStretches(rows, bar('light')).map((stretch) => stretch.value)).toEqual(['Dusk', 'Night']);
   });
 });
 

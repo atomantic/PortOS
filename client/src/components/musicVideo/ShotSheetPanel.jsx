@@ -7,7 +7,7 @@ import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, normalizeShotSheet, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRoute, shotSheetRows,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -30,28 +30,37 @@ function SheetPick({ label, field, value = '', disabled, onCommit, maxLength }) 
   );
 }
 
-// A location keeps its color wherever it comes back along the route.
-const ROUTE_COLORS = ['bg-port-accent/30', 'bg-port-success/30', 'bg-port-warning/30', 'bg-port-error/30', 'bg-port-accent/60', 'bg-port-success/60', 'bg-port-warning/60', 'bg-port-error/60'];
+// A value keeps its color wherever it comes back along its bar.
+const MAP_COLORS = ['bg-port-accent/30', 'bg-port-success/30', 'bg-port-warning/30', 'bg-port-error/30', 'bg-port-accent/60', 'bg-port-success/60', 'bg-port-warning/60', 'bg-port-error/60'];
 
-/** The route by time: each stretch sized by its length in the song. Tapping one lists only its location's shots. */
-function RouteBar({ rows, active, onPick }) {
-  const stretches = shotSheetRoute(rows);
-  if (!stretches.length) return null;
-  const places = [...new Set(stretches.map((stretch) => stretch.location).filter(Boolean))];
+/** The video's map: a bar each for location, camera and time of day, each stretch sized by its length in the song. Tapping one lists only its shots. */
+function ShotSheetMap({ rows, active, onPick }) {
   return (
-    <div role="group" aria-label="Route by time" className="flex min-h-[44px] min-w-0 overflow-hidden rounded border border-port-border">
-      {stretches.map((stretch) => {
-        const name = stretch.location || 'No location';
-        const color = stretch.location ? ROUTE_COLORS[places.indexOf(stretch.location) % ROUTE_COLORS.length] : 'bg-port-bg';
-        const on = active === stretch.location;
+    <div role="group" aria-label="Video map" className="min-w-0 space-y-1">
+      {SHOT_SHEET_MAP_BARS.map(([bar, label, valueOf]) => {
+        const stretches = shotSheetStretches(rows, valueOf);
+        const values = [...new Set(stretches.map((stretch) => stretch.value).filter(Boolean))];
         return (
-          <button key={stretch.startSec} type="button" aria-pressed={on} onClick={() => onPick(on ? null : stretch.location)}
-            aria-label={`${name}, ${formatTimecode(stretch.startSec)}, ${stretch.shots} shot${stretch.shots === 1 ? '' : 's'}`} title={`${name} · ${formatTimecode(stretch.startSec)} · ${stretch.shots} shot${stretch.shots === 1 ? '' : 's'}`}
-            style={{ flex: `${Math.max(stretch.endSec - stretch.startSec, 0.1)} 1 0` }}
-            className={`min-w-0 overflow-hidden border-r border-port-border px-1 py-1 text-left text-xs last:border-r-0 ${color} ${on ? 'ring-2 ring-inset ring-port-accent' : ''}`}>
-            <span className="block truncate font-medium">{name}</span>
-            <span className="block truncate tabular-nums text-port-text-muted">{formatTimecode(stretch.startSec)}</span>
-          </button>
+          <div key={bar} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] items-stretch gap-1.5">
+            <span className="self-center text-xs text-port-text-muted">{label}</span>
+            <div role="group" aria-label={label} className="flex min-h-[44px] min-w-0 overflow-hidden rounded border border-port-border">
+              {stretches.map((stretch) => {
+                const name = stretch.value || 'Not set';
+                const color = stretch.value ? MAP_COLORS[values.indexOf(stretch.value) % MAP_COLORS.length] : 'bg-port-bg';
+                const on = active?.bar === bar && active.value === stretch.value;
+                const detail = `${formatTimecode(stretch.startSec)}, ${stretch.shots} shot${stretch.shots === 1 ? '' : 's'}`;
+                return (
+                  <button key={stretch.startSec} type="button" aria-pressed={on} onClick={() => onPick(on ? null : { bar, value: stretch.value })}
+                    aria-label={`${label} ${name}, ${detail}`} title={`${name}, ${detail}`}
+                    style={{ flex: `${Math.max(stretch.endSec - stretch.startSec, 0.1)} 1 0` }}
+                    className={`min-w-0 overflow-hidden border-r border-port-border px-1 py-1 text-left text-xs last:border-r-0 ${color} ${on ? 'ring-2 ring-inset ring-port-accent' : ''}`}>
+                    <span className="block truncate font-medium">{name}</span>
+                    <span className="block truncate tabular-nums text-port-text-muted">{formatTimecode(stretch.startSec)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         );
       })}
     </div>
@@ -179,7 +188,7 @@ export default function ShotSheetPanel({ board }) {
   const [query, setQuery] = useState('');
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
-  const [locationFilter, setLocationFilter] = useState(null);
+  const [mapFilter, setMapFilter] = useState(null);
   const [uncheckedOnly, setUncheckedOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
@@ -193,7 +202,7 @@ export default function ShotSheetPanel({ board }) {
   const needle = query.trim().toLowerCase();
   const listed = rows.filter((row) => {
     if (outdatedOnly && !row.frameOutdated) return false;
-    if (locationFilter !== null && (row.sheet.location?.trim() || '') !== locationFilter) return false;
+    if (mapFilter && SHOT_SHEET_MAP_BARS.find(([bar]) => bar === mapFilter.bar)[2](row) !== mapFilter.value) return false;
     if (uncheckedOnly && row.sheet.checked) return false;
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;
@@ -214,7 +223,7 @@ export default function ShotSheetPanel({ board }) {
   const summary = `${checked} of ${rows.length} shots checked${withProblems ? ` · ${withProblems} incomplete` : ''}${outdated ? ` · ${outdated} frame${outdated === 1 ? '' : 's'} older than ${outdated === 1 ? 'its prompt' : 'their prompts'}` : ''}`;
   return (
     <StageSection id="mv-shot-sheet" title="Shot sheet" summary={summary}>
-      <RouteBar rows={rows} active={locationFilter} onPick={setLocationFilter} />
+      <ShotSheetMap rows={rows} active={mapFilter} onPick={setMapFilter} />
       <CameraList project={project} disabled={locked} onChange={editCameras} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <input type="search" aria-label="Search shots" placeholder="Search shots" value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputCls} max-w-xs`} />
