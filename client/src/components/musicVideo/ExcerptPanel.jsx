@@ -90,7 +90,7 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
   );
 }
 
-function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
+function ExcerptCard({ projectId, onNavigate, excerpt, role, proofApproved, activeRenderId, connected, deleting, noteBusy, onDelete, onCancel, onAddNote, onEditNote, onDeleteNote, canRevise, onRevise }) {
   const videoRef = useRef(null);
   const [draft, setDraft] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -110,7 +110,7 @@ function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, 
         <span className="font-medium">{fmt(excerpt.startSec)} – {fmt(excerpt.endSec)} <span className="text-port-text-muted">({excerpt.status === 'rendering' && (activeRenderId !== excerpt.id || connected === false) ? 'Checking render status' : STATUS_LABELS[excerpt.status] || excerpt.status})</span>
           <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-border text-port-text-muted text-[10px]">{ROLE_LABELS[role]}{role === 'proof' && proofApproved ? ' (approved)' : ''}</span>
           {excerpt.aspect && excerpt.aspect !== '16:9' && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-port-accent/20 text-port-accent text-[10px]">{excerpt.aspect}</span>}</span>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {/* #8987: regenerate ONLY the sections holding a flagged note; the rest stay as approved. */}
           {excerpt.status === 'complete' && excerpt.sections?.length > 0 && excerpt.notes?.some((n) => n.verdict === 'flagged') && (
             <button type="button" disabled={!canRevise} onClick={() => onRevise(excerpt.id)}
@@ -120,7 +120,18 @@ function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, 
           {excerpt.status === 'rendering'
             ? <button type="button" onClick={() => onCancel(excerpt.id)} className="text-port-error flex items-center gap-1 min-h-[44px] sm:min-h-0"><X size={12} /> Cancel</button>
             : role === 'proof'
-              ? <span className="text-port-text-muted">Registered proof — revoke approval to delete</span>
+              ? <span className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="text-port-text-muted">Registered proof — replace it before deleting</span>
+                  <a href={`/music-video/${encodeURIComponent(projectId)}/produce#mv-review-render`}
+                    onClick={onNavigate ? event => {
+                      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      onNavigate('produce', 'mv-review-render');
+                    } : undefined}
+                    className="min-h-[44px] inline-flex items-center rounded border border-port-border px-2 py-1 text-port-accent hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent sm:min-h-0">
+                    Open proof controls
+                  </a>
+                </span>
               : confirmingDelete
                 ? <span className="flex items-center gap-2">
                     <button type="button" disabled={deleting} onClick={() => { setConfirmingDelete(false); onDelete(excerpt.id); }} className="text-port-error disabled:opacity-50 min-h-[44px] sm:min-h-0">Confirm delete</button>
@@ -174,7 +185,7 @@ function ExcerptCard({ excerpt, role, proofApproved, activeRenderId, connected, 
  * start) — a frame check alone can't prove motion/audio sync, so the video
  * plays alongside the sheet rather than replacing it.
  */
-export default function ExcerptPanel({ project, rendering, occupied = rendering, progress, excerpts, activeRenderId = null, connected, revision = null, autoReview = null, ...actions }) {
+export default function ExcerptPanel({ project, rendering, occupied = rendering, progress, excerpts, activeRenderId = null, connected, revision = null, autoReview = null, onNavigate, ...actions }) {
   const newest = [...excerpts].reverse();
   const latestAttempt = newest[0];
   const roleOf = new Map(newest.map(e => [e.id, excerptRole(project, e)]));
@@ -191,7 +202,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
   const visible = newest.filter(e => e.status === 'rendering' || currentIds.has(e.id));
   const history = newest.filter(e => !visible.includes(e));
   const proofApproved = !!project?.productionReview?.approvals?.proof;
-  const card = excerpt => <ExcerptCard key={excerpt.id} excerpt={excerpt} role={roleOf.get(excerpt.id)} proofApproved={proofApproved} activeRenderId={activeRenderId} connected={connected}
+  const card = excerpt => <ExcerptCard key={excerpt.id} projectId={project.id} onNavigate={onNavigate} excerpt={excerpt} role={roleOf.get(excerpt.id)} proofApproved={proofApproved} activeRenderId={activeRenderId} connected={connected}
     deleting={actions.deletingId === excerpt.id} noteBusy={actions.noteBusyId}
     onDelete={actions.deleteExcerpt} onCancel={actions.cancelExcerpt} onAddNote={actions.addNote}
     onEditNote={actions.editNote} onDeleteNote={actions.deleteNote} canRevise={canRevise} onRevise={revision?.revise} />;
