@@ -183,6 +183,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
 | `musicVideoStoryValidation.js` | Typed Story summary, proposal and selective-apply request schemas. |
+| `musicVideoSubjectLimits.js` | Shared character limit for music-video subject descriptions and linked catalog looks. |
 | `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
 | `peerSyncValidation.js` | Federated peer-sync wire/request schemas (push payload, subscribe, sync-now, pull-metadata, the library manifest with its optional image `tombstones` and the `PEER_LIBRARY_TOMBSTONES_HEADER` that requests them plus the `PEER_LIBRARY_TOMBSTONES_SINCE_HEADER` cursor). |
 | `pipelineValidation.js` | Creative-production pipeline schemas (Writers Room works/folders/live-mode/drafts, story-bible character/place/object, editorial checks, storyboard shots/scenes, prompt-stage config, issue-list query). |

@@ -606,6 +606,18 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByLabelText('Pronouns')).toHaveValue('she/her');
   });
 
+  it('shows the music-video limit and prevents saving an overlong linked description', async () => {
+    const linked = { ...CHAR_FIXTURE, refs: [...CHAR_FIXTURE.refs, { refKind: 'music-video', refId: 'mv-example', role: 'cast' }] };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(linked));
+    await renderPage('/casting/cat-chr-1');
+    const description = screen.getByLabelText('Physical Description');
+    fireEvent.change(description, { target: { value: 'x'.repeat(1001) } });
+    expect(screen.getByText('1,001 / 1,000 characters for linked music videos')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    fireEvent.change(description, { target: { value: 'A concise appearance.' } });
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  });
+
   it('edits the full shared character sheet and preserves unedited legacy fields', async () => {
     const character = { ...CHAR_FIXTURE, payload: { ...CHAR_FIXTURE.payload, futureCanon: { retained: true } } };
     getCatalogIngredientDetails.mockResolvedValue(detailsOf(character));
@@ -1625,6 +1637,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-manual-canon-fail');
+    await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
     await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
     expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
     expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();

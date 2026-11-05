@@ -65,27 +65,27 @@ export async function setIngredientPayloadKey(id, key, value, { source = 'user',
 // key), so a multi-key edit either lands whole or not at all. Returns
 // `{ ingredient, priorUpdatedAt }`, the latter being the locked row's clock
 // just before this write, or null for a missing row.
-export async function updateIngredientPayloadKeys(id, update, { source = 'user', guard } = {}) {
-  return withTransaction(async client => {
-    await assertCatalogIdentityWritable(id, { client });
-    const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
-      WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
-    if (!current) return null;
-    guard?.(current);
-    const priorUpdatedAt = rowToIngredient(current).updatedAt;
-    const payload = current.payload && typeof current.payload === 'object' ? current.payload : {};
-    const next = { ...payload };
-    for (const [key, value] of Object.entries(update(payload) || {})) {
-      if (value === null) delete next[key];
-      else next[key] = value;
-    }
-    if (isDeepStrictEqual(next, payload)) return { ingredient: rowToIngredient(current), priorUpdatedAt };
-    const { rows: [row] } = await client.query('UPDATE catalog_ingredients SET payload = $2::jsonb WHERE id = $1 RETURNING *',
-      [current.id, toPgJson(next)]);
-    const ingredient = rowToIngredient(row);
-    await recordIngredientRevision(ingredient, { source, client });
-    return { ingredient, priorUpdatedAt };
-  });
+export async function updateIngredientPayloadKeys(id, update, { source = 'user', guard, client, invalidateEmbedding = false } = {}) {
+  if (!client) return withTransaction((tx) => updateIngredientPayloadKeys(id, update, { source, guard, client: tx, invalidateEmbedding }));
+  await assertCatalogIdentityWritable(id, { client });
+  const { rows: [current] } = await client.query(`SELECT * FROM catalog_ingredients
+    WHERE id = catalog_canonical_ingredient_id($1) AND deleted = false FOR UPDATE`, [id]);
+  if (!current) return null;
+  guard?.(current);
+  const priorUpdatedAt = rowToIngredient(current).updatedAt;
+  const payload = current.payload && typeof current.payload === 'object' ? current.payload : {};
+  const next = { ...payload };
+  for (const [key, value] of Object.entries(update(payload) || {})) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  if (isDeepStrictEqual(next, payload)) return { ingredient: rowToIngredient(current), priorUpdatedAt };
+  const { rows: [row] } = await client.query(`UPDATE catalog_ingredients SET payload = $2::jsonb,
+    embedding = CASE WHEN $3 THEN NULL ELSE embedding END, embedding_model = CASE WHEN $3 THEN NULL ELSE embedding_model END
+    WHERE id = $1 RETURNING *`, [current.id, toPgJson(next), invalidateEmbedding]);
+  const ingredient = rowToIngredient(row);
+  await recordIngredientRevision(ingredient, { source, client });
+  return { ingredient, priorUpdatedAt };
 }
 
 export const setIngredientLock = (id, locked) => setIngredientPayloadKey(id, 'locked', locked, {
@@ -167,6 +167,16 @@ export async function getIngredient(id, { client } = {}) {
     [id],
   );
   return rowToIngredient(result.rows[0]);
+}
+
+// Keep each requested identity as the key even when several resolve to one row.
+export async function getIngredientDescriptionsByRequestedIds(ids, { client } = {}) {
+  const wanted = [...new Set((ids || []).filter(Boolean))];
+  if (!wanted.length) return new Map();
+  const exec = client ? client.query.bind(client) : query;
+  const { rows } = await exec(`SELECT requested.id AS requested_key, i.id, i.type, i.payload FROM unnest($1::text[]) AS requested(id)
+    JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false`, [wanted]);
+  return new Map(rows.map(({ requested_key, ...record }) => [requested_key, record]));
 }
 
 // All stable IDs belonging to a local consolidated identity. The source row

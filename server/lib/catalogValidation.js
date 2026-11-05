@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
 import { REFERENCE_REVIEW_STATUSES, REFERENCE_REVIEW_WRITE_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
@@ -300,6 +301,13 @@ export const catalogVideoSubjectLinksSchema = z.object({
     // Replace the subject's description with the catalog's appearance text.
     useCatalogText: z.boolean().optional(),
   }).strict()).min(1).max(24),
+}).strict();
+export const catalogVideoDescriptionRestoreSchema = z.object({
+  subjectId: z.string().trim().min(1).max(64),
+  ingredientId: z.string().trim().min(1).max(128),
+  formId: z.string().regex(FORM_ID_PATTERN).optional(),
+  videoDescription: z.string().max(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX),
+  catalogDescription: z.string().max(16000),
 }).strict();
 export const catalogStoryDraftSchema = z.object({
   type: z.enum(['character', 'place', 'object']),

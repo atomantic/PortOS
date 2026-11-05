@@ -18,6 +18,7 @@ import {
   Drama, KeyRound, Mic, Images, BadgeCheck, Play, Compass,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
+import { formatCount } from '../../utils/formatters';
 // Shared narrative-framework definitions (#2175, #6417) — one source of truth
 // with the server store/schema and the Writers Room cast editor. An
 // unrecognized arc type is coerced to null server-side, so `''` = unset.
@@ -189,12 +190,13 @@ const LIST_SECTIONS = Object.freeze([
 ]);
 
 // Buffered text input — wraps useFieldDraft, commits to onCommit on blur.
-function DraftField({ field, value, onCommit, disabled, idPrefix }) {
+function DraftField({ field, value, onCommit, disabled, idPrefix, videoDescriptionLimit }) {
   const draft = useFieldDraft(typeof value === 'string' ? value : '', onCommit);
   // idPrefix scopes the field id to one editor instance so two open
   // character cards don't render duplicate `chr-field-pronouns` DOM ids
   // and break the label/input association.
   const id = `chr-field-${idPrefix || 'unknown'}-${field.name}`;
+  const showVideoCount = field.name === 'physicalDescription' && videoDescriptionLimit;
   // `id` stays off the shared spread and is written at each call site: a
   // control whose id arrives through `{...common}` reads as unnamed to any
   // reader — human or the a11y scan — that cannot resolve the spread.
@@ -205,6 +207,7 @@ function DraftField({ field, value, onCommit, disabled, idPrefix }) {
     disabled,
     placeholder: field.placeholder,
     maxLength: field.max,
+    ...(showVideoCount ? { 'aria-describedby': `${id}-video-count` } : {}),
     className: 'w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50',
   };
   return (
@@ -215,6 +218,9 @@ function DraftField({ field, value, onCommit, disabled, idPrefix }) {
       {field.type === 'textarea'
         ? <textarea id={id} {...common} rows={2} />
         : <input type="text" id={id} {...common} />}
+      {showVideoCount && <p id={`${id}-video-count`} className={`text-xs ${draft.value.length > videoDescriptionLimit ? 'text-port-error' : 'text-port-text-muted'}`}>
+        {formatCount(draft.value.length)} / {formatCount(videoDescriptionLimit)} characters for linked music videos
+      </p>}
     </div>
   );
 }
@@ -1414,7 +1420,7 @@ export default function CharacterDetailEditor({ draftMode = 'blur', ...props }) 
 
 function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, actionsDisabled = false,
   characters = [], portrait = null, identityControls = null, primaryActions = null, storyExtra = null, navigationId = null, onPageChange = null,
-  contextLoading = false, saveHint = 'Edits save when you leave a field', children }) {
+  contextLoading = false, saveHint = 'Edits save when you leave a field', videoDescriptionLimit = null, children }) {
   const [activePage, setActivePage] = useDrawerTab(`castSheet-${navigationId || entry?.id}`, 'attributes', SHEET_PAGE_IDS);
   // Keep visited pages mounted so pending list rows and local voice drafts survive
   // navigation. Unvisited production tools do not load until explicitly opened.
@@ -1428,7 +1434,7 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
   const patchField = (name, value) => onPatch?.({ [name]: value });
   const renderFields = (fields) => fields.map((field) => (
     <DraftField key={field.name} field={field} value={entry[field.name]}
-      onCommit={(value) => patchField(field.name, value)} disabled={disabled} idPrefix={entry.id} />
+      onCommit={(value) => patchField(field.name, value)} disabled={disabled} idPrefix={entry.id} videoDescriptionLimit={videoDescriptionLimit} />
   ));
   const proseSection = (key) => {
     const section = SECTIONS.find((item) => item.key === key);

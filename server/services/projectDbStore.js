@@ -122,7 +122,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
         if (allowMissing) return { __missing: true };
         throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
       }
-      const { project: next, result, skipPersist } = await mutate(project);
+      const { project: next, result, skipPersist } = await mutate(project, client);
       const persisted = skipPersist ? next : await persist(client.query.bind(client), next);
       return { project: persisted, result };
     });

@@ -23,6 +23,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
@@ -141,7 +142,7 @@ export const musicVideoConceptSchema = z.object({
     id: z.string().min(1).max(64),
     kind: z.enum(['character', 'place', 'object']),
     name: z.string().trim().min(1).max(120),
-    description: z.string().max(1000).optional(),
+    description: z.string().max(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX).optional(),
     role: z.enum(['protagonist', 'band', 'supporting']).optional(),
     canonId: z.string().max(64).optional(),
     // The catalog record this subject was cast from (Casting / Environments /
@@ -1708,6 +1709,8 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  // The descriptions the editor started from, used only for conflict checks.
+  catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(24).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
   storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),

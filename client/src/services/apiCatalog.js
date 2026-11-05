@@ -36,6 +36,9 @@ export const listVideoSubjectLinks = (projectId, type, options) =>
 export const linkVideoSubjects = (projectId, links, options) =>
   request(`/catalog/stories/music-video/${enc(projectId)}/subjects/link`, { method: 'POST', body: JSON.stringify({ links }), ...options });
 
+export const restoreVideoSubjectDescription = (projectId, body, options) =>
+  request(`/catalog/stories/music-video/${enc(projectId)}/subjects/restore-description`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 // --- Scraps -------------------------------------------------------------
 
 export const createCatalogScrap = (body = {}, options) =>

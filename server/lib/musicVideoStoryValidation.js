@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
 import { STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_LIMITS } from './storyboardVocabulary.js';
@@ -6,7 +7,7 @@ import { STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_LIMITS 
 const text = (max) => z.string().max(max);
 const id = z.string().min(1).max(120).optional();
 const subject = z.object({ id, kind: z.enum(['character', 'place', 'object']), name: text(120).refine((value) => !!value.trim(), 'Name is required'),
-  description: text(1000).optional(), role: z.enum(['protagonist', 'band', 'supporting']).optional() }).strict();
+  description: text(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX).optional(), role: z.enum(['protagonist', 'band', 'supporting']).optional() }).strict();
 const panel = z.object({ id, action: text(STORYBOARD_LIMITS.panelText).optional(), dialogue: text(STORYBOARD_LIMITS.panelText).optional(),
   framing: z.enum(STORYBOARD_PANEL_FRAMINGS).nullable().optional(), camera: text(STORYBOARD_LIMITS.camera).optional(),
   seconds: z.number().positive().max(STORYBOARD_LIMITS.panelSecondsMax).nullable().optional() }).strict();

@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
@@ -69,6 +70,7 @@ const project = (id, deletedAt) => ({
 
 describe.skipIf(!runDb)('music video projects DB adapter', () => {
   let db;
+  const catalogFixtures = [];
 
   beforeAll(async () => { db = await import('./projectsDB.js'); });
 
@@ -81,8 +83,78 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   });
 
   afterAll(async () => {
+    for (const id of catalogFixtures) await query('DELETE FROM catalog_ingredients WHERE id = $1', [id]);
     await query(`DELETE FROM music_video_projects WHERE id LIKE $1`, [`${PRUNE_PREFIX}%`]).catch(() => {});
     await close();
+  });
+
+  it('commits a linked description with the project and rolls both back on a later failure', async () => {
+    const catalog = await import('../catalogDB.js');
+    const { syncEditedSubjectDescriptions } = await import('./subjectDescriptionSync.js');
+    const id = `cat-obj-test-${randomUUID()}`;
+    catalogFixtures.push(id);
+    await catalog.createIngredient({ id, type: 'object', name: 'Example prop', payload: { description: 'Old description' }, embedding: Array(768).fill(0.01), embeddingModel: 'example-model' });
+    const subject = { id: 'prop', kind: 'object', name: 'Example prop', ingredientId: id, description: 'Old description' };
+    const created = await db.createProject({ name: 'Description transaction fixture', concept: { subjects: [subject] } });
+    const edit = (current, description) => ({ ...current, concept: { ...current.concept, subjects: [{ ...current.concept.subjects[0], description }] } });
+    await db.mutateProjectRecord(created.id, (current, { client }) => syncEditedSubjectDescriptions(current, edit(current, 'New description'), {
+      client, bases: [{ subjectId: 'prop', description: 'Old description' }],
+    }));
+    expect((await db.getProject(created.id)).concept.subjects[0].description).toBe('New description');
+    expect(await catalog.getIngredient(id)).toMatchObject({ payload: { description: 'New description' }, embedding: null, embeddingModel: null });
+
+    await expect(db.mutateProjectRecord(created.id, async (current, { client }) => {
+      await syncEditedSubjectDescriptions(current, edit(current, 'Not committed'), {
+        client, bases: [{ subjectId: 'prop', description: 'New description' }],
+      });
+      throw new Error('fixture failure');
+    })).rejects.toThrow('fixture failure');
+    expect((await db.getProject(created.id)).concept.subjects[0].description).toBe('New description');
+    expect((await catalog.getIngredient(id)).payload.description).toBe('New description');
+  });
+
+  it('reads a newer catalog description and saves a video edit without overwriting a later catalog edit', async () => {
+    vi.doMock('../../lib/pgFileFacade.js', async (importOriginal) => {
+      const actual = await importOriginal();
+      return { ...actual, createRecordStoreBackendSelector: (options) => actual.createRecordStoreBackendSelector(
+        options.label === 'Music Video' ? { ...options, isTestMode: () => false } : options,
+      ) };
+    });
+    const service = await import('./projects.js');
+    const catalog = await import('../catalogDB.js');
+    const id = `cat-obj-test-${randomUUID()}`;
+    catalogFixtures.push(id);
+    await catalog.createIngredient({ id, type: 'object', name: 'Example prop', payload: { description: 'Original' } });
+    const subject = { id: 'prop', kind: 'object', name: 'Example prop', ingredientId: id, description: 'Original' };
+    const created = await db.createProject({ name: 'Linked description fixture', concept: { subjects: [subject, { ...subject, id: 'prop-copy', description: 'Older snapshot' }] } });
+    const otherVideo = await db.createProject({ name: 'Another linked video', concept: { subjects: [subject] } });
+    await catalog.updateIngredientPayloadKeys(id, () => ({ description: 'Catalog edit' }));
+    const current = await service.getProject(created.id);
+    expect(current.concept.subjects[0].description).toBe('Catalog edit');
+    expect((await db.getProject(created.id)).concept.subjects[0].description).toBe('Original');
+
+    const nextSubject = { ...current.concept.subjects[0], description: 'Video edit' };
+    await service.updateProject(created.id, { concept: { subjects: [nextSubject, current.concept.subjects[1]] }, catalogDescriptionBases: [{ subjectId: 'prop', description: 'Catalog edit' }] });
+    expect((await catalog.getIngredient(id)).payload.description).toBe('Video edit');
+    expect((await db.getProject(created.id)).concept.subjects[0].description).toBe('Video edit');
+    expect((await db.getProject(created.id)).concept.subjects[1].description).toBe('Older snapshot');
+    expect((await service.getProject(created.id)).concept.subjects[1].description).toBe('Video edit');
+    expect((await service.getProject(otherVideo.id)).concept.subjects[0].description).toBe('Video edit');
+    expect((await db.getProject(otherVideo.id)).concept.subjects[0].description).toBe('Original');
+    expect((await service.listProjects()).find((item) => item.id === otherVideo.id).concept.subjects[0].description).toBe('Video edit');
+    await catalog.updateIngredientPayloadKeys(id, () => ({ description: 'Later catalog edit' }));
+    await expect(service.updateProject(created.id, { concept: { subjects: [{ ...nextSubject, description: 'Stale video edit' }] },
+      catalogDescriptionBases: [{ subjectId: 'prop', description: 'Video edit' }] })).rejects.toMatchObject({ code: 'CATALOG_DESCRIPTION_CONFLICT' });
+    expect((await catalog.getIngredient(id)).payload.description).toBe('Later catalog edit');
+    expect((await service.getProject(created.id)).concept.subjects[0].description).toBe('Later catalog edit');
+
+    const { restoreVideoSubjectDescription } = await import('./catalogCast.js');
+    await expect(restoreVideoSubjectDescription(created.id, { subjectId: 'prop', ingredientId: id,
+      videoDescription: 'Video edit', catalogDescription: 'Stale catalog value' })).rejects.toMatchObject({ code: 'CATALOG_DESCRIPTION_CONFLICT' });
+    await restoreVideoSubjectDescription(created.id, { subjectId: 'prop', ingredientId: id,
+      videoDescription: 'Video edit', catalogDescription: 'Later catalog edit' });
+    expect((await catalog.getIngredient(id)).payload.description).toBe('Video edit');
+    expect((await service.getProject(created.id)).concept.subjects[0].description).toBe('Video edit');
   });
 
   it('preserves a festival packet through PG saves, kit updates and legacy peer edits', async () => {
