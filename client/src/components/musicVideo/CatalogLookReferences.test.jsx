@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import socket from '../../services/socket.js';
 import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 import { describe, expect, it, vi } from 'vitest';
@@ -51,18 +50,12 @@ describe('live catalog references on the Look step', () => {
     expect(region.getByRole('link', { name: 'Bike' })).toHaveAttribute('href', '/objects/cat-bike');
     expect(region.getByRole('link', { name: 'Camera' })).toHaveAttribute('href', '/objects/cat-camera');
     expect(region.getAllByAltText(/^Bike reference [0-9]+$/)).toHaveLength(2);
-    expect(region.getByText('Pinned for shots')).toBeInTheDocument();
     expect(region.queryByAltText(/^Unlinked object reference/)).toBeNull();
     expect(listCatalogIngredientMedia.mock.calls.map(([id]) => id).sort()).toEqual(['cat-bike', 'cat-camera', 'cat-cast']);
     expect(save).not.toHaveBeenCalled();
     expect(project.castAndSets.images.character.imageId).toBe('approved.png');
-
-    const red = region.getByText('Red cruiser').closest('[role=listitem]');
-    fireEvent.load(within(red).getByRole('img'));
-    await act(async () => fireEvent.click(within(red).getByRole('button', { name: /^Add Bike image [0-9]+ to look references$/ })));
-    expect(save).toHaveBeenCalledWith({ references: [project.visualSpec.references[0], expect.objectContaining({
-      id: expect.stringMatching(/^mvr-object-/), imageId: 'red.png', label: 'Bike', role: 'prop', condition: false,
-    })] });
+    // Every linked image is offered to shots directly: there is nothing to pin.
+    expect(region.queryByRole('button', { name: /look references/ })).toBeNull();
   });
 
   it('reads cast and environments from the catalog with the selected form and refreshes changes without saving copies', async () => {
@@ -141,72 +134,14 @@ describe('live catalog references on the Look step', () => {
     expect(screen.getByRole('button', { name: 'Approve catalog Cast & Sets' })).toBeDisabled();
   });
 
-  it('does not add a reference that only exists outside the gallery', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'reference', mediaKey: 'asset.png' }]);
-    const project = makeProject();
-    project.concept.subjects = [project.concept.subjects[0]];
-    const { save } = show(project);
-    const image = await screen.findByAltText('Bike reference 1');
-    const button = screen.getByRole('button', { name: /^Add Bike image [0-9]+ to look references$/ });
-    expect(button).toBeDisabled();
-    fireEvent.load(image);
-    expect(button).toBeEnabled();
-    fireEvent.error(image);
-    expect(image.src).toContain('/data/image-refs/asset.png');
-    fireEvent.load(image);
-    expect(button).toBeDisabled();
-    expect(screen.getByText(/Only available in the catalog/)).toBeInTheDocument();
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  it('waits for a new look reference to save before adding another so neither edit is lost', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([
-      { kind: 'portrait', mediaKey: 'one.png', caption: 'First' },
-      { kind: 'reference', mediaKey: 'two.png', caption: 'Second' },
-    ]);
-    const project = makeProject();
-    project.concept.subjects = [project.concept.subjects[0]];
-    let finishSave;
-    const save = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
-    const { rerender } = show(project, save);
-    const first = (await screen.findByText('First')).closest('[role=listitem]');
-    const second = screen.getByText('Second').closest('[role=listitem]');
-    fireEvent.load(within(first).getByRole('img'));
-    fireEvent.load(within(second).getByRole('img'));
-    fireEvent.click(within(first).getByRole('button', { name: /Add Bike/ }));
-    expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeDisabled();
-    const references = save.mock.calls[0][0].references;
-    const updated = { ...project, visualSpec: { references } };
-    const board = { project: updated, saveVisualSpec: save, locked: false, castSets: { busy: false }, kickoff: { running: false }, devArtifacts: { busy: false } };
-    rerender(<MemoryRouter><CastSetsStage board={board} /></MemoryRouter>);
-    expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeDisabled();
-    await act(async () => finishSave());
-    await waitFor(() => expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeEnabled());
-    await act(async () => fireEvent.click(within(second).getByRole('button', { name: /Add Bike/ })));
-    expect(save.mock.calls[1][0].references.map((ref) => ref.imageId)).toEqual(['shared.png', 'one.png', 'two.png']);
-  });
-
-  it('keeps all existing look references when their list is full', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'reference', mediaKey: 'bike.png' }]);
-    const project = makeProject();
-    project.concept.subjects = [project.concept.subjects[0]];
-    project.visualSpec.references = Array.from({ length: 24 }, (_, i) => ({ id: `ref-${i}`, imageId: `image-${i}.png` }));
-    const { save } = show(project);
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    expect(screen.getByRole('button', { name: /^Add Bike image [0-9]+ to look references$/ })).toBeDisabled();
-    expect(screen.getByText(/look reference list is full/)).toBeInTheDocument();
-    expect(save).not.toHaveBeenCalled();
-  });
-
-  it('does not add images to a code-only project', async () => {
+  it('explains that a code-only project does not use image references', async () => {
     listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'bike.png' }]);
     const project = makeProject();
     project.concept.subjects = [project.concept.subjects[0]];
     project.mediaMode = 'code-only';
     project.visualSpec.references = [];
     const { save } = show(project);
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    expect(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })).toBeDisabled();
+    await screen.findByAltText('Bike reference 1');
     expect(screen.getByText(/Code-only projects do not allow image references/)).toBeInTheDocument();
     expect(save).not.toHaveBeenCalled();
   });
@@ -218,56 +153,6 @@ describe('live catalog references on the Look step', () => {
     show(project);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByAltText('Bike reference 1')).toBeInTheDocument();
-  });
-
-  it('persists Look removal through the board save and supports adding the retained catalog image again', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'shared.png' }]);
-    let saved = makeProject();
-    saved.concept.subjects = [saved.concept.subjects[0]];
-    saved.visualSpec.references.push({ id: 'keep', imageId: 'keep.png' });
-    saved.scenes = [{ sceneId: 'scene', frameReferenceIds: ['original'] }];
-    function Board() {
-      const [project, setProject] = useState(saved);
-      const saveVisualSpec = async (patch) => {
-        saved = { ...project, visualSpec: { ...project.visualSpec, ...patch } };
-        setProject(saved);
-        return saved;
-      };
-      return <CastSetsStage board={{ project, saveVisualSpec, locked: false, castSets: {}, kickoff: {}, devArtifacts: {} }} />;
-    }
-    const view = render(<MemoryRouter><Board /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', { name: /Remove Bike/ }));
-    await screen.findByRole('button', { name: /Add Bike/ });
-    expect(saved.visualSpec.references.map(ref => ref.imageId)).toEqual(['keep.png']);
-    expect(saved.scenes[0].frameReferenceIds).toEqual(['original']);
-    view.unmount();
-    render(<MemoryRouter><Board /></MemoryRouter>);
-    const add = await screen.findByRole('button', { name: /Add Bike/ });
-    fireEvent.load(screen.getByAltText('Bike reference 1'));
-    fireEvent.click(add);
-    await screen.findByRole('button', { name: /Remove Bike/ });
-    expect(saved.visualSpec.references.map(ref => ref.imageId)).toEqual(['keep.png', 'shared.png']);
-  });
-
-  it('removes only the selected look reference, guards repeated clicks, and restores controls after failure', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'shared.png' }]);
-    const project = makeProject();
-    project.concept.subjects = [project.concept.subjects[0]];
-    project.visualSpec.references.push({ id: 'keep', imageId: 'keep.png' });
-    let rejectSave;
-    const save = vi.fn().mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; })).mockResolvedValue(undefined);
-    show(project, save);
-    const remove = await screen.findByRole('button', { name: /Remove Bike/ });
-    fireEvent.click(remove);
-    fireEvent.click(remove);
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    expect(save).toHaveBeenCalledWith({ references: [project.visualSpec.references[1]] });
-    await act(async () => rejectSave(new Error('Save failed')));
-    expect(screen.getByRole('alert')).toHaveTextContent('Save failed');
-    expect(remove).toBeEnabled();
-    expect(project.visualSpec.references).toHaveLength(2);
-    await act(async () => fireEvent.click(remove));
-    expect(save).toHaveBeenCalledTimes(2);
   });
 
   it('confirms unlinking all image associations, preserves look references, and keeps the detach after remount', async () => {
@@ -292,7 +177,7 @@ describe('live catalog references on the Look step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
     await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledTimes(1));
     await act(async () => finish());
-    await waitFor(() => expect(screen.queryByText('Pinned for shots')).toBeNull());
+    await waitFor(() => expect(screen.queryByAltText('Bike reference 2')).toBeNull());
     expect(detachCatalogIngredientMedia.mock.calls).toEqual([
       ['cat-bike', { mediaKey: 'shared.png', kind: 'portrait' }, { silent: true }],
       ['cat-bike', { mediaKey: 'shared.png', kind: 'reference' }, { silent: true }],

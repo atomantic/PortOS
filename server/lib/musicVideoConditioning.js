@@ -218,29 +218,33 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
 const SHEET_ROLE = /^sheet:([^@]+)(?:@(.+))?$/;
 const titleCase = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
-function linkedAssetDetail(m, sheet) {
-  if (sheet) return sheet[1] === 'standard' ? 'Character sheet' : `${titleCase(sheet[1])} sheet`;
-  if (m.kind === 'portrait') return 'Portrait';
+// The catalog kinds a music video links, and the reference role each one plays in a shot.
+const LINKED_KINDS = { character: { role: 'character', sheet: 'Character sheet', canonical: 'Portrait', fallback: 'Cast member' }, place: { role: 'set', sheet: 'Set sheet', canonical: 'Canonical image', fallback: 'Set' }, object: { role: 'prop', sheet: 'Prop sheet', canonical: 'Canonical image', fallback: 'Prop' } };
+
+function linkedAssetDetail(m, sheet, kind) {
+  if (sheet) return sheet[1] === 'standard' ? kind.sheet : `${titleCase(sheet[1])} sheet`;
+  if (m.kind === 'portrait') return kind.canonical;
   const v = m.library?.variant || {};
   return v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || 'Reference');
 }
 
-/** The linked cast member ids a project's shots may pick catalog assets from. */
+/** The linked catalog ids (cast, sets, props) a project's shots may pick catalog assets from. */
 export const musicVideoLinkedCastIds = (project) => [...new Set((project?.concept?.subjects || [])
-  .filter((subject) => subject?.kind === 'character' && subject.ingredientId).map((subject) => subject.ingredientId))];
+  .filter((subject) => LINKED_KINDS[subject?.kind] && subject.ingredientId).map((subject) => subject.ingredientId))];
 
 /**
- * Every approved asset of each character linked from the catalog, as extra
- * choices for a shot's picker. Approved means the portrait, a render guide, a
- * reference rated good, or a character sheet, and never one rated bad or left
- * out of likeness. A subject linked at an age or look offers that form's assets
- * only; otherwise it offers the canonical ones. These never join the automatic
- * set, so a new sheet changes no shot until the director picks it.
+ * Every approved asset of each character, set and prop linked from the catalog,
+ * as extra choices for a shot's picker. Approved means the canonical image, a
+ * render guide, a reference rated good, or a sheet, and never one rated bad or
+ * left out of likeness. A subject linked at an age or look offers that form's
+ * assets only; otherwise it offers the canonical ones. These never join the
+ * automatic set, so a new sheet changes no shot until the director picks it.
  */
 export function musicVideoLinkedCastReferences(project, castMedia) {
   const seen = new Set();
   return (project?.concept?.subjects || []).flatMap((subject) => {
-    const media = subject?.kind === 'character' && castMedia?.[subject.ingredientId];
+    const kind = LINKED_KINDS[subject?.kind];
+    const media = kind && castMedia?.[subject.ingredientId];
     if (!Array.isArray(media)) return [];
     const rejected = rejectedReferenceKeys(media);
     const formId = subject.castForm?.id || null;
@@ -254,9 +258,10 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
       .map(({ m, sheet }) => ({
         id: musicVideoLinkedReferenceId(m.mediaKey),
         imageId: m.mediaKey,
-        role: 'character',
-        label: `${subject.name || 'Cast member'} · ${linkedAssetDetail(m, sheet)}`.slice(0, 120),
-        castGuide: true,
+        role: kind.role,
+        label: `${subject.name || kind.fallback} · ${linkedAssetDetail(m, sheet, kind)}`.slice(0, 120),
+        // Only a cast member's images are recorded as cast guides on the take.
+        ...(kind.role === 'character' ? { castGuide: true } : {}),
         linkedCast: true,
       }));
   }).filter((ref) => !isLegacyCatalogReference(project, ref));

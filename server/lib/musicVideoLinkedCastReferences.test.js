@@ -39,12 +39,17 @@ describe('catalog assets offered for a linked character', () => {
     expect(musicVideoLinkedCastReferences(linked, castMedia).map((ref) => ref.imageId)).toEqual(['child-face.png', 'child-good.png']);
   });
 
-  it('covers every linked character and skips subjects that are not linked characters', () => {
+  // Uniquely catches a linked set or prop missing from the picker, or offered under the wrong role.
+  it('covers every linked character, set and prop, and skips subjects that are not linked', () => {
     const other = { id: 'other', kind: 'character', name: 'Other', ingredientId: 'cat-chr-other' };
-    const linked = project({ concept: { subjects: [subject, other, { id: 'set', kind: 'place', name: 'Set', ingredientId: 'cat-plc' }, { id: 'free', kind: 'character', name: 'Free' }] } });
-    expect(musicVideoLinkedCastIds(linked)).toEqual([CAST, 'cat-chr-other']);
-    const refs = musicVideoLinkedCastReferences(linked, { ...castMedia, 'cat-chr-other': [{ kind: 'reference', role: 'sheet:face', mediaKey: 'other-face.png' }], 'cat-plc': [{ kind: 'portrait', mediaKey: 'set.png' }] });
-    expect(refs.map((ref) => ref.imageId)).toEqual(['portrait.png', 'face.png', 'sheet.png', 'good.png', 'other-face.png']);
+    const linked = project({ concept: { subjects: [subject, other, { id: 'set', kind: 'place', name: 'Rink', ingredientId: 'cat-plc' }, { id: 'bike', kind: 'object', name: 'Bike', ingredientId: 'cat-obj' }, { id: 'free', kind: 'character', name: 'Free' }, { id: 'mood', kind: 'mood', name: 'Mood', ingredientId: 'cat-mood' }] } });
+    expect(musicVideoLinkedCastIds(linked)).toEqual([CAST, 'cat-chr-other', 'cat-plc', 'cat-obj']);
+    const refs = musicVideoLinkedCastReferences(linked, { ...castMedia, 'cat-chr-other': [{ kind: 'reference', role: 'sheet:face', mediaKey: 'other-face.png' }],
+      'cat-plc': [{ kind: 'portrait', mediaKey: 'set.png' }, { kind: 'reference', role: 'sheet:standard', mediaKey: 'set-sheet.png' }, { kind: 'reference', mediaKey: 'set-unreviewed.png' }],
+      'cat-obj': [{ kind: 'portrait', mediaKey: 'bike.png' }], 'cat-mood': [{ kind: 'portrait', mediaKey: 'mood.png' }] });
+    expect(refs.map((ref) => ref.imageId)).toEqual(['portrait.png', 'face.png', 'sheet.png', 'good.png', 'other-face.png', 'set.png', 'set-sheet.png', 'bike.png']);
+    expect(refs.slice(-3).map(({ role, label, castGuide }) => [role, label, castGuide])).toEqual([
+      ['set', 'Rink · Canonical image', undefined], ['set', 'Rink · Set sheet', undefined], ['prop', 'Bike · Canonical image', undefined]]);
   });
 
   it('stays out of the automatic set until the director picks one', () => {
