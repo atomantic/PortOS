@@ -27,6 +27,18 @@ function recordPlayback() {
 }
 
 describe('Production proof render controls', () => {
+  it('links to the blocking storyboard even when a registered proof already exists', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard.approved = false;
+    const onNavigate = vi.fn();
+    render(<ProductionReviewPanel project={project} review={review} stage="proof" onNavigate={onNavigate} />);
+    expect(screen.getByRole('button', { name: 'Render a new proof' })).toBeDisabled();
+    const link = screen.getByRole('link', { name: 'Review the storyboard' });
+    expect(link).toHaveAttribute('href', '#mv-review-storyboard');
+    fireEvent.click(link);
+    expect(onNavigate).toHaveBeenCalledWith('produce', 'mv-review-storyboard');
+  });
+
   it('leads with the first render and submits the edited chorus interval', () => {
     const review = { ...reviewFixture(), renderProof: vi.fn() };
     const missing = { ...project, productionReview: { ...project.productionReview, proof: null } };

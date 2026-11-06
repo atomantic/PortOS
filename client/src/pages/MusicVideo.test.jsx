@@ -3649,6 +3649,25 @@ describe('MusicVideo main page project cards', () => {
 
 
 describe('direct production review navigation', () => {
+  it.each([true, false])('opens replacement controls for a registered proof (approved: %s) and restores navigation', async (approved) => {
+    const project = { ...PROJECT_ANALYZED,
+      productionReview: { proof: { excerptId: 'proof-1', basis: 'old' }, approvals: approved ? { proof: { excerptId: 'proof-1' } } : {} },
+      excerpts: [{ id: 'proof-1', status: 'complete', filename: 'proof.mp4', startSec: 0, endSec: 12, dependencyState: { status: 'stale' } }],
+    };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
+    const link = await screen.findByRole('link', { name: 'Open proof controls' });
+    expect(link).toHaveAttribute('href', '/music-video/mv-3/produce#mv-review-render');
+    fireEvent.click(link);
+    expect(await screen.findByRole('button', { name: 'Render a new proof' })).toBeEnabled();
+    await waitFor(() => expect(document.getElementById('mv-review-render')).toHaveFocus());
+    expect(screen.getByTestId('loc')).toHaveTextContent('/produce#mv-review-render');
+    fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
+    expect(await screen.findByRole('link', { name: 'Open proof controls' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
+    expect(await screen.findByRole('button', { name: 'Render a new proof' })).toBeEnabled();
+  });
+
   it('focuses the exact step on repeated clicks and restores its deep link with Back/Forward without approval', async () => {
     const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: { status: 'skipped' }, composition: { mode: 'document' },
       productionReview: { draft: { storyboardSource: 'document', storyboard: [{ id: 'shot-1' }, { id: 'shot-2' }] } },
