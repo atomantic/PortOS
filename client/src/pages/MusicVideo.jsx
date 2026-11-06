@@ -1766,6 +1766,8 @@ function ProjectWorkspace({
           open
           onClose={() => setPickerTarget(null)}
           onSelect={handleClipPickerSelect}
+          allowUpload
+          uploadToGallery
         />
       )}
       <DevArtifactDrawer
