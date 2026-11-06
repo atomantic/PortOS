@@ -6,12 +6,14 @@ const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px
 const labelCls = 'block text-[11px] text-port-text-muted';
 
 /** A text box that commits on blur, only when its text changed; a save elsewhere replaces what's shown. */
-function FieldText({ id, value = '', rows = 1, list, maxLength, disabled, onCommit }) {
+function FieldText({ id, label, value = '', rows = 1, list, maxLength, disabled, onCommit }) {
   const [draft, setDraft] = useState(value);
   const [saved, setSaved] = useState(value);
   if (value !== saved) { setSaved(value); setDraft(value); }
-  const props = { id, value: draft, disabled, maxLength, className: inputCls, onChange: (e) => setDraft(e.target.value), onBlur: () => { if (draft !== value) onCommit(draft); } };
-  return list ? <input {...props} list={list} /> : <AutoSizeTextarea {...props} rows={rows} />;
+  const props = { value: draft, disabled, maxLength, className: inputCls, onChange: (e) => setDraft(e.target.value), onBlur: () => { if (draft !== value) onCommit(draft); } };
+  return list
+    ? <input id={id} aria-label={label} list={list} {...props} />
+    : <AutoSizeTextarea id={id} aria-label={label} rows={rows} {...props} />;
 }
 
 /**
@@ -30,7 +32,7 @@ export default function ShotSheetFields({ project, scene, disabled = false, onCh
   const text = (field, label, { rows = 1, maxLength, pick = false } = {}) => (
     <div className="min-w-0">
       <label htmlFor={id(field)} className={labelCls}>{label}</label>
-      <FieldText id={id(field)} value={sheet[field] || ''} rows={rows} maxLength={maxLength} disabled={disabled}
+      <FieldText id={id(field)} label={label} value={sheet[field] || ''} rows={rows} maxLength={maxLength} disabled={disabled}
         list={pick ? id(`${field}-options`) : undefined} onCommit={(value) => setField(field, value)} />
       {pick && <datalist id={id(`${field}-options`)}>{shotSheetOptions(project, field).map((value) => <option key={value} value={value} />)}</datalist>}
     </div>
