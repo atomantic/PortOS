@@ -10,6 +10,7 @@ vi.mock('../../services/apiCatalog', () => ({
   previewCatalogSheet: vi.fn(),
   renderCatalogSheet: vi.fn(),
   listCatalogSheetVariants: vi.fn(),
+  listCatalogSheetJobs: vi.fn(async () => ({ jobs: [], hasMore: false })),
 }));
 
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: () => <span>Rendering sheet</span> }));
