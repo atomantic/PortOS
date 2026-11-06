@@ -138,6 +138,35 @@ describe('Runway pricing and lengths', () => {
     expect(runwayVideoClipQuote({ modelId: 'wan3', seconds: 4, resolution: '1080p' })).toMatchObject({ billedSec: 4, perSec: 0.2, costUsd: 0.8 });
     expect(runwayVideoClipQuote({ modelId: 'unknown' })).toBeNull();
   });
+
+  it('prices every model in the catalog at its published rate', () => {
+    for (const model of RUNWAY_VIDEO_MODELS) expect(model.pricing.perSecond, model.id).not.toBeNull();
+    const cost = (modelId, seconds, resolution, extra) => runwayVideoClipQuote({ modelId, seconds, resolution, ...extra }).costUsd;
+    expect(cost('seedance2_5', 7, '1080p')).toBe(4.76);
+    expect(cost('seedance2', 4, '4k')).toBe(6);
+    expect(cost('veo3.1', 8, '1080p')).toBe(1.6);
+    expect(cost('klingO3_pro', 5)).toBe(0.85);
+  });
+
+  it('never quotes Seedance below its per-generation minimum', () => {
+    const minimums = { seedance2_5: 0.8, seedance2: 0.56, seedance2_fast: 0.44, seedance2_mini: 0.28 };
+    for (const [modelId, minimum] of Object.entries(minimums)) {
+      const model = getRunwayVideoModel(modelId);
+      expect(model.duration.min).toBe(4);
+      expect(runwayVideoClipQuote({ modelId, seconds: 4, resolution: '480p' }).costUsd).toBe(minimum);
+    }
+  });
+
+  it('adds the per-image charge for every image a request sends', () => {
+    expect(runwayVideoClipQuote({ modelId: 'hailuo3', seconds: 5, resolution: '768p' })).toMatchObject({ inputImageUsd: 0.02, costUsd: 0.52 });
+    expect(runwayVideoClipQuote({ modelId: 'hailuo3', seconds: 5, resolution: '768p', inputImages: 3 }).costUsd).toBe(0.56);
+    const request = (extra) => buildRunwayVideoRequest({ modelId: 'hailuo3', prompt: 'A coast', seconds: 5, resolution: '768p', ...extra }).estimatedCostUsd;
+    expect(request({})).toBe(0.5);
+    expect(request({ imageUri: FRAME })).toBe(0.52);
+    expect(request({ imageUri: FRAME, endImageUri: END })).toBe(0.54);
+    expect(describeRunwayVideoRate('hailuo3', '768p')).toBe('$0.1/s at 768p + $0.02/image · bills 5s min');
+    expect(runwayVideoClipQuote({ modelId: 'seedance2_5', seconds: 5, resolution: '720p', inputImages: 5 }).inputImageUsd).toBe(0);
+  });
 });
 
 describe('Additional Runway families', () => {
