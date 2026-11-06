@@ -466,16 +466,14 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
 
   // Filter and sort by RRF score
   let results = Array.from(rrfScores.entries())
-    .map(([id, data]) => {
-      return {
-        ...indexMap.get(id),
-        rrfScore: data.rrfScore,
-        bm25Rank: data.bm25Rank,
-        vectorRank: data.vectorRank,
-        searchMethod: data.bm25Rank && data.vectorRank ? 'hybrid' :
-                     data.bm25Rank ? 'bm25' : 'vector'
-      }
-    })
+    .map(([id, data]) => ({
+      ...indexMap.get(id),
+      rrfScore: data.rrfScore,
+      bm25Rank: data.bm25Rank,
+      vectorRank: data.vectorRank,
+      searchMethod: data.bm25Rank && data.vectorRank ? 'hybrid' :
+                   data.bm25Rank ? 'bm25' : 'vector'
+    }))
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, limit)
 

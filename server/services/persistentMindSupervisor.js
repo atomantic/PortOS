@@ -1053,7 +1053,7 @@ async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, 
     identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
     instructions: prepared.instructions || '',
     memories: Array.isArray(prepared.memories) ? prepared.memories : [],
-    memoryRecall: prepared.memoryRecall ?? null,
+    memoryRecall: prepared.memoryRecall,
     reflection,
     // A local window's adapter bounds the recalled context so the wake
     // prompt leaves room for its tool rounds; absent means the default cap.
@@ -1104,7 +1104,7 @@ async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, 
       });
     },
   });
-  if (context.memoryRecall?.includedIds?.length) await recordPersistentMindRecallAccess(context.memoryRecall.includedIds);
+  await recordPersistentMindRecallAccess(context.memoryRecall?.includedIds);
   for (const event of Array.isArray(result?.events) ? result.events : []) {
     await appendMindEvent({
       kind: event.kind,

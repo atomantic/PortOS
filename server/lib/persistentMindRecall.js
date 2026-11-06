@@ -20,6 +20,8 @@ const GENERIC_MESSAGE_TERMS = new Set([
   'you', 'your', 'yours', 'yup',
 ]);
 
+// Not bm25's tokenize: its ASCII-only \w would empty a Cyrillic message and turn
+// off recall for text Postgres can match.
 const words = (text) => (typeof text === 'string' ? text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) || [] : [])
   .filter((word) => word.length > 1 && !STOP_WORDS.has(word));
 
@@ -38,7 +40,7 @@ export function persistentMindRecallTerms(text) {
  * must cover two message terms (the only term of a one-term message) and, for a
  * long message, about a third of them, so incidental overlap forces no context.
  */
-export function selectPersistentMindRecall({ message, candidates = [], mindId, maxRecords = PERSISTENT_MIND_RECALL_LIMITS.maxRecords }) {
+export function selectPersistentMindRecall({ message, candidates = [], mindId }) {
   const terms = persistentMindRecallTerms(message);
   if (terms.length === 0) return [];
   const required = Math.max(Math.min(2, terms.length), Math.ceil(terms.length * 0.3));
@@ -51,6 +53,6 @@ export function selectPersistentMindRecall({ message, candidates = [], mindId, m
     .filter(({ matched }) => matched >= required)
     // Stable: equal coverage keeps the backend's relevance order.
     .sort((a, b) => b.matched - a.matched)
-    .slice(0, maxRecords)
+    .slice(0, PERSISTENT_MIND_RECALL_LIMITS.maxRecords)
     .map(({ memory }) => memory);
 }

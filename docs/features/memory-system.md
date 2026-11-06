@@ -25,6 +25,22 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 8. **Real-time Updates**: WebSocket events for memory changes
 9. **Graph Visualization**: D3.js relationship graph (planned)
 
+## Persistent Mind message recall
+
+A human message also recalls up to three of the mind's own active memories that
+share enough terms with the unchanged message text, even when many other memories
+outrank them by importance. Search is lexical and scoped to the mind's records
+before ranking; nothing is sent to a provider and no query is generated.
+Acknowledgements, unrelated messages and self-wakes recall nothing.
+
+Recalled records follow protected memories in the context and are marked
+`recalled=current-message`. They share a reserved quarter of the memory budget,
+so each is either whole in the prompt or left out. The turn's `mind.model.request`
+event records `memoryRecallState` (`none`, `no-match`, `unavailable`, `included`,
+`omitted-budget`, `already-in-baseline`), `memoryRecallIds` and
+`memoryRecallOmittedIds`. A failed search leaves the normal context in place.
+Access stats change only for records in a prompt whose turn ran.
+
 ## Persistent Mind memory protection
 
 Persistent Mind memories have an explicit cleanup protection level, separate from
