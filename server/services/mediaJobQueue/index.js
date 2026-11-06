@@ -2027,9 +2027,9 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         job.progress = 1;
         job.statusMsg = 'Completed';
       }
-      // failed/canceled intentionally retain the last mid-render progress/statusMsg
-      // (how far it got) — consumers gate the progress UI on status === 'running',
-      // so the residual values are not displayed for terminal jobs.
+      // failed/canceled retain progress and any status message supplied by apply
+      // (for example, a retained image after finishing fails). Consumers gate
+      // the progress UI on status === 'running'.
       job.completedAt = new Date().toISOString();
     }, async () => {
       // The terminal snapshot is durable now; a restart no longer rebuilds
@@ -2098,6 +2098,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
           } catch (error) {
             await terminate(job.cancelRequested ? 'canceled' : 'failed', j => {
               j.result = result;
+              j.statusMsg = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained`;
               j.error = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained: ${error.message}`;
             }, remoteInputsDisposable === true);
           } finally { clearTimeout(finishWatchdog); delete job.visualProfileFinishing; }

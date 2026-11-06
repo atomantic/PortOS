@@ -812,7 +812,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/video-timeline` | Video timeline editor |
 | `/api/html-composition` | Offline seekable HTML-to-MP4 rendering; [contract and job endpoints](./HTML_COMPOSITIONS.md) |
 | `/api/continuous-video` | Continuous-video episodes (script + bible → chained multi-clip generation) |
-| `/api/media-jobs` | Async media job queue |
+| `/api/media-jobs` | Async media job queue. `GET /queue` is a display feed: all live jobs plus up to `limit` recent failed/canceled jobs (default 10, range 0–100), filtered by optional `kind` and `owner`. A nonempty response does not mean work is running. Check for `status: queued` or `running` to determine render activity. `kind=video-upscale` also includes recent completed jobs and retains Topaz recovery rows independently of the limit. `GET /?status=running` and `GET /?status=queued` select active states directly. Failed film finishing retains the source in `result`; its status message identifies the retained image. Retrying unchanged generation inputs resumes finishing from the server's saved source without buying another render. |
 | `/api/creative-director` | Creative Director projects |
 | `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects; [one-prompt autonomous runs](./features/music-video-autonomous.md) at `/api/music-video/autonomous` |
