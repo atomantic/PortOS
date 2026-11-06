@@ -96,11 +96,22 @@ describe('refreshInteractiveUsage', () => {
     await writeFile(join(archive, 'one.jsonl'), text);
     await writeFile(join(archive, 'copy.jsonl.zst'), Buffer.from('incomplete'));
     const args = { home, runsDir, providers: [CODEX], now: NOW };
-    await expect(refreshInteractiveUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE' });
-    expect(ledger.scan).toBeNull();
-    expect(applied).toEqual([]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const held = await refreshInteractiveUsage({ ...args, providers: [CODEX, GROK] });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { invalid_compression: 1 } });
+    // One family's inventory never holds another family's billing.
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(ledger.scan.codexCoverage).toMatchObject({ issues: { invalid_compression: 1 }, sources: [{ source: join('archived_sessions', 'copy.jsonl.zst') }] });
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('invalid_compression');
+    await refreshInteractiveUsage({ ...args, now: NOW + 1 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
     await writeFile(join(archive, 'copy.jsonl.zst'), zstdCompressSync(text));
     expect((await refreshInteractiveUsage(args)).families.codex.tokens).toBe(150);
+    expect(ledger.scan.codexCoverage).toBeNull();
     await rm(join(archive, 'one.jsonl'));
     applied.length = 0;
     await refreshInteractiveUsage({ ...args, now: NOW + HOUR });

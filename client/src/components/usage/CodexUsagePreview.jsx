@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import * as api from '../../services/api';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
-import { formatCount } from '../../utils/formatters';
+import { formatCount, timeAgo } from '../../utils/formatters';
 
 const buttonClass = 'rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed';
 
-export default function CodexUsagePreview({ job, onStatus, refreshStatus }) {
+const formatIssues = issues => Object.entries(issues || {}).map(([reason, count]) => `${reason.replaceAll('_', ' ')} (${formatCount(count)})`).join(', ');
+
+export default function CodexUsagePreview({ job, onStatus, refreshStatus, coverage = null }) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const isPreview = job?.mode === 'preview';
@@ -27,6 +29,11 @@ export default function CodexUsagePreview({ job, onStatus, refreshStatus }) {
   return (
     <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3" aria-label="Preview Codex history">
       <h3 className="text-sm font-medium text-white">Preview Codex history before repair</h3>
+      {coverage && <div role="note" aria-label="Codex usage on hold" className="rounded-lg border border-port-warning/30 bg-port-warning/5 p-3 text-xs space-y-1">
+        <p className="font-medium text-port-warning">Interactive Codex usage is on hold since {timeAgo(coverage.since, 'an unknown time')}. It is billed when the sources below can be read; nothing is lost while it waits.</p>
+        <p className="text-gray-400">Reasons: {formatIssues(coverage.issues)}.</p>
+        {coverage.sources?.length > 0 && <ul className="text-gray-400 break-words">{coverage.sources.map(({ source, issues }) => <li key={source}>{source}: {issues.join(', ').replaceAll('_', ' ')}</li>)}</ul>}
+      </div>}
       <p className="text-xs text-gray-400">Inspect raw, compressed and archived sources without changing recorded usage. Choose up to 366 days, inclusive in UTC. No provider calls.</p>
       <form onSubmit={event => { event.preventDefault(); if (valid && !busy && !starting) void preview(); }} className="flex flex-wrap items-end gap-3">
         <label htmlFor="codex-preview-from" className="text-xs text-gray-400">From (UTC)
@@ -45,7 +52,7 @@ export default function CodexUsagePreview({ job, onStatus, refreshStatus }) {
       {result && <div className="text-xs text-gray-400 space-y-2" role="status">
         <p>Preview: {result.range.from} to {result.range.to} (UTC, inclusive).</p>
         <p>{result.coverage.complete ? 'Source coverage complete within scan limits.' : 'Source coverage incomplete. Totals may omit sources or conflicts.'} Inspected {formatCount(result.coverage.filesInspected)} files; {formatCount(result.coverage.resolvedSessions)} resolved and {formatCount(result.coverage.unresolvedSessions)} unresolved sessions.</p>
-        {Object.keys(result.coverage.issues || {}).length > 0 && <p>Coverage issues: {Object.entries(result.coverage.issues).map(([reason, count]) => `${reason.replaceAll('_', ' ')} (${formatCount(count)})`).join(', ')}.</p>}
+        {Object.keys(result.coverage.issues || {}).length > 0 && <p>Coverage issues: {formatIssues(result.coverage.issues)}.</p>}
         {result.totals ? <p>Observed: {formatCount(result.totals.tokensIn)} input, {formatCount(result.totals.cacheReadTokens)} cached input and {formatCount(result.totals.tokensOut)} output tokens.</p> : <p>Observed totals unavailable.</p>}
         {Object.entries(result.byModel || {}).map(([model, counts]) => <p key={model}>{model}: {formatCount(counts.tokensIn)} input, {formatCount(counts.cacheReadTokens)} cached input, {formatCount(counts.tokensOut)} output.</p>)}
         <p className="text-port-warning">Prior ledger overlap is unknown. Observed counters are not proven missing usage. No adjustments are available from this preview; recorded usage is unchanged.</p>

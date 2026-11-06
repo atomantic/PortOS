@@ -444,7 +444,7 @@ function setReconciledMarkers(runId, siblings) {
 }
 
 /**
- * Interactive-scan state `{ watermarks, sidechainRepairedAt }`, or null when
+ * Interactive-scan state `{ watermarks, sidechainRepairedAt, codexCoverage }`, or null when
  * this ledger has never committed one (the caller then adopts the legacy
  * `usage-interactive-scan.json`). Lives in usage.json so a watermark and the
  * counts it covers commit in one atomic write. Local bookkeeping: never in the digest.
@@ -1464,6 +1464,8 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       })),
       basis: 'ledger'
     },
+    // Local diagnostics only; the federated digest is built separately.
+    codexCoverage: usageData.interactiveScan?.codexCoverage ?? null,
     lastUpdated: usageData.lastUpdated
   };
   if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
