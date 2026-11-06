@@ -206,7 +206,7 @@ export function renderCastAndSetsSheet({
     ? `<p class="sub"><b>Revision ${revision}.</b> Notes applied: ${notesApplied.map((n) => `${n.target ? `[${e(n.target)}] ` : ''}${e(n.text)}`).join(' · ')}</p>`
     : '';
   const statusLine = status === 'approved'
-    ? '<p class="sub" style="margin:10px 0 0"><b>Approved.</b> These references now condition the storyboard frames.</p>'
+    ? '<p class="sub" style="margin:0"><b>Approved.</b> These references now condition the storyboard frames.</p>'
     : `<p class="sub" style="margin:10px 0 0">${checkinMode === 'auto' ? 'Auto-approve is on: the autopilot continues to the storyboard.' : 'Add a note on any item in PortOS, then regenerate or approve to continue to the storyboard.'}</p>`;
 
   return `<!doctype html>
@@ -235,7 +235,7 @@ ${castFigures ? `<section><h2><small>Supporting cast</small>${cast.length} recur
 ${sections.length ? `<div class="bar">${bar}</div><div class="ticks"><span>0:00</span><span>${fmtTime(total)}</span></div><div class="tablewrap"><table>${rows}</table></div>` : '<p class="sub">The song has not been sectioned yet.</p>'}
 </section>
 <section><h2><small>Overlay layer</small>What ties every shot together</h2>${overlay.summary ? `<p class="sub">${e(overlay.summary)}</p>` : ''}${overlayCards ? `<div class="overlay">${overlayCards}</div>` : ''}</section>
-<div class="ask"><b>What I need from you before the storyboard</b><ol>${questions}</ol>${statusLine}</div>
+${status === 'approved' ? `<div class="ask">${statusLine}</div>` : `<div class="ask"><b>What I need from you before the storyboard</b><ol>${questions}</ol>${statusLine}</div>`}
 </div></body></html>
 `;
 }

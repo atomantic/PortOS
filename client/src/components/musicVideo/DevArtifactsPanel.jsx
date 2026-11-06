@@ -14,11 +14,20 @@ export const DEV_ARTIFACT_KIND_LABELS = {
   other: 'Other',
 };
 const KIND_ICONS = { 'cast-sets': Users, animatic: Film, treatment: FileText, storyboard: LayoutGrid, other: ImageIcon };
-export const DEV_ARTIFACT_STATUS = {
+const DEV_ARTIFACT_STATUS = {
   pending: { label: 'Pending review', tone: 'warning' },
   approved: { label: 'Approved', tone: 'success' },
   'changes-requested': { label: 'Changes requested', tone: 'error' },
 };
+/**
+ * The review badge for an artifact. The sheet an approved Cast & Sets stage
+ * names reads Approved: the stage's approval is the decision, and a version
+ * saved after it (a catalog guide rebuild, an import) must not reopen review.
+ */
+export function devArtifactStatus(artifact, stage) {
+  if (stage?.status === 'approved' && stage.artifactId === artifact.id) return DEV_ARTIFACT_STATUS.approved;
+  return DEV_ARTIFACT_STATUS[artifact.status] || DEV_ARTIFACT_STATUS.pending;
+}
 const ACCEPT = '.html,.htm,.md,.mp4,.png,.jpg,.jpeg';
 // What the production approvals accept as the visual cast/environment guide.
 const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
@@ -76,7 +85,7 @@ export default function DevArtifactsPanel({
         <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
           {artifacts.map((artifact) => {
             const Icon = KIND_ICONS[artifact.kind] || ImageIcon;
-            const status = DEV_ARTIFACT_STATUS[artifact.status] || DEV_ARTIFACT_STATUS.pending;
+            const status = devArtifactStatus(artifact, project.castAndSets);
             const open = (artifact.notes || []).filter((n) => !n.resolvedAt).length;
             return (
               <li key={artifact.id} className="min-w-0 rounded border border-port-border p-2">

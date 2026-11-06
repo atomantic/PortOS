@@ -6,7 +6,7 @@ import Pill from '../ui/Pill.jsx';
 import { musicVideoDevArtifactFileUrl } from '../../services/apiMusicVideo.js';
 import { timeAgo } from '../../utils/formatters.js';
 import { isStandalonePwa } from '../../lib/standaloneDownload.js';
-import { DEV_ARTIFACT_KIND_LABELS, DEV_ARTIFACT_STATUS } from './DevArtifactsPanel.jsx';
+import { DEV_ARTIFACT_KIND_LABELS, devArtifactStatus } from './DevArtifactsPanel.jsx';
 
 const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
 
@@ -49,7 +49,7 @@ export default function DevArtifactDrawer({
   const stageWorking = isStageSheet && ['directing', 'imaging', 'assembling'].includes(stage.status);
   const shown = (artifact.versions || []).some((v) => v.version === version) ? version : artifact.version;
   const openNotes = (artifact.notes || []).filter((n) => !n.resolvedAt);
-  const status = DEV_ARTIFACT_STATUS[artifact.status] || DEV_ARTIFACT_STATUS.pending;
+  const status = devArtifactStatus(artifact, stage);
   const targets = isStageSheet ? castAndSetsTargets(stage) : null;
   const idPrefix = `mv-dev-${artifact.id}`;
 
