@@ -2,7 +2,7 @@ import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
 import { shotSheetCast } from './musicVideoShotSheet.js';
 import { musicVideoConceptSchema } from './musicVideoValidation.js';
 import { describe, it, expect } from 'vitest';
-import { musicVideoCastGuideReferences, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -234,6 +234,18 @@ describe('catalog-linked check-in conditioning', () => {
         { subjectId: 'room', ingredientId: 'cat-loc-room', kind: 'location', name: 'Room', images: ['current-room.png'] },
       ] },
     },
+  });
+
+  // Uniquely catches a moved pick vanishing from renders when the catalog later stops offering its image.
+  it('reports a catalog pick the check-in stopped offering, but not while the check-in itself is unresolved', () => {
+    const p = catalogProject();
+    const id = musicVideoReferenceChoices(p).find((ref) => ref.imageId === 'current-lead.png').id;
+    const scene = { sceneId: 's1', frameReferenceIds: [id] };
+    expect(musicVideoCatalogPickPlans(p, [scene])).toEqual([]);
+    p.castAndSets.catalogCheckin.items[0].images = ['newer-lead.png'];
+    expect(musicVideoCatalogPickPlans(p, [scene])[0].unmappedFrame).toEqual([{ id, label: 'a removed catalog image' }]);
+    p.castAndSets.catalogCheckin.problems = [{ subjectId: 'lead', code: 'CATALOG_UNAVAILABLE', message: 'Try again' }];
+    expect(musicVideoCatalogPickPlans(p, [scene])).toEqual([]);
   });
 
   it('conditions from current catalog media without copying or modifying historical sheets', () => {

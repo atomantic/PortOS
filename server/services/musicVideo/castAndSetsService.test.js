@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -2866,6 +2867,94 @@ it('converts legacy check-in to catalog links without recasting, copying media, 
     expect(response.body.code || response.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
   }
   expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', filename: 'late.png', revision: 2 })).toBe(false);
+});
+
+describe('saved shot references across the switch to catalog links', () => {
+  const guide = { guide: true };
+  const MEDIA = {
+    'chr-lead': [{ kind: 'reference', role: 'sheet:standard', mediaKey: 'lead-sheet.png', library: guide }, { kind: 'reference', role: 'sheet:face', mediaKey: 'lead-face.png', library: guide }],
+    'chr-alt': [{ kind: 'portrait', mediaKey: 'alt-sheet.png' }],
+    // A sheet flagged out of the guides on a record with other guides is not offered.
+    'chr-guest': [{ kind: 'portrait', mediaKey: 'guest-portrait.png', library: guide }, { kind: 'reference', role: 'sheet:standard', mediaKey: 'guest-sheet.png', library: { guide: false } }],
+    'plc-street': [{ kind: 'portrait', mediaKey: 'street-plate.png' }],
+  };
+  const SUBJECTS = [
+    { id: 's-lead', kind: 'character', name: 'Lead', role: 'protagonist', ingredientId: 'chr-lead', active: true },
+    { id: 's-alt', kind: 'character', name: 'Lead', ingredientId: 'chr-alt', active: false },
+    { id: 's-guest', kind: 'character', name: 'Guest', ingredientId: 'chr-guest' },
+    { id: 's-street', kind: 'place', name: 'Street', ingredientId: 'plc-street' },
+  ];
+  const REFERENCES = [
+    { id: 'mvr-cs-character', imageId: 'lead-sheet.png', role: 'character', label: 'Lead sheet' },
+    { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character', label: 'Lead face sheet' },
+    { id: 'mvr-cs-set-street', imageId: 'street-plate.png', role: 'set', label: 'Street plate' },
+    { id: 'mvr-cs-cast-s-alt', imageId: 'alt-sheet.png', role: 'character', label: 'Alternate sheet' },
+    { id: 'mvr-cs-cast-s-guest', imageId: 'guest-sheet.png', role: 'character', label: 'Guest sheet' },
+  ];
+  const SCENES = [
+    { sceneId: 'shot-a', frameReferenceIds: ['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-set-street'], clipReferenceIds: ['mvr-cs-character'] },
+    { sceneId: 'shot-b', frameReferenceIds: ['mvr-cs-character', 'mvr-cs-cast-s-alt'] },
+    { sceneId: 'shot-c', label: 'Guest arrives', frameReferenceIds: ['mvr-cs-cast-s-guest', 'mvr-cs-character'] },
+    { sceneId: 'shot-d' },
+  ];
+  const STAGE = { status: 'approved', revision: 2, direction: { ...DIRECTION, cast: [{ id: 's-alt', name: 'Lead' }, { id: 's-guest', name: 'Guest' }] }, images: {} };
+  const sentFiles = (project, sceneId) => musicVideoConditioningReferences(project, project.scenes.find(scene => scene.sceneId === sceneId)).map(ref => ref.imageId);
+
+  async function legacyVideo(stage = STAGE) {
+    onDisk(...Object.values(MEDIA).flat().map(row => row.mediaKey));
+    const project = await seed({ concept: { subjects: SUBJECTS } });
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, scenes: SCENES,
+      visualSpec: { ...current.visualSpec, references: REFERENCES }, castAndSets: stage } }));
+    const db = { getIngredient: async id => ({ id, type: id.startsWith('plc-') ? 'place' : 'character', name: id, payload: {} }), listMediaForIngredient: async id => MEDIA[id] || [] };
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+    const catalogDB = await import('../catalogDB.js');
+    const spies = [vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient), vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient)];
+    onTestFinished(() => spies.forEach(spy => spy.mockRestore()));
+    return project;
+  }
+  const switchToCatalog = id => request(app).post(`/api/music-video/${id}/cast-and-sets/catalog`).send({});
+
+  it('sends the same images after the switch, keeps alternates out, and names the shot the catalog cannot serve', async () => {
+    const project = await legacyVideo();
+    const switched = await switchToCatalog(project.id);
+    expect(switched.status).toBe(200);
+    const after = switched.body.project;
+    expect(sentFiles(after, 'shot-a')).toEqual(['lead-sheet.png', 'lead-face.png', 'street-plate.png']);
+    const [shotA, shotB, shotC, shotD] = after.scenes;
+    expect(shotA.clipReferenceIds[0]).toBe(shotA.frameReferenceIds[0]);
+    expect(shotA.frameReferenceIds.every(id => id.startsWith('mvr-catalog-'))).toBe(true);
+    // The inactive alternate's sheet stays out, exactly as it did before the switch, and is no problem.
+    expect(shotB.frameReferenceIds[1]).toMatch(/^mvr-catalog-/);
+    expect(sentFiles(after, 'shot-b')).toEqual(['lead-sheet.png']);
+    // The pick with no equivalent stays saved so offering the image later can still move it.
+    expect(shotC.frameReferenceIds[0]).toBe('mvr-cs-cast-s-guest');
+    expect(shotC.frameReferenceIds[1]).toBe(shotA.frameReferenceIds[0]);
+    expect(shotD.frameReferenceIds).toBeUndefined();
+    const { shotReferenceProblems, movableShotReferences, problems, basis } = switched.body.catalogCheckin;
+    expect(problems).toEqual([]);
+    expect(movableShotReferences).toBe(0);
+    expect(shotReferenceProblems).toHaveLength(1);
+    expect(shotReferenceProblems[0]).toMatchObject({ sceneId: 'shot-c', shot: 3, references: ['Guest sheet'] });
+    expect(shotReferenceProblems[0].message).toContain('Shot 3 · Guest arrives');
+    // One shot's gap blocks neither approval nor the other shots' catalog choices.
+    expect(sentFiles(after, 'shot-c')).toEqual(['lead-sheet.png']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis })).status).toBe(200);
+    expect(after.visualSpec.references).toEqual(REFERENCES);
+    expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+  });
+
+  it('recovers a video switched before picks moved, without touching its approval', async () => {
+    const project = await legacyVideo({ ...STAGE, source: 'catalog' });
+    const before = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(before.body.catalogCheckin.movableShotReferences).toBe(7);
+    expect(before.body.catalogCheckin.shotReferenceProblems.map(problem => problem.sceneId)).toEqual(['shot-c']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: before.body.catalogCheckin.basis })).status).toBe(200);
+    const moved = await switchToCatalog(project.id);
+    expect(moved.status).toBe(200);
+    expect(moved.body.catalogCheckin).toMatchObject({ approved: true, basis: before.body.catalogCheckin.basis, movableShotReferences: 0 });
+    expect(moved.body.stage.revision).toBe(STAGE.revision);
+    expect(sentFiles(moved.body.project, 'shot-a')).toEqual(['lead-sheet.png', 'lead-face.png', 'street-plate.png']);
+  });
 });
 
 it('blocks catalog approval until every subject is linked and refuses conversion while old jobs are active', async () => {

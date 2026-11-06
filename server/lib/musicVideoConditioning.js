@@ -120,7 +120,7 @@ export const musicVideoReferenceChoices = (project) => [
   ...musicVideoCatalogReferences(project), ...(project?.visualSpec?.references || []), ...overflowFaceReferences(project),
 ].filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref) && !isLegacyCatalogReference(project, ref) && isActiveMusicVideoReference(project, ref));
 
-// Keep saved sheets and shot picks for history, but never use them for a new catalog-linked render.
+// Keep saved sheets for history, but never use them for a new catalog-linked render.
 export function isLegacyCatalogReference(project, ref) {
   const stage = project?.castAndSets;
   if (stage?.source !== 'catalog') return false;
@@ -156,7 +156,11 @@ function musicVideoCatalogReferences(project) {
   const checkin = stage?.catalogCheckin;
   if (stage?.source !== 'catalog' || !checkin || !Array.isArray(checkin.problems)
     || checkin.problems.length || !Array.isArray(checkin.items)) return [];
-  return checkin.items.flatMap((item) => (item.images || [])
+  return catalogItemReferences(project);
+}
+
+function catalogItemReferences(project) {
+  return (project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.images || [])
     .filter((filename) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
     .map((filename) => ({
       id: catalogReferenceId(item.subjectId, filename),
@@ -169,6 +173,60 @@ function musicVideoCatalogReferences(project) {
       ingredientId: item.ingredientId,
       formId: item.formId || null,
     }))).filter((ref) => !isLegacyCatalogReference(project, ref));
+}
+
+/**
+ * Resolves one saved shot pick against the check-in. A generated sheet's id never
+ * renders again, so it either moves to the catalog id for the same image or comes
+ * back `unmapped`. A pick its inactive owner was already keeping out of renders
+ * stays out: it only moves to another inactive subject's copy of the image.
+ */
+function catalogPickResolver(project) {
+  const stage = project.castAndSets;
+  const saved = new Map([...(stage.overflowFaceReferences || []), ...(project.visualSpec?.references || [])]
+    .filter((ref) => ref?.id && ref.imageId).map((ref) => [ref.id, ref]));
+  const { catalogCheckin: _resolved, ...generatedStage } = stage;
+  const generated = { ...project, castAndSets: generatedStage };
+  let offered = null;
+  return (id) => {
+    // A pick that already moved can still fall out when the catalog stops offering its
+    // image. An unresolved check-in has its own blocking problem, so it reports nothing here.
+    if (String(id).startsWith('mvr-catalog-')) {
+      if (stage.catalogCheckin?.problems?.length) return { id };
+      offered ??= catalogItemReferences(project);
+      return offered.some((choice) => choice.id === id) ? { id } : { id, unmapped: { id, label: 'a removed catalog image' } };
+    }
+    const ref = saved.get(id);
+    if (!ref || isOutsideMusicVideoReference(ref) || !isLegacyCatalogReference(project, ref)) return { id };
+    const wasSent = isActiveMusicVideoReference(generated, ref);
+    offered ??= catalogItemReferences(project);
+    const match = offered.find((choice) => choice.imageId === ref.imageId && isActiveMusicVideoReference(project, choice) === wasSent);
+    if (match) return { id: match.id, moved: true };
+    return wasSent ? { id, unmapped: ref } : { id };
+  };
+}
+
+/**
+ * What a catalog check-in does to each shot's saved frame and clip picks: the
+ * lists with generated sheets moved to the same catalog image (`null` for a shot
+ * left on Auto), how many moved, and the picks the check-in does not offer.
+ * Only shots with something to move or report appear.
+ */
+export function musicVideoCatalogPickPlans(project, scenes = project?.scenes || []) {
+  if (project?.castAndSets?.source !== 'catalog') return [];
+  const resolve = catalogPickResolver(project);
+  return scenes.flatMap((scene) => {
+    const plan = (ids) => (Array.isArray(ids) ? ids.map(resolve) : null);
+    const next = (picks) => picks && [...new Set(picks.map((pick) => pick.id))];
+    const lost = (picks) => (picks || []).filter((pick) => pick.unmapped).map((pick) => pick.unmapped);
+    const frame = plan(scene?.frameReferenceIds);
+    const clip = plan(scene?.clipReferenceIds);
+    const moved = [...(frame || []), ...(clip || [])].filter((pick) => pick.moved).length;
+    const unmappedFrame = lost(frame);
+    const unmapped = [...new Map([...unmappedFrame, ...lost(clip)].map((ref) => [ref.id, ref])).values()];
+    if (!moved && !unmapped.length) return [];
+    return [{ sceneId: scene.sceneId, frameReferenceIds: next(frame), clipReferenceIds: next(clip), moved, unmapped, unmappedFrame }];
+  });
 }
 
 /** The cast member and variant a scene asks its frames to show, or null when it names none. */

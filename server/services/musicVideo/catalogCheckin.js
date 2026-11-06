@@ -6,10 +6,43 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
+import { musicVideoCatalogPickPlans } from '../../lib/musicVideoConditioning.js';
 
 export const isCatalogCheckin = project => project?.castAndSets?.source === 'catalog';
 const TYPES = new Set(['character', 'place', 'object']);
 const existsOnDisk = filename => !!(resolveGalleryImage(filename) || resolveImageRef(filename));
+
+// Kept apart from `problems`, which refuse every render and empty the catalog
+// choices: one shot's pick must not stop the others. Outside `basis` too, so
+// editing a shot's references never invalidates approval or a prepared render.
+function shotReferenceReport(project, items, problems) {
+  if (!isCatalogCheckin(project)) return { shotReferenceProblems: [], movableShotReferences: 0 };
+  const plans = musicVideoCatalogPickPlans({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: { items, problems } } });
+  const scenes = project.scenes || [];
+  return {
+    movableShotReferences: plans.reduce((total, plan) => total + plan.moved, 0),
+    shotReferenceProblems: plans.filter(plan => plan.unmapped.length).map(({ sceneId, unmapped }) => {
+      const index = scenes.findIndex(scene => scene.sceneId === sceneId);
+      const label = scenes[index].label;
+      const references = [...new Set(unmapped.map(ref => ref.label || ref.role || 'a saved reference'))];
+      const them = references.length === 1 ? 'it' : 'them';
+      return { sceneId, shot: index + 1, references,
+        message: `Shot ${index + 1}${label ? ` · ${label}` : ''}: the catalog check-in does not offer ${references.join(', ')}, so new renders cannot send ${them}. Offer ${them} on the catalog record, or pick a replacement on the shot.` };
+    }),
+  };
+}
+
+/** Move each shot's saved generated sheets to the catalog id for the same image. Needs a resolved check-in. */
+export function remapCatalogShotReferences(project) {
+  const plans = new Map(musicVideoCatalogPickPlans(project).filter(plan => plan.moved).map(plan => [plan.sceneId, plan]));
+  if (!plans.size) return { project, moved: 0 };
+  const scenes = project.scenes.map((scene) => {
+    const plan = plans.get(scene.sceneId);
+    if (!plan) return scene;
+    return { ...scene, ...(plan.frameReferenceIds ? { frameReferenceIds: plan.frameReferenceIds } : {}), ...(plan.clipReferenceIds ? { clipReferenceIds: plan.clipReferenceIds } : {}) };
+  });
+  return { project: { ...project, scenes }, moved: [...plans.values()].reduce((total, plan) => total + plan.moved, 0) };
+}
 
 export async function resolveCatalogCheckin(project, { catalog, exists = existsOnDisk, client } = {}) {
   const allowsImages = musicVideoAllowsMedia(project, 'image');
@@ -53,7 +86,7 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
   const basis = createHash('sha256').update(JSON.stringify({ items, problems, concept: project?.concept?.prompt || '',
     song: [project?.trackId || null, project?.uploadedAudioFilename || null] })).digest('hex');
   return { items, problems, basis, approved: isCatalogCheckin(project) && project.castAndSets.status === 'approved'
-    && !problems.length && project.castAndSets.catalogApprovedBasis === basis };
+    && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...shotReferenceReport(project, items, problems) };
 }
 
 /** Read-time only. Never persist the resolved media or presentation fields. */
