@@ -7,7 +7,7 @@ import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet } 
 
 const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
-const FIELD_LABELS = { cameraId: 'Camera', holder: 'Held by', view: 'View', location: 'Location', light: 'Time and light', characters: 'Who', action: 'Action', emotion: 'Emotion', notes: 'Notes' };
+const FIELD_LABELS = { cameraId: 'Camera', holder: 'Held by', view: 'View', location: 'Location', timeOfDay: 'Time of day', light: 'Light', characters: 'Who', action: 'Action', emotion: 'Emotion', notes: 'Notes' };
 
 const chunks = (items, size) => Array.from({ length: Math.ceil(items.length / size) }, (_, at) => items.slice(at * size, (at + 1) * size));
 

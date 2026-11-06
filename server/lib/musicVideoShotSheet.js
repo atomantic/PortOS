@@ -11,6 +11,8 @@ import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
 
 export const SHOT_CAMERA_KINDS = ['in-world', 'observer'];
 export const SHOT_CAMERA_MAX = 12;
+// What a camera produces. A camera with neither set can shoot both.
+export const SHOT_CAMERA_OUTPUTS = ['image', 'video'];
 export const SHOT_SHEET_CHARACTERS_MAX = 24;
 // Shots per AI request, so one reply stays short enough to read and retry.
 export const SHOT_SHEET_PROPOSE_BATCH = 15;
@@ -19,7 +21,7 @@ export const SHOT_CAMERA_SET_DOWN = 'Set down';
 
 // The sheet's free-text columns, in reading order, with their character limits.
 export const SHOT_SHEET_TEXT_FIELDS = [
-  ['view', 1000], ['location', 200], ['light', 300], ['action', 2000], ['emotion', 300], ['notes', 2000],
+  ['view', 1000], ['location', 200], ['timeOfDay', 100], ['light', 300], ['action', 2000], ['emotion', 300], ['notes', 2000],
 ];
 
 const hasSheetValue = (value) => (Array.isArray(value) ? value.length > 0 : typeof value === 'string' ? value.trim() !== '' : typeof value === 'boolean' ? value : value != null);
@@ -47,10 +49,18 @@ function selectedFrameOutdated(scene) {
   return !take.prompt.includes(framePrompt);
 }
 
+/** What a shot is set to render: a photo or video, from its planned medium, else its picture layer. */
+function shotOutput(scene, direction) {
+  if (direction?.medium === 'still') return 'image';
+  if (direction?.medium === 'generated-footage' || direction?.medium === 'existing-footage') return 'video';
+  return scene.visualLayer === 'still' ? 'image' : 'video';
+}
+
 /** The sheet's rows: timed shots in song order, then untimed ones, each with its sung lyric, camera and frame state. */
 export function shotSheetRows(project) {
   const scenes = (project?.scenes || []).filter(Boolean);
   const cameras = new Map((project?.cameras || []).map((camera) => [camera.id, camera]));
+  const directions = new Map((project?.treatment?.shotDirections || []).map((direction) => [direction.sceneId, direction]));
   const timed = scenes.filter((scene) => Number.isFinite(scene.startSec)).sort((a, b) => a.startSec - b.startSec);
   const untimed = scenes.filter((scene) => !Number.isFinite(scene.startSec));
   return [...timed, ...untimed].map((scene) => {
@@ -62,6 +72,10 @@ export function shotSheetRows(project) {
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
       frameOutdated: selectedFrameOutdated(scene),
+      hasDirection: directions.has(scene.sceneId),
+      output: shotOutput(scene, directions.get(scene.sceneId)),
+      // The picture layer can disagree with the plan, and a composed render reads the layer.
+      layerOutput: scene.visualLayer === 'still' ? 'image' : 'video',
     };
   });
 }
@@ -69,7 +83,8 @@ export function shotSheetRows(project) {
 // Starting choices for the sheet's pick lists. The director can type anything; what they type is offered on other shots.
 export const SHOT_SHEET_SUGGESTIONS = {
   view: ['Wide', 'Medium', 'Close-up', 'Point of view', 'Over the shoulder', 'Low angle', 'High angle', 'Side-on tracking', 'Following from behind', 'Arm\u2019s-length selfie', 'Locked off', 'Handheld'],
-  light: ['Golden hour', 'Sunset', 'Dusk', 'Blue hour', 'Night', 'Deep night', 'Dawn', 'Daylight', 'Flash', 'Streetlight', 'Headlights'],
+  timeOfDay: ['Pre-sunset', 'Golden hour', 'Sunset', 'Dusk', 'Blue hour', 'Night', 'Deep night', 'Dawn', 'Daylight'],
+  light: ['Available light', 'Flash', 'Streetlight', 'Headlights', 'Porch light', 'Skylight', 'Lamp', 'Dark'],
   emotion: ['Joyful', 'Playful', 'Laughing', 'Free', 'Tender', 'Contemplative', 'Melancholy', 'Longing', 'Focused', 'Serious', 'Scared', 'Urgent', 'Defiant', 'Awed', 'At peace'],
 };
 
@@ -86,7 +101,7 @@ export function shotSheetOptions(project, field) {
 }
 
 // The columns every shot needs before its plan is complete, with the label shown when one is empty.
-const SHOT_SHEET_REQUIRED = [['cameraId', 'camera'], ['location', 'location'], ['light', 'time and light'], ['emotion', 'emotion'], ['action', 'action']];
+const SHOT_SHEET_REQUIRED = [['cameraId', 'camera'], ['location', 'location'], ['timeOfDay', 'time of day'], ['emotion', 'emotion'], ['action', 'action']];
 
 /**
  * What's wrong with a shot's plan, by rule alone: empty columns, an in-world
@@ -100,6 +115,9 @@ export function shotSheetProblems(row, previous = null) {
   const problems = missing.length ? [`Missing ${missing.join(', ')}`] : [];
   if (sheet.cameraId && !camera) problems.push('Its camera was removed from this video');
   if (camera?.kind === 'in-world' && !sheet.holder) problems.push(`Nobody holds the ${camera.name}`);
+  if (camera?.output && (row.output !== camera.output || row.layerOutput !== camera.output)) {
+    problems.push(`${camera.name} shoots ${camera.output === 'image' ? 'photos' : 'video'}, but this shot is set to ${row.output === camera.output ? row.layerOutput === 'image' ? 'a photo' : 'video' : row.output === 'image' ? 'a photo' : 'video'}`);
+  }
   const action = sheet.action?.trim();
   if (action && action === previous?.sheet?.action?.trim()) problems.push('Same action as the shot before');
   return problems;
@@ -109,8 +127,14 @@ export function shotSheetProblems(row, previous = null) {
 export const SHOT_SHEET_MAP_BARS = [
   ['location', 'Location', (row) => row.sheet.location?.trim() || ''],
   ['camera', 'Camera', (row) => (row.camera ? [row.camera.name, row.sheet.holder].filter(Boolean).join(' · ') : '')],
-  ['light', 'Time of day', (row) => row.sheet.light?.trim() || ''],
+  ['timeOfDay', 'Time of day', (row) => row.sheet.timeOfDay?.trim() || ''],
 ];
+
+/** The rows a stretch tapped on the map stands for, whichever list is showing them. */
+export function shotSheetMapRows(rows, filter) {
+  const bar = filter && SHOT_SHEET_MAP_BARS.find(([id]) => id === filter.bar);
+  return bar ? rows.filter((row) => bar[2](row) === filter.value) : rows;
+}
 
 /**
  * One bar of the video's map: consecutive timed shots with the same value joined
@@ -138,6 +162,37 @@ export function shotSheetStretches(rows, readValue) {
 export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
   const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
   return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
+}
+
+/**
+ * The media changes that bring shots in line with their camera's output: the
+ * planned medium and the picture layer. Footage already planned stays as it is
+ * when it's on a video camera. A shot with no compiled direction has no medium to
+ * plan yet, so only its layer changes.
+ */
+export function shotSheetMediaEdits(rows) {
+  return rows.flatMap(({ scene, camera, output, layerOutput, hasDirection }) => {
+    if (!camera?.output || (output === camera.output && layerOutput === camera.output)) return [];
+    return [{
+      sceneId: scene.sceneId,
+      ...(hasDirection && output !== camera.output ? { medium: camera.output === 'image' ? 'still' : 'generated-footage' } : {}),
+      ...(layerOutput !== camera.output ? { visualLayer: camera.output === 'image' ? 'still' : 'footage' } : {}),
+    }];
+  });
+}
+
+/**
+ * A column set across a run of shots: the sheet each one saves, leaving out shots
+ * it wouldn't change. With `onlyEmpty`, a value the director already set stays.
+ * Clearing a column (a blank value) removes it. Checked is left as it was.
+ */
+export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}) {
+  const next = typeof value === 'string' ? value.trim() : value;
+  return rows.flatMap(({ scene, sheet }) => {
+    if (onlyEmpty && hasSheetValue(sheet[field])) return [];
+    if ((sheet[field] ?? '') === (next ?? '')) return [];
+    return [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, [field]: next }) }];
+  });
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */

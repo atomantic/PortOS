@@ -85,6 +85,54 @@ describe('refreshInteractiveUsage', () => {
     await rm(runsDir, { recursive: true, force: true });
   });
 
+  it('holds the Codex watermark on incomplete archives, then bills moved duplicate sources only once', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    const text = [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'archive-session', cwd: CWD, model: 'example-codex-model' } }),
+      JSON.stringify({ timestamp: new Date(P1).toISOString(), payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+    ].join('\n');
+    await writeFile(join(archive, 'one.jsonl'), text);
+    await writeFile(join(archive, 'copy.jsonl.zst'), Buffer.from('incomplete'));
+    const args = { home, runsDir, providers: [CODEX], now: NOW };
+    await expect(refreshInteractiveUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE' });
+    expect(ledger.scan).toBeNull();
+    expect(applied).toEqual([]);
+    await writeFile(join(archive, 'copy.jsonl.zst'), zstdCompressSync(text));
+    expect((await refreshInteractiveUsage(args)).families.codex.tokens).toBe(150);
+    await rm(join(archive, 'one.jsonl'));
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + HOUR });
+    expect(applied).toEqual([]);
+  });
+
+  it('replays deferred archived Codex records after lifecycle resolution without rebilling', async () => {
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    await writeFile(join(archive, 'deferred.jsonl'), [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'deferred-archive', cwd: CWD, model: 'example-codex-model' } }),
+      ...[P1, P2].map((at, i) => JSON.stringify({ timestamp: new Date(at).toISOString(),
+        payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100 * (i + 1), output_tokens: 50 * (i + 1) } } } }))
+    ].join('\n'));
+    const runDir = join(runsDir, 'archived-owner');
+    await mkdir(runDir);
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({
+      workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null
+    }));
+    const args = { home, runsDir, providers: [CODEX], now: NOW };
+    await refreshInteractiveUsage(args);
+    expect(applied).toEqual([]);
+    expect(ledger.scan.deferred.codex.length).toBeGreaterThan(0);
+    lifecycle.projections = [{ id: 'archived-owner', status: 'completed', endedAt: new Date(P1 + 60_000).toISOString(), success: true }];
+    const recovered = await refreshInteractiveUsage({ ...args, now: NOW + 60_000 });
+    expect(recovered.families.codex.tokens).toBe(150);
+    expect(ledger.scan.deferred.codex).toEqual([]);
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + 120_000 });
+    expect(applied).toEqual([]);
+  });
+
   it('bills terminal sessions per UTC day, outside PortOS run windows, exactly once', async () => {
     // A PortOS run covers p3 in this cwd: the run path owns it, so the scan must not.
     const runDir = join(runsDir, 'run-1');

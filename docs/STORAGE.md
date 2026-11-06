@@ -1476,3 +1476,19 @@ the run record. Missing lifecycle evidence, removed run metadata and mere age do
 not prove an end. Existing advanced watermarks are not rewound automatically:
 legacy historical gaps require the explicit evidence-bound reconciliation
 preview/apply workflow. No migration rewrites historical counts for this format.
+
+### Codex accounting source inventory
+
+The shared source reader keeps a disposable, process-local inventory of projected
+accounting records, keyed by source path and device/inode/size/mtime/ctime. It
+retains no transcript prose. Source changes invalidate the entry; incomplete
+reads are never cached. There is no new durable store or automatic historical
+rewrite, and restarting a worker safely rebuilds this inventory.
+
+Accounting claims use `codex-session:v1:<SHA-256 session ID>` in the existing
+`codexHighWater` snapshot. Readers accept older path-keyed claims through current
+source aliases and the standard rollout filename's session UUID, preserving
+claims when a source moves to an archive or becomes compressed. This is additive
+key compatibility, not a rewrite or migration of historical usage totals.
+Interactive scans still atomically commit their watermark with their counts;
+incomplete source coverage leaves that watermark unchanged.
