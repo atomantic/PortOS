@@ -112,9 +112,10 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
     // The help line names a change request ahead of any problem, so then every problem is listed here.
     return dirty || review.busy || openRequests(stage).length ? problems : problems.slice(1);
   };
-  // A link to another step's section crosses steps through the page; within this step it just unfolds the target.
+  // Route across steps or between the proof and storyboard panels (only one is mounted).
+  // Other same-step sections only need unfolding.
   const jump = (tab, anchor) => event => {
-    if (onNavigate && tab !== STAGE_TABS[stage]) { event.preventDefault(); onNavigate(tab, anchor); return; }
+    if (onNavigate && (tab !== STAGE_TABS[stage] || (stage === 'proof' && anchor === 'mv-review-storyboard'))) { event.preventDefault(); onNavigate(tab, anchor); return; }
     openReviewSection(event);
   };
   const openReviewSection = event => {

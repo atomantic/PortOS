@@ -50,6 +50,7 @@ export default function ReviewStage({ board }) {
       <h4 className="text-sm font-medium">Drafts and proofs</h4>
       <ExcerptPanel
         project={project}
+        onNavigate={board.goToStage}
         rendering={excerpts.rendering}
         occupied={excerpts.occupied}
         progress={excerpts.progress}
