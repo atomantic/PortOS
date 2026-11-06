@@ -283,3 +283,8 @@ export async function reviewMindMemory(input, provenance) {
   const b = await getBackend();
   return b.reviewMindMemory(input, provenance);
 }
+
+export async function selectMindMemoryForReview(mindId) {
+  const b = await getBackend();
+  return b.selectMindMemoryForReview(mindId);
+}

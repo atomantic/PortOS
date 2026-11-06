@@ -323,6 +323,7 @@ export function assemblePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  reflection = null,
   events = [],
   rollups = [],
   journalDigest = null,
@@ -468,7 +469,21 @@ export function assemblePersistentMindContext({
     `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`,
     `# Recent trajectory\n${recentLines.join('\n')}`,
   ];
-  const text = sections.join('\n\n').slice(0, cap);
+  let text = sections.join('\n\n').slice(0, cap);
+  let reflectionState = reflection?.state || 'disabled';
+  let reflectionBlock = '';
+  if (reflectionState === 'pending' && reflection.source) {
+    const source = reflection.source;
+    const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version ?? 1, content: source.content });
+    const fence = '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map(match => match[0].length + 1)));
+    const invitation = `\n\n# Optional memory reflection\nYou may revisit this fading experience with mind.review-memory (memoryId and expectedVersion below; verdict keep, learn, archive, or defer), or ignore it. A lesson does not authorize archival. No follow-up wake or maintenance quota is requested.\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}json\n${body}\n${fence}`;
+    if (body.length <= PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars && text.length + invitation.length <= cap) {
+      reflectionBlock = invitation;
+      text += invitation;
+    } else {
+      reflectionState = 'omitted-budget';
+    }
+  }
   return {
     mindId,
     text,
@@ -484,6 +499,7 @@ export function assemblePersistentMindContext({
     } : null,
     recentEventCount: recentLines.length,
     memoryCount: memoryLines.length,
+    reflection: { ...reflection, state: reflectionState, block: reflectionBlock },
     journalActiveCount: journalSummary.activeCount,
     identityChars: identityText.length,
     instructionsChars: instructionsText.length,

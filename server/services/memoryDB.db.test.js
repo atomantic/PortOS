@@ -1399,3 +1399,19 @@ describe.skipIf(!runDb)('mind memory review transactions', () => {
     }
   });
 });
+
+describe.skipIf(!runDb)('mind reflection selection', () => {
+  it('filters ownership, retention, age and settled versions before LIMIT without access writes', async () => {
+    const owner = 'synthetic-reflection-mind';
+    const source = await memoryDB.createMemory({ content: 'Fading owned source', type: 'observation', importance: 0.1, sourceAgentId: owner });
+    const foreign = await memoryDB.createMemory({ content: 'Foreign source', type: 'fact', importance: 0.1, sourceAgentId: 'other-reflection-mind' });
+    const protectedSource = await memoryDB.createMemory({ content: 'Protected source', type: 'fact', tags: ['mind:important'], importance: 0.1, sourceAgentId: owner });
+    await query("UPDATE memories SET created_at = NOW() - INTERVAL '60 days' WHERE id = ANY($1)", [[source.id, foreign.id, protectedSource.id]]);
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, accessCount: 0 });
+    await memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: 1, verdict: 'keep' }, { mindId: owner, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toBeNull();
+    await memoryDB.updateMemory(source.id, { content: 'New source version' });
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, version: 2, accessCount: 0 });
+    await query('DELETE FROM memories WHERE id = ANY($1)', [[source.id, foreign.id, protectedSource.id]]);
+  });
+});

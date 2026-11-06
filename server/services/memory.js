@@ -1003,3 +1003,21 @@ export function reviewMindMemory(input, provenance) {
     return { ok: true, duplicate: false, memoryId: source.id, review, lastReview: updated.lastReview };
   });
 }
+
+/** Filter the index before loading source prose; no access or retention writes. */
+export async function selectMindMemoryForReview(mindId) {
+  const cutoff = Date.now() - 30 * 86400000;
+  const index = await loadIndex();
+  const candidates = index.memories.filter(meta => meta.sourceAgentId === mindId
+    && meta.status === 'active' && meta.importance < 0.15
+    && Date.parse(meta.createdAt) < cutoff && persistentMindMemoryProtection(meta) === 'standard')
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id));
+  for (const meta of candidates) {
+    const source = await loadMemory(meta.id);
+    if (source?.sourceAgentId === mindId && source.status === 'active'
+        && source.importance < 0.15 && Date.parse(source.createdAt) < cutoff
+        && persistentMindMemoryProtection(source) === 'standard'
+        && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)) return source;
+  }
+  return null;
+}

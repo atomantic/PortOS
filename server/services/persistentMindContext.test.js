@@ -9,6 +9,7 @@ const mock = vi.hoisted(() => ({
   memoryApi: {
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
+    selectMindMemoryForReview: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
     archiveMemory: vi.fn(async (id) => ({ success: true, id })),
     updateMemory: vi.fn(),
@@ -513,4 +514,25 @@ describe('trajectory annotations and Brain promotion', () => {
     })).resolves.toMatchObject({ success: true, duplicate: true, memory: { id: 'memory-1' } });
     expect(memoryApi.createMemory).toHaveBeenCalledTimes(1);
   });
+});
+
+it('distinguishes disabled, empty, unavailable and stale reflection reads without writes', async () => {
+  const { readPersistentMindReflection, revalidatePersistentMindReflection } = await import('./persistentMindContext.js');
+  const source = { id: 'source', version: 1, status: 'active', sourceAgentId: 'cos-persistent-mind', tags: [], content: 'Exact source' };
+  mock.memoryApi.selectMindMemoryForReview.mockResolvedValue(source);
+  expect(await readPersistentMindReflection()).toMatchObject({ state: 'disabled' });
+  expect(mock.memoryApi.selectMindMemoryForReview).not.toHaveBeenCalled();
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'pending', source });
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: undefined });
+  expect(await revalidatePersistentMindReflection({ source }, true)).toBe('pending');
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: 2 });
+  expect(await revalidatePersistentMindReflection({ source }, true)).toBe('changed');
+  mock.history = [{ data: { memoryReview: { memoryId: source.id } } }];
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, lastReview: { expectedVersion: 1, latestVerdict: 'keep' } });
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ inspected: { id: source.id, lastReview: { latestVerdict: 'keep' } } });
+  mock.memoryApi.selectMindMemoryForReview.mockResolvedValue(null);
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'empty' });
+  mock.memoryApi.selectMindMemoryForReview.mockRejectedValue(new Error('Unavailable'));
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'unavailable' });
+  expect(mock.memoryApi.createMemory).not.toHaveBeenCalled();
 });

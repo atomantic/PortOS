@@ -209,6 +209,7 @@ export async function preparePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  reflection = null,
   maxChars,
   recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
   promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
@@ -341,6 +342,7 @@ export async function preparePersistentMindContext({
       : 'No chosen display name yet.', identity].filter(Boolean).join('\n'),
     instructions,
     memories,
+    reflection,
     events: history,
     rollups,
     journalDigest: persistentMindJournalDigest(journal, mindId),
@@ -571,4 +573,34 @@ export function reviewPersistentMindMemory(input, context) {
     mindId: PERSISTENT_MIND_ID, turnId: context.turnId,
     providerId: context.providerId, model: context.model,
   }));
+}
+
+/** Inspect-only reflection projection. An unavailable store is never an empty one. */
+export async function readPersistentMindReflection({ enabled = false, mindId = PERSISTENT_MIND_ID } = {}) {
+  if (!enabled) return { state: 'disabled', source: null, inspected: null };
+  return Promise.all([
+    memoryBackend.selectMindMemoryForReview(mindId),
+    (async () => {
+      const latestId = (await readPersistentMindHistory(mindId))
+        .findLast(event => event.data?.memoryReview?.memoryId)?.data.memoryReview.memoryId;
+      return latestId ? memoryBackend.peekMemory(latestId) : null;
+    })(),
+  ]).then(([source, inspected]) => ({
+    state: source ? 'pending' : 'empty',
+    source: projectPersistentMindMemory(source),
+    inspected: inspected?.sourceAgentId === mindId ? projectPersistentMindMemory(inspected) : null,
+  })).catch(() => ({ state: 'unavailable', source: null, inspected: null }));
+}
+
+/** Recheck just before transport; changed/settled/protected sources are no invitation. */
+export async function revalidatePersistentMindReflection(reflection, enabled) {
+  if (!enabled) return 'disabled';
+  const previous = reflection?.source;
+  if (!previous) return reflection?.state || 'empty';
+  return memoryBackend.peekMemory(previous.id).then(source => (
+    source?.sourceAgentId === PERSISTENT_MIND_ID && source.status === 'active'
+      && (source.version ?? 1) === (previous.version ?? 1) && persistentMindMemoryProtection(source) === 'standard'
+      && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)
+      ? 'pending' : 'changed'
+  )).catch(() => 'unavailable');
 }

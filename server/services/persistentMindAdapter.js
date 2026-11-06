@@ -560,6 +560,14 @@ export function createPersistentMindTurnAdapter() {
     async run({ turnId, wake, provider, model, effort, signal, context, heartbeat, recordCapabilityEvent, callBoundary = passthroughCallBoundary }) {
       const root = await loadState();
       const taskAccess = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+      if (context?.reflection?.block) {
+        const { revalidatePersistentMindReflection } = await import('./persistentMindContext.js');
+        const state = await revalidatePersistentMindReflection(context.reflection, taskAccess.manageMind);
+        if (state !== 'pending') {
+          const text = context.text.replace(context.reflection.block, '');
+          context = { ...context, text, chars: text.length, approximateTokens: Math.ceil(text.length / 4), reflection: { ...context.reflection, state, block: '' } };
+        }
+      }
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
       const visibility = await readPersistentMindVisibility({
         root,
