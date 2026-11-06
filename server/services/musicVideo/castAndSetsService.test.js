@@ -2966,6 +2966,21 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     expect(refusedLegacy.body.code || refusedLegacy.body.error?.code).toBe('CAST_SETS_PLAN_STALE');
   });
 
+  // Uniquely catches a catalog edit made during image encoding publishing an already-stale guide as current.
+  it('refuses to save a guide when the catalog changed while it was being built', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const records = { ...RECORDS };
+    service.__setCastAndSetsDepsForTests(testDeps({
+      catalog: { getIngredient: async (id) => records[id] ?? null, listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }] },
+      sheetImage: async () => { records['plc-harbor'] = { ...RECORDS['plc-harbor'], name: 'Renamed Harbor' }; return { mime: 'image/jpeg', bytes: Buffer.from('x') }; },
+    }));
+    const refused = await rebuild(project.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_STALE');
+    expect((await projects.getStoredProject(project.id)).devArtifacts || []).toEqual([]);
+  });
+
   // Uniquely catches a rebuild versioning a stale stage sheet while Art keeps opening a different guide, or replacing a director's own guide.
   it('versions the Cast & Sets guide Art opens and keeps a different guide the director selected', async () => {
     await useCatalog();
