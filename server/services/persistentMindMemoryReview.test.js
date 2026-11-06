@@ -102,3 +102,23 @@ it('selects an old owned standard source beyond context pages without mutating i
   expect(await memory.selectMindMemoryForReview('cos-persistent-mind')).toMatchObject({ id: aged.id, version: 2 });
   await store.saveIndex(original);
 });
+
+describe('continuation note on the real memory store and ledger', () => {
+  it('keeps attribution across replacement, compaction reads and a clear', async () => {
+    const { applyPersistentMindContinuationNote, preparePersistentMindContext, readPersistentMindContinuationNote, readPersistentMindMemories } = await import('./persistentMindContext.js');
+    const apply = (turnId, note, providerId) => applyPersistentMindContinuationNote({ turnId, note, providerId, model: 'model-example' });
+
+    await apply('note-turn-1', 'First note.', 'provider-a');
+    const replaced = await apply('note-turn-2', 'Second note.', 'provider-b');
+    expect(replaced).toMatchObject({ action: 'updated', version: 2 });
+
+    const current = await readPersistentMindContinuationNote();
+    expect(current).toMatchObject({ content: 'Second note.', version: 2, provenance: { turnId: 'note-turn-2', providerId: 'provider-b', model: 'model-example' } });
+    expect((await readPersistentMindMemories()).map((item) => item.id)).not.toContain(current.memoryId);
+    expect((await preparePersistentMindContext({ providerId: 'provider-c' })).text).toContain('Second note.');
+
+    expect(await apply('note-turn-3', '', 'provider-b')).toMatchObject({ action: 'cleared' });
+    expect(await readPersistentMindContinuationNote()).toBeNull();
+    expect(await memory.peekMemory(current.memoryId)).toMatchObject({ status: 'archived', content: 'Second note.' });
+  });
+});

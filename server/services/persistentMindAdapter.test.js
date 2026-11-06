@@ -22,6 +22,7 @@ const mock = vi.hoisted(() => ({
   recipeCatalog: [],
   reflectionState: 'pending',
   realRegistry: null,
+  applyContinuationNote: vi.fn(async () => ({ action: 'created', memoryId: 'note-1', version: 1 })),
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -43,6 +44,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   resolveScreenshot: vi.fn((filename) => filename ? `/tmp/portos-screenshots/${filename}` : null),
 }));
 vi.mock('./persistentMindContext.js', () => ({
+  applyPersistentMindContinuationNote: (...args) => mock.applyContinuationNote(...args),
   createPersistentMindMemoryFromCandidate: (...args) => mock.createPersistentMindMemoryFromCandidate(...args),
   readPersistentMindMemories: vi.fn(async () => mock.memories),
   readPersistentMindName: vi.fn(async () => resolvePersistentMindChosenName(mock.memories)),
@@ -267,6 +269,59 @@ describe('persistent mind adapter', () => {
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Environment visibility: READY');
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('# Recent user actions (last 24h)');
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('PortOS tools: read=false write=false');
+  });
+
+  describe('continuation note', () => {
+    const shown = { state: 'included', memoryId: 'note-1', version: 3, content: 'Prior note' };
+    const runTurn = (response, overrides = {}) => {
+      mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify(response) });
+      return createPersistentMindTurnAdapter().run({
+        turnId: 'note-turn', wake: { kind: 'self' }, ...profile,
+        signal: new AbortController().signal, context: { text: '# Context', continuationNote: shown }, ...overrides,
+      });
+    };
+    beforeEach(() => {
+      mock.applyContinuationNote.mockReset();
+      mock.applyContinuationNote.mockResolvedValue({ action: 'updated', memoryId: 'note-1', version: 4 });
+    });
+
+    it.each([
+      ['omitted', {}],
+      ['null', { continuationNote: null }],
+    ])('leaves the note alone when the field is %s', async (_name, field) => {
+      await runTurn({ thinkingSummary: 'Working.', ...field });
+      expect(mock.applyContinuationNote).not.toHaveBeenCalled();
+    });
+
+    it('passes an explicit clear, with the note this wake read and the route that ran', async () => {
+      await runTurn({ continuationNote: '' });
+      expect(mock.applyContinuationNote).toHaveBeenCalledWith(expect.objectContaining({
+        turnId: 'note-turn', note: '', providerId: profile.provider.id, model: 'example-model',
+        expected: { memoryId: 'note-1', version: 3 },
+      }));
+    });
+
+    it('never writes from an oversized, malformed, or failed turn', async () => {
+      await expect(runTurn({ thinkingSummary: 'Long.', continuationNote: 'x'.repeat(4_001) })).rejects.toThrow();
+      await expect(runTurn({ thinkingSummary: 'Bad.', continuationNote: 7 })).rejects.toThrow();
+      mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({
+        continuationNote: 'From a round that later fails',
+        toolCalls: [{ name: 'tools.list', arguments: {} }],
+      }) });
+      mock.runPrompt.mockRejectedValueOnce(new Error('provider failed'));
+      await expect(createPersistentMindTurnAdapter().run({
+        turnId: 'note-turn', wake: { kind: 'self' }, ...profile,
+        signal: new AbortController().signal, context: { text: '# Context', continuationNote: shown },
+      })).rejects.toThrow('provider failed');
+      expect(mock.applyContinuationNote).not.toHaveBeenCalled();
+    });
+
+    it('tells the mind when its replacement was refused, without failing the turn', async () => {
+      mock.applyContinuationNote.mockResolvedValue({ action: 'stale' });
+      const result = await runTurn({ thinkingSummary: 'Working.', continuationNote: 'New note' });
+      expect(result.events.find((event) => event.kind === 'mind.continuation.refused').data.reason).toBe('stale');
+      expect(result.events.find((event) => event.kind === 'mind.thought').data.displayText).toContain('replacement was refused');
+    });
   });
 
   it('executes semantic tool calls and feeds normalized results into a final provider round', async () => {

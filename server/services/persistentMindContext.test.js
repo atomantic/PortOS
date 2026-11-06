@@ -36,6 +36,7 @@ vi.mock('./memoryBackend.js', () => mock.memoryApi);
 
 const {
   appendPersistentMindAnnotation,
+  applyPersistentMindContinuationNote,
   archivePersistentMindMemories,
   clearPersistentMindRollups,
   createPersistentMindMemoryFromCandidate,
@@ -535,4 +536,138 @@ it('distinguishes disabled, empty, unavailable and stale reflection reads withou
   mock.memoryApi.selectMindMemoryForReview.mockRejectedValue(new Error('Unavailable'));
   expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'unavailable' });
   expect(mock.memoryApi.createMemory).not.toHaveBeenCalled();
+});
+
+describe('continuation note', () => {
+  const NOTE = 'Open thread: the draft is waiting on review. Next: read ```the reply``` first.';
+  let records;
+
+  const installStore = () => {
+    records = new Map();
+    let created = 0;
+    mock.memoryApi.getMemories.mockImplementation(async ({ tags, status, offset = 0, limit = 100 }) => ({
+      memories: [...records.values()]
+        .filter((memory) => memory.status === status && (!tags || tags.some((tag) => memory.tags.includes(tag))))
+        .slice(offset, offset + limit),
+    }));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
+    mock.memoryApi.createMemory.mockImplementation(async (input) => {
+      const memory = { id: `note-${++created}`, version: 1, updatedAt: '2026-01-01T00:00:00.000Z', ...input };
+      records.set(memory.id, memory);
+      return structuredClone(memory);
+    });
+    mock.memoryApi.updateMemory.mockImplementation(async (id, { expectedVersion, changedBy: _by, changeReason: _reason, ...updates }) => {
+      const memory = records.get(id);
+      if (expectedVersion !== undefined && expectedVersion !== memory.version) {
+        throw Object.assign(new Error('conflict'), { code: 'MEMORY_VERSION_CONFLICT' });
+      }
+      const next = { ...memory, ...updates, version: memory.version + Number(updates.content !== undefined) };
+      records.set(id, next);
+      return structuredClone(next);
+    });
+    mock.appendMindEvent.mockImplementation(async (event) => {
+      mock.history.push({ ...event, at: '2026-01-02T00:00:00.000Z' });
+      return { appended: true, event };
+    });
+  };
+
+  const write = (turnId, note, overrides = {}) => applyPersistentMindContinuationNote({
+    turnId, note, providerId: 'provider-a', model: 'model-a', ...overrides,
+  });
+
+  beforeEach(() => {
+    mock.history = [];
+    installStore();
+  });
+
+  it('reaches later wakes unchanged, once, across provider swaps and past the ordinary memory page', async () => {
+    for (let index = 0; index < 150; index += 1) {
+      records.set(`ordinary-${index}`, { id: `ordinary-${index}`, status: 'active', sourceAgentId: 'cos-persistent-mind', content: `Ordinary ${index}`, tags: [], importance: 1 });
+    }
+    await write('turn-1', NOTE);
+    const memories = await readPersistentMindMemories();
+    expect(memories.some((memory) => memory.content === NOTE)).toBe(false);
+
+    const context = await preparePersistentMindContext({ memories, providerId: 'provider-b', model: 'model-b', maxChars: 100_000 });
+    expect(context.text.split(NOTE)).toHaveLength(2);
+    expect(context.text).toContain('Written by this mind at 2026-01-02T00:00:00.000Z, turn turn-1, on provider-a/model-a.');
+    expect(context.continuationNote).toMatchObject({ state: 'included', content: NOTE, version: 1 });
+    expect(mock.history).toHaveLength(1);
+    expect(JSON.stringify(mock.history)).not.toContain('the draft');
+  });
+
+  it('replaces through a version, clears to history, and starts a fresh record afterward', async () => {
+    await write('turn-1', NOTE);
+    expect(await write('turn-2', 'Second note')).toMatchObject({ action: 'updated', version: 2 });
+    expect(records.get('note-1').content).toBe('Second note');
+
+    expect(await write('turn-3', '')).toMatchObject({ action: 'cleared', memoryId: 'note-1' });
+    expect(records.get('note-1')).toMatchObject({ status: 'archived', content: 'Second note' });
+    expect((await preparePersistentMindContext({})).continuationNote).toEqual({ state: 'none' });
+    expect(mock.history.at(-1)).toMatchObject({ kind: 'mind.continuation.cleared', turnId: 'turn-3' });
+
+    expect(await write('turn-4', 'Third note')).toMatchObject({ action: 'created', memoryId: 'note-2' });
+  });
+
+  it('applies one turn once and refuses a replacement of a note it did not read', async () => {
+    await write('turn-1', NOTE);
+    expect(await write('turn-1', 'Different retry text')).toMatchObject({ action: 'replayed' });
+    expect(records.get('note-1')).toMatchObject({ content: NOTE, version: 1 });
+
+    expect(await write('turn-2', NOTE)).toMatchObject({ action: 'unchanged' });
+    expect(records.get('note-1').version).toBe(1);
+
+    expect(await write('turn-3', 'Stale', { expected: { memoryId: 'note-1', version: 9 } })).toEqual({ action: 'stale' });
+    expect(await write('turn-3', 'Stale', { expected: { memoryId: null, version: null } })).toEqual({ action: 'stale' });
+    mock.memoryApi.updateMemory.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'MEMORY_VERSION_CONFLICT' }));
+    expect(await write('turn-3', 'Raced')).toEqual({ action: 'stale' });
+    expect(records.get('note-1').content).toBe(NOTE);
+    expect(mock.history).toHaveLength(1);
+  });
+
+  it('survives bulk cleanup without counting as an archivable memory', async () => {
+    await write('turn-1', NOTE);
+    expect(await archivePersistentMindMemories()).toEqual({ archived: 0, preserved: 1 });
+    expect(records.get('note-1').status).toBe('active');
+  });
+
+  it('admits the whole note or reports it omitted, keeping identity and the newest message', async () => {
+    const long = `${'word '.repeat(300)}END`;
+    await write('turn-1', long);
+    mock.history.push({
+      kind: 'mind.message.accepted', mindId: 'cos-persistent-mind', eventId: 'message-1', sequence: 5,
+      at: '2026-01-03T00:00:00.000Z', data: { displayText: 'Latest human message', previousSequence: null },
+    });
+    const small = await preparePersistentMindContext({
+      identity: 'Stable identity', maxChars: 1_500,
+      memories: [{ id: 'core', content: 'Core commitment', tags: ['mind:core-identity'], status: 'active' }],
+    });
+    expect(small.continuationNote.state).toBe('omitted-budget');
+    expect(small.text).toContain('# Continuation note\n(omitted due to context budget');
+    expect(small.text).not.toContain('word word');
+    for (const kept of ['Stable identity', 'Core commitment', 'Latest human message']) expect(small.text).toContain(kept);
+
+    const roomy = await preparePersistentMindContext({ identity: 'Stable identity', maxChars: 5_000 });
+    expect(roomy.continuationNote.state).toBe('included');
+    expect(roomy.text).toContain(long);
+  });
+
+  it('cannot be forged through ordinary memory paths or attributed after an outside edit', async () => {
+    await createPersistentMindMemory({ content: 'Posing as the note', tags: ['mind:continuation-note'] });
+    await createPersistentMindMemoryFromCandidate({ candidateId: 'turn-9:0', turnId: 'turn-9', content: 'Candidate posing', tags: ['mind:continuation-note'] });
+    await promotePersistentMindMemory({ id: 'promotion-1', approved: true, content: 'Promoted posing', tags: ['mind:continuation-note'] });
+    expect((await preparePersistentMindContext({})).continuationNote).toEqual({ state: 'none' });
+
+    await write('turn-1', NOTE);
+    await expect(updatePersistentMindMemory('note-4', { content: 'Custodian edit' })).rejects.toMatchObject({ status: 409 });
+    expect(await protectPersistentMindMemory({ memoryId: 'note-4', protection: 'core-identity' })).toMatchObject({ ok: false });
+    expect(records.get('note-4')).toMatchObject({ content: NOTE, tags: ['mind:continuation-note', 'mind:important'] });
+
+    // A legacy record or an edit through the generic Brain surface is never re-signed.
+    records.set('note-4', { ...records.get('note-4'), content: 'Edited elsewhere' });
+    const edited = await preparePersistentMindContext({});
+    expect(edited.continuationNote.provenance).toBeNull();
+    expect(edited.text).toContain('Author unknown');
+    expect(edited.text).not.toContain('Written by this mind');
+  });
 });

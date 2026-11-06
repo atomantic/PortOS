@@ -10,6 +10,27 @@ export const PERSISTENT_MIND_MEMORY_PROTECTION_TAGS = Object.freeze({
   important: 'mind:important',
 });
 
+// The one current note the mind leaves its next wake. Only the continuation
+// writer may apply this tag; every other tag path strips it, so a memory
+// candidate, panel edit, or promotion cannot pose as the note.
+export const PERSISTENT_MIND_CONTINUATION_TAG = 'mind:continuation-note';
+export const PERSISTENT_MIND_CONTINUATION_NOTE_MAX_CHARS = 4_000;
+
+// null is a local model's spelling of an absent field, so it preserves the note;
+// only an explicit empty string clears it.
+export const persistentMindContinuationNoteSchema = z.string().trim()
+  .max(PERSISTENT_MIND_CONTINUATION_NOTE_MAX_CHARS)
+  .nullish()
+  .transform((value) => value ?? undefined);
+
+export const isPersistentMindContinuationNote = (memory) => Array.isArray(memory?.tags)
+  && memory.tags.includes(PERSISTENT_MIND_CONTINUATION_TAG);
+
+export const persistentMindContinuationNoteTags = () => [
+  PERSISTENT_MIND_CONTINUATION_TAG,
+  PERSISTENT_MIND_MEMORY_PROTECTION_TAGS.important,
+];
+
 export const persistentMindMemoryProtectionSchema = z.enum(['standard', 'important', 'core-identity']);
 export const persistentMindProtectMemorySchema = z.object({
   memoryId: memoryIdSchema.max(128),
@@ -24,7 +45,7 @@ export function persistentMindMemoryProtection(memory) {
 
 export function persistentMindMemoryTags(tags, protection) {
   const level = persistentMindMemoryProtectionSchema.parse(protection);
-  const reserved = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
+  const reserved = [...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS), PERSISTENT_MIND_CONTINUATION_TAG];
   const ordinary = [...new Set((Array.isArray(tags) ? tags : [])
     .filter((tag) => typeof tag === 'string' && tag && !reserved.includes(tag)))];
   const marker = PERSISTENT_MIND_MEMORY_PROTECTION_TAGS[level];

@@ -199,6 +199,8 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
         </div>
       </section>}
 
+      {view !== 'memories' && data?.preview && <ContinuationNote note={data.preview.continuationNote} />}
+
       {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
         <h3 id="mind-preview-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Eye size={16} aria-hidden="true" /> Effective context preview</h3>
         <p className="mt-1 text-xs text-port-text-muted">
@@ -219,6 +221,29 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
         </details>
       </section>}
     </div>
+  );
+}
+
+function ContinuationNote({ note }) {
+  const provenance = note?.provenance;
+  const hasNote = typeof note?.content === 'string';
+  return (
+    <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-continuation-heading">
+      <h3 id="mind-continuation-heading" className="text-sm font-semibold text-port-text">Continuation note</h3>
+      <p className="mt-1 text-xs text-port-text-muted">The mind's own note to its next wake, kept word for word across compaction and provider changes. Only the mind can change it; earlier wording stays in the memory's history.</p>
+      {!hasNote && <p className="mt-2 text-xs text-port-text-muted">The mind has not left a continuation note.</p>}
+      {hasNote && <div className="mt-3 space-y-2 text-xs text-port-text">
+        <p className="text-port-text-muted">
+          {provenance
+            ? `Written by the mind · ${provenance.providerId || 'unknown'} / ${provenance.model || 'default'} · ${formatDateTime(provenance.at)} · turn ${provenance.turnId || 'unknown'}`
+            : `Author unknown: no retained runtime event attests this wording · last changed ${note.updatedAt ? formatDateTime(note.updatedAt) : 'at an unknown time'}`}
+          {` · version ${note.version}`}
+        </p>
+        {note.state === 'omitted-budget' && <Banner tone="warning" title="Omitted from this context">The note does not fit this context budget, so the wake is told it was omitted instead of receiving part of it. The stored note is unchanged.</Banner>}
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-port-border p-3">{note.content}</pre>
+        <Link className="inline-block text-port-accent underline" to={`/cos/memory/${encodeURIComponent(note.memoryId)}`}>Memory and version history</Link>
+      </div>}
+    </section>
   );
 }
 

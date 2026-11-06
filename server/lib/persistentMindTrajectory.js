@@ -50,6 +50,12 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   'mind.call.requested',
   'mind.call.placed',
   'mind.call.suppressed',
+  // Provenance for the continuation note: who wrote which wording. The note's
+  // text lives in the versioned memory record, never in the ledger or prompt
+  // events, so it cannot be compacted into a rollup.
+  'mind.continuation.updated',
+  'mind.continuation.cleared',
+  'mind.continuation.refused',
 ]);
 
 const MIND_KIND_SET = new Set(PERSISTENT_MIND_EVENT_KINDS);
@@ -313,6 +319,22 @@ export function buildPersistentMindRollup({
   });
 }
 
+// Longer than any backtick run in the body, so exact text cannot close its fence.
+const fenceFor = (body) => '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((match) => match[0].length + 1)));
+
+const continuationNoteAttribution = ({ provenance, updatedAt }) => (provenance
+  ? `Written by this mind at ${provenance.at}, turn ${provenance.turnId || 'unknown'}, on ${provenance.providerId || 'unknown'}/${provenance.model || 'default'}.`
+  : `Author unknown: no retained runtime event attests this wording. Last changed ${updatedAt || 'at an unknown time'}.`);
+
+// Exact stored wording inside its own fence. No clamp or fence rewrite: it is
+// admitted whole or reported as omitted.
+const renderContinuationNote = (note) => {
+  const fence = fenceFor(note.content);
+  return `# Continuation note\nYour note to your next wake, kept outside compaction. ${continuationNoteAttribution(note)}\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}text\n${note.content}\n${fence}`;
+};
+
+const renderOmittedContinuationNote = (note) => `# Continuation note\n(omitted due to context budget: ${note.content.length} chars. The stored note is unchanged. Omit continuationNote to keep it.)`;
+
 /**
  * Render stable identity + older rollups + recent verbatim events into a hard
  * character budget. Unavailable/failed/stale summary state is explicit;
@@ -323,6 +345,7 @@ export function assemblePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  continuationNote = null,
   reflection = null,
   events = [],
   rollups = [],
@@ -387,6 +410,7 @@ export function assemblePersistentMindContext({
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
   );
   const seenMemoryContent = new Set();
+  let coreIdentityChars = 0;
   const memoryLines = (Array.isArray(memories) ? memories : [])
     .filter((memory) => memory && typeof memory === 'object')
     .sort(comparePersistentMindMemories)
@@ -399,7 +423,9 @@ export function assemblePersistentMindContext({
       seenMemoryContent.add(key);
       const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
       const protection = persistentMindMemoryProtection(memory);
-      return `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}] ${content}`;
+      const line = `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}] ${content}`;
+      if (protection === 'core-identity') coreIdentityChars += line.length + 1;
+      return line;
     })
     .filter(Boolean);
   const memoryText = bounded(
@@ -415,11 +441,21 @@ export function assemblePersistentMindContext({
     ? journalDigest
     : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
   const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
+  // Identity, instructions, protected identity memories, and the newest human
+  // input outrank the note. Whatever is left admits it whole or not at all.
+  const latestInput = recent.findLast((event) => ['mind.message.accepted', 'mind.annotation.accepted'].includes(event.kind));
+  const requiredChars = identityText.length + instructionsText.length + mindId.length + 500
+    + Math.min(coreIdentityChars, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars)
+    + (latestInput ? renderPersistentMindContextEvent(latestInput).length : 0);
+  const fullNoteSection = continuationNote ? renderContinuationNote(continuationNote) : '';
+  const noteAdmitted = Boolean(continuationNote) && fullNoteSection.length <= cap - requiredChars;
+  const noteSection = !continuationNote ? ''
+    : noteAdmitted ? fullNoteSection : renderOmittedContinuationNote(continuationNote);
   // Leave room for the full delimiter even with a small context budget.
   // Truncating the assembled prefix must never cut through a memory fence.
   const memoryBudget = Math.max(0, Math.min(
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
-    cap - identityText.length - instructionsText.length - mindId.length - 500,
+    cap - identityText.length - instructionsText.length - mindId.length - 500 - noteSection.length,
   ));
   const memoryBlock = memoryBudget > 0
     ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
@@ -427,6 +463,8 @@ export function assemblePersistentMindContext({
   const prefix = [
     `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
     `# Operating instructions\n${instructionsText || '(none)'}`,
+    // Ahead of the sections the final slice can cut, so an admitted note stays whole.
+    ...(noteSection ? [noteSection] : []),
     `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`,
     `# Decision journal\n${journalText || '(none)'}`,
   ].join('\n\n');
@@ -475,7 +513,7 @@ export function assemblePersistentMindContext({
   if (reflectionState === 'pending' && reflection.source) {
     const source = reflection.source;
     const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version ?? 1, content: source.content });
-    const fence = '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map(match => match[0].length + 1)));
+    const fence = fenceFor(body);
     const invitation = `\n\n# Optional memory reflection\nYou may revisit this fading experience with mind.review-memory (memoryId and expectedVersion below; verdict keep, learn, archive, or defer), or ignore it. A lesson does not authorize archival. No follow-up wake or maintenance quota is requested.\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}json\n${body}\n${fence}`;
     if (body.length <= PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars && text.length + invitation.length <= cap) {
       reflectionBlock = invitation;
@@ -499,6 +537,9 @@ export function assemblePersistentMindContext({
     } : null,
     recentEventCount: recentLines.length,
     memoryCount: memoryLines.length,
+    continuationNote: continuationNote
+      ? { ...continuationNote, state: noteAdmitted ? 'included' : 'omitted-budget' }
+      : { state: 'none' },
     reflection: { ...reflection, state: reflectionState, block: reflectionBlock },
     journalActiveCount: journalSummary.activeCount,
     identityChars: identityText.length,
