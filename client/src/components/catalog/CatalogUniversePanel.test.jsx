@@ -265,3 +265,30 @@ it('retries a failed socket refresh after usage has already loaded', async () =>
   expect(screen.getByText('missing')).toBeInTheDocument();
   expect(getCatalogUniverseContext).toHaveBeenCalledTimes(2);
 });
+
+it('opens Fork directly, edits only the new character, and discards cancelled modifications', async () => {
+  const ingredient = { id: 'cat-chr-1', type: 'character', name: 'Example courier',
+    payload: { physicalDescription: 'A tall courier.', visualNotes: 'Blue coat.' } };
+  forkCatalogIngredient.mockResolvedValue({ id: 'cat-chr-fork', type: 'character' });
+  render(<MemoryRouter><Harness ingredient={ingredient} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Fork', exact: true }));
+  const description = await screen.findByLabelText('physical description');
+  expect(description).toHaveValue('A tall courier.');
+  fireEvent.change(description, { target: { value: 'Cancelled version.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(forkCatalogIngredient).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Fork', exact: true }));
+  expect(await screen.findByLabelText('physical description')).toHaveValue('A tall courier.');
+  fireEvent.change(screen.getByLabelText('physical description'), { target: { value: 'A tall female courier.' } });
+  fireEvent.change(screen.getByLabelText('visual notes'), { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText('Destination universe'), { target: { value: 'first' } });
+  fireEvent.change(screen.getByLabelText('Fork name'), { target: { value: 'Example new courier' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create fork' }));
+  await waitFor(() => expect(navigate).toHaveBeenCalledWith('/casting/cat-chr-fork'));
+  expect(forkCatalogIngredient).toHaveBeenCalledWith('cat-chr-1', {
+    universeId: 'first', name: 'Example new courier', operationKey: expect.any(String),
+    fields: { physicalDescription: 'A tall female courier.', visualNotes: '' },
+  }, { silent: true });
+  expect(ingredient.payload).toEqual({ physicalDescription: 'A tall courier.', visualNotes: 'Blue coat.' });
+});
