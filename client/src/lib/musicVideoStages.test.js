@@ -379,12 +379,12 @@ describe('stage route param', () => {
     expect(resolveStageParam(undefined)).toBeNull();
   });
 
-  it('keeps old stage links and places optional Story between Song and Plan, with Plan before Look', () => {
+  it('keeps old stage links and puts optional Story first, before Song, with Storyboard before Look', () => {
     expect(resolveStageParam('compose')).toBe('produce');
     expect(resolveStageParam('shots')).toBe('produce');
     expect(resolveStageParam('plan')).toBe('board');
     expect(resolveStageParam('storyboard')).toBe('board');
-    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Song', 'Story', 'Storyboard', 'Look', 'Shots', 'Final render', 'Publish']);
+    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Story', 'Song', 'Storyboard', 'Look', 'Shots', 'Final render', 'Publish']);
     expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('board');
     for (const stage of MUSIC_VIDEO_STAGES) expect(stage.doneWhen).toMatch(/^Done when /);
   });
@@ -486,6 +486,8 @@ describe('stageChecklist', () => {
     const items = stageChecklist('cast-sets', castProject(), NOT_APPROVED);
     expect(items.map((i) => [i.id, i.done])).toEqual([['direction', true], ['guide', true], ['approve-art', false]]);
     expect(items[1].label).toBe('Visual guide chosen: Cast sheet');
+    expect(stageChecklist('cast-sets', castProject({ devArtifacts: [{ id: 'sheet', title: 'Cast sheet', mimeType: 'text/html', version: 35 }] }), NOT_APPROVED)[1].label)
+      .toBe('Visual guide chosen: Cast sheet v35');
     expect(items[2].detail).toMatch(/Approving a sheet file does not approve the art direction/);
     expect(items[2].action).toEqual({ label: 'Review art direction', anchor: 'mv-review-art', stage: 'cast-sets' });
     // Its done answer matches the tab's own state, so the checklist and the "needs you" mark agree.
@@ -697,6 +699,8 @@ describe('stepNotes', () => {
       setup: '4:40 · 2 lyric lines', story: '', 'cast-sets': 'Visual guide chosen', board: '2 shots',
       produce: '1 of 2 shots have their picture', review: '', publish: '',
     });
+    // The step names the guide version the director settled on.
+    expect(stepNotes({ ...project, devArtifacts: [{ id: 'g', title: 'Guide', version: 35 }] })['cast-sets']).toBe('Visual guide v35');
     expect(stepNotes({ ...project, composition: { mode: 'document' } }).produce).toBe('Picture drawn by the composition');
     expect(stepNotes({ id: 'p' })).toMatchObject({ setup: 'No track yet', board: '', produce: '' });
     expect(stepNotes({ ...project, renderHistoryId: 'r', renderDependencyState: { status: 'stale' } }).review).toBe('Out of date');
