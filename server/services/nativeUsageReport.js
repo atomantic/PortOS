@@ -20,7 +20,7 @@ export async function captureNativeUsageReport({ home = homedir(), limits = NATI
   const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
   const codexEvidence = await getCodexAccountUsageEvidence();
   const transcripts = {};
-  for (const family of ['agy', 'claude', 'grok']) transcripts[family] = await getNativeTranscriptCoverage(family, { home, limits });
+  for (const family of ['agy', 'claude', 'grok']) transcripts[family] = await getNativeTranscriptCoverage(family, { home, limits, includeRecords: true });
   return buildNativeUsageReport({
     instanceId: await getInstanceId(), capturedAt, codexEvidence, transcripts, scanLimits: limits,
   });

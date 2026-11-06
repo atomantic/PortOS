@@ -120,6 +120,21 @@ describe('reproducible staged input', () => {
     expect(report.participantKey).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it('unions independently captured copies by projected identity, not participant aggregates', async () => {
+    await materialize(claude);
+    const first = await capture();
+    getInstanceId.mockResolvedValue('00000000-0000-4000-8000-00000000000b');
+    const copied = await capture();
+    const matrix = buildNativeUsageMatrix({ reports: [first, copied], selections: [{
+      family: 'claude', accountLabel: 'acct-a', historyScope: 'operator-confirmed-retained-history', members: [first.participantKey, copied.participantKey],
+    }] });
+    expect(first.contractVersion).toBe(2);
+    expect(matrix.families.find(({ family }) => family === 'claude')).toMatchObject({
+      merge: { status: 'partial', completeness: 'unknown', totals: { totalTokens: 41 } },
+      accounts: [{ coverage: { uniqueRecords: 2, measuredRecords: 2, duplicateRecords: 2 }, records: expect.any(Array) }],
+    });
+  });
+
   it('flows a captured report into the matrix, and an unset instance identity refuses to merge', async () => {
     getCodexAccountUsageEvidence.mockResolvedValue(codexEvidence(fixtures.find(({ family }) => family === 'codex').scenarios[0]));
     const report = await capture();

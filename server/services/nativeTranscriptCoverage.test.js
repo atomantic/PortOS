@@ -102,6 +102,78 @@ describe('read-only native retained history', () => {
     }
   });
 
+  it('projects private, sorted Claude identities and deterministic tombstones regardless of emission order', async () => {
+    const first = claude('private-message', 9);
+    first.requestId = 'private-request';
+    first.message.stop_reason = 'end_turn';
+    first.message.content = 'private prompt';
+    const copy = { ...first, timestamp: '2026-03-03T00:00:00Z' };
+    const bad = claude('invalid', -1);
+    const inconsistent = claude('inconsistent');
+    inconsistent.message.usage.cache_creation = { ephemeral_5m_input_tokens: 90 };
+    const differentRequest = { ...claude('request-collision'), requestId: 'different-request' };
+    const rows = [copy, first, bad, inconsistent, claude('request-collision'), differentRequest];
+    let projection;
+    for (const order of [rows, [...rows].reverse()]) {
+      await save('.claude/projects/private-project/s.jsonl', order);
+      const result = await getNativeTranscriptCoverage('claude', { home, includeRecords: true });
+      expect(result).toMatchObject({ summary: { tokensOut: 9 }, coverage: { measuredRecords: 1, conflictingRecords: 1, fieldInconsistentRecords: 1 },
+        recordProjection: { version: 1, identityScheme: 'sha256-native-record/1', truncated: false } });
+      const records = result.recordProjection.records;
+      expect(records).toHaveLength(4);
+      expect(records.map(row => row.recordKey)).toEqual(records.map(row => row.recordKey).sort());
+      expect(records.find(row => row.final)).toMatchObject({ requestKey: expect.stringMatching(/^[a-f0-9]{64}$/), at: '2026-03-01T00:00:00.000Z' });
+      expect(records.find(row => row.conflict)).toMatchObject({ values: [null, null, null, null], requestKey: null, final: false });
+      expect(records.some(row => row.values[1] === null && !row.conflict)).toBe(true);
+      for (const row of records) expect(Object.keys(row).sort()).toEqual(['at', 'conflict', 'final', 'inconsistent', 'recordKey', 'requestKey', 'values']);
+      expect(JSON.stringify(result)).not.toMatch(/private-message|private-request|private prompt|private-project|different-request/);
+      if (projection) expect(result.recordProjection).toEqual(projection);
+      projection = result.recordProjection;
+    }
+    expect(await getNativeTranscriptCoverage('claude', { home })).not.toHaveProperty('recordProjection');
+    for (const family of ['agy', 'grok']) expect(await getNativeTranscriptCoverage(family, { home, includeRecords: true })).toHaveProperty('recordProjection', null);
+  });
+
+  it('counts superseded streaming copies consistently and excludes incompatible inputs and competing finals', async () => {
+    const emission = (id, output, final = false) => {
+      const row = claude(id, output); row.requestId = 'request'; row.message.stop_reason = final ? 'end_turn' : null; return row;
+    };
+    const inputConflict = emission('input-conflict', 9, true); inputConflict.message.usage.input_tokens = 11;
+    const rows = [emission('stream', 3), emission('stream', 3), emission('stream', 7), emission('stream', 9, true),
+      emission('input-conflict', 3), inputConflict, emission('final-conflict', 3, true), emission('final-conflict', 9, true),
+      emission('unfinished', 3), emission('unfinished', 9)];
+    let projection;
+    for (const order of [rows, [...rows].reverse(), [...rows.slice(2), ...rows.slice(0, 2)]]) {
+      await save('.claude/projects/p/s.jsonl', order);
+      const result = await getNativeTranscriptCoverage('claude', { home, includeRecords: true });
+      expect(result).toMatchObject({ summary: { tokensOut: 9 }, coverage: { measuredRecords: 1, conflictingRecords: 3, streamingSupersededRecords: 3 } });
+      if (projection) expect(result.recordProjection).toEqual(projection);
+      projection = result.recordProjection;
+    }
+  });
+
+  it('fingerprints the full Grok usage shape canonically without summing unvalidated counters', async () => {
+    const usage = { inputTokens: 10, outputTokens: 7, totalTokens: 17, reasoningTokens: 2, costUsdTicks: 12,
+      modelUsage: { second: { outputTokens: 3, inputTokens: 4 }, first: { inputTokens: 6, outputTokens: 4 } } };
+    const turn = (id, values) => ({ timestamp: 1772323200, params: { sessionId: 'synthetic', update: {
+      sessionUpdate: 'turn_completed', prompt_id: id, usage: values,
+    } } });
+    await save('.grok/sessions/project/session/updates.jsonl', [turn('same', usage), turn('same', {
+      ...usage, modelUsage: { first: { outputTokens: 4, inputTokens: 6 }, second: { inputTokens: 4, outputTokens: 3 } },
+    }), ...['totalTokens', 'reasoningTokens', 'costUsdTicks'].flatMap(field => [turn(field, usage), turn(field, { ...usage, [field]: usage[field] + 1 })])]);
+    expect(await getNativeTranscriptCoverage('grok', { home })).toMatchObject({ summary: null,
+      coverage: { measuredRecords: 1, duplicateRecords: 4, conflictingRecords: 3, fieldInconsistentRecords: 1 } });
+  });
+
+  it('retains the same bounded runtime version evidence regardless of file order', async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => ({ ...claude(`version-${index}`), version: `1.0.${index}` }));
+    const expected = rows.map(row => row.version).sort().slice(0, 32);
+    for (const order of [rows, [...rows].reverse(), [...rows.slice(20), ...rows.slice(0, 20)]]) {
+      await save('.claude/projects/p/s.jsonl', order);
+      expect((await getNativeTranscriptCoverage('claude', { home })).coverage.runtimeVersions).toEqual(expected);
+    }
+  });
+
   it('keeps scanning past an oversized record and reports it instead of stopping', async () => {
     // One line wholly inside a read chunk, and one spanning several.
     const small = JSON.stringify({ type: 'user', content: 'x'.repeat(2 * 1024) });

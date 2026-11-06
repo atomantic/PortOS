@@ -228,9 +228,12 @@ describe('Settings routes — apiAccess slice', () => {
   it('validates the machine-local native usage account selection and refuses an email as a label', async () => {
     const participant = 'a'.repeat(32);
     const selection = { family: 'codex', accountLabel: 'acct-a', authoritativeParticipant: participant, members: [participant] };
-    const saved = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [selection] });
+    const retained = { family: 'claude', accountLabel: 'acct-a', historyScope: 'operator-confirmed-retained-history', members: [participant] };
+    const saved = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [selection, retained] });
     expect(saved.status).toBe(200);
-    expect(saved.body.usageNativeAccountSelections).toEqual([selection]);
+    expect(saved.body.usageNativeAccountSelections).toEqual([selection, retained]);
+    const { historyScope: _scope, ...unconfirmedHistory } = retained;
+    expect((await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [unconfirmedHistory] })).status).toBe(400);
     const email = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [{ ...selection, accountLabel: 'alice@example.com' }] });
     expect(email.status).toBe(400);
   });
