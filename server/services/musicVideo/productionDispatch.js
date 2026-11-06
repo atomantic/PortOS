@@ -106,10 +106,10 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const selected = files.map((file) => remaining.splice(remaining.findIndex(({ ref }) => ref.imageId === file), 1)[0]);
   const sent = selected.map(({ ref }) => ref);
   const referenceImagePaths = selected.map(({ path }) => path);
-  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
-  const panel = await loadLinkedStoryboardPanel(project, scene);
+  const [{ loadLinkedStoryboardPanel }, { loadMusicVideoSubjectSizes }] = await Promise.all([import('./linkedPanel.js'), import('./subjectScale.js')]);
+  const [panel, sizes] = await Promise.all([loadLinkedStoryboardPanel(project, scene), loadMusicVideoSubjectSizes(project)]);
   const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent });
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent, sizes });
   if (!prompt) throw unprompted(scene, 'frame');
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {

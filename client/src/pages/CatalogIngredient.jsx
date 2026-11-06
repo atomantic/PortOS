@@ -83,6 +83,7 @@ import {
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import { timeAgo, formatDateTime, formatCount } from '../utils/formatters';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../server/lib/musicVideoSubjectLimits.js';
+import { BIBLE_LIMITS } from '../lib/bibleLimits';
 import { humanizeIntegrityField } from '../lib/characterIntegrity';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { formsOf } from '../lib/catalogForms';
@@ -1300,7 +1301,9 @@ function SheetField({ fieldKey, label, kind, value, onChange, videoDescriptionLi
           </select>
         : kind === 'textarea'
         ? <textarea id={inputId} aria-describedby={showVideoCount ? `${inputId}-video-count` : undefined} rows={3} value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />
-        : <input id={inputId} type="text" value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared} />}
+        : <input id={inputId} type="text" value={value} onChange={(e) => onChange(fieldKey, e.target.value)} className={shared}
+            {...(kind === 'size' ? { maxLength: BIBLE_LIMITS.SIZE_MAX, placeholder: 'fence 4 ft tall · 5 ft 8 in long, 3 ft 4 in high', 'aria-describedby': `${inputId}-hint` } : {})} />}
+      {kind === 'size' && <p id={`${inputId}-hint`} className="mt-1 text-xs text-gray-500">Keeps it to scale beside people in renders and states it on its sheet. For a place, size its key features (fences, signs, doors).</p>}
       {showVideoCount && <p id={`${inputId}-video-count`} className={`text-xs ${value.length > videoDescriptionLimit ? 'text-port-error' : 'text-port-text-muted'}`}>
         {formatCount(value.length)} / {formatCount(videoDescriptionLimit)} characters for linked music videos
       </p>}

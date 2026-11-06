@@ -334,6 +334,18 @@ it('keeps separate strengths for repeated named references', async () => {
   expect(data.referenceImageStrengths).toEqual([0.3, 0.9]);
 });
 
+// Catches the board preview/render losing the shot's real-world sizes read from Casting (Hold Still shot 89).
+it('composes a board still with its subjects\' Casting sizes as the Real-world scale chip', async () => {
+  getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+  greyboxCatalog.getIngredient.mockImplementation(async (id) => (id === 'cat-fence' ? { type: 'place', payload: { size: 'chain-link fence 4 ft tall' } } : null));
+  getProject.mockResolvedValue({ concept: { subjects: [{ id: 'fence', kind: 'place', name: 'Example fence', ingredientId: 'cat-fence' }] }, scenes: [{ sceneId: 's1' }] });
+  const { data } = await run({ prompt: 'Two kids at the fence', musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true } });
+  const chip = data.promptAdditions.find((item) => item.id === 'real-world-scale');
+  expect(chip.text).toContain('Example fence: chain-link fence 4 ft tall');
+  expect(data.prompt).toContain(chip.text);
+  greyboxCatalog.getIngredient.mockReset();
+});
+
 it('names a retained overflow face sheet in the composed board prompt', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   mkdirSync(PATHS.images, { recursive: true });
