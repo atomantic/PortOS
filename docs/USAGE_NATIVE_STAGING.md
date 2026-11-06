@@ -106,6 +106,10 @@ Actual spend and API-equivalent USD stay unknown for all providers.
 
 ## Still required before cutover
 
+The [offline barrier-store rehearsal](./USAGE_NATIVE_REHEARSAL.md) can now bind
+detached ledger/peer-store copies to this stage and verify isolated byte restores
+for every participant. It does not establish a full backup or green cutover preflight.
+
 Every artifact permanently reports `activation.ready: false`. There is no activate
 command, runtime registration, background task or boot migration in this increment.
 

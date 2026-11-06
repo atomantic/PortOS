@@ -1090,3 +1090,5 @@ export * from './nativeAgyMetadata.js';
 export * from './nativeAgyUsageRecords.js';
 export * from './nativeGrokUsageRecords.js';
 export * from './nativeUsageStaging.js';
+
+export * from './nativeUsageRehearsal.js';
