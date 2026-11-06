@@ -161,6 +161,8 @@ vi.mock('./creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettle
 vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
 import { handleOrphanedTask, pauseAgent, resumeAgent, relaunchAgent, settleOrphanedCreativeDirectorRun, cleanupOrphanedAgents, terminateAgent, killAgent, getAgentProcessStats } from './agentManagement.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import * as fileUtils from '../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
@@ -1389,6 +1391,28 @@ describe('resumeAgent — requeues the paused agent\'s own task', () => {
     getAgents.mockResolvedValue([]);
   });
 
+  it('closes the stopped run before the agent and continuation dispatch', async () => {
+    const pausedAt = '2026-08-10T00:00:00.000Z';
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, pausedAt, metadata: { ...PAUSED_AGENT.metadata, runId: 'run-paused' } });
+    const transcript = vi.spyOn(fileUtils, 'tryReadFile').mockResolvedValueOnce('partial synthetic output');
+    await resumeAgent('agent-paused-1');
+    expect(completeAgentRun).toHaveBeenCalledWith('run-paused', 'partial synthetic output', 143, 0,
+      { category: 'interrupted', origin: 'operator', message: 'Paused execution retired for continuation' }, false, null, { endedAt: pausedAt });
+    expect(completeAgentRun.mock.invocationCallOrder[0]).toBeLessThan(markAgentComplete.mock.invocationCallOrder[0]);
+    expect(completeAgentRun.mock.invocationCallOrder[0]).toBeLessThan(forceSpawnTask.mock.invocationCallOrder[0]);
+    transcript.mockRestore();
+  });
+
+  it('keeps private assessment output in its local archive', async () => {
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata,
+      runId: 'run-private', taskAnalysisType: 'private-security-assessment' } });
+    const transcript = vi.spyOn(fileUtils, 'tryReadFile');
+    await resumeAgent('agent-paused-1');
+    expect(transcript).not.toHaveBeenCalled();
+    expect(completeAgentRun.mock.calls[0][1]).toBe('Private security assessment interrupted; inspect its local assessment archive.');
+    transcript.mockRestore();
+  });
+
   it('flips the SAME task back to pending — no new task', async () => {
     const result = await resumeAgent('agent-paused-1');
 
@@ -2027,8 +2051,11 @@ describe('pause-release adapter registration', () => {
   });
 
   it('retires the paused record immediately, with the verdict resumeAgent would write', async () => {
+    getAgentRecord.mockResolvedValue({ ...PAUSED_AGENT, metadata: { ...PAUSED_AGENT.metadata, runId: 'run-adapter', pausedAt: '2026-08-10T00:00:00.000Z' } });
     pausedAgents.set('agent-paused-9', { pausedAt: 'now' });
     await retirePausedAgent('agent-paused-9', 'task-xyz', 'cos/task-xyz/agent-paused-9');
+    expect(completeAgentRun).toHaveBeenCalledWith('run-adapter', '', 143, 0, expect.objectContaining({ category: 'interrupted' }), false, null, { endedAt: '2026-08-10T00:00:00.000Z' });
+    expect(completeAgentRun.mock.invocationCallOrder[0]).toBeLessThan(markAgentComplete.mock.invocationCallOrder[0]);
     expect(pausedAgents.has('agent-paused-9')).toBe(false);
     expect(markAgentComplete).toHaveBeenCalledWith('agent-paused-9', {
       success: false,
@@ -2855,7 +2882,7 @@ describe('host-restart interruptions are not charged orphan-retry budget (#3202)
 describe('the sweep retires paused records whose task moved on', () => {
   const OLD_PAUSE = new Date('2026-08-10T00:00:00.000Z').toISOString();
   const pausedAgent = {
-    id: 'agent-paused-9', status: 'paused', taskId: 'task-9', pausedAt: OLD_PAUSE, metadata: {},
+    id: 'agent-paused-9', status: 'paused', taskId: 'task-9', pausedAt: OLD_PAUSE, metadata: { runId: 'run-swept' },
   };
 
   beforeEach(() => {
@@ -2885,6 +2912,8 @@ describe('the sweep retires paused records whose task moved on', () => {
   ])('retires the record when %s', async (_label, task) => {
     getTaskById.mockResolvedValue(task);
     await cleanupOrphanedAgents();
+    expect(completeAgentRun).toHaveBeenCalledWith('run-swept', '', 143, 0, expect.objectContaining({ category: 'interrupted' }), false, null, { endedAt: OLD_PAUSE });
+    expect(completeAgentRun.mock.invocationCallOrder[0]).toBeLessThan(markAgentComplete.mock.invocationCallOrder[0]);
     // `resumed: true` for the same reason resumeAgent uses it — this run has no
     // verdict of its own, so charging it an error invents a failure.
     expect(markAgentComplete).toHaveBeenCalledWith('agent-paused-9', expect.objectContaining({
