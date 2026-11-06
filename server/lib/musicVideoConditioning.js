@@ -206,7 +206,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');
       return {
-        id: `mvr-guide-${m.mediaKey}`.slice(0, 128),
+        id: `mvr-guide-${m.mediaKey}`.length <= 128 ? `mvr-guide-${m.mediaKey}` : `mvr-guide-${fnv1a64(m.mediaKey)}`,
         imageId: m.mediaKey,
         role: 'character',
         label: `${name}${detail ? ` · ${detail}` : ''}`.slice(0, 120),
@@ -274,14 +274,15 @@ export function musicVideoSceneCastIds(project, scene) {
 }
 
 /**
- * A shot's picked linked assets that do not resolve: their cast media failed to
+ * A shot's picked catalog assets (guides included) that do not resolve: their cast media failed to
  * load, or the asset has since left the catalog's approved set. Resolving would
  * silently drop them, so a frame render must stop instead of spending a take.
  */
 export function musicVideoMissingFrameLinkedPicks(project, scene, castMedia) {
   if (!Array.isArray(scene?.frameReferenceIds)) return [];
-  const linked = musicVideoLinkedCastReferences(project, castMedia);
-  return scene.frameReferenceIds.filter((id) => String(id).startsWith('mvr-linked-') && !linked.some((ref) => ref.id === id));
+  const choices = [...musicVideoLinkedCastReferences(project, castMedia), ...musicVideoCastGuideReferences(project, scene, castMedia)]
+    .filter((ref) => !isLegacyCatalogReference(project, ref));
+  return scene.frameReferenceIds.filter((id) => isCatalogMediaReferenceId(id) && !choices.some((ref) => ref.id === id));
 }
 
 /** What a picker offers: the linked cast first, minus any image the project's own references already offer. */

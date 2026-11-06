@@ -116,12 +116,12 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
   });
 
   // Uniquely catches a paid frame going out without the catalog sheet the director picked.
-  it('refuses a frame whose picked catalog asset failed to load', async () => {
+  it.each(['linked', 'guide'])('refuses a frame whose picked %s asset failed to load', async (kind) => {
     listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
     const cast = {
       id: 'p2',
       concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
-      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], frameReferenceIds: [musicVideoLinkedReferenceId('face.png')] }],
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: [kind === 'guide' ? 'mvr-guide-face.png' : musicVideoLinkedReferenceId('face.png')] }],
     };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());

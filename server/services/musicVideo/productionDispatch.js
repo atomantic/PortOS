@@ -92,7 +92,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const available = [];
   for (const ref of allReferences) {
     const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
-    if (!path && ref.linkedCast) {
+    if (!path && (ref.linkedCast || scene.frameReferenceIds?.includes(ref.id))) {
       throw new ServerError(`The picked reference ${ref.label} is missing. Restore it or reset the shot's references.`, { status: 409, code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
     }
     if (!path) continue;

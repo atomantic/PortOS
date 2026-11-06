@@ -41,7 +41,7 @@ describe('a shot\'s References row', () => {
   it('warns when a saved catalog pick cannot resolve after its media failed to load', () => {
     const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
     render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', frameReferenceIds: ['r1', musicVideoLinkedReferenceId('kit-face.png')] }} castMedia={{ 'cat-chr-kit': null }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
-    expect(screen.getByText(/picked catalog reference is unavailable/)).toBeTruthy();
+    expect(screen.getByText(/picked cast reference is unavailable/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Back to auto' }).disabled).toBe(false);
   });
 
@@ -137,6 +137,7 @@ describe('a shot whose Casting guides failed to load', () => {
     const picked = references.slice(0, 15).map((ref) => ref.id);
     render(<SceneFrameReferences project={{ visualSpec: { references } }} scene={{ sceneId: 's1', frameReferenceIds: [...picked, 'mvr-guide-missing.png'] }} castMedia={{}} onEditLocal={vi.fn()} onSave={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(true);
+    expect(screen.getByText(/A picked cast reference is unavailable/)).toHaveTextContent('Back to auto');
   });
 
   it('keeps all saved picks visible and editable when a greybox is also selected', () => {

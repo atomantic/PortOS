@@ -124,26 +124,30 @@ describe('production scene dispatch (#9066)', () => {
   });
 
   // Uniquely catches a production step spending a render without the sheet the director picked.
-  it('refuses a frame whose picked catalog asset cannot resolve, and sends it when it can', async () => {
+  it.each(['linked', 'guide'])('refuses an unresolved or missing picked %s asset, and sends it when restored', async (kind) => {
     const linkedProject = { ...project, concept: { subjects: [{ id: 'lead', kind: 'character', name: 'Lead', ingredientId: 'cat-chr-lead' }] } };
-    const linkedScene = { ...scene, frameReferenceIds: [musicVideoLinkedReferenceId('lead-face.png')] };
+    const filename = `${kind}-lead-face.png`;
+    const linkedScene = { ...scene, characterVariant: { ingredientId: 'cat-chr-lead' }, frameReferenceIds: [kind === 'guide' ? `mvr-guide-${filename}` : musicVideoLinkedReferenceId(filename)] };
     const step = { stepKind: 'frame', project: linkedProject, scene: linkedScene, route: { kind: 'image', mode: 'codex', model: null }, tag, settings };
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     greyboxCatalog.listMediaForIngredient.mockRejectedValueOnce(new Error('offline'));
     await expect(dispatchProductionStep(step)).rejects.toMatchObject({ code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
     expect(enqueueJob).not.toHaveBeenCalled();
 
-    const faceRow = [{ kind: 'reference', role: 'sheet:face', mediaKey: 'lead-face.png' }];
+    const faceRow = [{ kind: 'reference', role: 'sheet:face', mediaKey: filename, library: { guide: true } }];
+    greyboxCatalog.listMediaForIngredient.mockResolvedValueOnce([{ ...faceRow[0], library: { review: { status: 'bad' } } }]);
+    await expect(dispatchProductionStep(step)).rejects.toMatchObject({ code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
+    expect(enqueueJob).not.toHaveBeenCalled();
     greyboxCatalog.listMediaForIngredient.mockResolvedValueOnce(faceRow);
     await expect(dispatchProductionStep(step)).rejects.toMatchObject({ code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
     expect(enqueueJob).not.toHaveBeenCalled();
 
     mkdirSync(PATHS.images, { recursive: true });
-    writeFileSync(join(PATHS.images, 'lead-face.png'), 'png');
+    writeFileSync(join(PATHS.images, filename), 'png');
     greyboxCatalog.listMediaForIngredient.mockResolvedValueOnce(faceRow);
     await dispatchProductionStep(step);
     expect(enqueueJob).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(enqueueJob.mock.calls[0])).toContain('lead-face.png');
+    expect(JSON.stringify(enqueueJob.mock.calls[0])).toContain(filename);
   });
 
   it('never conditions a frame on a mood board import or a Pinterest pin, even when flagged', async () => {

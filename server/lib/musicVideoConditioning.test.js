@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -28,6 +28,20 @@ it('uses the selected video model\'s real extra-image capacity', () => {
 });
 
 describe('musicVideoConditioningReferences with Casting guides', () => {
+  // Uniquely catches selecting the second long guide sending the first one's image.
+  it('resolves distinct long guide picks and preserves existing short guide ids', () => {
+    const prefix = 'a'.repeat(130);
+    const media = { [CAST_ID]: [guide(`${prefix}-one.png`, 7), guide(`${prefix}-two.png`, 7), guide('short.png', 7)] };
+    const scene = { characterVariant: { ingredientId: CAST_ID, age: 7 } };
+    const refs = musicVideoCastGuideReferences(project([]), scene, media);
+    expect(new Set(refs.map(ref => ref.id)).size).toBe(3);
+    expect(refs.every(ref => ref.id.length <= 128)).toBe(true);
+    expect(refs.find(ref => ref.imageId === 'short.png').id).toBe('mvr-guide-short.png');
+    for (const ref of refs) {
+      expect(ids(musicVideoConditioningReferences(project([]), { ...scene, frameReferenceIds: [ref.id] }, media))).toEqual([ref.imageId]);
+    }
+  });
+
   it('leads with age-compatible guides, then fills from the project references', () => {
     const scene = { characterVariant: { ingredientId: CAST_ID, age: 7 } };
     const refs = musicVideoConditioningReferences(project(authored), scene, castMedia);
