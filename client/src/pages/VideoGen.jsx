@@ -1117,13 +1117,13 @@ export default function VideoGen() {
   }, [promptCap, submittedPromptLength, prompt]);
 
   // Only grok folds a negative prompt into its request (as an "Avoid:" line);
-  // fal's queue body and reactor's enqueue command have no such field, and a
+  // fal's queue body, reactor's enqueue command and Gemini's composer have no such field, and a
   // CFG-distilled local model ignores one. Hide the box rather than showing a
   // dead field that quietly does nothing. A federated render is the PEER's
   // model to judge, so the local selection's gate must not take away a field
   // that lane does submit.
   const negativePromptSupported = isGrok || isRunway || remoteTarget.isRemote
-    || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
+    || (!isFal && !isReactor && !isGemini && currentModel?.supportsNegativePrompt !== false);
 
   // Every completed reactor render stamps its fast-h3 clip id on the history
   // record; those ids are the only thing continue_from_clip_id can address, so
