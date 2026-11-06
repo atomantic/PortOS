@@ -156,7 +156,7 @@ export const musicVideoConceptSchema = z.object({
       label: z.string().max(80),
       age: z.number().int().min(0).max(150).optional(),
     }).strict().optional(),
-    // Kept in this video only: never offered for saving to the catalog.
+    // Kept in this video only: saved to the catalog only when explicitly asked.
     localOnly: z.boolean().optional(),
     active: z.boolean().optional(),
   }).strict()).max(24).optional(),

@@ -7,7 +7,7 @@ const { requireDbOrSkip } = await import('../lib/dbTestGate.js');
 const { listIngredients } = await import('./catalogDB/ingredients.js');
 const { listCatalogStories, joinStory, draftStoryMember, __setStoryDepsForTests } = await import('./catalogStories.js');
 const catalogDB = await import('./catalogDB.js');
-const { listVideoSubjectLinks, linkVideoSubjects, addCatalogRecordToVideo } = await import('./musicVideo/catalogCast.js');
+const { listVideoSubjectLinks, linkVideoSubjects, addCatalogRecordToVideo, saveVideoSubjectToCatalog } = await import('./musicVideo/catalogCast.js');
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('services/catalogStories.db.test', health.connected, health.error);
 if (ready) await ensureSchema();
@@ -133,6 +133,37 @@ describe.skipIf(!ready)('catalog stories', () => {
     const d = videoDeps([{ id: 'mvc-a', kind: 'character', name: 'Example Lead' }]);
     await expect(linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.rink }], d)).rejects.toMatchObject({ status: 400, code: 'SUBJECT_KIND_MISMATCH' });
     await expect(linkVideoSubjects(ids.video, [{ subjectId: 'mvc-a', ingredientId: ids.lead, formId: 'elder' }], d)).rejects.toMatchObject({ status: 400, code: 'FORM_NOT_FOUND' });
+  });
+
+  // Uniquely catches the real catalog duplicating a saved subject, losing its reference, or reviving a deleted record.
+  it('saves a subject to its own record once and never brings back a deleted one', async () => {
+    const d = videoDeps([{ id: 'mvc-save', kind: 'place', name: 'Example Pier', description: 'Salt-worn planks.' }]);
+    d.getUniverse = async () => null;
+    d.project.visualSpec = { references: [{ id: 'r1', imageId: 'example-pier.png', role: 'set', label: 'Example Pier' }] };
+    const subject = () => d.project.concept.subjects[0];
+
+    await expect(saveVideoSubjectToCatalog(ids.video, 'mvc-save', d)).resolves.toMatchObject({ created: 1, kept: 0 });
+    const id = subject().ingredientId;
+    expect(id).toMatch(/^cat-plc-mv-/);
+    try {
+      expect(await catalogDB.getIngredient(id)).toMatchObject({ type: 'place', name: 'Example Pier', payload: { description: 'Salt-worn planks.' } });
+      const references = async () => (await catalogDB.listMediaForIngredient(id)).filter((row) => row.kind === 'reference').map((row) => row.mediaKey);
+      expect(await references()).toEqual(['example-pier.png']);
+
+      await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-save', ingredientId: null }], d);
+      await saveVideoSubjectToCatalog(ids.video, 'mvc-save', d);
+      expect(subject().ingredientId).toBe(id);
+      expect((await query('SELECT id FROM catalog_ingredients WHERE id = $1', [id])).rows).toHaveLength(1);
+      expect(await references()).toEqual(['example-pier.png']);
+
+      await linkVideoSubjects(ids.video, [{ subjectId: 'mvc-save', ingredientId: null }], d);
+      await catalogDB.deleteIngredient(id);
+      await expect(saveVideoSubjectToCatalog(ids.video, 'mvc-save', d)).resolves.toMatchObject({ created: 0, kept: 1 });
+      expect(subject().ingredientId).toBeUndefined();
+      expect(await catalogDB.getIngredient(id)).toBeNull();
+    } finally {
+      await query('DELETE FROM catalog_ingredients WHERE id = $1', [id]);
+    }
   });
 
   it('casts a record from the catalog side: links the subject named for it, else adds one', async () => {

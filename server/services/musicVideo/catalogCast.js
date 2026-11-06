@@ -1,11 +1,12 @@
 // Saves a music video's cast, sets and props to the catalog so Casting,
-// Environments and Objects hold them for reuse. Two callers share it: approving
-// Cast & Sets saves the check-in's new cast automatically, and the importer
-// (dry run, review, commit) backfills videos made before the catalog link.
+// Environments and Objects hold them for reuse. Three callers share it: approving
+// Cast & Sets saves the check-in's new cast automatically, the importer (dry run,
+// review, commit) backfills videos made before the catalog link, and Save to
+// catalog creates one subject's record from Manage catalog links.
 //
 // A subject is saved by stamping `ingredientId` on it; catalogLinks.js then
 // keeps the music-video ref in step. `localOnly` marks a subject the director
-// keeps in this video only, so neither caller offers it again.
+// keeps in this video only, so only an explicit Save to catalog saves it.
 //
 // Catalog ids are deterministic per (project, subject), like the universe canon
 // promotion, so two machines saving the same synced video converge on one row.
@@ -53,13 +54,14 @@ function referenceImage(project, subject) {
 
 /**
  * The subjects of a project not yet in the catalog, with the image that shows
- * each. `checkinOnly` limits it to the ones Cast & Sets created.
+ * each. `checkinOnly` limits it to the ones Cast & Sets created; `includeLocal`
+ * adds the subjects kept in this video, for an explicit save of one.
  */
-function catalogCastCandidates(project, { checkinOnly = false } = {}) {
+function catalogCastCandidates(project, { checkinOnly = false, includeLocal = false } = {}) {
   if (!project || project.deleted) return [];
   const sheets = checkinImages(project);
   return (project.concept?.subjects || [])
-    .filter((s) => s?.id && s.name && TYPE_PREFIX[s.kind] && !s.ingredientId && !s.localOnly)
+    .filter((s) => s?.id && s.name && TYPE_PREFIX[s.kind] && !s.ingredientId && (includeLocal || !s.localOnly))
     .filter((s) => !checkinOnly || s.id.startsWith(CAST_SETS_SUBJECT_PREFIX))
     .map((s) => ({
       subjectId: s.id,
@@ -271,7 +273,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
   const { catalogDB, getProject, mutateProjectRecord, queueProjectCatalogLinkSync } = deps;
   const project = await getProject(projectId);
   if (!project || project.deleted || !decisions.length) return { project, created: 0, linked: 0, kept: 0 };
-  const images = new Map(catalogCastCandidates(project).map((c) => [c.subjectId, c.imageId]));
+  const images = new Map(catalogCastCandidates(project, { includeLocal: true }).map((c) => [c.subjectId, c.imageId]));
   const stamps = new Map();
   const stats = { created: 0, linked: 0, kept: 0 };
   for (const d of decisions) {
@@ -318,11 +320,16 @@ async function commitCatalogCast(projectId, decisions, deps) {
       ...current,
       concept: {
         ...(current.concept || {}),
-        subjects: (current.concept?.subjects || []).map((s) => (stamps.has(s.id) && !s.ingredientId ? { ...s, ...stamps.get(s.id) } : s)),
+        subjects: (current.concept?.subjects || []).map((s) => {
+          if (!stamps.has(s.id) || s.ingredientId) return s;
+          const { localOnly: _localOnly, ...rest } = s;
+          return { ...rest, ...stamps.get(s.id) };
+        }),
       },
     },
   }));
-  queueProjectCatalogLinkSync(projectId);
+  // Awaited so the catalog's story filter shows the change when this returns.
+  await queueProjectCatalogLinkSync(projectId);
   return { project: saved, ...stats };
 }
 
@@ -564,6 +571,22 @@ export async function linkVideoSubjects(projectId, links, deps = null) {
   const linked = [...stamps.values()].filter(Boolean).length;
   console.log(`🎭 Music video ${String(projectId).slice(0, 11)}: ${linked} subject(s) linked, ${stamps.size - linked} unlinked`);
   return { project: saved, linked, unlinked: stamps.size - linked };
+}
+
+/**
+ * "Save to catalog" for one subject: create and link its deterministic record
+ * with the importer's logic. A director's explicit save overrides `localOnly`.
+ * `kept: 1` means that record was deleted, so it is not brought back.
+ */
+export async function saveVideoSubjectToCatalog(projectId, subjectId, deps = null) {
+  const d = deps || await defaultDeps();
+  const project = await loadVideo(projectId, d);
+  if (!(project.concept?.subjects || []).some((s) => s.id === subjectId)) {
+    throw new ServerError(`This video has no subject ${subjectId}.`, { status: 404, code: 'NOT_FOUND' });
+  }
+  const { project: saved, created, kept } = await commitCatalogCast(projectId, [{ subjectId, action: 'create' }], d);
+  console.log(`🎭 Music video ${String(projectId).slice(0, 11)}: subject save to catalog, ${created} created, ${kept} kept in the video`);
+  return { project: saved, created, kept };
 }
 
 /** Restore a reviewed legacy video snapshot to its linked catalog look. */
