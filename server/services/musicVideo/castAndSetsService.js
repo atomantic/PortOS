@@ -1,3 +1,4 @@
+import { isCatalogCheckin, resolveCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
@@ -375,6 +376,7 @@ async function writePlan(projectId, { direction = null, forceKeys = [], changes 
   const route = codeOnly ? (stage.route || null) : await chooseCastAndSetsRoute(project, { preferred, settings });
   if (!route && !codeOnly && !stage.feedbackRenderPlan) return fail(projectId, 'No enabled image backend is allowed for the Cast & Sets images — enable Codex (or another image tool in the brief) and resume');
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     if (current.castAndSets?.revision !== stage.revision) throw new ServerError('The check-in changed while its image plan was being prepared', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
     const next = setCastAndSetsDirection(current, { direction: nextDirection, plan, route, renderKeys });
     const savedStage = { ...next.stage, greyboxPending: false, greyboxPendingSetIds: [], greyboxLegacyPendingSetIds: [],
@@ -563,6 +565,7 @@ function refundUnusedCheckinSteps(project) {
 /** Reserve the WHOLE pending plan in one write before any job can be queued. */
 async function reserveCheckinPlan(projectId) {
   return mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (!stage?.productionRunId) return { project: current };
     const run = findProductionRun(current, stage.productionRunId);
@@ -582,6 +585,7 @@ async function reserveCheckinPlan(projectId) {
 
 async function dispatchKey(projectId, key) {
   const reserved = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     if (current.castAndSets?.productionRunId) {
       const run = findProductionRun(current, current.castAndSets.productionRunId);
       if (run.status !== 'running' || checkinStep(current, current.castAndSets, key)?.status !== 'reserved') {
@@ -601,6 +605,7 @@ async function dispatchKey(projectId, key) {
   if (sent?.error || !sent?.jobId) {
     const reason = sent?.error?.message || 'The image job was not queued';
     const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
       const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'refused', error: reason }).project : current;
       // This route cannot carry the required inputs, so retrying it cannot
       // succeed and may otherwise leave the final pending key without a wakeup.
@@ -622,6 +627,7 @@ async function dispatchKey(projectId, key) {
     return;
   }
   const linked = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const next = productionStep ? settleProductionStep(current, runId, productionStep.key, { status: 'queued', jobId: sent.jobId }).project : current;
     return linkCastAndSetsJob(next, key, sent.jobId, sent.submission);
   });
@@ -683,6 +689,7 @@ async function retryInspectedImage(projectId, { key, inputs, inspectionId, note 
   const keyNotes = { ...stage.keyNotes, [key]: [...(stage.keyNotes?.[key] || []), note].slice(-CAST_SETS_MAX_KEY_NOTES) };
   const { plan } = await currentImagePlan({ ...project, castAndSets: { ...stage, keyNotes } }, stage.direction);
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     if (!eligible(current)) return { project: current, changed: false };
     const run = findProductionRun(current, stage.productionRunId);
     if (run.status !== 'running') return { project: current, changed: false };
@@ -722,6 +729,7 @@ async function advanceOnce(projectId) {
       const limit = ['PRODUCTION_SPEND_LIMIT', 'PRODUCTION_BUDGET_EXHAUSTED'].includes(reserved.error.code);
       const reason = limit ? `${checkinPlanSize(stage)}: ${reserved.error.message}. Raise the run's limit and resume.` : reserved.error.message;
       const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
         const failed = setCastAndSetsStatus(refundUnusedCheckinSteps(current), 'failed', { reason });
         return haltProduction(failed.project, stage.productionRunId, {
           status: limit ? 'limit-reached' : 'blocked', reason,
@@ -872,7 +880,9 @@ const settleAndRebase = (next, now) => {
 
 /** Record an explicit operator decision on this exact image, including unavailable vision. */
 export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (stage?.status !== 'review') throw new ServerError('The sheet is not waiting for review', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
     if (stage.feedbackRenderPlan) throw new ServerError('Finish the feedback plan before accepting images', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
@@ -891,6 +901,7 @@ export async function acknowledgeCastAndSetsImage(projectId, input, reviewer) {
 
 /** Re-run vision on existing images (all unreviewed/mismatched when `keys` is omitted) without touching approval. */
 export async function reinspectCastAndSetsImages(projectId, { keys } = {}) {
+  assertLegacyCheckin(await requireProject(projectId));
   const project = await requireProject(projectId);
   if (project.castAndSets?.feedbackRenderPlan) throw new ServerError('Finish the feedback plan before inspecting images', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
   const { reinspectCastAndSetsImages: run } = await import('./castAndSetsInspection.js');
@@ -899,7 +910,9 @@ export async function reinspectCastAndSetsImages(projectId, { keys } = {}) {
 
 /** Adopt a gallery take without re-rendering it or approving uninspected pixels. */
 export async function useCastAndSetsImage(projectId, { key, imageId }) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (!stage || !['review', 'approved'].includes(stage.status)) throw new ServerError('Wait for the check-in to finish before choosing an image', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
     if (stage.feedbackRenderPlan) throw new ServerError('Finish the feedback plan before choosing an image', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
@@ -933,9 +946,11 @@ export async function useCastAndSetsImage(projectId, { key, imageId }) {
 }
 
 /** Approve & continue. Returns `{ project, stage }`. */
-export async function approveCastAndSets(projectId) {
+export async function approveCastAndSets(projectId, input = {}) {
+  if (isCatalogCheckin(await requireProject(projectId))) return approveCatalogCheckin(projectId, input);
   const now = new Date().toISOString();
   const out = await mutateProjectRecord(projectId, async (current) => {
+    assertLegacyCheckin(current);
     assertCastAndSetsApprovable(current);
     const pending = await pendingGreyboxState(current);
     if (pending.unavailable.length) throw new ServerError('The selected greybox capture could not be checked. Restore it or clear the selection, then try again.', { status: 409, code: 'CAST_SETS_GREYBOX_PENDING' });
@@ -954,7 +969,8 @@ export async function approveCastAndSets(projectId) {
  * subjects and song (#10141): clears the "changed since" note without
  * rebuilding the sheet or re-applying its references. Returns `{ project, stage }`.
  */
-export async function reconfirmCastAndSets(projectId) {
+export async function reconfirmCastAndSets(projectId, input = {}) {
+  if (isCatalogCheckin(await requireProject(projectId))) return approveCatalogCheckin(projectId, input);
   await requireProject(projectId);
   const now = new Date().toISOString();
   const out = await mutateProjectRecord(projectId, (current) => reconfirmCastAndSetsOnProject(current, castAndSetsApprovalInputs(current), castAndSetsApprovalValues(current), now));
@@ -965,9 +981,11 @@ export async function reconfirmCastAndSets(projectId) {
 
 /** Skip the check-in (e.g. no image backend): the autopilot continues without it. */
 export async function skipCastAndSets(projectId) {
+  assertLegacyCheckin(await requireProject(projectId));
   await requireProject(projectId);
   const now = new Date().toISOString();
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const base = current.castAndSets ? current : { ...current, castAndSets: { revision: 0, images: {}, plan: {}, createdAt: now } };
     if (base.castAndSets.feedbackRenderPlan) throw new ServerError('Finish or discard the feedback plan before skipping the check-in', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
     if (base.castAndSets.status === 'approved') throw new ServerError('The Cast & Sets check-in is already approved', { status: 409, code: 'CAST_SETS_EXISTS' });
@@ -984,6 +1002,7 @@ export async function skipCastAndSets(projectId) {
 /** Start the check-in (explicit request). The work continues in the background. */
 export async function startCastAndSets(projectId, { providerId, model, effort, productionRunId = null } = {}) {
   const project = await requireProject(projectId);
+  assertLegacyCheckin(project);
   if (!Array.isArray(project.audioAnalysis?.sections) || !project.audioAnalysis.sections.length) {
     throw new ServerError('Analyze the song before the Cast & Sets check-in', { status: 409, code: 'NOT_ANALYZED' });
   }
@@ -995,10 +1014,17 @@ export async function startCastAndSets(projectId, { providerId, model, effort, p
 }
 
 /** Render an isolated candidate; the approved stage remains unchanged until acceptance. */
-export const previewCastAndSetsImageEdit = (projectId, input) => previewCastSetsImageEdit(projectId, input, deps);
-export const editCastAndSetsImage = (projectId, input) => requestCastSetsImageEdit(projectId, input, { ...deps, processId: PROCESS_ID, publish });
+export const previewCastAndSetsImageEdit = async (projectId, input) => {
+  assertLegacyCheckin(await requireProject(projectId));
+  return previewCastSetsImageEdit(projectId, input, deps);
+};
+export const editCastAndSetsImage = async (projectId, input) => {
+  assertLegacyCheckin(await requireProject(projectId));
+  return requestCastSetsImageEdit(projectId, input, { ...deps, processId: PROCESS_ID, publish });
+};
 export const discardCastAndSetsImageEdit = (projectId, input) => discardCastSetsImageEdit(projectId, input, publish);
 export async function acceptCastAndSetsImageEdit(projectId, input) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await acceptCastSetsImageEdit(projectId, input, PROCESS_ID);
   publish(projectId, out.project);
   inBackground('The accepted image edit', projectId, () => advance(projectId));
@@ -1013,6 +1039,7 @@ export async function acceptCastAndSetsImageEdit(projectId, input) {
  * The consumed notes are resolved on the sheet. Returns `{ project, stage }`.
  */
 export async function regenerateCastAndSets(projectId, { notes = null, keys = null, providerId, model, effort } = {}) {
+  assertLegacyCheckin(await requireProject(projectId));
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to regenerate yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
@@ -1034,6 +1061,7 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
   const redirect = directionNotes.length > 0;
   const consumed = new Set(source.map((n) => n.id).filter(Boolean));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const revised = reviseCastAndSetsOnProject(current, { processId: PROCESS_ID, notesApplied: source, redirect });
     const keyNotes = { ...(revised.stage.keyNotes || {}) };
     for (const [k, list] of Object.entries(imageNotes)) keyNotes[k] = [...(keyNotes[k] || []), ...list].slice(-CAST_SETS_MAX_KEY_NOTES);
@@ -1064,7 +1092,9 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
  * Returns `{ project, stage }`.
  */
 export async function applyCastAndSetsFeedback(projectId, { text, target = null, providerId, model, effort } = {}) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (!stage?.direction) throw new ServerError('There is no Cast & Sets sheet to give feedback on yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
     if (!['review', 'approved'].includes(stage.status)) throw new ServerError('Wait for the check-in to stop before applying feedback', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
@@ -1092,7 +1122,9 @@ export async function applyCastAndSetsFeedback(projectId, { text, target = null,
 
 /** Start exactly the feedback plan the director reviewed, never a later revision. */
 export async function renderCastAndSetsFeedback(projectId, { revision, count }) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     const plan = stage?.feedbackRenderPlan;
     if (stage?.status !== 'review' || plan?.phase !== 'ready' || stage.revision !== revision || plan.keys.length !== count) {
@@ -1116,7 +1148,9 @@ export async function renderCastAndSetsFeedback(projectId, { revision, count }) 
 
 /** Re-resolve an unavailable renderer without repeating feedback or calling a model. */
 export async function refreshCastAndSetsFeedbackRenderer(projectId, { revision }) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (stage?.status !== 'review' || stage.feedbackRenderPlan?.phase !== 'ready' || stage.revision !== revision) {
       throw new ServerError('The feedback plan changed. Review it before refreshing the renderer.', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
@@ -1134,6 +1168,7 @@ export async function refreshCastAndSetsFeedbackRenderer(projectId, { revision }
 
 /** Stop honoring one piece of standing sheet feedback. Nothing re-renders until the next revision. Returns `{ project, stage }`. */
 export async function removeCastAndSetsFeedbackEntry(projectId, feedbackId) {
+  assertLegacyCheckin(await requireProject(projectId));
   await requireProject(projectId);
   const out = await mutateProjectRecord(projectId, (current) => removeCastAndSetsFeedback(current, feedbackId));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} feedback removed (${out.stage.feedback.length} standing)`);
@@ -1142,6 +1177,7 @@ export async function removeCastAndSetsFeedbackEntry(projectId, feedbackId) {
 }
 
 export async function removeCastAndSetsImageFeedback(projectId, input) {
+  assertLegacyCheckin(await requireProject(projectId));
   const out = await mutateProjectRecord(projectId, (current) => removeCastAndSetsImageNote(current, { ...input, processId: PROCESS_ID }));
   publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
@@ -1160,11 +1196,13 @@ export async function removeCastAndSetsImageFeedback(projectId, input) {
  * Returns `{ project, stage }`.
  */
 export async function editCastAndSetsDirection(projectId, edits) {
+  assertLegacyCheckin(await requireProject(projectId));
   const project = await requireProject(projectId);
   const sections = songSections(project);
   const referencesOnly = edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'));
   if (referencesOnly) {
     const out = await mutateProjectRecord(projectId, async (current) => {
+    assertLegacyCheckin(current);
       if (!current.castAndSets?.direction || !['review', 'approved'].includes(current.castAndSets.status)) throw new ServerError('The Cast & Sets direction is not ready to edit.', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
       if (current.castAndSets.feedbackRenderPlan) throw new ServerError('Finish the feedback plan before editing the direction', { status: 409, code: 'CAST_SETS_FEEDBACK_PENDING' });
       const edited = applyCastAndSetsDirectionEdits(current.castAndSets.direction, edits, { sections });
@@ -1187,6 +1225,7 @@ export async function editCastAndSetsDirection(projectId, edits) {
   }
   let changed = [];
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (!stage?.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
     if (stage.status === 'skipped') throw new ServerError('The Cast & Sets check-in was skipped — rebuild it first', { status: 409, code: 'CAST_SETS_NOT_IN_REVIEW' });
@@ -1223,8 +1262,10 @@ export async function editCastAndSetsDirection(projectId, edits) {
  * development artifacts. Returns `{ project }`.
  */
 export async function discardCastAndSets(projectId) {
+  assertLegacyCheckin(await requireProject(projectId));
   await requireProject(projectId);
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     const stage = current.castAndSets;
     if (!stage) throw new ServerError('This project has no Cast & Sets check-in', { status: 404, code: 'NOT_FOUND' });
     if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === PROCESS_ID) throw new ServerError('The Cast & Sets check-in is still being prepared — wait for it to stop', { status: 409, code: 'CAST_SETS_IN_PROGRESS' });
@@ -1243,6 +1284,7 @@ export async function discardCastAndSets(projectId) {
 
 /** Resume an interrupted (restart) or failed stage in this process. */
 export async function resumeCastAndSets(projectId, { providerId, model, effort } = {}) {
+  assertLegacyCheckin(await requireProject(projectId));
   await reconcileOldCastSetsJobs(projectId);
   const out = await mutateProjectRecord(projectId, (current) => resumeCastAndSetsOnProject(current, { processId: PROCESS_ID, resolveNoteKeys: noteImageKeys }));
   console.log(`▶️ Music Video Cast & Sets ${short(projectId)} resumed (${out.stage.status})`);
@@ -1271,6 +1313,7 @@ export async function resumeCastAndSets(projectId, { providerId, model, effort }
 export async function getCastAndSetsCastingChanges(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
+  if (isCatalogCheckin(project)) return { changes: null };
   if (!stage?.direction || !['review', 'approved'].includes(stage.status)) return { changes: null };
   // Only reference images are compared, so the look line (withoutBoardLook) is not needed.
   const direction = stage.direction;
@@ -1294,7 +1337,7 @@ export async function getCastAndSetsCastingChanges(projectId) {
 /** The stage as the director sees it. */
 export async function getCastAndSets(projectId) {
   const project = await requireProject(projectId);
-  return { stage: presentStage(project) };
+  return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog }) };
 }
 
 // ---- completion hook entry points ----------------------------------------------------------
@@ -1306,12 +1349,14 @@ export async function getCastAndSets(projectId) {
  */
 export async function onCastAndSetsImageSettled({ projectId, key, editRequestId = null, jobId = null, filename = null, error = null, revision = null, productionRunId = null, productionStepKey = null, status = null }) {
   const project = await getProject(projectId);
+  if (isCatalogCheckin(project)) return false;
   if (editRequestId) {
     if (!project) return false;
     return settleCastSetsImageEdit({ projectId, key, editRequestId, jobId, filename, error, status, productionRunId, productionStepKey }, publish);
   }
   if (!project?.castAndSets?.images?.[key]) return false;
   const out = await mutateProjectRecord(projectId, (current) => {
+    assertLegacyCheckin(current);
     if (revision != null && revision !== current.castAndSets?.revision) return { project: current, changed: false };
     const next = productionRunId && productionStepKey
       ? settleProductionStep(current, productionRunId, productionStepKey, {
@@ -1338,4 +1383,39 @@ export async function onCastAndSetsImageSettled({ projectId, key, editRequestId 
     advance(projectId).catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)} could not continue: ${err.message}${where(err)}`));
   }
   return true;
+}
+
+
+/** Explicitly switch the current check-in without rewriting historical media. */
+export async function useCatalogCheckin(projectId) {
+  const out = await mutateProjectRecord(projectId, current => {
+    if (isCatalogCheckin(current)) return { project: current };
+    const stage = current.castAndSets;
+    if ((CAST_SETS_WORKING.includes(stage?.status) && stage.processId === PROCESS_ID) || Object.values(stage?.images || {}).some(image => image.status === 'queued' || image.edit?.status === 'queued')
+      || (current.productionRuns || []).some(run => ['running', 'waiting'].includes(run.status))
+      || (current.productionRuns || []).some(run => (run.steps || []).some(step => ['reserved', 'queued'].includes(step.status)))
+      || current.autonomousRun?.status === 'running') {
+      throw new ServerError('Stop active production and finish or cancel queued check-in work before switching to catalog links.', { status: 409, code: 'CAST_SETS_IN_PROGRESS' });
+    }
+    const now = new Date().toISOString();
+    return { project: { ...current, castAndSets: { ...stage, source: 'catalog', status: 'review',
+      revision: (stage?.revision || 0) + 1, catalogApprovedBasis: null, processId: null, productionRunId: null,
+      createdAt: stage?.createdAt || now, updatedAt: now } } };
+  });
+  publish(projectId, out.project);
+  return { project: out.project, stage: out.project.castAndSets, catalogCheckin: await resolveCatalogCheckin(out.project, { catalog: deps.catalog }) };
+}
+
+async function approveCatalogCheckin(projectId, { catalogBasis } = {}) {
+  const out = await mutateProjectRecord(projectId, async (current, { client } = {}) => {
+    if (!isCatalogCheckin(current)) throw new ServerError('The check-in changed. Reload it before approving.', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
+    const checkin = await resolveCatalogCheckin(current, { catalog: deps.catalog, client });
+    assertCatalogCheckinReady(checkin);
+    if (!catalogBasis || catalogBasis !== checkin.basis) throw new ServerError('The catalog check-in changed. Review the current links and images before approving.', { status: 409, code: 'CAST_SETS_CATALOG_STALE' });
+    const now = new Date().toISOString();
+    const stage = { ...current.castAndSets, status: 'approved', catalogApprovedBasis: checkin.basis, approvedAt: now, updatedAt: now };
+    return settleAndRebase({ project: { ...current, castAndSets: stage } }, now);
+  });
+  publish(projectId, out.project);
+  return { project: out.project, stage: out.project.castAndSets, catalogCheckin: await resolveCatalogCheckin(out.project, { catalog: deps.catalog }) };
 }

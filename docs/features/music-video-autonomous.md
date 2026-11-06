@@ -188,3 +188,27 @@ A programmatic scheduled task (no agent). Each run picks the **oldest active Bra
 ## Where it lives
 
 `server/lib/musicVideoAutonomous.js` (vocabulary, brief normalizer, Suno limits, idea picker) · `server/services/musicVideo/autonomous{Service,Brief,Board,Suno,LocalSong}.js` · `server/services/musicGeneration.js` · `server/services/scheduledHandlers/musicVideoAutopilot.js` · `client/src/components/musicVideo/Autonomous{StartDrawer,RunPanel}.jsx`.
+
+## Catalog-only Cast & Sets
+
+New check-ins started from Look link to the existing Casting, Environments and
+Objects records. Existing generated check-ins have an explicit **Use catalog-only
+check-in** conversion. Conversion refuses active image or production work and
+keeps generated outputs, submitted inputs and shot references as history.
+
+The current check-in is a live projection of subject catalog IDs and selected
+forms, not a copied image list. Missing records, forms or usable images are
+reported beside the check-in. Correct the catalog source or manage its link;
+there is no fallback to a historical sheet or a similarly named character.
+Approval is tied to the exact catalog basis the director saw and becomes stale
+when its source changes. Catalog-mode generation/edit endpoints cannot revive
+legacy sheet generation or write historical output back into the catalog.
+
+Mood boards, pinned shot assets and optional visual guides remain separate from
+the catalog check-in. Existing shot choices are preserved; new conditioning in
+catalog mode uses the approved live catalog projection.
+
+Implementation: `server/services/musicVideo/catalogCheckin.js` resolves and
+validates sources; `server/lib/musicVideoCatalogCheckinValidation.js` validates
+approval requests. `CatalogLookReferences.jsx` presents live catalog media;
+`useCatalogCastSetsCheckin.js` refreshes approval state on catalog events.

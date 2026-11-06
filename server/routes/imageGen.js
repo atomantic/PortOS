@@ -719,6 +719,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
   }
+  if (params.musicVideo?.sceneId) {
+    const { assertCatalogRenderParams } = await import('../services/musicVideo/clipCastReferences.js');
+    await assertCatalogRenderParams(params);
+  }
   let result = await imageGen.generateImage(params);
   if (params.visualProfile && result?.filename) result = await finishVisualProfileImage({ result, profile: params.visualProfile, signal: new AbortController().signal });
   if (params.musicVideoProjectId && result?.filename) {

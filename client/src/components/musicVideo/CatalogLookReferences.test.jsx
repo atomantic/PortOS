@@ -1,10 +1,14 @@
 import { useState } from 'react';
+import socket from '../../services/socket.js';
+import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CastSetsStage from './stages/CastSetsStage.jsx';
 import { detachCatalogIngredientMedia, listCatalogIngredientMedia } from '../../services/apiCatalog.js';
 
+vi.mock('../../services/apiMusicVideo.js', () => ({ getMusicVideoCastAndSets: vi.fn() }));
+vi.mock('../../services/socket.js', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: vi.fn(), detachCatalogIngredientMedia: vi.fn() }));
 vi.mock('./CastAndSetsCheckin.jsx', () => ({ default: () => <p>Approved sheet</p> }));
 vi.mock('./DevArtifactsPanel.jsx', () => ({ default: () => null }));
@@ -24,13 +28,13 @@ const makeProject = () => ({
   castAndSets: { status: 'approved', images: { character: { imageId: 'approved.png' } } },
 });
 
-function show(project = makeProject(), save = vi.fn()) {
-  const board = { project, saveVisualSpec: save, locked: false, castSets: { busy: false }, kickoff: { running: false }, devArtifacts: { busy: false } };
+function show(project = makeProject(), save = vi.fn(), extra = {}) {
+  const board = { project, saveVisualSpec: save, locked: false, castSets: { busy: false }, kickoff: { running: false }, devArtifacts: { busy: false }, ...extra };
   const view = render(<MemoryRouter><CastSetsStage board={board} /></MemoryRouter>);
   return { ...view, save };
 }
 
-describe('linked object references on the Look step', () => {
+describe('live catalog references on the Look step', () => {
   it('shows the video’s linked object images automatically, while excluding unusable and unrelated media', async () => {
     listCatalogIngredientMedia.mockImplementation(async (id) => id === 'cat-bike' ? [
       { kind: 'portrait', mediaKey: 'shared.png' },
@@ -43,13 +47,13 @@ describe('linked object references on the Look step', () => {
     const project = makeProject();
     const { save } = show(project);
     await screen.findByText('Red cruiser');
-    const region = within(screen.getByRole('region', { name: 'Linked object references' }));
+    const region = within(screen.getByRole('region', { name: 'Catalog-linked look' }));
     expect(region.getByRole('link', { name: 'Bike' })).toHaveAttribute('href', '/objects/cat-bike');
     expect(region.getByRole('link', { name: 'Camera' })).toHaveAttribute('href', '/objects/cat-camera');
     expect(region.getAllByAltText(/^Bike reference [0-9]+$/)).toHaveLength(2);
-    expect(region.getByText('Already in look references')).toBeInTheDocument();
+    expect(region.getByText('Pinned for shots')).toBeInTheDocument();
     expect(region.queryByAltText(/^Unlinked object reference/)).toBeNull();
-    expect(listCatalogIngredientMedia.mock.calls.map(([id]) => id).sort()).toEqual(['cat-bike', 'cat-camera']);
+    expect(listCatalogIngredientMedia.mock.calls.map(([id]) => id).sort()).toEqual(['cat-bike', 'cat-camera', 'cat-cast']);
     expect(save).not.toHaveBeenCalled();
     expect(project.castAndSets.images.character.imageId).toBe('approved.png');
 
@@ -59,6 +63,82 @@ describe('linked object references on the Look step', () => {
     expect(save).toHaveBeenCalledWith({ references: [project.visualSpec.references[0], expect.objectContaining({
       id: expect.stringMatching(/^mvr-object-/), imageId: 'red.png', label: 'Bike', role: 'prop', condition: false,
     })] });
+  });
+
+  it('reads cast and environments from the catalog with the selected form and refreshes changes without saving copies', async () => {
+    const project = makeProject();
+    project.concept.subjects = [
+      { id: 'lead', kind: 'character', name: 'Lead', ingredientId: 'cat-lead', castForm: { id: 'young' } },
+      { id: 'set', kind: 'place', name: 'Street', ingredientId: 'cat-street' },
+    ];
+    let changed = false;
+    listCatalogIngredientMedia.mockImplementation(async (id) => id === 'cat-lead' ? [
+      { kind: 'portrait', mediaKey: 'adult.png' },
+      { kind: 'reference', mediaKey: changed ? 'new.png' : 'young.png', library: { variant: { formId: 'young' } } },
+    ] : [{ kind: 'reference', mediaKey: 'street.png' }]);
+    const { save, unmount } = show(project);
+    expect(await screen.findByAltText('Lead reference 1')).toHaveAttribute('src', '/data/images/young.png');
+    expect(screen.getByRole('link', { name: 'Lead' })).toHaveAttribute('href', '/casting/cat-lead');
+    expect(screen.getByRole('link', { name: 'Street' })).toHaveAttribute('href', '/environments/cat-street');
+    expect(within(screen.getByRole('region', { name: 'Cast' })).getAllByRole('img')).toHaveLength(1);
+    changed = true;
+    const handler = socket.on.mock.calls.findLast(([name]) => name === 'catalog:assets-changed')[1];
+    await act(async () => handler({ ingredientId: 'cat-lead' }));
+    await waitFor(() => expect(screen.getByAltText('Lead reference 1')).toHaveAttribute('src', '/data/images/new.png'), { timeout: 2500 });
+    expect(save).not.toHaveBeenCalled();
+    expect(project.castAndSets.images.character.imageId).toBe('approved.png');
+    unmount();
+    expect(socket.off).toHaveBeenCalledWith('catalog:assets-changed', handler);
+  });
+
+  it('checks in only resolved catalog images and leaves prior generated sheets in closed history', async () => {
+    const project = makeProject();
+    project.concept.subjects = [project.concept.subjects[3]];
+    project.castAndSets = { source: 'catalog', status: 'review', images: { character: { imageId: 'old-generated.png' } }, plan: { character: { key: 'character', label: 'Old generated sheet' } } };
+    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'reference', mediaKey: 'current.png' }, { kind: 'reference', mediaKey: 'not-selected.png' }]);
+    getMusicVideoCastAndSets.mockResolvedValue({ catalogCheckin: { items: [{ subjectId: 'cast', ingredientId: 'cat-cast', name: 'Cast', images: ['current.png'] }], problems: [], approved: false, basis: 'seen-basis' } });
+    const approve = vi.fn();
+    const applyCatalogCheckin = vi.fn();
+    const { save } = show(project, vi.fn(), { approveCastAndSets: approve, applyCatalogCheckin });
+    expect(await screen.findByAltText('Cast reference 1')).toHaveAttribute('src', '/data/images/current.png');
+    expect(screen.queryByAltText('Cast reference 2')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Manage image in catalog' })).toHaveAttribute('href', '/casting/cat-cast');
+    expect(screen.queryByRole('button', { name: /Unlink Cast image/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve catalog Cast & Sets' }));
+    expect(approve).toHaveBeenCalledWith('seen-basis');
+    expect(applyCatalogCheckin).toHaveBeenCalledWith(expect.objectContaining({ basis: 'seen-basis' }));
+    const old = screen.getByAltText('Old generated sheet — previous revision');
+    expect(old.closest('details')).not.toHaveAttribute('open');
+    expect(within(screen.getByRole('region', { name: 'Catalog-linked look' })).queryByRole('img', { name: /Old generated sheet/ })).toBeNull();
+    expect(screen.queryByText('Approved sheet')).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('shows canonical payload images even without a media association and routes correction to the catalog', async () => {
+    const project = makeProject();
+    project.concept.subjects = [project.concept.subjects[3]];
+    project.castAndSets.source = 'catalog';
+    listCatalogIngredientMedia.mockResolvedValue([]);
+    getMusicVideoCastAndSets.mockResolvedValue({ catalogCheckin: { items: [{ subjectId: 'cast', ingredientId: 'cat-cast', name: 'Cast', images: ['canonical.png'] }], problems: [], approved: true, basis: 'seen' } });
+    show(project);
+    expect(await screen.findByAltText('Cast reference 1')).toHaveAttribute('src', '/data/images/canonical.png');
+    expect(screen.getByRole('link', { name: 'Manage image in catalog' })).toHaveAttribute('href', '/casting/cat-cast');
+    expect(screen.queryByRole('button', { name: /Unlink Cast image/ })).toBeNull();
+    expect(screen.queryByText('No usable images for this look.')).toBeNull();
+  });
+
+  it('blocks catalog approval on missing links or a failed read instead of falling back to old images', async () => {
+    const project = makeProject();
+    project.castAndSets.source = 'catalog';
+    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'old.png' }]);
+    getMusicVideoCastAndSets.mockRejectedValueOnce(new Error('Catalog unavailable')).mockResolvedValueOnce({ catalogCheckin: { items: [], problems: [{ subjectId: 'bike', code: 'missing', message: 'Link Bike to a catalog record.' }], approved: false } });
+    show(project);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog unavailable');
+    expect(screen.getByRole('button', { name: 'Approve catalog Cast & Sets' })).toBeDisabled();
+    expect(screen.queryByAltText('Bike reference 1')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry catalog check-in' }));
+    expect(await screen.findByText('Link Bike to a catalog record.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve catalog Cast & Sets' })).toBeDisabled();
   });
 
   it('does not add a reference that only exists outside the gallery', async () => {
@@ -75,7 +155,7 @@ describe('linked object references on the Look step', () => {
     expect(image.src).toContain('/data/image-refs/asset.png');
     fireEvent.load(image);
     expect(button).toBeDisabled();
-    expect(screen.getByText(/Only available in Objects/)).toBeInTheDocument();
+    expect(screen.getByText(/Only available in the catalog/)).toBeInTheDocument();
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -207,12 +287,12 @@ describe('linked object references on the Look step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Unlink Bike image 1/ }));
-    expect(screen.getByText(/object and image file are kept/)).toBeInTheDocument();
+    expect(screen.getByText(/catalog record and image file are kept/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
     await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledTimes(1));
     await act(async () => finish());
-    await waitFor(() => expect(screen.queryByText('Already in look references')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Pinned for shots')).toBeNull());
     expect(detachCatalogIngredientMedia.mock.calls).toEqual([
       ['cat-bike', { mediaKey: 'shared.png', kind: 'portrait' }, { silent: true }],
       ['cat-bike', { mediaKey: 'shared.png', kind: 'reference' }, { silent: true }],

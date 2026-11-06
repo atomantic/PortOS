@@ -186,11 +186,10 @@ describe('music-video render-target resolution (#3231 Phase 4)', () => {
     expect(getProject).toHaveBeenCalledOnce();
   });
 
-  it('falls through to the install default with no pins, and a missing project is harmless', async () => {
+  it('refuses an unreadable tagged project instead of bypassing its catalog approval with install defaults', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
     getProject.mockRejectedValue(new Error('gone'));
-    const { mode } = await run({ prompt: 'p', musicVideo: { projectId: 'mv-x', sceneId: 's1' } });
-    expect(mode).toBe('external');
+    await expect(run({ prompt: 'p', musicVideo: { projectId: 'mv-x', sceneId: 's1' } })).rejects.toThrow('gone');
   });
 
   it('renders without a musicVideo tag never touch the project store', async () => {
@@ -527,4 +526,33 @@ it('leaves FableLoom authored intent for its compiler instead of composing photo
   expect(result.data.negativePrompt).toBe('authored avoid');
   expect(result.data.visualProfile).toBeUndefined();
   expect(result.data.visualProfileOverride).toBeDefined();
+});
+
+
+it('gates catalog-linked frame preparation on fresh approval and refuses explicitly supplied historical sheets', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  const { resolveCatalogCheckin } = await import('../musicVideo/catalogCheckin.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['catalog-live.png', 'catalog-updated.png', 'legacy-sheet.png', 'scene-start.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  const p = { id: 'mv-1', concept: { subjects: [{ id: 'lead', ingredientId: 'catalog-lead', kind: 'character' }] },
+    castAndSets: { source: 'catalog', status: 'approved', images: { character: { imageId: 'legacy-sheet.png' } } }, scenes: [{ sceneId: 's1' }] };
+  greyboxCatalog.getIngredient.mockResolvedValue({ id: 'catalog-lead', type: 'character', name: 'Lead', payload: {} });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'catalog-live.png' }]);
+  p.castAndSets.catalogApprovedBasis = (await resolveCatalogCheckin(p)).basis;
+  getProject.mockResolvedValue(p);
+  const request = () => ({ mode: 'codex', prompt: 'Lead walks', referenceImageFiles: ['catalog-live.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
+  const prepared = await run(request());
+  expect(prepared.data.referenceImagePaths).toEqual([join(PATHS.images, 'catalog-live.png')]);
+  const edited = await run({ ...request(), referenceImageFiles: ['scene-start.png', 'catalog-live.png'],
+    musicVideo: { ...request().musicVideo, fromFrame: true } });
+  expect(edited.data.referenceImagePaths).toEqual([join(PATHS.images, 'scene-start.png'), join(PATHS.images, 'catalog-live.png')]);
+  await expect(run({ ...request(), referenceImageFiles: ['legacy-sheet.png'] }))
+    .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  await expect(run({ ...request(), initImageFile: 'legacy-sheet.png' }))
+    .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'catalog-updated.png' }]);
+  await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
+  greyboxCatalog.getIngredient.mockResolvedValue(null);
+  await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
 });

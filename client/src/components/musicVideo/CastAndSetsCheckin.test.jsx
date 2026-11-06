@@ -8,7 +8,7 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({
   listeners: new Map(),
-  api: { selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), inspectMusicVideoCastAndSetsImages: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), renderMusicVideoCastAndSetsFeedback: vi.fn(), refreshMusicVideoCastAndSetsFeedbackRenderer: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsImageFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
+  api: { linkMusicVideoCastAndSetsToCatalog: vi.fn(), selectMusicVideoCastAndSetsImage: vi.fn(), previewMusicVideoCastAndSetsImageEdit: vi.fn(), editMusicVideoCastAndSetsImage: vi.fn(), acceptMusicVideoCastAndSetsImageEdit: vi.fn(), discardMusicVideoCastAndSetsImageEdit: vi.fn(), getMusicVideoProject: vi.fn(), getMusicVideoCastAndSets: vi.fn(), startMusicVideoCastAndSets: vi.fn(), regenerateMusicVideoCastAndSets: vi.fn(), editMusicVideoCastAndSetsDirection: vi.fn(), resumeMusicVideoCastAndSets: vi.fn(), approveMusicVideoCastAndSets: vi.fn(), reconfirmMusicVideoCastAndSets: vi.fn(), inspectMusicVideoCastAndSetsImages: vi.fn(), revertMusicVideoProductionInput: vi.fn(), skipMusicVideoCastAndSets: vi.fn(), applyMusicVideoCastAndSetsFeedback: vi.fn(), renderMusicVideoCastAndSetsFeedback: vi.fn(), refreshMusicVideoCastAndSetsFeedbackRenderer: vi.fn(), removeMusicVideoCastAndSetsFeedback: vi.fn(), removeMusicVideoCastAndSetsImageFeedback: vi.fn(), discardMusicVideoCastAndSets: vi.fn(), getMusicVideoCastAndSetsCastingChanges: vi.fn() },
   getMediaJob: vi.fn(),
   greyboxData: { places: {} },
 }));
@@ -26,6 +26,7 @@ vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 // The Look step also holds the creative direction; it is covered by its own panels' tests.
 vi.mock('./CreativeSetupPanel.jsx', () => ({ default: () => null }));
+vi.mock('./CatalogLookReferences.jsx', () => ({ default: () => null }));
 vi.mock('./LookReferencesPanel.jsx', () => ({ default: () => null }));
 vi.mock('./VisualSpecPanel.jsx', () => ({ default: () => null }));
 const DRAFTS = { conceptDraft: { value: '', onChange: () => {}, onBlur: () => {} }, styleDraft: { value: '', onChange: () => {}, onBlur: () => {} } };

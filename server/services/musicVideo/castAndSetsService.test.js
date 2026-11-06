@@ -2822,3 +2822,65 @@ describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
     await runTo(project.id, 'approved');
   });
 });
+
+it('converts legacy check-in to catalog links without recasting, copying media, or rewriting shot history', async () => {
+  onDisk('catalog-example.png');
+  const project = await seed({ concept: { subjects: [{ id: 's-example', kind: 'character', name: 'Example', ingredientId: 'chr-example' }] } });
+  const historical = { status: 'approved', revision: 2, direction: DIRECTION, images: { character: { status: 'done', imageId: 'old-example.png', submittedReferences: ['original-example.png'] } }, approvedInputs: { subjects: 'old-hash' } };
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: historical } }));
+  const db = { getIngredient: async () => ({ id: 'chr-example', type: 'character', name: 'Example', payload: { physicalDescription: 'Catalog description' } }),
+    listMediaForIngredient: async () => [{ kind: 'portrait', mediaKey: 'catalog-example.png' }] };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+  const catalogDB = await import('../catalogDB.js');
+  const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
+  const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
+  onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
+  const events = [];
+  const capture = event => { if (event.projectId === project.id) events.push(event); };
+  musicVideoEvents.on('cast-and-sets', capture);
+  onTestFinished(() => musicVideoEvents.off('cast-and-sets', capture));
+  const switched = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({});
+  expect(switched.status).toBe(200);
+  expect(switched.body.stage).toMatchObject({ source: 'catalog', status: 'review', images: historical.images, approvedInputs: historical.approvedInputs });
+  expect(switched.body.catalogCheckin.items[0].images).toEqual(['catalog-example.png']);
+  const stale = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: 'a'.repeat(64) });
+  expect(stale.status).toBe(409);
+  const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: switched.body.catalogCheckin.basis });
+  expect(approved.status).toBe(200);
+  expect(approved.body.catalogCheckin.approved).toBe(true);
+  expect(approved.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+  expect(events.at(-1).project.castAndSets.catalogCheckin.approved).toBe(true);
+  const edited = await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, name: 'Example renamed' } }));
+  expect(edited.project.castAndSets.catalogCheckin.approved).toBe(true);
+  expect((await projects.updateProject(project.id, { name: 'Example revised' })).castAndSets.catalogCheckin.approved).toBe(true);
+  expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+  expect(approved.body.project.concept.subjects).toEqual(project.concept.subjects);
+  expect(approved.body.project.visualSpec.references).toEqual(project.visualSpec.references);
+  expect(approved.body.stage.images).toEqual(historical.images);
+  expect(runPrompt).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
+  for (const endpoint of ['', '/regenerate', '/resume', '/skip', '/use-image']) {
+    const body = endpoint === '/use-image' ? { key: 'character', imageId: 'catalog-example.png' } : {};
+    const response = await request(app).post(`/api/music-video/${project.id}/cast-and-sets${endpoint}`).send(body);
+    expect(response.status).toBe(409);
+    expect(response.body.code || response.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
+  }
+  expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', filename: 'late.png', revision: 2 })).toBe(false);
+});
+
+it('blocks catalog approval until every subject is linked and refuses conversion while old jobs are active', async () => {
+  const project = await seed();
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'directing', processId: service.__castAndSetsProcessId(), images: {} } } }));
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({})).status).toBe(409);
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'imaging', images: { character: { status: 'queued' } } } } }));
+  const busy = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({});
+  expect(busy.status).toBe(409);
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'directing', processId: 'previous-process', images: {} } } }));
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({})).status).toBe(200);
+  const read = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+  expect(read.body.catalogCheckin.problems[0].code).toBe('CATALOG_LINK_REQUIRED');
+  expect(read.body.catalogCheckin.items[0].subjectId).toBe('s-band');
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
+  expect(runPrompt).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
+});

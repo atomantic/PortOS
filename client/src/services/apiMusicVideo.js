@@ -623,6 +623,8 @@ export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
 // advances server-side and reports over the `music-video:cast-and-sets` socket event.
 export const getMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
+export const linkMusicVideoCastAndSetsToCatalog = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog`, { method: 'POST', body: '{}', ...options });
 // `{ changes: null | { images: [{ key, label }], cast: [name] } }`: Casting changes since the sheet was built.
 export const getMusicVideoCastAndSetsCastingChanges = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/casting-changes`, options);
@@ -666,11 +668,11 @@ export const inspectMusicVideoCastAndSetsImages = (id, body = {}, options = {}) 
 export const acknowledgeMusicVideoCastAndSetsImage = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/acknowledge-image`, { method: 'POST', body: JSON.stringify(body), ...options });
 
-export const approveMusicVideoCastAndSets = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+export const approveMusicVideoCastAndSets = (id, { catalogBasis, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...(catalogBasis ? { body: JSON.stringify({ catalogBasis }) } : {}), ...options });
 // "Keep approved" (#10141): re-stamp an approved check-in on the project's current concept, style, subjects and song.
-export const reconfirmMusicVideoCastAndSets = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...options });
+export const reconfirmMusicVideoCastAndSets = (id, { catalogBasis, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...(catalogBasis ? { body: JSON.stringify({ catalogBasis }) } : {}), ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
 // Start over: drop a check-in that is not approved (its images stay in the gallery).

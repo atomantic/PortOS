@@ -360,7 +360,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   let localModelCandidates = [];
   const source = data.mode ? null : RECORD_PIN_SOURCES.find((s) => data[s.tag]?.[s.idKey]);
   if (source) {
-    const record = await source.load(data[source.tag][source.idKey]).catch(() => null);
+    const record = await source.load(data[source.tag][source.idKey]).catch(error => {
+      if (source.tag === 'musicVideo') throw error;
+      return null;
+    });
     if (source.tag === 'musicVideo') { musicVideoProject = record; musicVideoProjectLoaded = true; }
     const pin = recordRenderPin(record || {});
     const resolved = resolveRenderTargetConfig(settings, source.target, {
@@ -391,12 +394,16 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
-    const project = musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles } = await import('../musicVideo/clipCastReferences.js');
+    const project = await requireCatalogRenderReady(musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId));
+    assertCatalogReferenceFiles(project, [...namedReferenceFiles, data.initImageFile]);
+    if (project?.castAndSets?.source === 'catalog') data.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
     const standardSize = musicVideoFrameGenSize(project);
     if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
       Object.assign(data, musicVideoFrameGenSize(project, localModel));
     }
     await applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount });
+    assertCatalogReferenceFiles(project, namedReferenceFiles);
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = initInputCount + referenceImageCount;

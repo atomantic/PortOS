@@ -2390,6 +2390,10 @@ async function assertMusicVideoJobPolicy(kind, params) {
     const project = await getProject(params.musicVideo.projectId);
     if (!project) throw new Error('Music Video project not found');
     assertMusicVideoMedia(project, kind, 'generation');
+    if (project.castAndSets?.source === 'catalog') {
+      const { assertCatalogRenderParams } = await import('../musicVideo/clipCastReferences.js');
+      await assertCatalogRenderParams(params, project);
+    }
   }
 }
 

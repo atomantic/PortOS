@@ -109,14 +109,57 @@ function featuredAuthoredCharacters(references, scene) {
 // sheet removed later by the director must not silently reappear here.
 function overflowFaceReferences(project) {
   const stage = project?.castAndSets;
-  if (stage?.status !== 'approved' || !musicVideoAllowsMedia(project, 'image') || !Array.isArray(stage.overflowFaceReferences)) return [];
+  if (stage?.source === 'catalog' || stage?.status !== 'approved' || !musicVideoAllowsMedia(project, 'image') || !Array.isArray(stage.overflowFaceReferences)) return [];
   const published = new Set((project?.visualSpec?.references || []).map((ref) => ref.id));
   return stage.overflowFaceReferences.filter((ref) => ref?.id && ref.imageId && !published.has(ref.id));
 }
 
 /** The references a director can send with a shot's frames: every one with an image except outside inspiration. */
-export const musicVideoReferenceChoices = (project) => [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)]
-  .filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref));
+export const musicVideoReferenceChoices = (project) => [
+  ...musicVideoCatalogReferences(project), ...(project?.visualSpec?.references || []), ...overflowFaceReferences(project),
+].filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref) && !isLegacyCatalogReference(project, ref));
+
+// Keep saved sheets and shot picks for history, but never use them for a new catalog-linked render.
+export function isLegacyCatalogReference(project, ref) {
+  const stage = project?.castAndSets;
+  if (stage?.source !== 'catalog') return false;
+  if (String(ref?.id || '').startsWith('mvr-cs-')) return true;
+  // A historical generated file may since have become an approved catalog asset.
+  if (stage.catalogCheckin?.approved && stage.catalogCheckin.items?.some(item => item.images?.includes(ref?.imageId))) return false;
+  return Object.values(stage.images || {}).some((image) => image?.imageId === ref?.imageId || image?.history?.includes(ref?.imageId))
+    || (project?.visualSpec?.references || []).some((saved) => String(saved?.id || '').startsWith('mvr-cs-') && saved.imageId === ref?.imageId)
+    || (stage.overflowFaceReferences || []).some((saved) => saved.imageId && saved.imageId === ref?.imageId);
+}
+
+// Browser-safe FNV-1a 64-bit identity. Hash the full tuple, never a truncated filename or its position.
+function catalogReferenceId(subjectId, filename) {
+  let hash = 0xcbf29ce484222325n;
+  for (const character of JSON.stringify([subjectId, filename])) {
+    hash = BigInt.asUintN(64, (hash ^ BigInt(character.codePointAt(0))) * 0x100000001b3n);
+  }
+  return `mvr-catalog-${hash.toString(16).padStart(16, '0')}`;
+}
+
+/** Virtual choices resolved from the catalog on read, never published copies of catalog images. */
+function musicVideoCatalogReferences(project) {
+  const stage = project?.castAndSets;
+  const checkin = stage?.catalogCheckin;
+  if (stage?.source !== 'catalog' || !checkin?.approved || !Array.isArray(checkin.problems)
+    || checkin.problems.length || !Array.isArray(checkin.items)) return [];
+  return checkin.items.flatMap((item) => (item.images || [])
+    .filter((filename) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
+    .map((filename) => ({
+      id: catalogReferenceId(item.subjectId, filename),
+      imageId: filename,
+      role: ['place', 'location'].includes(item.kind) ? 'set' : item.kind === 'object' ? 'prop' : item.kind,
+      label: String(item.name || 'Catalog item').slice(0, 120),
+      note: String(item.description || '').slice(0, 1000),
+      condition: true,
+      catalogSubjectId: item.subjectId,
+      ingredientId: item.ingredientId,
+      formId: item.formId || null,
+    }))).filter((ref) => !isLegacyCatalogReference(project, ref));
+}
 
 /** The cast member and variant a scene asks its frames to show, or null when it names none. */
 export function sceneCastVariant(scene) {
@@ -145,14 +188,15 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
   // the pick lets the next candidate take an unsendable file's slot. The guide-vs-fallback choice
   // reads the member's real guide flags: with guides flagged, only sendable guides qualify (none
   // left = the automatic set), never the non-guide images pickGuideMedia falls back to.
-  const want = { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId };
+  const want = { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId, formId: variant.formId };
   const rejected = rejectedReferenceKeys(media);
-  const eligible = media.filter((m) => m && !m.deleted && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want));
+  const eligible = media.filter((m) => m && !m.deleted && !rejected.has(m.mediaKey) && matchesReferenceVariant(m, want)
+    && (!Object.hasOwn(variant, 'formId') || (m.library?.variant?.formId || null) === (variant.formId || null)));
   const sendable = eligible.filter((m) => typeof m?.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey));
   const flagged = eligible.some((m) => CAST_IMAGE_KINDS.has(m.kind) && m.library?.guide === true);
   const candidates = flagged ? sendable.filter((m) => m.library?.guide === true) : sendable;
   if (!candidates.length) return [];
-  return pickGuideMedia(candidates, { age: variant.age, era: variant.era, wardrobeId: variant.wardrobeId }, MUSIC_VIDEO_MAX_REFERENCE_CHOICES)
+  return pickGuideMedia(candidates, want, MUSIC_VIDEO_MAX_REFERENCE_CHOICES)
     .map((m) => {
       const v = m.library?.variant || {};
       const detail = v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || '');
@@ -174,13 +218,15 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
  * (or without a variant) the result is the automatic set alone.
  */
 function baseConditioningReferences(project, scene, castMedia = null, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
-  const research = musicVideoResearchReferences(scene);
+  const research = musicVideoResearchReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // A roster cameo's photos (#14821) are the shot's identity references, ahead of any cast guide.
-  const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)];
-  const panel = musicVideoPanelArtReferences(scene);
+  const guides = [...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia)]
+    .filter((ref) => !isLegacyCatalogReference(project, ref));
+  const panel = musicVideoPanelArtReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project)];
+    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project)]
+      .filter((ref) => !isLegacyCatalogReference(project, ref));
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
   }
@@ -216,7 +262,73 @@ export function musicVideoPanelArtReferences(scene) {
   return [{ id: `mvr-panel-${scene.panelId || 'art'}`.slice(0, 128), imageId: scene.panelArt, role: 'mood', label: 'Storyboard panel', panelArt: true }];
 }
 
+/** Match only subjects the shot actually identifies; an unknown or missing selection never means everybody. */
+function sceneCatalogSubjectIds(project, scene) {
+  const items = project?.castAndSets?.catalogCheckin?.items || [];
+  const sheet = scene?.shotSheet;
+  const text = [scene?.description, scene?.framePrompt, scene?.prompt, scene?.visualIntent,
+    scene?.direction?.frameClause, scene?.direction?.motionClause, sheet?.action, sheet?.location,
+    sheet?.view, /selfie/i.test(sheet?.view || '') ? sheet?.holder : null].filter(Boolean).join(' ');
+  const variant = sceneCastVariant(scene);
+  const direction = project?.castAndSets?.direction;
+  const mappedSetId = Number.isInteger(scene?.sectionIndex)
+    ? direction?.songMap?.find(entry => entry.section === scene.sectionIndex)?.setId : null;
+  const mappedSet = direction?.sets?.find(set => set.id === mappedSetId);
+  const matches = items.filter(item => {
+    const subject = project?.concept?.subjects?.find(entry => entry.id === item.subjectId);
+    const names = [item.name, subject?.name].filter(Boolean);
+    const named = names.some(name => namesIn(text, name));
+    if (item.kind === 'character') {
+      if (variant && variant.ingredientId === item.ingredientId) {
+        // Internal/legacy scenes can carry an exact look. Never let a name match undo that selection.
+        return !Object.hasOwn(variant, 'formId') || (item.formId || null) === (variant.formId || null);
+      }
+      if (Array.isArray(sheet?.characters)) {
+        return sheet.characters.some(name => [item.subjectId, item.ingredientId, ...names].some(value =>
+          String(value || '').toLowerCase() === name.toLowerCase()));
+      }
+      const cast = direction?.cast?.find(entry => entry.id === item.subjectId || names.includes(entry.name));
+      return named || (cast && namesIn(text, cast.role));
+    }
+    if (['place', 'location'].includes(item.kind)) {
+      if (scene?.setReference?.subjectId) return scene.setReference.subjectId === item.subjectId;
+      if (sheet?.location) return names.some(name => namesIn(sheet.location, name));
+      return named || (mappedSetId && (mappedSetId === item.subjectId || mappedSet?.setReference?.subjectId === item.subjectId
+        || names.includes(mappedSet?.name)));
+    }
+    return named || (item.kind === 'object' && names.some(name => showsProp({ props: [{ name }] }, { prompt: text })));
+  });
+  const priority = item => item.kind === 'character' ? (variant && variant.ingredientId === item.ingredientId ? 0 : 1)
+    : ['place', 'location'].includes(item.kind) ? 2 : 3;
+  return matches.sort((a, b) => priority(a) - priority(b)).map(item => item.subjectId);
+}
+
 function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES) {
+  if (project?.castAndSets?.source === 'catalog') {
+    const choices = musicVideoReferenceChoices(project).filter((ref) => ref.condition);
+    const subjects = new Map();
+    for (const subjectId of sceneCatalogSubjectIds(project, scene)) {
+      subjects.set(subjectId, choices.filter(ref => ref.catalogSubjectId === subjectId));
+    }
+    const selected = [];
+    const seen = new Set();
+    // Each subject gets its next distinct image before any subject gets another slot.
+    while ([...subjects.values()].some(refs => refs.length)) {
+      for (const refs of subjects.values()) {
+        while (refs.length && seen.has(refs[0].imageId)) refs.shift();
+        const ref = refs.shift();
+        if (!ref) continue;
+        selected.push(ref);
+        seen.add(ref.imageId);
+      }
+    }
+    for (const ref of choices.filter(ref => !ref.catalogSubjectId)) {
+      if (seen.has(ref.imageId)) continue;
+      selected.push(ref);
+      seen.add(ref.imageId);
+    }
+    return selected.slice(0, limit);
+  }
   const references = [...(project?.visualSpec?.references || []), ...overflowFaceReferences(project)];
   const stage = project?.castAndSets;
   // Legacy projects and incomplete check-ins retain the authored reference set.
@@ -289,13 +401,14 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
   const references = baseConditioningReferences(project, scene, castMedia);
   // The chosen camera replaces the section's generic set plate, which shows the place from another side.
   const ordered = greybox?.reference
-    ? [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-'))]
+    ? [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-') && !(r.catalogSubjectId && r.role === 'set'))]
     : references;
-  const panel = !Array.isArray(scene?.frameReferenceIds) && ordered.find((ref) => ref.panelArt);
-  const ids = musicVideoLimitReferenceFiles(ordered.map((ref) => ref.imageId), limit, {
+  const current = ordered.filter((ref) => !isLegacyCatalogReference(project, ref));
+  const panel = !Array.isArray(scene?.frameReferenceIds) && current.find((ref) => ref.panelArt);
+  const ids = musicVideoLimitReferenceFiles(current.map((ref) => ref.imageId), limit, {
     panelImageId: panel?.imageId, protectedCount: greybox?.reference ? 1 : 0,
   });
-  const remaining = [...ordered];
+  const remaining = [...current];
   return ids.map((id) => remaining.splice(remaining.findIndex((ref) => ref.imageId === id), 1)[0]);
 }
 
@@ -316,7 +429,8 @@ export function musicVideoClipConditioningReferences(project, scene, castMedia =
 
 /** References that may be selected independently for a clip. */
 export function musicVideoClipReferenceChoices(project, scene, castMedia = null) {
-  return [...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)];
+  return [...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)]
+    .filter((ref) => !isLegacyCatalogReference(project, ref));
 }
 
 /** Keep an automatic storyboard panel in a spare slot after a leading frame or greybox. */

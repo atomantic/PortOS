@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
+import { musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
 
 const CAST_ID = 'cat-chr-example';
@@ -198,5 +198,144 @@ describe('musicVideoConditioningReferences with research photos (#14822)', () =>
     expect(ids(musicVideoConditioningReferences(project(authored), { ...scene, frameReferenceIds: ['set', 'mvr-research-r2'] }))).toEqual(['set.png', 'research-2.png']);
     // On Auto a clip also keeps the subject photos, beside the identities.
     expect(ids(musicVideoClipConditioningReferences(project(authored), scene))).toEqual(['research-1.png', 'research-2.png', 'research-3.png', 'lead.png']);
+  });
+});
+
+describe('catalog-linked check-in conditioning', () => {
+  const catalogProject = () => ({
+    visualSpec: { references: [
+      { id: 'mvr-cs-character', imageId: 'old-sheet.png', role: 'character', condition: true },
+      { id: 'renamed-sheet', imageId: 'old-set.png', role: 'set', condition: true },
+      { id: 'palette', imageId: 'palette.png', role: 'mood', condition: true },
+    ] },
+    castAndSets: {
+      source: 'catalog', status: 'approved',
+      images: { character: { imageId: 'old-sheet.png' }, 'set:room': { imageId: 'old-set.png' } },
+      overflowFaceReferences: [{ id: 'mvr-cs-face-lead', imageId: 'old-face.png', role: 'character' }],
+      catalogCheckin: { approved: true, basis: 'live-basis', problems: [], items: [
+        { subjectId: 'lead', ingredientId: CAST_ID, formId: 'adult', kind: 'character', name: 'Lead', images: ['current-lead.png'] },
+        { subjectId: 'room', ingredientId: 'cat-loc-room', kind: 'location', name: 'Room', images: ['current-room.png'] },
+      ] },
+    },
+  });
+
+  it('conditions from current catalog media without copying or modifying historical sheets', () => {
+    const p = catalogProject();
+    const before = structuredClone(p);
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Room' }))).toEqual(['current-lead.png', 'current-room.png', 'palette.png']);
+    expect(p).toEqual(before);
+    p.castAndSets.catalogCheckin.items[0].images = ['updated-lead.png'];
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Room' }))[0]).toBe('updated-lead.png');
+    expect(ids(musicVideoClipConditioningReferences(p, { prompt: 'Lead in the Room' }))).toEqual(['updated-lead.png']);
+  });
+
+  it('drops stale explicit picks and aliases while retaining live picks and panel art', () => {
+    const p = catalogProject();
+    const scene = { panelId: 'p1', panelArt: 'panel.png', frameReferenceIds: [
+      'mvr-cs-character', 'renamed-sheet', 'mvr-cs-face-lead', musicVideoReferenceChoices(p)[0].id, 'mvr-panel-p1',
+    ], researchReferences: [{ id: 'aliased-old', imageId: 'old-sheet.png', subject: 'Lead' }] };
+    scene.frameReferenceIds.push('aliased-old');
+    const before = structuredClone(scene);
+    expect(ids(musicVideoConditioningReferences(p, scene))).toEqual(['current-lead.png', 'panel.png']);
+    expect(ids(musicVideoClipConditioningReferences(p, { ...scene, clipReferenceIds: scene.frameReferenceIds })))
+      .toEqual(['current-lead.png']);
+    expect(scene).toEqual(before);
+    expect(ids(musicVideoConditioningReferences(p, { panelId: 'p1', panelArt: 'panel.png', prompt: 'Lead in the Room' })))
+      .toEqual(['current-lead.png', 'current-room.png', 'palette.png', 'panel.png']);
+  });
+
+  it('allows a historical sheet promoted into the approved catalog while excluding its old IDs and unpromoted history', () => {
+    const p = catalogProject();
+    p.castAndSets.images.character.history = ['promoted.png', 'obsolete-edit.png'];
+    p.castAndSets.catalogCheckin.items[0].images = ['old-sheet.png', 'promoted.png'];
+    p.visualSpec.references.push({ id: 'old-edit-alias', imageId: 'obsolete-edit.png', condition: true });
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Room' }))).toEqual(['old-sheet.png', 'current-room.png', 'promoted.png', 'palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, { frameReferenceIds: ['mvr-cs-character', 'old-edit-alias', musicVideoReferenceChoices(p)[0].id] })))
+      .toEqual(['old-sheet.png']);
+  });
+
+  it('keeps explicit media choices stable through catalog reordering, insertion and removal', () => {
+    const p = catalogProject();
+    const item = p.castAndSets.catalogCheckin.items[0];
+    const prefix = 'shared-prefix-'.repeat(20);
+    item.subjectId = 'long-subject-'.repeat(20);
+    item.images = [`${prefix}a.png`, `${prefix}b.png`];
+    const choices = musicVideoReferenceChoices(p);
+    const selected = [choices[1].id, choices[0].id];
+    expect(new Set(selected).size).toBe(2);
+    expect(selected.every(id => id.length <= 128)).toBe(true);
+    const scene = { frameReferenceIds: selected };
+    item.images = ['inserted.png', `${prefix}b.png`, `${prefix}a.png`];
+    expect(ids(musicVideoConditioningReferences(p, scene))).toEqual([`${prefix}b.png`, `${prefix}a.png`]);
+    item.images = ['replacement.png', `${prefix}a.png`];
+    expect(ids(musicVideoConditioningReferences(p, scene))).toEqual([`${prefix}a.png`]);
+    expect(scene.frameReferenceIds).toEqual(selected);
+  });
+
+  it('gives each catalog subject a distinct image before extra views consume the renderer cap', () => {
+    const p = catalogProject();
+    p.castAndSets.catalogCheckin.items[0].images = ['lead.png', 'lead.png', 'lead-side.png', 'lead-back.png'];
+    p.castAndSets.catalogCheckin.items.splice(1, 0, { subjectId: 'guest', kind: 'character', name: 'Guest', images: ['lead.png', 'guest.png', 'guest-side.png'] });
+    p.castAndSets.catalogCheckin.items[2].images = ['room.png', 'room-side.png'];
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead and Guest in the Room' }, null, null, { limit: 3 }))).toEqual(['lead.png', 'guest.png', 'room.png']);
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead and Guest in the Room' }, null, null, { limit: 6 })))
+      .toEqual(['lead.png', 'guest.png', 'room.png', 'lead-side.png', 'guest-side.png', 'room-side.png']);
+  });
+
+  it('selects the named actor and room rather than unrelated actors, even beyond the renderer cap', () => {
+    const p = catalogProject();
+    p.castAndSets.catalogCheckin.items.unshift(...['Alice', 'Clara', 'David', 'Elena', 'Felix'].map(name => ({
+      subjectId: name, ingredientId: `cast-${name}`, kind: 'character', name, images: [1, 2, 3, 4].map(n => `${name}-${n}.png`),
+    })));
+    const lead = p.castAndSets.catalogCheckin.items.find(item => item.subjectId === 'lead');
+    lead.name = 'Bob';
+    const scene = { description: 'Bob alone in the Room' };
+    expect(ids(musicVideoConditioningReferences(p, scene, null, null, { limit: 4 })))
+      .toEqual(['current-lead.png', 'current-room.png', 'palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, scene, null, null, { limit: 1 }))).toEqual(['current-lead.png']);
+    expect(ids(musicVideoConditioningReferences(p, { prompt: 'An abstract shot' }))).toEqual(['palette.png']);
+  });
+
+  it('honors structured cast and set selectors without substituting other subjects when selected items are missing', () => {
+    const p = catalogProject();
+    p.castAndSets.catalogCheckin.items.push({ subjectId: 'camera', kind: 'object', name: "Lead's camera", images: ['camera.png'] });
+    expect(ids(musicVideoConditioningReferences(p, { characterVariant: { ingredientId: CAST_ID }, setReference: { subjectId: 'room' } })))
+      .toEqual(['current-lead.png', 'current-room.png', 'palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, { characterVariant: { ingredientId: 'missing' }, setReference: { subjectId: 'missing' } })))
+      .toEqual(['palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, { shotSheet: { characters: ['Lead'], location: 'Room', action: 'Raise the camera' } })))
+      .toEqual(['current-lead.png', 'current-room.png', 'camera.png', 'palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, { shotSheet: { characters: ['Missing'], location: 'Missing' } }))).toEqual(['palette.png']);
+    p.castAndSets.direction = { sets: [{ id: 'legacy-room', setReference: { subjectId: 'room' } }], songMap: [{ section: 0, setId: 'legacy-room' }] };
+    expect(ids(musicVideoConditioningReferences(p, { sectionIndex: 0 }))).toEqual(['current-room.png', 'palette.png']);
+    expect(musicVideoConditioningReferences(p, { frameReferenceIds: ['removed-choice'], prompt: 'Lead in the Room' })).toEqual([]);
+  });
+
+  it('keeps an explicit catalog form exact despite matching names, shot-sheet cast and canonical guides', () => {
+    const p = catalogProject();
+    const lead = p.castAndSets.catalogCheckin.items[0];
+    lead.formId = null;
+    p.castAndSets.catalogCheckin.items.push({ ...lead, subjectId: 'lead-child', formId: 'child', images: ['child-look.png'] },
+      { ...lead, subjectId: 'lead-older', formId: 'older', images: ['older-look.png'] });
+    const scene = { characterVariant: { ingredientId: CAST_ID, formId: 'child' }, framePrompt: 'Lead alone', shotSheet: { characters: ['Lead'] } };
+    const media = { [CAST_ID]: [guide('canonical-guide.png', 30), guide('older-guide.png', 70,
+      { library: { guide: true, variant: { formId: 'older' } } })] };
+    expect(ids(musicVideoConditioningReferences(p, scene, media))).toEqual(['child-look.png', 'palette.png']);
+    expect(ids(musicVideoConditioningReferences(p, { ...scene, characterVariant: { ingredientId: CAST_ID, formId: null } }, media)))
+      .toEqual(['canonical-guide.png', 'current-lead.png', 'palette.png']);
+    p.castAndSets.catalogCheckin.items = p.castAndSets.catalogCheckin.items.filter(item => item.formId !== 'child');
+    expect(ids(musicVideoConditioningReferences(p, scene, media))).toEqual(['palette.png']);
+    media[CAST_ID].push(guide('child-guide.png', 7, { library: { guide: true, variant: { formId: 'child' } } }));
+    expect(ids(musicVideoConditioningReferences(p, scene, media))).toEqual(['child-guide.png', 'palette.png']);
+  });
+
+  it('does not resurrect legacy sheets while catalog resolution or approval is pending', () => {
+    for (const checkin of [undefined, { approved: false, items: [], problems: [] },
+      { approved: true, items: [{ subjectId: 'lead', kind: 'character', images: ['current-lead.png'] }], problems: ['Missing catalog item'] }]) {
+      const p = catalogProject();
+      p.castAndSets.catalogCheckin = checkin;
+      expect(ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Room' }))).toEqual(['palette.png']);
+      expect(musicVideoConditioningReferences(p, { frameReferenceIds: ['mvr-cs-character', 'renamed-sheet'] })).toEqual([]);
+    }
   });
 });

@@ -338,7 +338,7 @@ async function defaultDeps() {
 }
 
 async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
-  if (!project?.castAndSets || (!selectedKey && project.castAndSets.status !== 'approved')) return;
+  if (!project?.castAndSets || project.castAndSets.source === 'catalog' || (!selectedKey && project.castAndSets.status !== 'approved')) return;
   const sheets = checkinImages(project, selectedKey);
   const keys = checkinImageKeys(project.castAndSets);
   for (const subject of project.concept?.subjects || []) {
@@ -391,7 +391,7 @@ export async function saveCheckinCastToCatalog(projectId, deps = null) {
   return queueCheckinSave(projectId, async () => {
     const d = deps || await defaultDeps();
     const project = await d.getProject(projectId);
-    if (!project || project.deleted || project.castAndSets?.status !== 'approved') return null;
+    if (!project || project.deleted || project.castAndSets?.source === 'catalog' || project.castAndSets?.status !== 'approved') return null;
     const candidates = catalogCastCandidates(project, { checkinOnly: true });
     const plan = candidates.length ? await planCatalogCast(project, candidates, d) : [];
     const result = await commitCatalogCast(projectId, plan.map(({ subjectId, action, ingredientId }) => ({ subjectId, action, ingredientId })), d);
