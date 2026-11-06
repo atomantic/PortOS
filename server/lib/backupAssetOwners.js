@@ -46,7 +46,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['services/universeBuilderCollectionHook.js', 'services/universeCharacterSheet.js'],
   },
-  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/local.js', 'services/imageGen/sidecarStore.js'] },
+  { id: 'gallery-image-workflows', status: 'admitted', modules: ['services/imageGen/local.js', 'services/imageGen/sidecarStore.js', 'services/imageGen/imageRecords.js'] },
   { id: 'gallery-image-deletion-canon-purge', status: 'admitted', modules: ['services/galleryImageDeletion.js'] },
   { id: 'restored-gallery-image-stamp', status: 'admitted', modules: ['services/mediaRestoreTombstones.js'] },
   { id: 'video-history-deletion', status: 'admitted', modules: ['services/videoGen/historyOps.js'] },

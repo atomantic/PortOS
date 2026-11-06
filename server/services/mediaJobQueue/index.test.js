@@ -1345,6 +1345,30 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png', finishedVariant: { filename: 'example-finished.png' } });
   });
 
+  it.each([{}, { catalogAttach: { ingredientId: 'example', kind: 'reference' } }, { characterSheet: { entryId: 'example' } }])(
+    'finishes under the media owner after provider publication settles, with catalog policy %j', async target => {
+      stubs.generateImageCodex.mockResolvedValue({});
+      let releaseFinish;
+      const delayed = new Promise(resolve => { releaseFinish = resolve; });
+      stubs.finishVisualProfile.mockImplementation(async ({ result, applyFilmFinish }) => {
+        await delayed;
+        return currentAdmission.continueSettlement(() => ({ ...result, applyFilmFinish }));
+      });
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+        mode: 'codex', prompt: 'Example', visualProfile: { version: 1 }, ...target,
+      } });
+      await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+      // Real providers emit synchronously inside a short-lived publication.
+      await currentAdmission.run('settlement', 'provider publication', () => {
+        imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+      });
+      await waitFor(() => stubs.finishVisualProfile.mock.calls.length === 1);
+      releaseFinish();
+      await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
+      expect(mediaJobQueue.getJob(jobId).result.applyFilmFinish).toBe(!target.catalogAttach && !target.characterSheet);
+    },
+  );
+
   it('cancels the finish browser independently after the provider has settled', async () => {
     stubs.generateImageCodex.mockImplementation(async () => ({}));
     stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));

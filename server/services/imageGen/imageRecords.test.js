@@ -7,9 +7,16 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs'
 import { join } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
+import { naturalUniverseVisualProfile } from '../../lib/universeVisualProfile.js';
+import { finishVisualProfileImage } from './finishVisualProfile.js';
 import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let dataRoot;
+let admission;
+vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  maintenance: new Proxy({}, { get: (_target, property) => admission[property] }),
+}));
 vi.mock('../../lib/fileUtils.js', async () => makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), { dataRoot: () => dataRoot }));
 vi.mock('../../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
 vi.mock('../mediaAssetIndex/index.js', () => ({ indexImage: vi.fn(async () => {}), unindexImage: vi.fn(async () => {}) }));
@@ -26,6 +33,8 @@ let disarm;
 
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'portos-image-records-'));
+  const { createMaintenanceAdmission } = await import('../../lib/maintenanceAdmission.js');
+  admission = createMaintenanceAdmission(dataRoot);
   process.env.PORTOS_MEDIA_MODELS_FILE = join(dataRoot, 'media-models.json');
   ({ PATHS } = await import('../../lib/fileUtils.js'));
   ({ imageGenEvents } = await import('../imageGenEvents.js'));
@@ -54,7 +63,9 @@ describe('image origin', () => {
     seed('render.png', { prompt: 'a fox' });
     seed('claimed.png', { prompt: 'a cat', originInstanceId: 'other-inst' });
     seed('temp.png', { prompt: 'scratch' });
-    imageGenEvents.emit('completed', { filename: 'render.png', path: '/data/images/render.png' });
+    await admission.run('settlement', 'provider publication', () => {
+      imageGenEvents.emit('completed', { filename: 'render.png', path: '/data/images/render.png' });
+    });
     imageGenEvents.emit('completed', { filename: 'claimed.png', path: '/data/images/claimed.png' });
     imageGenEvents.emit('completed', { filename: 'temp.png', path: null, temp: true });
     await vi.waitFor(() => expect(sidecarOf('render.png').originInstanceId).toBe('local-inst'));
@@ -63,6 +74,20 @@ describe('image origin', () => {
     expect(sidecarOf('claimed.png').originInstanceId).toBe('other-inst');
     expect(sidecarOf('temp.png')).not.toHaveProperty('originInstanceId');
     expect(await readHeldImage('render.png')).toEqual({ filename: 'render.png', originInstanceId: 'local-inst', createdAt: sidecarOf('render.png').createdAt });
+  });
+
+  it('recovers catalog metadata with finishing disabled even when a previous attempt saved a film profile', async () => {
+    const profile = naturalUniverseVisualProfile();
+    profile.finishing.mode = 'save';
+    seed('catalog.png', { prompt: 'Example character', originInstanceId: 'local-inst', visualProfile: profile });
+    const result = await finishVisualProfileImage({ result: { filename: 'catalog.png' }, profile,
+      applyFilmFinish: false, signal: new AbortController().signal });
+    const saved = sidecarOf('catalog.png');
+    expect(saved.visualProfile.finishing.mode).toBe('off');
+    expect(saved.visualProfile.generation).toEqual(profile.generation);
+    expect(saved).toMatchObject({ prompt: 'Example character', originInstanceId: 'local-inst' });
+    expect(saved.visualProfileRevision).toBe(result.visualProfileRevision);
+    expect(result.finishedVariant).toBeUndefined();
   });
 
   it("gives a variant of a peer's image this machine as origin, without the source's local fields", async () => {
