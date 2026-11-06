@@ -81,6 +81,7 @@ vi.mock('../services/apiCatalog', () => ({
   attachCatalogIngredientGeneratedImage: vi.fn(),
   detachCatalogIngredientMedia: vi.fn(),
   listCatalogSheetVariants: vi.fn(async () => ({ variants: [] })),
+  listCatalogSheetJobs: vi.fn(async () => ({ jobs: [], hasMore: false })),
   previewCatalogSheet: vi.fn(async () => ({ preview: null })),
   renderCatalogSheet: vi.fn(),
   removeCatalogPointerSheet: vi.fn(),
@@ -1626,7 +1627,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     api.renderCatalogSheet.mockResolvedValue({ jobId: 'canon-job', variant: 'standard', delegatedTo: 'universe' });
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
-    await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
+    await screen.findByTestId('job-thumb-canon-job');
     expect(api.attachCatalogIngredientMedia).not.toHaveBeenCalled();
 
     getCatalogIngredientDetails.mockImplementation(async () => ({
@@ -1648,8 +1649,10 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await screen.findByTestId('job-thumb-manual-canon-fail');
     await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
     await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
-    expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
-    expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();
+    expect(screen.getByText(/The render finished, but its sheet link could not be saved/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open image queue' })).toHaveAttribute('href', '/media/image');
+    expect(screen.getByTestId('job-thumb-manual-canon-fail')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled();
   });
 
   it('keeps an unsaved name edit across tab switches without a discard prompt', async () => {
