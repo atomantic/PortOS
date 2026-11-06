@@ -34,6 +34,7 @@ const {
   codexLogout,
   getCodexAccountReadiness,
   getCodexAccountUsage,
+  getCodexAccountUsageEvidence,
   peekCodexAccountReadiness,
   startCodexChatGptLogin,
   stopCodexAppServer,
@@ -483,6 +484,30 @@ describe('native account usage', () => {
       fetchedAt: expect.any(String) });
     expect(child.written.map(frame => frame.method)).toEqual(['initialize', 'initialized', 'account/usage/read']);
     expect(child.lastRequest('account/usage/read').params).toEqual({});
+  });
+  it('brackets the read with account reads and keeps only the runtime version from the handshake', async () => {
+    const result = await scripted(child, getCodexAccountUsageEvidence(), [
+      ['initialize', { userAgent: 'codex_cli_rs/0.166.0 (Example OS 1.0; arm64) example-terminal' }],
+      ['account/read', { account: { type: 'chatgpt', planType: 'plus', email: 'alice@example.com' } }],
+      ['account/usage/read', { summary, dailyUsageBuckets: [] }],
+      ['account/read', { account: { type: 'chatgpt', planType: 'team', email: 'alice@example.com' } }],
+    ]);
+    expect(result).toMatchObject({ failureCode: null, runtimeVersion: '0.166.0',
+      accountBefore: { status: 'read', account: { planType: 'plus' } }, accountAfter: { status: 'read', account: { planType: 'team' } } });
+    expect(JSON.stringify(result)).not.toContain('alice@example.com');
+    expect(JSON.stringify(result)).not.toContain('Example OS');
+    expect(child.written.map(frame => frame.method)).toEqual(['initialize', 'initialized', 'account/read', 'account/usage/read', 'account/read']);
+  });
+  it('returns failure codes rather than messages when the evidence reads fail', async () => {
+    const leak = { code: -32000, message: 'upstream said private detail' };
+    const result = await scripted(child, getCodexAccountUsageEvidence(), [
+      ['initialize', {}],
+      ['account/read', frame => child.replyError(frame, leak)],
+      ['account/usage/read', frame => child.replyError(frame, leak)],
+      ['account/read', frame => child.replyError(frame, leak)],
+    ]);
+    expect(result).toEqual({ usage: null, failureCode: CODEX_ERROR_CODES.protocol, runtimeVersion: null,
+      accountBefore: { status: 'unread', account: null }, accountAfter: { status: 'unread', account: null } });
   });
   it('rejects an unsupported endpoint rather than manufacturing zero usage', async () => {
     const pending = getCodexAccountUsage();

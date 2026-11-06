@@ -59,17 +59,69 @@ These reads do not rebuild the ledger, stop existing writers, change peer sync,
 or establish the replacement gates below. Historical rectification remains
 pending matched-account coverage evidence and a validated staged cutover.
 
+## Provider and account coverage contract
+
+`server/lib/nativeUsageContract.js` is the read-only contract #15031 consumes.
+Versioned synthetic fixtures live in `server/lib/fixtures/nativeUsage/v1/`. Each
+participant runs `node scripts/native-usage-report.js capture > participant.json`.
+One machine then runs `node scripts/native-usage-report.js matrix <reports>...`,
+adding `--summary` for a short operator view. Neither command calls a model, writes
+the ledger, contacts a peer, or changes authentication or sync. Only the Codex read
+needs the runtime, and it uses the fixed `account/read` and `account/usage/read`.
+
+Each provider entry records source and runtime version, account or machine scope,
+date boundary and timezone, freshness, retention, missing intervals, scan caps,
+duplicate conflicts and supported token and cost fields. Reports have no paths,
+transcript text or native identifiers, and a strict schema refuses any extra field.
+A participant is named only by a hash of its random instance id.
+
+The same inputs produce byte-identical output. `evidenceHash` covers source-derived
+facts and stays equal across captures of an unchanged source, unless a scan stopped
+early (`reproducibility: scan-stopped-early`) or the live Codex read has moved.
+`contentHash` also covers the capture time.
+
+**Account identity.** Codex's `account/read` holds an email and no id that is safe
+to publish, and a hash of an email can be reversed with a dictionary. So `accountKey`
+is always null and identity is `unknown`. Matching totals never group participants.
+The operator groups them in the machine-local `usageNativeAccountSelections` setting
+(`PUT /api/settings`), naming one authoritative participant per account under an
+opaque label. Without a selection for every participant that may hold an account, the
+matrix refuses the merge and reports a null total. A failed authoritative read also
+refuses, with no fallback to another member. A plan or sign-in change, a lifetime
+that went backwards, or restated history across two reports of one participant
+refuses until the operator reselects and drops the older report. Those checks detect
+a change. They do not prove the account stayed the same.
+
 ## Remaining provider work
 
-- Claude: native assistant message IDs and usage fields can support a deduplicated
-  retained-history projection, including subagents. Cached aggregate stats are not
-  necessarily current. Deleted transcript history remains unknown.
-- Antigravity: use conversation identity and step index. Track measured and missing
-  usage per step; the presence of some measurements must not mark an entire
-  conversation complete. Verify model and cache semantics before pricing.
-- Grok: use session and prompt identity with a versioned per-turn contract. Do not
-  infer cumulative accounting merely from monotonic values. Confirm native cost
-  tick semantics and billing scope before calling a cost actual spend.
+Validated against fixtures and a read-only scan of one install's retained files, with
+no values published. Other installs may run other runtime versions.
+
+- Codex: verified on runtime 0.166.0. Daily buckets carry no timezone and are kept as
+  provider calendar days. Reported history can have gaps; these are listed as missing
+  intervals and are not zero usage. The contract's only arithmetic check is that daily
+  buckets cannot exceed the lifetime total. Agreement does not prove completeness.
+- Claude: one API response is written several times while streaming. The emissions
+  share a message and request ID and input and cache counters, while output grows and
+  only the final one has `stop_reason`. These are resolved to the final emission
+  instead of being excluded as conflicts, which had dropped a large share of retained
+  messages. A copy with another request or input is still a conflict and is excluded.
+  Cache-creation breakdowns matched their totals on every sampled message. The four
+  token fields are summed as disjoint per Anthropic's usage contract; retained data
+  cannot prove that independently. Deleted history stays unavailable.
+- Antigravity: conversation plus step index identifies a record. Many completed
+  planner steps have no token fields, and some conversations have index gaps, so
+  conversations are reported as partly measured. Cached reads often exceed
+  `input_tokens`, which rules out `input_tokens` always including them, but the
+  remaining steps do not establish a disjoint rule, so no combined total is exposed.
+  Planner steps carry no model or runtime version, so both stay unknown.
+- Grok: session plus prompt identifies a turn. Native turn counters are reported but
+  not summed, and monotonic values are not read as cumulative. The ledger's shape
+  detection (`looksCumulative`) is a billing heuristic, not native evidence.
+  `costUsdTicks` is counted as an unverified signal, not converted to spend. Its
+  billing scope is unconfirmed.
+- All providers: retention is unknown, and machine-scoped subsets cannot be combined
+  because reports do not carry the private identities needed to prove they are disjoint.
 
 ## Validation gates before replacement
 
