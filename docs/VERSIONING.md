@@ -592,6 +592,12 @@ curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: app
 git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
 ```
 
+Do not `git worktree lock` the sync checkout: its reservation and captured seed
+already protect it from sweeps while the run is live. Post-exit retirement holds a
+checkout under any lock it cannot attribute, and the release then stays
+"synchronization blocked" until an operator clears it. The only lock it accepts
+here is exactly `Active inline release synchronization owned by <agent-id>`.
+
 Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is a
 hold, not authority to adopt another checkout. On recovery, reuse the returned
 checkout and branch; do not create a second synchronization branch.
