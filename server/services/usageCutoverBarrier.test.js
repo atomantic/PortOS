@@ -192,6 +192,23 @@ describe('usage writers during a fence', () => {
     expect(result.refreshed).toBe(false);
   });
 
+  it('dates a replayed write by when it happened, not when the fence lifted', async () => {
+    const a = await boot('inst-a');
+    await a.call.barrier.acquireUsageCutover({ migrationEpoch: EPOCH, participants: ['inst-a'] });
+    await a.call.usage.recordRunUsage(run(10));
+
+    const path = join(a.dir, 'usage-cutover-barrier.json');
+    const record = JSON.parse(readFileSync(path, 'utf8'));
+    const happened = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    record.spool[0].at = happened;
+    writeFileSync(path, JSON.stringify(record));
+
+    await a.call.barrier.releaseUsageCutover({ migrationEpoch: EPOCH });
+    const { dailyActivity } = JSON.parse(a.ledger());
+    expect(dailyActivity[happened.slice(0, 10)].byProvider['provider-a'].tokensIn).toBe(10);
+    expect(dailyActivity[DAY]).toBeUndefined();
+  });
+
   it('never bills a retained write twice when a release is retried after a mid-replay failure', async () => {
     const a = await boot('inst-a');
     await a.call.usage.recordRunUsage(run(100));

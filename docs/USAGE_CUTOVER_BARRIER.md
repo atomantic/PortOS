@@ -31,7 +31,8 @@ is read from `data/usage-cutover-barrier.json` at every gate.
 **Retained** writes are durably held in the barrier record and answered with
 `{ deferred: true }`. They are real money data with no other durable home.
 
-- On release they replay into the proven restored ledger, each exactly once. The replay
+- On release they replay into the proven restored ledger, each exactly once and on the day
+  it happened. The replay
   marker commits in the same write as each record, so a crash mid-replay is safe to retry.
 - On activation they stay retained and are not replayed, because they were recorded
   against old accounting and the rebuilt partition must not absorb them. Status reports

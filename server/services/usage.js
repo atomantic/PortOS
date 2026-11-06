@@ -39,6 +39,12 @@ async function transactUsage(fn) {
 // All ledger writers share this boundary, so the cutover barrier is decided once.
 // It runs inside the queue: a drain then proves nothing admitted is still writing.
 let usageWritesInFlight = 0;
+
+// A write the cutover fence retained belongs to the day it happened, not the day
+// the fence lifted. Only set inside the exclusive replay transaction.
+let retainedWriteTime = null;
+const usageClock = () => new Date(retainedWriteTime ?? Date.now());
+
 function mutateUsage(op, draft, args) {
   usageWritesInFlight++;
   return queueUsageWrite(async () => {
@@ -718,7 +724,7 @@ function mergeSource(existing, incoming) {
 }
 
 function todayBucket() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = usageClock().toISOString().split('T')[0];
   if (!usageData.dailyActivity[today]) {
     usageData.dailyActivity[today] = { sessions: 0, messages: 0, tokens: 0 };
     cacheActivityDay(today);
@@ -758,7 +764,7 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
   if (model) modelDayBucket(providerDay, model).sessions++;
 
   // Track hourly activity
-  const hour = new Date().getHours();
+  const hour = usageClock().getHours();
   usageData.hourlyActivity[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
@@ -1007,7 +1013,7 @@ async function recordLimitBlockDraft({
   category = 'usage-limit',
   message = null,
   resetHint = null,
-  at = Date.now()
+  at = usageClock().getTime()
 } = {}) {
   if (!providerId) return null;
   if (!usageData) await loadUsageDraft();
@@ -1634,12 +1640,13 @@ function replayRetainedUsageWrites(transaction) {
   return queueUsageWrite(() => transaction(async (migrationEpoch, entries) => {
     await loadUsageDraft({ persist: false });
     const replayed = usageData.cutoverReplay?.epoch === migrationEpoch ? usageData.cutoverReplay.seq : 0;
-    for (const { seq, op, args } of entries) {
+    for (const { seq, op, args, at } of entries) {
       if (seq <= replayed) continue;
+      retainedWriteTime = Date.parse(at);
       await transactUsage(async () => {
         usageData.cutoverReplay = { epoch: migrationEpoch, seq };
         await RETAINABLE_USAGE_DRAFTS[op](...args);
-      });
+      }).finally(() => { retainedWriteTime = null; });
     }
   }));
 }
