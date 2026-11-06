@@ -59,6 +59,7 @@ import {
   catalogStoryDraftSchema,
   catalogVideoSubjectsQuerySchema,
   catalogVideoSubjectLinksSchema,
+  catalogVideoSubjectSaveSchema,
   catalogVideoDescriptionRestoreSchema,
   REF_KINDS,
 } from '../lib/catalogValidation.js';
@@ -79,7 +80,7 @@ import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaK
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
-import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription } from '../services/musicVideo/catalogCast.js';
+import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../services/musicVideo/catalogCast.js';
 import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
@@ -300,6 +301,13 @@ router.post('/stories/music-video/:id/subjects/link', asyncHandler(async (req, r
   const { links } = validateRequest(catalogVideoSubjectLinksSchema, req.body ?? {});
   const { project, linked, unlinked } = await linkVideoSubjects(req.params.id, links);
   res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null, linked, unlinked });
+}));
+
+// One subject's own new record, created and linked; repeating it is a no-op.
+router.post('/stories/music-video/:id/subjects/save', asyncHandler(async (req, res) => {
+  const { subjectId } = validateRequest(catalogVideoSubjectSaveSchema, req.body ?? {});
+  const { project, created, kept } = await saveVideoSubjectToCatalog(req.params.id, subjectId);
+  res.json({ concept: project?.concept || {}, updatedAt: project?.updatedAt ?? null, created, kept });
 }));
 
 router.post('/stories/music-video/:id/subjects/restore-description', asyncHandler(async (req, res) => {

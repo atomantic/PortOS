@@ -4,7 +4,8 @@ vi.mock('../../lib/pgFileFacade.js', () => ({ isFileBackend: () => false }));
 
 import { createHash } from 'crypto';
 
-const { syncCheckinImageToCatalog, saveCheckinCastToCatalog, previewCatalogCastImport, commitCatalogCastImport } = await import('./catalogCast.js');
+const { syncCheckinImageToCatalog, saveCheckinCastToCatalog, previewCatalogCastImport, commitCatalogCastImport, saveVideoSubjectToCatalog } = await import('./catalogCast.js');
+const { resolveCatalogCheckin } = await import('./catalogCheckin.js');
 
 // The deterministic catalog id two synced machines both derive for a subject.
 const PREFIX = { character: 'chr', place: 'plc', object: 'obj' };
@@ -210,6 +211,67 @@ describe('music video cast import', () => {
 
     // Committing again changes nothing.
     expect(await commitCatalogCastImport([{ projectId: 'mv-1', subjectId: 'mvc-1', action: 'create' }], deps)).toEqual({ projects: 0, created: 0, linked: 0, kept: 0 });
+  });
+});
+
+describe('saving one video subject to the catalog', () => {
+  const localSubject = { id: 'mvc-5', kind: 'place', name: 'Rooftop', description: 'City lights', localOnly: true };
+  const project = () => {
+    const video = videoProject();
+    video.concept.subjects.push(localSubject);
+    video.visualSpec.references.push({ id: 'r2', imageId: 'rooftop.png', role: 'set', label: 'rooftop' });
+    return video;
+  };
+
+  const linkProblem = async (video, deps) => (await resolveCatalogCheckin(video, { catalog: deps.catalogDB, exists: () => true }))
+    .problems.find((p) => p.subjectId === 'mvc-1' && p.code === 'CATALOG_LINK_REQUIRED');
+
+  // Uniquely catches the subject not linking to its deterministic record, a save losing its same-named reference, a repeat duplicating either, or the check-in still asking for a link.
+  it('creates and links the deterministic record with its image, then repeats as a no-op', async () => {
+    const projects = [project()];
+    const { deps, ingredients, media } = makeDeps({ projects, universes: { 'u-1': { id: 'u-1' } } });
+    const id = musicVideoCastIngredientId('mv-1', { id: 'mvc-1', kind: 'object' });
+    expect(await linkProblem(projects[0], deps)).toBeTruthy();
+
+    await expect(saveVideoSubjectToCatalog('mv-1', 'mvc-1', deps)).resolves.toMatchObject({ created: 1, kept: 0 });
+    const subject = () => projects[0].concept.subjects.find((s) => s.id === 'mvc-1');
+    expect(subject().ingredientId).toBe(id);
+    expect(ingredients.get(id)).toMatchObject({ type: 'object', name: 'Glass guitar' });
+    expect(media).toEqual([expect.objectContaining({ id, key: 'guitar.png', kind: 'reference' })]);
+    expect(deps.queueProjectCatalogLinkSync).toHaveBeenCalledWith('mv-1');
+    expect(await linkProblem(projects[0], deps)).toBeUndefined();
+
+    const count = ingredients.size;
+    await expect(saveVideoSubjectToCatalog('mv-1', 'mvc-1', deps)).resolves.toMatchObject({ created: 0, kept: 0 });
+    expect(ingredients.size).toBe(count);
+    expect(media).toHaveLength(1);
+    expect(subject().ingredientId).toBe(id);
+  });
+
+  // Uniquely catches an explicit save leaving a kept-in-this-video mark on a linked subject, or dropping its image.
+  it('saves a subject marked as kept in this video when asked', async () => {
+    const projects = [project()];
+    const { deps, media } = makeDeps({ projects, universes: { 'u-1': { id: 'u-1' } } });
+    await saveVideoSubjectToCatalog('mv-1', 'mvc-5', deps);
+    const saved = projects[0].concept.subjects.find((s) => s.id === 'mvc-5');
+    expect(saved.localOnly).toBeUndefined();
+    expect(saved.ingredientId).toBe(musicVideoCastIngredientId('mv-1', localSubject));
+    expect(media).toEqual([expect.objectContaining({ key: 'rooftop.png', kind: 'reference' })]);
+  });
+
+  // Uniquely catches a save bringing back a record the director deleted, or reporting it as saved.
+  it('does not bring back a deleted record', async () => {
+    const projects = [project()];
+    const id = musicVideoCastIngredientId('mv-1', { id: 'mvc-1', kind: 'object' });
+    const { deps } = makeDeps({ projects, universes: { 'u-1': { id: 'u-1' } }, rows: [{ id, type: 'object', name: 'Glass guitar', deleted: true }] });
+    await expect(saveVideoSubjectToCatalog('mv-1', 'mvc-1', deps)).resolves.toMatchObject({ created: 0, kept: 1 });
+    expect(projects[0].concept.subjects.find((s) => s.id === 'mvc-1').ingredientId).toBeUndefined();
+  });
+
+  // Uniquely catches a stale row answering success when its subject is gone.
+  it('refuses a subject the video no longer has', async () => {
+    const { deps } = makeDeps({ projects: [project()] });
+    await expect(saveVideoSubjectToCatalog('mv-1', 'mvc-missing', deps)).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
   });
 });
 

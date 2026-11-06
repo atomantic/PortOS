@@ -302,6 +302,7 @@ export const catalogVideoSubjectLinksSchema = z.object({
     useCatalogText: z.boolean().optional(),
   }).strict()).min(1).max(24),
 }).strict();
+export const catalogVideoSubjectSaveSchema = z.object({ subjectId: z.string().trim().min(1).max(64) }).strict();
 export const catalogVideoDescriptionRestoreSchema = z.object({
   subjectId: z.string().trim().min(1).max(64),
   ingredientId: z.string().trim().min(1).max(128),

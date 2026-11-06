@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VideoCastLinks from './VideoCastLinks.jsx';
-import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription } from '../../services/api';
+import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../../services/api';
+import toast from '../ui/Toast';
 
-vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), restoreVideoSubjectDescription: vi.fn() }));
+vi.mock('../../services/api', () => ({ listVideoSubjectLinks: vi.fn(), linkVideoSubjects: vi.fn(), restoreVideoSubjectDescription: vi.fn(), saveVideoSubjectToCatalog: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../IngredientPicker.jsx', () => ({
   default: ({ open: isOpen, type, onSelect }) => (isOpen ? (
@@ -57,6 +58,30 @@ describe('linking a music video’s cast to the catalog', () => {
     fireEvent.change(screen.getByLabelText('Age or look for Stranger'), { target: { value: 'old' } });
     fireEvent.click(screen.getByRole('button', { name: 'Link' }));
     await waitFor(() => expect(linkVideoSubjects).toHaveBeenCalledWith('mv-1', [{ subjectId: 'mvc-c', ingredientId: 'cat-chr-2', formId: 'old' }], { silent: true }));
+  });
+
+  // Uniquely catches an unlinked subject having no way to get a record here, or the parent's check-in not hearing about the new link.
+  it('saves an unlinked subject to the catalog and reports the new link', async () => {
+    const res = { concept: { subjects: [] }, updatedAt: 't1', created: 1, kept: 0 };
+    saveVideoSubjectToCatalog.mockResolvedValue(res);
+    const onLinked = renderLinks();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Stranger to the catalog' }));
+    await waitFor(() => expect(saveVideoSubjectToCatalog).toHaveBeenCalledWith('mv-1', 'mvc-c', { silent: true }));
+    await waitFor(() => expect(onLinked).toHaveBeenCalledWith(res));
+    await waitFor(() => expect(listVideoSubjectLinks).toHaveBeenCalledTimes(2));
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save Stranger to the catalog' })).toHaveTextContent('Save to catalog');
+    expect(screen.getByRole('button', { name: 'Save Example Lead to the catalog' })).toHaveTextContent('Save as new');
+  });
+
+  // Uniquely catches a silent no-op when the subject's own record was deleted, and a save offered for a link that is merely broken.
+  it('says when a deleted record was not recreated, and offers no save on a broken link', async () => {
+    listVideoSubjectLinks.mockResolvedValue({ subjects: [subjects[2], { id: 'mvc-d', kind: 'character', name: 'Gone', ingredientId: 'cat-chr-9', linked: null, suggestion: null }] });
+    saveVideoSubjectToCatalog.mockResolvedValue({ concept: { subjects: [] }, updatedAt: 't1', created: 0, kept: 1 });
+    renderLinks();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Stranger to the catalog' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('was deleted')));
+    expect(screen.queryByRole('button', { name: 'Save Gone to the catalog' })).toBeNull();
   });
 
   // Uniquely catches a linked subject and its catalog record disagreeing with no warning or one-tap fix either way.

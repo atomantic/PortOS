@@ -287,6 +287,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/stories/:kind/:id/members', RECORDS],
   ['POST /api/catalog/stories/music-video/:id/subjects/link', RECORDS],
   ['POST /api/catalog/stories/music-video/:id/subjects/restore-description', RECORDS],
+  ['POST /api/catalog/stories/music-video/:id/subjects/save', RECORDS],
   ['POST /api/catalog/types', RECORDS],
   ['DELETE /api/catalog/types/:id', REMOVES_RECORD],
   ['PATCH /api/catalog/types/:id', RECORDS],

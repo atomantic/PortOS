@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
 import IngredientPicker from '../IngredientPicker.jsx';
 import toast from '../ui/Toast';
-import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription } from '../../services/api';
+import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../../services/api';
 import { formatCount } from '../../utils/formatters';
 import { ingredientPath } from '../../lib/creativeLibraries.js';
 
@@ -19,7 +19,8 @@ const recordForms = (ingredient) => (Array.isArray(ingredient?.payload?.forms) ?
 /**
  * A music video's subjects and the catalog record each one is. An unlinked
  * subject named for an existing record ("Nora (17)") offers that record and
- * age in one tap; any other record can be picked. The catalog supplies the
+ * age in one tap; any other record can be picked, or the subject saved as a new
+ * record with its reference image. The catalog supplies the
  * current description; an older video snapshot can be reviewed and restored.
  * `type` limits it to one kind.
  */
@@ -36,28 +37,29 @@ export default function VideoCastLinks({ projectId, type, universeId = null, onL
 
   useEffect(() => { setSubjects(null); load(); }, [load]);
 
-  const link = async (links) => {
+  const run = async (call, failure) => {
     setBusy(true);
-    const res = await linkVideoSubjects(projectId, links, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Could not link'); return null; });
-    if (res) {
-      setStaged(null);
-      onLinked?.(res);
-      await load();
-    }
+    const res = await call().catch((err) => { toast.error(err?.message || failure); return null; });
+    if (res) { onLinked?.(res); await load(); }
     setBusy(false);
+    return res;
   };
 
+  const link = (links) => run(async () => {
+    const res = await linkVideoSubjects(projectId, links, { silent: true });
+    setStaged(null);
+    return res;
+  }, 'Could not link');
+
   // "Update catalog": the record (or its linked age) takes this video's description.
-  const updateCatalog = async (subject) => {
-    setBusy(true);
-    const saved = await restoreVideoSubjectDescription(projectId, {
-      subjectId: subject.id, ingredientId: subject.ingredientId, ...(subject.castForm?.id ? { formId: subject.castForm.id } : {}),
-      videoDescription: subject.description || '', catalogDescription: subject.linked.appearance.text || '',
-    }, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Could not update the catalog'); return null; });
-    if (saved) { onLinked?.(saved); await load(); }
-    setBusy(false);
+  const updateCatalog = (subject) => run(() => restoreVideoSubjectDescription(projectId, {
+    subjectId: subject.id, ingredientId: subject.ingredientId, ...(subject.castForm?.id ? { formId: subject.castForm.id } : {}),
+    videoDescription: subject.description || '', catalogDescription: subject.linked.appearance.text || '',
+  }, { silent: true }), 'Could not update the catalog');
+
+  const saveToCatalog = async (subject) => {
+    const res = await run(() => saveVideoSubjectToCatalog(projectId, subject.id, { silent: true }), `Could not save ${subject.name} to the catalog`);
+    if (res?.kept) toast.error(`The catalog record for ${subject.name} was deleted, so it was not recreated. Restore it or pick another record.`);
   };
 
   if (error) return <p role="alert" className="text-xs text-port-error">{error}</p>;
@@ -133,6 +135,10 @@ export default function VideoCastLinks({ projectId, type, universeId = null, onL
                 )}
                 <button type="button" disabled={busy} className={buttonClass} aria-label={`Pick a catalog record for ${subject.name}`}
                   onClick={() => setPickFor(subject.id)}>{subject.suggestion ? 'Other…' : 'Pick from catalog'}</button>
+                {!subject.ingredientId && (
+                  <button type="button" disabled={busy} className={buttonClass} aria-label={`Save ${subject.name} to the catalog`}
+                    onClick={() => saveToCatalog(subject)}>{subject.suggestion ? 'Save as new' : 'Save to catalog'}</button>
+                )}
               </>}
               {isStaged && <>
                 <span className="text-xs">{staged.name}</span>
