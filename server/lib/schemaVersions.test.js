@@ -103,17 +103,17 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 });
 
 describe('buildPortosMeta', () => {
-  it('rejects shot wipes, word-cut shots and earlier music-video fields on older peers', async () => {
+  it('rejects active cast alternates and earlier music-video fields on older peers', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.musicVideoProjects).toBe(43);
+    expect(meta.schemaVersions.musicVideoProjects).toBe(44);
     // Older builds re-normalize the newer fields away; the gate must stop that peer receiving them.
-    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]) {
+    for (const receiverV of [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]) {
       expect(compareSchemaVersions(meta.schemaVersions, { ...meta.schemaVersions, musicVideoProjects: receiverV }).ahead)
-        .toContainEqual({ category: 'musicVideoProjects', senderV: 43, receiverV });
+        .toContainEqual({ category: 'musicVideoProjects', senderV: 44, receiverV });
     }
     const olderPeer = { ...meta.schemaVersions, musicVideoProjects: 24 };
     expect(scopeVersionDiff(compareSchemaVersions(meta.schemaVersions, olderPeer), RECORD_KIND_SCHEMA_CATEGORIES.musicVideoProject))
-      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 43, receiverV: 24 }] });
+      .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 44, receiverV: 24 }] });
   });
 
   it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {

@@ -158,6 +158,7 @@ export const musicVideoConceptSchema = z.object({
     }).strict().optional(),
     // Kept in this video only: never offered for saving to the catalog.
     localOnly: z.boolean().optional(),
+    active: z.boolean().optional(),
   }).strict()).max(24).optional(),
 }).strict();
 

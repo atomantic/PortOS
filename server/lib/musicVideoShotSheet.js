@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 /**
  * The shot sheet: every shot's plan on one screen, read and edited without
  * rendering anything. A shot's sheet (`scene.shotSheet`) names what the shot is
@@ -197,7 +198,7 @@ export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */
 export function shotSheetCast(project) {
-  return (project?.concept?.subjects || [])
+  return activeMusicVideoSubjects(project?.concept)
     .filter((subject) => subject?.kind === 'character' && subject.name)
     .map((subject) => subject.name);
 }

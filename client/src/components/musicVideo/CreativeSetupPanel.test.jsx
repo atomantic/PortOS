@@ -226,3 +226,25 @@ describe('creative setup already made', () => {
     expect(screen.queryByText('Set up creative direction')).toBeNull();
   });
 });
+
+// Catches choosing the second same-name cast entry saving two active identities.
+it('switches the active alternate from creative setup and saves the selection', async () => {
+  const onSave = vi.fn(async () => {});
+  const castProject = { ...project, concept: { subjects: [
+    { id: 'one', kind: 'character', name: 'Q', description: 'Silver coat' },
+    { id: 'two', kind: 'character', name: 'Q', description: 'Copper dress' },
+  ] } };
+  render(<MemoryRouter><CreativeSetupPanel project={castProject} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit creative direction' }));
+  const choices = screen.getAllByRole('radio', { name: 'Use this alternate' });
+  expect(choices[0]).toBeChecked();
+  expect(choices[1]).not.toBeChecked();
+  fireEvent.click(choices[1]);
+  expect(choices[0]).not.toBeChecked();
+  expect(choices[1]).toBeChecked();
+  fireEvent.click(screen.getByText('Save creative setup'));
+  await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  expect(onSave.mock.calls[0][0].concept.subjects.map(({ id, active }) => ({ id, active }))).toEqual([
+    { id: 'one', active: false }, { id: 'two', active: true },
+  ]);
+});

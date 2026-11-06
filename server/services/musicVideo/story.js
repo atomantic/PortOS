@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
@@ -167,7 +168,7 @@ export async function proposeArtGuides(id, input, { hasHostControl = false } = {
   const concept = project.concept || {};
   const context = {
     concept: { prompt: concept.prompt || '', style: concept.style || '', songStyle: concept.songStyle || '' },
-    subjects: (concept.subjects || []).map(({ kind, name, role, description }) => ({ kind, name, role, description })),
+    subjects: activeMusicVideoSubjects(concept).map(({ kind, name, role, description }) => ({ kind, name, role, description })),
     lyrics: lyricSheetText(project),
   };
   const additions = [CREATIVE_LATITUDE_ADDITION, { id: 'art-guide-instructions', label: 'Guide instructions', text: ART_GUIDE_INSTRUCTIONS },

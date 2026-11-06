@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
 import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
 import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
@@ -103,7 +104,7 @@ function deriveMotifs(project, brief) {
   const fromBrief = (brief.mustHave || '').split(/[\n;,]+/).map((s) => s.trim()).filter(Boolean).slice(0, 3)
     .map((name) => ({ name: name.slice(0, 120), description: 'A must-have from the brief.', evolution, rationale: `A recurring image ${audience} can track across the song.` }));
   if (fromBrief.length > 0) return fromBrief;
-  const subjects = (project.concept?.subjects || []).slice(0, 3)
+  const subjects = activeMusicVideoSubjects(project.concept).slice(0, 3)
     .map((subject) => ({ name: subject.name, description: subject.description || `The selected ${subject.kind}.`, evolution, rationale: `Preserves the production's cast and recurring subjects for ${audience}.` }));
   if (subjects.length > 0) return subjects;
   const refs = (project.visualSpec?.references || [])
@@ -150,7 +151,7 @@ const FRAMINGS = ['wide establishing', 'medium', 'close-up'];
 
 function focalFor(mode, project, motifs) {
   const character = (project.visualSpec?.references || []).find((r) => r.role === 'character' && isNonBlankStr(r.label));
-  const lead = (project.concept?.subjects || []).find((s) => s.kind === 'character' && ['protagonist', 'band'].includes(s.role));
+  const lead = activeMusicVideoSubjects(project.concept).find((s) => s.kind === 'character' && ['protagonist', 'band'].includes(s.role));
   if (mode === 'performance') return lead?.name || (character ? character.label.trim() : 'the performer');
   if (mode === 'graphic') return 'a bold graphic composition';
   return motifs[0]?.name || 'the recurring motif';
