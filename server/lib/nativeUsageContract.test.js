@@ -236,7 +236,7 @@ describe('versioned retained-history union', () => {
   it('accepts v1 account snapshots but refuses a retained union without projections, including mixed-version members', () => {
     const legacy = retainedReport('host-a', [message('a')]);
     legacy.contractVersion = 1;
-    legacy.providers.forEach((provider) => { delete provider.recordProjection; });
+    legacy.providers.forEach((provider) => { delete provider.recordProjection; delete provider.nativeUsageCoverage; });
     const matrix = buildNativeUsageMatrix({ reports: [hashReport(legacy), retainedReport('host-b', [message('b')])], selections: [account('acct-a', 'host-a', 'host-b'), retainedAccount('acct-a', 'host-a', 'host-b')] });
     expect(matrix.participants).toHaveLength(2);
     expect(codexFamily(matrix).merge.status).toBe('merged');
