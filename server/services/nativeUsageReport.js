@@ -12,6 +12,22 @@ export const NATIVE_USAGE_CAPTURE_LIMITS = Object.freeze({
   bytes: 512 * 1024 ** 3, lineBytes: 64 * 1024 ** 2, entries: 5_000_000, records: 50_000_000, milliseconds: 30 * 60_000, depth: 8,
 });
 
+// Fixed per-provider request budgets. Callers cannot choose paths or raise caps.
+export const NATIVE_USAGE_DASHBOARD_LIMITS = Object.freeze({
+  bytes: 128 * 1024 ** 2, lineBytes: 1024 ** 2, entries: 30000, records: 100000, milliseconds: 5000, depth: 8,
+});
+
+let pendingDashboardCapture = null;
+
+/** The local UI and authenticated peer endpoint share only an in-flight read.
+ * Nothing is cached after completion, persisted or forwarded from another host.
+ */
+export function captureDashboardNativeUsageReport() {
+  pendingDashboardCapture ??= captureNativeUsageReport({ limits: NATIVE_USAGE_DASHBOARD_LIMITS })
+    .finally(() => { pendingDashboardCapture = null; });
+  return pendingDashboardCapture;
+}
+
 /**
  * Capture this participant's staged input for #15031. Reads native files and makes
  * the fixed Codex account reads: no inference, ledger, peer or sync access, and the

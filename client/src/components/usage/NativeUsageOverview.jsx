@@ -2,7 +2,8 @@ import { useCallback, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { RefreshCw } from 'lucide-react';
 import * as api from '../../services/api';
-import useMounted from '../../hooks/useMounted';
+import useLatestRequest from '../../hooks/useLatestRequest';
+import useUrlParams from '../../hooks/useUrlParams';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatDateNumeric, formatDateTime, formatMonthYear } from '../../utils/formatters';
 
@@ -82,15 +83,69 @@ function Cost({ cost }) {
   </div>;
 }
 
-function AccountUnion({ matrix, family }) {
+const PEER_REASONS = {
+  available: 'Report received', disabled: 'Peer is disabled', 'usage-disabled': 'Usage sharing is disabled',
+  unpaired: 'Peer is not paired', 'identity-unknown': 'Participant identity is unknown',
+  'duplicate-identity': 'Duplicate participant identity', 'peer-limit': 'Peer collection limit reached',
+  unavailable: 'Report unavailable', stale: 'Report is stale', invalid: 'Report is invalid',
+  forbidden: 'Peer refused access', 'too-large': 'Report exceeded the size limit',
+  'not-configured': 'Selected member is not a configured peer', 'not-collected': 'Selected member report was not collected',
+};
+const shortParticipant = key => key ? key.slice(0, 8) : 'Unknown identity';
+
+function PeerCollection({ snapshot }) {
+  const collection = snapshot.peerCollection;
+  return <section aria-label="Configured peer collection" className="min-w-0 space-y-3 rounded-xl border border-port-border bg-port-card p-3 sm:p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h2 className="font-semibold text-white">Configured peer collection</h2>
+      <span className="text-sm text-gray-300">{collection?.status ?? 'Unknown'} · {unknownCount(collection?.received)} received / {unknownCount(collection?.requested)} requested</span>
+    </div>
+    <p className="text-xs text-gray-400">Up to {unknownCount(collection?.maxPeers)} eligible peers per read. Collection does not verify account identity or complete history. Missing reports are not zero usage.</p>
+    <Link to="/instances" className="inline-flex rounded border border-port-border px-3 py-2 text-sm text-port-accent">Manage peers</Link>
+    <Findings findings={collection?.findings} />
+    {collection?.peers?.length ? <ul className="space-y-2 text-xs">
+      {collection.peers.map((peer, index) => <li key={`${peer.participantKey ?? 'unknown'}-${index}`} className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+        <span className="font-mono text-gray-300">{peer.participantKey ? shortParticipant(peer.participantKey) : `Unknown identity ${formatCount(index + 1)}`}</span>
+        <span className={peer.status === 'available' ? 'text-gray-300' : 'text-port-warning'}>{PEER_REASONS[peer.status] ?? peer.status}</span>
+        <span className="text-gray-500">Report captured: {formatDateTime(peer.capturedAt, 'Unknown')}</span>
+      </li>)}
+    </ul> : <p className="text-xs text-gray-400">No configured peer reports are listed.</p>}
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold text-white">Participant source coverage</h3>
+      {snapshot.participants?.map(participant => <details key={participant.participantKey ?? 'local'} className="min-w-0 rounded border border-port-border p-2">
+        <summary className="cursor-pointer break-words text-sm text-gray-300">{shortParticipant(participant.participantKey)}{participant.participantKey === snapshot.participantKey ? ' · Local instance' : ' · Peer'} · Captured {formatDateTime(participant.capturedAt, 'Unknown')}</summary>
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+          {FAMILIES.map(({ family, label }) => {
+            const provider = participant.providers?.find(entry => entry.family === family);
+            const formatObserved = family === 'codex' ? formatDateNumeric : formatDateTime;
+            return <section key={family} aria-label={`${label} coverage for ${shortParticipant(participant.participantKey)}`} className="min-w-0 space-y-2 text-xs">
+              <h4 className="text-sm text-white">{label} · {provider?.status ?? 'unavailable'}</h4>
+              <dl className="space-y-1">
+                <div><dt className="text-gray-500">Earliest observed</dt><dd>{formatObserved(provider?.freshness?.earliestObserved, 'Unknown')}</dd></div>
+                <div><dt className="text-gray-500">Latest observed</dt><dd>{formatObserved(provider?.freshness?.latestObserved, 'Unknown')}</dd></div>
+                <Evidence label="Coverage" value={provider?.coverage} />
+                <Evidence label="Scan limits" value={provider?.scanCaps} />
+                {provider?.nativeUsageCoverage && <Evidence label="Persisted usage coverage" value={provider.nativeUsageCoverage} />}
+                {provider?.nativeAgyCoverage && <Evidence label="Antigravity metadata coverage" value={provider.nativeAgyCoverage} />}
+              </dl>
+              <Findings findings={provider?.findings} />
+            </section>;
+          })}
+        </div>
+      </details>)}
+    </div>
+  </section>;
+}
+
+function AccountUnion({ matrix, family, fleet, collectionStatus }) {
   return <div className="space-y-2 border-t border-port-border pt-3">
     <h3 className="text-sm font-semibold text-white">Selected account union</h3>
-    <p className="text-xs text-gray-400">{matrix?.merge?.status ?? 'Unknown'} · Peer reports are not collected by this read. This is not a fleet-complete total.</p>
+    <p className="text-xs text-gray-400">{matrix?.merge?.status ?? 'Unknown'} · {fleet ? `Configured-peer collection: ${collectionStatus ?? 'Unknown'}.` : 'Peer reports are not collected by this local read.'} This is not a fleet-complete total.</p>
     <Findings findings={matrix?.merge?.reasons} />
     {['merged', 'partial'].includes(matrix?.merge?.status) && <Counters totals={matrix.merge.totals} family={family} />}
     {!matrix?.accounts?.length && <p className="text-xs text-gray-400">No usable account selection. Local measurements above remain separate.</p>}
     {matrix?.accounts?.map(account => <div key={account.accountLabel} className="space-y-2 rounded border border-port-border p-2">
-      <h4 className="text-sm text-white">{account.accountLabel} · {account.status}</h4>
+      <h4 className="break-words text-sm text-white">{account.accountLabel} · {account.status}</h4>
       <p className="text-xs text-gray-400">{unknownCount(account.members?.length)} selected members · {unknownCount(account.membersWithoutReport?.length)} members without reports</p>
       {account.membersWithoutReport?.length > 0 && <p className="text-xs text-port-warning">Missing peer reports prevent a complete selected-account view.</p>}
       {account.status !== 'refused' && account.totals && <Counters totals={account.totals} family={family} />}
@@ -102,7 +157,7 @@ function AccountUnion({ matrix, family }) {
   </div>;
 }
 
-function SourceCard({ family, label, provider, matrix, scanned }) {
+function SourceCard({ family, label, provider, matrix, scanned, fleet, collectionStatus }) {
   const account = family === 'codex';
   return <section aria-label={`${label} native history`} className="min-w-0 rounded-xl border border-port-border bg-port-card p-3 sm:p-4 space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold text-white">{label}</h2><span className="text-xs text-gray-400">{provider?.status ?? (scanned ? 'unavailable' : 'Not scanned')}</span></div>
@@ -129,40 +184,57 @@ function SourceCard({ family, label, provider, matrix, scanned }) {
       </details>
       {account && <DailyHistory buckets={provider?.totals?.dailyBuckets ?? null} />}
       {account && provider?.status === 'unavailable' && <Link className="inline-flex rounded border border-port-border px-3 py-2 text-sm text-port-accent" to="/ai/services">Check Codex connection</Link>}
-      <AccountUnion matrix={matrix} family={family} />
+      <AccountUnion matrix={matrix} family={family} fleet={fleet} collectionStatus={collectionStatus} />
     </>}
   </section>;
 }
 
-export default function NativeUsageOverview() {
+function NativeUsageRead({ scope, onScopeChange }) {
   const [snapshot, setSnapshot] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const request = useRef(false);
-  const mounted = useMounted();
+  const beginRequest = useLatestRequest();
+  const fleet = scope === 'fleet';
   const read = useCallback(async () => {
     if (request.current) return;
     request.current = true;
+    const isCurrent = beginRequest();
     setBusy(true);
-    const result = await api.getNativeUsageMatrix({ silent: true }).catch(() => null);
+    const result = await api.getNativeUsageMatrix({ scope }, { silent: true }).catch(() => null);
+    if (!isCurrent()) return;
     request.current = false;
-    if (!mounted.current) return;
     if (result) setSnapshot(result);
     setError(!result);
     setBusy(false);
-  }, [mounted]);
+  }, [beginRequest, scope]);
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="max-w-3xl text-sm text-gray-400">Read-only local native history. One bounded read captures all four providers. Peer reports are not collected; existing PortOS usage records remain unchanged.</p>
-      <button type="button" disabled={busy} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
-        {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}{busy ? 'Reading…' : snapshot ? 'Refresh native sources' : 'Read native sources'}
-      </button>
+      <p className="max-w-3xl text-sm text-gray-400">Read-only native history for all four providers. {fleet ? 'A bounded read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged.</p>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <label htmlFor="native-usage-scope" className="text-sm text-gray-400">Native history scope</label>
+        <select id="native-usage-scope" value={scope} onChange={event => onScopeChange(event.target.value)} className="min-w-0 max-w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
+          <option value="local">Local instance</option><option value="fleet">Configured peers</option>
+        </select>
+        <button type="button" disabled={busy} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
+          {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}{busy ? 'Reading…' : snapshot ? 'Refresh native sources' : 'Read native sources'}
+        </button>
+      </div>
     </div>
     {error && <p role="alert" className="text-sm text-port-warning">Could not read native sources. {snapshot ? 'Stale: the previous snapshot remains below. Retry to get current values.' : 'No snapshot was captured. Retry the read.'}</p>}
-    {snapshot && <p className="text-xs text-gray-400">Snapshot read at {formatDateTime(snapshot.capturedAt ?? snapshot.generatedAt, 'Unknown')} · Local instance only</p>}
+    {snapshot && <p className="text-xs text-gray-400">Snapshot read at {formatDateTime(snapshot.capturedAt ?? snapshot.generatedAt, 'Unknown')} · {fleet ? 'Local instance and configured peers' : 'Local instance only'}</p>}
     <Findings findings={snapshot?.refusals?.map(({ code, family }) => `${family ?? 'All providers'}: ${code}`)} />
+    {snapshot && fleet && <PeerCollection snapshot={snapshot} />}
+    <h2 className="text-sm font-semibold text-white">Local source measurements</h2>
     <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
-      {FAMILIES.map(row => <SourceCard key={row.family} {...row} scanned={snapshot !== null} provider={snapshot?.providers?.find(provider => provider.family === row.family)} matrix={snapshot?.families?.find(family => family.family === row.family)} />)}
+      {FAMILIES.map(row => <SourceCard key={row.family} {...row} scanned={snapshot !== null} provider={snapshot?.providers?.find(provider => provider.family === row.family)} matrix={snapshot?.families?.find(family => family.family === row.family)} fleet={fleet} collectionStatus={snapshot?.peerCollection?.status} />)}
     </div>
   </div>;
+}
+
+export default function NativeUsageOverview() {
+  const [searchParams, updateParams] = useUrlParams();
+  const scope = searchParams.get('nativeScope') === 'fleet' ? 'fleet' : 'local';
+  // A scope change disposes both the prior snapshot and its pending request.
+  return <NativeUsageRead key={scope} scope={scope} onScopeChange={nativeScope => updateParams({ nativeScope, nativeMonth: null })} />;
 }

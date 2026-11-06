@@ -1,12 +1,7 @@
-import { buildNativeUsageMatrix } from '../lib/nativeUsageContract.js';
-import { captureNativeUsageReport, getNativeUsageAccountSelections } from './nativeUsageReport.js';
-
-// Dashboard requests must not inherit the standalone capture's 30-minute budget.
-// These caps apply independently to each retained provider. They cannot be raised
-// by HTTP input; incomplete inventories remain visibly partial/refused.
-export const NATIVE_USAGE_DASHBOARD_LIMITS = Object.freeze({
-  bytes: 128 * 1024 ** 2, lineBytes: 1024 ** 2, entries: 30000, records: 100000, milliseconds: 5000, depth: 8,
-});
+import { buildNativeUsageMatrix, nativeUsageAccountSelectionsSchema, nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
+import { captureDashboardNativeUsageReport, getNativeUsageAccountSelections } from './nativeUsageReport.js';
+import { getInstanceId } from './instanceIdentity.js';
+export { NATIVE_USAGE_DASHBOARD_LIMITS } from './nativeUsageReport.js';
 
 const pick = (value, fields) => Object.fromEntries(fields.filter(field => Object.hasOwn(value, field)).map(field => [field, value[field]]));
 const PROVIDER_FIELDS = ['family', 'source', 'validator', 'status', 'completeness', 'retention', 'runtime', 'scope',
@@ -15,17 +10,44 @@ const PROVIDER_FIELDS = ['family', 'source', 'validator', 'status', 'completenes
 const ACCOUNT_FIELDS = ['accountLabel', 'identityBasis', 'authoritativeParticipant', 'historyScope', 'members',
   'membersWithoutReport', 'status', 'completeness', 'retention', 'freshness', 'coverage', 'totals', 'findings', 'cost', 'attribution'];
 
-/** Local observations and selected-account diagnostics, never a fleet snapshot.
- * The full contract contains hashed record identities for offline deduplication;
- * this HTTP projection deliberately has no per-record arrays or source paths.
+/** Local observations stay separate from selected-account unions. Only the
+ * paired report protocol carries hashed record identities for deduplication;
+ * the browser projection never includes per-record arrays or source paths.
  */
-async function readLocalMatrix() {
-  const report = await captureNativeUsageReport({ limits: NATIVE_USAGE_DASHBOARD_LIMITS });
-  const matrix = buildNativeUsageMatrix({ reports: [report], selections: await getNativeUsageAccountSelections() });
+async function readMatrix(scope) {
+  const localKey = scope === 'fleet' ? nativeUsageParticipantKey(await getInstanceId()) : null;
+  const fleet = scope === 'fleet' ? await import('./nativeUsageFleet.js') : null;
+  const [report, collection] = await Promise.all([
+    captureDashboardNativeUsageReport(),
+    fleet ? fleet.collectNativeUsagePeerReports(localKey) : null,
+  ]);
+  if (scope === 'fleet' && report.participantKey !== localKey) throw new Error('Local participant changed during capture');
+  // Resolve the selection after the network wait; configuration stays local and
+  // never travels with the reports. Equal counters are not account identity.
+  const selections = await getNativeUsageAccountSelections();
+  if (collection) await fleet.revalidateNativeUsagePeerCollection(collection);
+  const reports = [report, ...(collection?.reports ?? [])];
+  const matrix = buildNativeUsageMatrix({ reports, selections });
+  if (collection) {
+    const parsed = nativeUsageAccountSelectionsSchema.safeParse(selections);
+    const known = new Set([report.participantKey, ...collection.peerCollection.peers.map(peer => peer.participantKey)]);
+    for (const key of new Set((parsed.success ? parsed.data : []).flatMap(selection => selection.members))) {
+      if (known.has(key)) continue;
+      collection.peerCollection.peers.push({ participantKey: key,
+        status: collection.peerCollection.findings.includes('peer-inventory-truncated') ? 'not-collected' : 'not-configured', capturedAt: null });
+      if (collection.peerCollection.status === 'complete') collection.peerCollection.status = 'partial';
+    }
+  }
   return {
-    mode: 'read-only', scope: 'local-instance', contractVersion: matrix.contractVersion,
+    mode: 'read-only', scope: collection ? 'configured-peers' : 'local-instance', contractVersion: matrix.contractVersion,
     generatedAt: new Date().toISOString(), capturedAt: report.capturedAt,
-    ledgerChanged: false, peerReports: 'not-collected', participantKey: report.participantKey,
+    ledgerChanged: false, peerReports: collection ? 'collected' : 'not-collected', participantKey: report.participantKey,
+    ...(collection ? {
+      peerCollection: collection.peerCollection,
+      participants: reports.map(source => ({ participantKey: source.participantKey, capturedAt: source.capturedAt,
+        providers: source.providers.map(provider => pick(provider, PROVIDER_FIELDS)),
+      })),
+    } : {}),
     providers: report.providers.map(provider => pick(provider, PROVIDER_FIELDS)),
     families: matrix.families.map(family => ({
       family: family.family, scope: family.scope, merge: family.merge,
@@ -41,14 +63,15 @@ async function readLocalMatrix() {
   };
 }
 
-let pendingRead = null;
+const pendingReads = new Map();
 
 /** Coalesce concurrent reads, not completed snapshots. Every later click reads
  * native sources again; a failed refresh can never return an old success.
  */
-export function getNativeUsageMatrix() {
-  pendingRead ??= readLocalMatrix()
+export function getNativeUsageMatrix({ scope = 'local' } = {}) {
+  if (!['local', 'fleet'].includes(scope)) throw new Error('Unsupported native usage scope');
+  if (!pendingReads.has(scope)) pendingReads.set(scope, readMatrix(scope)
     .catch(() => { throw new Error('Native usage capture failed. Existing usage records are unchanged.'); })
-    .finally(() => { pendingRead = null; });
-  return pendingRead;
+    .finally(() => { pendingReads.delete(scope); }));
+  return pendingReads.get(scope);
 }

@@ -660,7 +660,7 @@ it('validates native coverage source selection before scanning and never caches 
 it('serves the bounded local matrix without allowing source roots, caps or peer reports from HTTP input', async () => {
   const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
   getNativeUsageMatrix.mockClear();
-  for (const query of ['home=/private', 'milliseconds=1800000', 'reports=[]', 'family=claude']) {
+  for (const query of ['home=/private', 'milliseconds=1800000', 'reports=[]', 'family=claude', 'scope=all', 'scope=local&scope=fleet']) {
     expect((await request(buildApp()).get(`/api/usage/native-matrix?${query}`)).status).toBe(400);
   }
   expect(getNativeUsageMatrix).not.toHaveBeenCalled();
@@ -668,5 +668,8 @@ it('serves the bounded local matrix without allowing source roots, caps or peer 
   expect(response.status).toBe(200);
   expect(response.headers['cache-control']).toBe('no-store');
   expect(response.body).toMatchObject({ mode: 'read-only', scope: 'local-instance', peerReports: 'not-collected' });
-  expect(getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith();
+  expect(getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ scope: 'local' });
+  const fleet = await request(buildApp()).get('/api/usage/native-matrix?scope=fleet');
+  expect(fleet.status).toBe(200);
+  expect(getNativeUsageMatrix).toHaveBeenLastCalledWith({ scope: 'fleet' });
 });

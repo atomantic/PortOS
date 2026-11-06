@@ -92,7 +92,7 @@ that went backwards, or restated history across two reports of one participant
 refuses until the operator reselects and drops the older report. Those checks detect
 a change. They do not prove the account stayed the same.
 
-## Read-only local dashboard matrix
+## Read-only local and configured-peer dashboard matrix
 
 The Usage page's **Read native sources** action uses `GET /api/usage/native-matrix`
 to capture all four current readers and pass that v4 report through the same
@@ -101,17 +101,42 @@ account-selection matrix. Each retained provider has a 128 MiB / 100,000-record 
 and unknown coverage stay visible. This is a diagnostic subset, not the standalone
 capture's full-history budget or a staged replacement for the active ledger.
 
-The endpoint reads the local instance only. It does not collect or cache peer
-reports, create account selections, or map machines by matching counters. Existing
-operator selections are applied as stored. Missing selected participants are
+The default endpoint reads the local instance only. The URL-backed **Configured
+peers** scope uses `GET /api/usage/native-matrix?scope=fleet` on an explicit read.
+Changing scope does not read sources or show a snapshot from the old scope.
+Neither scope creates account selections or maps machines by matching counters.
+Existing operator selections are applied as stored. Missing selected participants are
 listed explicitly; retained-account unions refuse their totals when any required
 report is missing. A locally authoritative Codex account snapshot may still be
 shown once, with missing member reports visible. Neither case claims complete
-fleet collection or verified account identity.
+history or verified account identity.
+
+Fleet collection contacts at most eight registered peers, two at a time, and
+lists at most 64 registry entries with explicit inventory/collection limits.
+Only enabled, user-established, paired peers with effective `usage` sharing
+qualify. No configuration or pairing is created. The existing usage-category
+policy still applies when the older content-sync master switch is off.
+
+`GET /api/usage/native-report/v1?challenge=<64 hex>` exchanges only a local v4
+report with a currently authenticated paired usage peer. A domain-separated HMAC
+binds the report to its source, audience and fresh challenge. Strict schemas,
+content/evidence hashes, a 16 MiB byte limit, a 60-second whole-request deadline,
+a five-second body-idle deadline, and five-minute capture freshness with a
+30-second future allowance constrain each response. A response cannot redirect
+credentials, fall back to Basic auth, impersonate another participant or forward
+another peer's records. Current pairing, category, URL and identity bindings are
+checked after waits and again before the collection is released.
+
+Old endpoints, unpaired/disabled peers, stale or oversized reports, conflicting
+identities, unreadable registries and partial failures stay explicit. Failed
+reports are omitted from matrix inputs, never converted to zero. A successful
+collection means the requested reports arrived; it proves neither historical
+completeness nor membership in the same provider account.
 
 Only aggregate counters, coverage, safe participant keys, selected-account
 diagnostics and refusal reasons reach the UI. Per-record projections and native
-record identities remain inside the capture/matrix computation. Grok cost ticks
+record identities travel only as strict hashed accounting projections on the
+pair-authenticated report protocol, never in browser output. Grok cost ticks
 are an unverified native signal, not dollars or subscription spend. Antigravity's
 input, output, cache and output-decomposition counters stay separate because the
 combined total remains unverified. Native and legacy counters are never added.
@@ -120,8 +145,9 @@ Concurrent requests share only the in-flight read. A later refresh captures new
 sources, and a failed read never silently substitutes an older server snapshot.
 The UI labels any prior result retained after a request error as stale. The action
 does not run on boot or poll, write the ledger, change sync, invoke inference, or
-perform deployment. Fleet report transport/retention, account-map verification,
-and live checks on each participant remain tracked by #15097; this local UI does
+perform deployment. Reports are neither persisted nor forwarded. Durable capture
+for staging, account-map verification and live checks on each participant remain
+tracked by #15097; this read-only UI does
 not close that issue or the staged recovery in #15031.
 
 ## Antigravity native CLI capture (report version 4)

@@ -251,7 +251,7 @@ const usageQuery = (params) => {
   return qs ? `?${qs}` : '';
 };
 export const getUsage = (params = {}, options = {}) => request(`/usage${usageQuery(params)}`, options);
-export const getNativeUsageMatrix = (options = {}) => request('/usage/native-matrix', options);
+export const getNativeUsageMatrix = (params = {}, options = {}) => request(`/usage/native-matrix${usageQuery(params)}`, options);
 // Per-model token totals for every Claude Code session on this machine, read
 // from the CLI transcripts. Same { period } | { from, to } params as getUsage.
 export const getClaudeCodeModelUsage = (params = {}, options = {}) =>

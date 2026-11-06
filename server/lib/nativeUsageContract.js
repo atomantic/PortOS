@@ -353,7 +353,8 @@ export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, 
   return nativeUsageReportSchema.parse(report);
 }
 
-const reportIsIntact = (report) => {
+/** Verify content and evidence hashes after validating the strict report schema. */
+export const reportIsIntact = (report) => {
   const { contentHash: claimed, ...body } = report;
   return claimed === hashOf(body) && report.evidenceHash === hashOf(report.providers);
 };
