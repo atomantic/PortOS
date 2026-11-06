@@ -1,6 +1,6 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { useRef, useState } from 'react';
-import { Ban, Check, RotateCcw, X, MessageSquare } from 'lucide-react';
+import { Ban, Check, Loader2, RotateCcw, X, MessageSquare } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
@@ -33,9 +33,11 @@ async function videoTakeUrl(take) {
  * A legacy take (a pre-takes selection the server hasn't materialized yet)
  * has copy actions but no review actions, because it has no take id to address.
  * `grid` lays the takes out in rows that fit the width instead of one scrolling row.
+ * `pending` lists renders still in flight for this slot (`{ key, label, running, progress }`):
+ * each shows as a "Rendering grok…" placeholder after the takes until its take lands.
  */
 export default function SceneTakeStrip({
-  scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null,
+  scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -43,7 +45,8 @@ export default function SceneTakeStrip({
   const copyPointer = useRef(false);
   const takes = sceneTakeList(scene, kind);
   const selected = scene[TAKE_SLOT[kind]] || null;
-  if (takes.length === 0) return null;
+  const rendering = Array.isArray(pending) ? pending : [];
+  if (takes.length === 0 && rendering.length === 0) return null;
 
   const openNote = (take) => { setNoteFor(take.takeId); setNoteDraft(take.note || ''); };
   const saveNote = (take) => {
@@ -56,7 +59,7 @@ export default function SceneTakeStrip({
   return (
     <div className="space-y-1">
       <div className="text-[11px] text-port-text-muted">
-        {KIND_LABEL[kind]} ({takes.length})
+        {KIND_LABEL[kind]} ({takes.length}){rendering.length ? ` · ${rendering.length} rendering` : ''}
       </div>
       <ul className={grid ? 'grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 sm:grid-cols-[repeat(auto-fill,minmax(6rem,1fr))]' : 'flex gap-2 overflow-x-auto pb-1'} aria-label={`${KIND_LABEL[kind]} for ${scene.label || `scene ${scene.order + 1}`}`}>
         {takes.map((take) => {
@@ -176,6 +179,18 @@ export default function SceneTakeStrip({
                   />
                 </div>
               )}
+            </li>
+          );
+        })}
+        {rendering.map((job) => {
+          const pct = job.running && typeof job.progress === 'number' ? Math.round(job.progress * 100) : null;
+          return (
+            <li key={`pending-${job.key}`} className={thumbClass} data-testid="pending-take">
+              <div role="status" className="flex aspect-video w-full flex-col items-center justify-center gap-1 rounded border border-dashed border-port-accent/60 bg-port-bg px-1 text-center text-[10px] text-port-text-muted">
+                <Loader2 size={14} className="animate-spin text-port-accent" aria-hidden="true" />
+                <span className="text-port-text">Rendering{job.label ? ` ${job.label}` : ''}…</span>
+                <span>{job.running ? (pct != null ? `${pct}%` : 'Running') : 'Queued'}</span>
+              </div>
             </li>
           );
         })}

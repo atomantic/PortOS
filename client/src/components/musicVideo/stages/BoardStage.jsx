@@ -297,6 +297,7 @@ export default function BoardStage({ board }) {
               generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
               frameProgress={sceneMedia.sceneProgress?.[scene.sceneId]}
               videoProgress={sceneMedia.videoSceneProgress?.[scene.sceneId]}
+              videoJobs={sceneMedia.videoSceneJobs?.[scene.sceneId] || []}
               settingsSaving={videoSettings.saving}
               videoBlockedReason={videoSettings.videoBlockedReason}
               videoBlockedReasonFor={videoSettings.blockedReasonFor}

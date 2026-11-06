@@ -1298,3 +1298,23 @@ it('lets a document shot opt out of the video look and return to inheritance', a
   await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', { filmLook: null }));
   expect(screen.queryByRole('button', { name: 'Render shot' })).toBeNull();
 });
+
+// Uniquely catches a clip in flight blocking another render on the shot, or its placeholder take
+// going missing (#15128); a request still on its way holds Render so a double tap sends nothing twice.
+describe('clip renders in flight', () => {
+  it('keeps Render open while clips render and shows each as a placeholder take', () => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onGenerateVideo, falVideoSettings: { backend: 'grok' }, generatingVideo: true };
+    const { rerender } = render(<SceneCard {...props} videoJobs={[
+      { key: 'r1', jobId: 'job-local', label: 'local', running: true, progress: 0.25 },
+      { key: 'r2', jobId: 'job-grok', label: 'grok', running: false, progress: null },
+    ]} />);
+    const placeholders = screen.getAllByTestId('pending-take').map((tile) => tile.textContent);
+    expect(placeholders).toEqual(['Rendering local…25%', 'Rendering grok…Queued']);
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledTimes(1);
+    rerender(<SceneCard {...props} videoJobs={[{ key: 'r3', jobId: null, label: 'grok', running: false, progress: null }]} />);
+    expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+  });
+});

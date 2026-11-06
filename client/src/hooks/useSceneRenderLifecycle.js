@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { getMediaJob } from '../services/apiMediaJobs';
 import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
@@ -71,14 +71,17 @@ function failureToastMessage(failMessage, failures) {
  *                        land within a short window (a batch) collapse into ONE
  *                        summary toast instead of one identical toast per scene.
  *
- * Returns `{ genScenes, sceneProgress, failedScenes, startScene, clearScene, trackJob, restoreJobs }`
+ * Returns `{ genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs }`
  * (`sceneProgress`: sceneId → `{ progress }` once a job reports running; a scene
  * in `genScenes` with no entry is still queued;
+ * `sceneJobs`: sceneId → every render in flight for it, `{ key, jobId, label, running, progress }`,
+ * since one shot may render on several providers at once;
  * `failedScenes` — sceneId → true after a confirmed render failure this session, until that scene renders again):
- *   - `startScene(sceneId)` — light the spinner before the kickoff request.
- *   - `clearScene(sceneId)` — drop the spinner (sync-lane finish, or a kickoff
- *     that returns no trackable job id).
- *   - `trackJob(jobId, sceneId)` — register a queued render so its terminal
+ *   - `startScene(sceneId, { label })` — light the spinner before the kickoff
+ *     request; returns the render's key.
+ *   - `clearScene(sceneId, key)` — drop that render (sync-lane finish, or a kickoff
+ *     that returns no trackable job id); without a key, every render not yet bound to a job.
+ *   - `trackJob(jobId, sceneId, key)` — register a queued render so its terminal
  *     event clears the right scene's spinner; reconciles an already-arrived
  *     orphan terminal inline (clears the spinner, toasts on failure) instead of
  *     registering a job that's already done.
@@ -98,8 +101,25 @@ export default function useSceneRenderLifecycle({
   failMessage,
   sceneLabel,
 }) {
-  const [genScenes, setGenScenes] = useState({});
-  const [sceneProgress, setSceneProgress] = useState({});
+  // sceneId → the renders in flight for it, oldest first: `{ key, jobId, label, running, progress }`.
+  // A shot can have several at once (a local clip and a grok clip, #15128); `jobId`
+  // is null until the kickoff returns, `running` flips on the job's started/progress event.
+  const [sceneJobs, setSceneJobs] = useState({});
+  const keySeq = useRef(0);
+  const editJobs = useCallback((sceneId, edit) => setSceneJobs((prev) => {
+    const current = prev[sceneId] || [];
+    const nextList = edit(current);
+    if (nextList === current) return prev;
+    const next = { ...prev };
+    if (nextList.length) next[sceneId] = nextList; else delete next[sceneId];
+    return next;
+  }), []);
+  const genScenes = useMemo(() => Object.fromEntries(Object.keys(sceneJobs).map((sceneId) => [sceneId, true])), [sceneJobs]);
+  // A scene with no running render has no entry (it is still queued).
+  const sceneProgress = useMemo(() => Object.fromEntries(Object.entries(sceneJobs)
+    .map(([sceneId, list]) => [sceneId, list.find((entry) => entry.running)])
+    .filter(([, entry]) => entry)
+    .map(([sceneId, entry]) => [sceneId, { progress: entry.progress }])), [sceneJobs]);
   // sceneId → true once a render for it failed this session (cleared when the scene renders again or succeeds).
   const [failedScenes, setFailedScenes] = useState({});
   const markFailed = useCallback((sceneId, failed) => setFailedScenes((prev) => {
@@ -142,33 +162,47 @@ export default function useSceneRenderLifecycle({
     failuresRef.current = [];
   }, []);
 
-  const startScene = useCallback(
-    (sceneId) => { markFailed(sceneId, false); setGenScenes((prev) => ({ ...prev, [sceneId]: true })); },
-    [markFailed],
-  );
-  const clearScene = useCallback(
-    (sceneId) => setGenScenes((prev) => {
-      const next = { ...prev };
-      delete next[sceneId];
-      return next;
-    }),
-    [],
-  );
-  const clearProgress = useCallback((sceneId) => setSceneProgress((prev) => {
-    if (!(sceneId in prev)) return prev;
-    const next = { ...prev };
-    delete next[sceneId];
-    return next;
-  }), []);
+  // Returns the new render's key: pass it to trackJob / clearScene so a second
+  // render on the same shot never settles the first one's placeholder.
+  const startScene = useCallback((sceneId, { label = null } = {}) => {
+    markFailed(sceneId, false);
+    keySeq.current += 1;
+    const key = `r${keySeq.current}`;
+    editJobs(sceneId, (list) => [...list, { key, jobId: null, label, running: false, progress: null }]);
+    return key;
+  }, [markFailed, editJobs]);
+  // With a key, drop that one render; without one, every render not yet bound to a job
+  // (a kickoff that failed or returned nothing to track).
+  const clearScene = useCallback((sceneId, key = null) => editJobs(sceneId, (list) => {
+    const next = list.filter((entry) => (key ? entry.key !== key : entry.jobId));
+    return next.length === list.length ? list : next;
+  }), [editJobs]);
+  const settleJob = useCallback((sceneId, jobId) => editJobs(sceneId, (list) => {
+    const next = list.filter((entry) => entry.jobId !== jobId);
+    return next.length === list.length ? list : next;
+  }), [editJobs]);
+  // Bind a job to the render that started it (by key, else the oldest unbound one), or add it.
+  const bindJob = useCallback((sceneId, jobId, key = null, label = null) => editJobs(sceneId, (list) => {
+    if (list.some((entry) => entry.jobId === jobId)) return list;
+    const index = list.findIndex((entry) => (key ? entry.key === key : !entry.jobId));
+    if (index === -1) {
+      keySeq.current += 1;
+      return [...list, { key: `r${keySeq.current}`, jobId, label, running: false, progress: null }];
+    }
+    return list.map((entry, i) => (i === index ? { ...entry, jobId, label: entry.label ?? label } : entry));
+  }), [editJobs]);
 
   // The orphan-reconcile helper used by the kickoff `.then`: if the terminal
   // event already raced ahead, settle it now; otherwise register the pending job.
-  const trackJob = useCallback((jobId, sceneId) => {
+  const trackJob = useCallback((jobId, sceneId, key = null) => {
     if (orphanRef.current.has(jobId)) {
       const orphan = orphanRef.current.get(jobId);
       orphanRef.current.delete(jobId);
-      clearScene(sceneId);
-      clearProgress(sceneId);
+      if (key) clearScene(sceneId, key);
+      else editJobs(sceneId, (list) => {
+        const index = list.findIndex((entry) => !entry.jobId);
+        return index === -1 ? list : list.filter((_, i) => i !== index);
+      });
       const failed = typeof orphan === 'object' ? orphan.failed : orphan === 'failed';
       const outcome = (typeof orphan === 'object' ? orphan.outcome : orphan) || (failed ? 'failed' : 'completed');
       const error = typeof orphan === 'object' ? orphan.error : undefined;
@@ -180,18 +214,18 @@ export default function useSceneRenderLifecycle({
       return;
     }
     pendingRef.current.set(jobId, sceneId);
-  }, [clearScene, clearProgress, markFailed, reportFailure]);
+    bindJob(sceneId, jobId, key);
+  }, [clearScene, editJobs, bindJob, markFailed, reportFailure]);
 
   const restoreJobs = useCallback((entries) => {
     const list = (Array.isArray(entries) ? entries : []).filter((e) => e?.jobId && e?.sceneId);
-    if (list.length === 0) return;
-    setGenScenes((prev) => {
-      const next = { ...prev };
-      for (const { sceneId } of list) next[sceneId] = true;
-      return next;
-    });
-    for (const { jobId, sceneId } of list) trackJob(jobId, sceneId);
-  }, [trackJob]);
+    for (const { jobId, sceneId, label, status } of list) {
+      if (pendingRef.current.has(jobId)) continue;
+      pendingRef.current.set(jobId, sceneId);
+      bindJob(sceneId, jobId, `restored-${jobId}`, label || null);
+      if (status === 'running') editJobs(sceneId, (jobs) => jobs.map((entry) => (entry.jobId === jobId ? { ...entry, running: true } : entry)));
+    }
+  }, [bindJob, editJobs]);
 
   useEffect(() => {
     const onAttach = (data) => cfgRef.current.apply(data);
@@ -217,8 +251,7 @@ export default function useSceneRenderLifecycle({
         return;
       }
       pendingRef.current.delete(jobId);
-      clearScene(sceneId);
-      clearProgress(sceneId);
+      settleJob(sceneId, jobId);
       if (failed) {
         markFailed(sceneId, true);
         reportFailure(sceneId, data?.error);
@@ -233,9 +266,14 @@ export default function useSceneRenderLifecycle({
       if (!sceneId) return;
       const progress = typeof data.progress === 'number' && Number.isFinite(data.progress)
         ? Math.min(1, Math.max(0, data.progress)) : null;
-      setSceneProgress((prev) => (prev[sceneId]?.progress === progress && sceneId in prev
-        ? prev
-        : { ...prev, [sceneId]: { progress: progress ?? prev[sceneId]?.progress ?? null } }));
+      editJobs(sceneId, (list) => {
+        const index = list.findIndex((entry) => entry.jobId === jobId);
+        if (index === -1) return list;
+        const entry = list[index];
+        const nextProgress = progress ?? entry.progress;
+        if (entry.running && entry.progress === nextProgress) return list;
+        return list.map((item, i) => (i === index ? { ...item, running: true, progress: nextProgress } : item));
+      });
     };
     // Deferred failure toast for an owned render. A render canceled WHILE RUNNING
     // reaches us as `failedEvent` (SIGTERM) just before `canceledEvent` — and
@@ -313,7 +351,7 @@ export default function useSceneRenderLifecycle({
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
-  }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, clearScene, clearProgress, markFailed, reportFailure]);
+  }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, settleJob, editJobs, markFailed, reportFailure]);
 
-  return { genScenes, sceneProgress, failedScenes, startScene, clearScene, trackJob, restoreJobs };
+  return { genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs };
 }
