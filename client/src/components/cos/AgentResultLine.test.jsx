@@ -384,6 +384,31 @@ it('does not claim publication from synchronization metadata without a verified 
   expect(screen.getByRole('link', { name: 'v1.2.3' })).toHaveAttribute('href', sync.releaseUrl);
 });
 
+it('names a held checkout and offers a next step for a foreign lock', () => {
+  const publication = { status: 'verified', tag: 'v1.2.3' };
+  const synchronization = { status: 'blocked', blocker: 'retirement:exact-retirement-receipt-unverified', heldCheckouts: [
+    { branch: 'codex/release-sync', path: '/example/sync', reason: 'release-checkout-locked', lockReason: 'operator hold',
+      observedAt: '2026-01-01T12:00:00Z', nextAction: 'Unlock it when its owner has finished.' },
+    { branch: 'codex/release-agent', path: '/example/candidate', reason: 'retirement-outcome-unverified', nextAction: 'The sweep retries.' },
+  ] };
+  render(<ReleasePublicationLine publication={publication} synchronization={synchronization} />);
+  expect(screen.getByText('Reason: release-checkout-locked')).toBeInTheDocument();
+  expect(screen.getByText('Lock: operator hold')).toBeInTheDocument();
+  expect(screen.getByText('Next step: Unlock it when its owner has finished.')).toBeInTheDocument();
+  expect(screen.getByText('Reason: retirement-outcome-unverified')).toBeInTheDocument();
+  // Only the locked checkout has an unlock to copy.
+  expect(screen.getAllByRole('button', { name: 'Copy unlock command' })).toHaveLength(1);
+});
+
+it('marks an operator-retired checkpoint as settled rather than actively blocked', () => {
+  const synchronization = { status: 'blocked', blocker: 'publisher-candidate-checkout-unverified',
+    operatorReset: { reason: 'Start from main' }, nextAction: 'The operator retired this checkpoint.' };
+  render(<ReleasePublicationLine publication={{ status: 'verified', tag: 'v1.2.3' }} synchronization={synchronization} />);
+  expect(screen.getByText('Published — synchronization retired by operator')).toBeInTheDocument();
+  expect(screen.getByText('Historical blocker: publisher-candidate-checkout-unverified')).toBeInTheDocument();
+  expect(screen.queryByText('Published — synchronization blocked')).not.toBeInTheDocument();
+});
+
 it('shows independent delivery while retaining the historical blocked verdict', () => {
   const publication = { status: 'verified', tag: 'v2.109.0', releaseUrl: 'https://github.com/example/repo/releases/tag/v2.109.0' };
   const synchronization = { status: 'blocked', blocker: 'synchronization-pr-pending',

@@ -132,6 +132,17 @@ describe('releaseSynchronizationProjection', () => {
     expect(projected.nextAction).toContain('remains unverified');
   });
 
+  it('shows retirement holds only while they explain a live retirement blocker', () => {
+    const hold = { branch: 'codex/release-sync', path: '/example/sync', reason: 'release-checkout-generation-changed', observedAt: '2026-01-01T12:00:00Z' };
+    const held = { ...entry, synchronization: { status: 'blocked', blocker: 'retirement:exact-retirement-receipt-unverified' },
+      obligations: { ...entry.obligations, retirement: { status: 'blocked', evidence: { checkouts: [], heldCheckouts: [hold] } } } };
+    const project = record => projectTaskReleaseMilestones({ id: 'example', metadata: {} }, record).metadata.releaseSynchronization;
+    expect(project(held).heldCheckouts).toEqual([{ ...hold, nextAction: expect.stringContaining('operator reset') }]);
+    expect(project({ ...held, synchronization: { status: 'blocked', blocker: 'synchronization-pr-pending' } })).not.toHaveProperty('heldCheckouts');
+    expect(project({ ...held, operatorReset: { version: 1, identity, resetAt: '2026-01-01T12:00:00Z', actor: 'local-operator',
+      reason: 'Start from main', previousStatus: 'blocked', previousBlocker: null, checkouts: [] } })).not.toHaveProperty('heldCheckouts');
+  });
+
   it('projects release publication and synchronization onto agents', () => {
     const publisher = { id: 'publisher-agent-1', metadata: { releasePublication: publication } };
     const projectedPublisher = projectAgentReleaseMilestones(publisher, outbox);

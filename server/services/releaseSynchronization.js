@@ -570,9 +570,35 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
       });
       // The obligation only reports a missing receipt; say why this sweep made none.
       for (const row of result?.held || []) console.log(`⏸️ Release checkout retained ${row.branch}: ${row.reason}`);
+      if (result?.attempted) await recordReleaseCheckoutHolds(entry.identity, result.held, agents).catch(error => {
+        console.log(`🚫 Release checkout holds not recorded for ${taskId}: ${error.code || 'store-unavailable'}`);
+      });
       if (result?.retired?.length) await verifyReleaseSynchronizationTask(taskId, { agents });
     }
   }
+}
+
+/** Keep the latest sweep's reasons with the evidence they explain, so status views
+ * can name the cause. A row keeps its first observation time while its hold is
+ * unchanged, and an unchanged sweep writes nothing. */
+async function recordReleaseCheckoutHolds(identity, held, agents) {
+  const updated = await queue(async () => {
+    const entry = (await readOutbox()).publications[identity];
+    const evidence = entry?.obligations.retirement.evidence;
+    if (!evidence) return null;
+    const previous = evidence.heldCheckouts || [];
+    const observedAt = new Date().toISOString();
+    const rows = held.map(row => {
+      const prior = previous.find(({ observedAt: _observedAt, ...hold }) => isDeepStrictEqual(hold, row));
+      return prior || { ...row, observedAt };
+    });
+    if (isDeepStrictEqual(rows, previous)) return null;
+    const { heldCheckouts: _prior, ...rest } = evidence;
+    entry.obligations.retirement.evidence = { ...rest, ...(rows.length && { heldCheckouts: rows }) };
+    await saveReleaseSynchronization(entry);
+    return entry;
+  });
+  if (updated) await emitReleaseSynchronization(updated, agents, { suppressCompletionWake: true });
 }
 
 async function verifyEntry(entry, agents) {
