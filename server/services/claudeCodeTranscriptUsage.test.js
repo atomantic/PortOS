@@ -47,6 +47,26 @@ describe('claude code transcript usage', () => {
     expect(days['2026-09-12']['model-x'].output).toBe(3);
   });
 
+  it('keeps the final streamed output across copied transcripts in either file order', async () => {
+    const final = JSON.stringify({
+      type: 'assistant', timestamp: '2026-09-10T01:00:01Z', requestId: 'req-shared',
+      message: { id: 'shared', model: 'model-x', stop_reason: 'end_turn', usage: u(50) }
+    });
+    const partial = line('shared', 'model-x', '2026-09-10T01:00:00Z', u(5));
+
+    for (const finalFirst of [true, false]) {
+      const orderedRoot = join(root, finalFirst ? 'final-first' : 'partial-first');
+      const a = join(orderedRoot, 'a.jsonl');
+      const b = join(orderedRoot, 'b.jsonl');
+      await mkdir(orderedRoot, { recursive: true });
+      await writeFile(a, `${finalFirst ? final : partial}\n`);
+      await writeFile(b, `${finalFirst ? partial : final}\n`);
+      await rm(svc.TRANSCRIPT_USAGE_FILE, { force: true });
+      const { days } = await svc.refreshLocalTranscriptUsage({ root: orderedRoot, force: true });
+      expect(days['2026-09-10']['model-x'].output).toBe(50);
+    }
+  });
+
   it('persists history past transcript pruning and never shrinks a stored day', async () => {
     const file = join(root, 'proj-b', 's.jsonl');
     await writeFile(file, [line('a', 'model-x', '2026-01-05T00:00:00Z', u(9)), line('b', 'model-x', '2026-01-05T00:00:01Z', u(9))].join('\n'));
