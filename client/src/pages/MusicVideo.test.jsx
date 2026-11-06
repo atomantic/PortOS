@@ -2749,8 +2749,10 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
-    expect(screen.getByText(/A refine or end frame counts its frame first/)).toBeTruthy();
     await showFrames();
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
+    expect(screen.getByRole('tooltip').textContent).toContain('A refine or end frame counts its frame first');
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
