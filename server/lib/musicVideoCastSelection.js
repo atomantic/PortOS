@@ -5,9 +5,11 @@ export function activeMusicVideoSubjects(concept) {
   for (const subject of subjects) {
     if (subject?.kind !== 'character' || subject.active === false) continue;
     const key = subject.name?.trim();
+    if (!key) continue;
     if (!chosen.has(key) || (subject.active === true && chosen.get(key).active !== true)) chosen.set(key, subject);
   }
-  return subjects.filter(subject => subject?.kind !== 'character' || chosen.get(subject.name?.trim()) === subject);
+  return subjects.filter(subject => subject?.kind !== 'character'
+    || (subject.active !== false && (!subject.name?.trim() || chosen.get(subject.name.trim()) === subject)));
 }
 
 /** References with an identifiable inactive owner cannot condition a new render. */
