@@ -22,6 +22,13 @@ describe('sceneEndFramePlan (#11173)', () => {
     expect(sceneEndFrameRequestFields(s, options)).toEqual({});
   });
 
+  it('sends nothing while the shot switches its end frame off, keeping the selection', () => {
+    const off = { ...scene, endFrameOff: true };
+    expect(sceneEndFramePlan(off, kling)).toEqual({ endImageId: null, used: false, reason: null });
+    expect(sceneEndFrameRequestFields(off, { backend: 'local', localRuntime: 'ltx2' })).toEqual({});
+    expect(off.endImageId).toBe('end.png');
+  });
+
   it('sends it to an end-image fal model, including the default when none is named', () => {
     expect(sceneEndFrameRequestFields(scene, kling)).toEqual({ lastImageFile: 'end.png' });
     expect(sceneEndFramePlan(scene, { backend: 'fal' })).toEqual({ endImageId: 'end.png', used: true, reason: null });

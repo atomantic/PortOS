@@ -1952,6 +1952,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // and the prompt that renders it from the start frame.
   endImageId: z.string().max(256).nullable().optional(),
   endFramePrompt: z.string().max(8000).nullable().optional(),
+  // The shot's end frame switched off: clips skip it, its selection and takes stay.
+  endFrameOff: z.boolean().nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.

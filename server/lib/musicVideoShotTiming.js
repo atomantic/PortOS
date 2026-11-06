@@ -591,7 +591,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
       costUsd: seconds == null ? null : estimateFalVideoCostUsd({ modelId: capability.modelId, seconds, resolution }),
     };
   }
-  const endFrameModel = typeof scene?.endImageId === 'string' && scene.endImageId.trim()
+  const endFrameModel = scene?.endFrameOff !== true && typeof scene?.endImageId === 'string' && scene.endImageId.trim()
     ? getFalVideoModel(settings.falEndFrameModelId) : null;
   const modelId = endFrameModel?.endImage ? endFrameModel.id : settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getFalVideoModel(modelId);

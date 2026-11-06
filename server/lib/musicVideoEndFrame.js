@@ -21,7 +21,13 @@ import { VIDEO_RUNTIME_MODES } from './videoModeProfiles.js';
 const localRuntimeEndsOnFrame = (runtime) => isLastFrameAnchoredRuntime(runtime)
   && Boolean(VIDEO_RUNTIME_MODES[runtime]?.includes('fflf'));
 
-const endImageOf = (scene) => (typeof scene?.endImageId === 'string' && scene.endImageId.trim() ? scene.endImageId : null);
+/**
+ * The end frame a clip for `scene` may end on: its selected end frame, unless
+ * the director switched the shot's end frame off (`scene.endFrameOff`), which
+ * keeps the selection, prompt and takes for when it is switched back on.
+ */
+export const sceneActiveEndImageId = (scene) => (scene?.endFrameOff !== true && typeof scene?.endImageId === 'string' && scene.endImageId.trim()
+  ? scene.endImageId : null);
 
 /**
  * Whether a clip for `scene` on `backend` (with `falModelId` for fal, `runwayModelId` for Runway, the local
@@ -31,7 +37,7 @@ const endImageOf = (scene) => (typeof scene?.endImageId === 'string' && scene.en
  * ignored, and is null when it is used or absent.
  */
 export function sceneEndFramePlan(scene, { backend = null, falModelId = null, runwayModelId = null, mode = 'image', localRuntime = null } = {}) {
-  const endImageId = endImageOf(scene);
+  const endImageId = sceneActiveEndImageId(scene);
   if (!endImageId) return { endImageId: null, used: false, reason: null };
   const ignored = (reason) => ({ endImageId, used: false, reason });
   if (isPerformanceScene(scene)) return ignored('A performance shot follows the song and takes no end frame');

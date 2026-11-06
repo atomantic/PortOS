@@ -1,5 +1,6 @@
 import { falHearsAudioReference, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
 import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
@@ -72,7 +73,7 @@ export function shotCardRenderRequest({
   const promptAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
   let endFrame = null;
-  if (scene?.endImageId) {
+  if (sceneActiveEndImageId(scene)) {
     if (songAudio.state === 'on') endFrame = { state: 'unavailable', note: 'Not with song audio' };
     else if (endFramePlan?.used) endFrame = { state: inputs.endFrame === false ? 'off' : 'on', note: null };
     // The card says why under Render on (its end-frame line), so no note repeats it here.
