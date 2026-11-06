@@ -18,8 +18,8 @@ const subjectLine = (subject, size) => (subject.kind === 'character'
 /** The scale line for a shot's subjects, '' when none has a known size. */
 export function musicVideoSubjectScaleText(concept, sizes) {
   if (!sizes || typeof sizes !== 'object') return '';
-  // Like the production bible: every active subject (the caller passes a
-  // storyboard-filtered concept when the shot has a panel).
+  // Like the production bible: every active subject of the concept, which the
+  // shot prompt narrows to the shot's own subjects first.
   const lines = activeMusicVideoSubjects(concept)
     .map((subject) => {
       const size = typeof sizes[subject.id] === 'string' ? sizes[subject.id].trim() : '';
