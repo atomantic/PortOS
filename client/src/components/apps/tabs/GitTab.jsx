@@ -165,8 +165,10 @@ export default function GitTab({ appId, appName, repoPath }) {
   const [merging, setMerging] = useState(null);
   const [mergeConfirm, setMergeConfirm] = useState(null);
   const [checkingOutRemote, setCheckingOutRemote] = useState(null);
+  // false | true (bulk cleanup) | branch name (one merged branch from its row)
   const [cleaningUp, setCleaningUp] = useState(false);
   const [cleanupConfirm, setCleanupConfirm] = useState(false);
+  const [mergedDeleteConfirm, setMergedDeleteConfirm] = useState(null);
   const [resetting, setResetting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [sourceRefreshKey, setSourceRefreshKey] = useState(0);
@@ -489,12 +491,15 @@ export default function GitTab({ appId, appName, repoPath }) {
     ? `Deletes merged branches locally and on the remote, removing the ${localWorktreeMergedCount} worktree${localWorktreeMergedCount === 1 ? '' : 's'} holding one — unless it still has uncommitted or unmerged work, or is in use`
     : 'Deletes merged branches both locally and on the remote';
 
-  const handleCleanupMerged = async () => {
+  // With a branch name, the same server cleanup (and its safety holds) scoped
+  // to that one merged branch — the per-row delete.
+  const handleCleanupMerged = async (branchName = null) => {
     if (!repoPath || cleaningUp) return;
-    setCleaningUp(true);
+    setCleaningUp(branchName || true);
     setCleanupConfirm(false);
-    const result = await api.cleanupMergedBranches(repoPath, { silent: true }).catch((err) => {
-      toast.error(`Cleanup failed: ${err.message}`);
+    setMergedDeleteConfirm(null);
+    const result = await api.cleanupMergedBranches(repoPath, { silent: true, ...(branchName && { branches: [branchName] }) }).catch((err) => {
+      toast.error(`${branchName ? `Delete ${branchName}` : 'Cleanup'} failed: ${err.message}`);
       return null;
     });
     setCleaningUp(false);
@@ -507,30 +512,36 @@ export default function GitTab({ appId, appName, repoPath }) {
       // answer to "why is this branch still here?", which a bare count isn't.
       const preserved = `${skipped.slice(0, 2).join('; ')}${skipped.length > 2 ? ` (+${skipped.length - 2} more)` : ''}`;
       if (count === 0) {
-        toast(
-          skipped.length > 0 ? `No branches deleted — preserved ${preserved}` : 'No merged branches to clean up',
-          { icon: skipped.length > 0 ? '⚠️' : 'ℹ️' }
-        );
+        if (branchName) {
+          toast.error(skipped.length > 0 ? `Not deleted — ${preserved}` : `Not deleted — ${branchName} is no longer a merged branch`);
+        } else {
+          toast(
+            skipped.length > 0 ? `No branches deleted — preserved ${preserved}` : 'No merged branches to clean up',
+            { icon: skipped.length > 0 ? '⚠️' : 'ℹ️' }
+          );
+        }
+        return;
+      }
+      if (branchName) {
+        toast.success(`Deleted ${branchName}${removedWorktrees > 0 ? ' and its worktree' : ''}`);
       } else {
         const worktreeSuffix = removedWorktrees > 0
           ? ` and ${removedWorktrees} worktree${removedWorktrees === 1 ? '' : 's'}`
           : '';
         toast.success(`Cleaned up ${count} merged branch${count === 1 ? '' : 'es'}${worktreeSuffix}`);
-        const deletedRemotes = new Set(deleted.filter(d => d.remote === 'deleted').map(d => d.name));
-        setRemoteBranches(prev => prev.filter(b => !deletedRemotes.has(b.name)));
-        // A reap also clears the `worktree` flag on whatever survived, so re-read
-        // the branches instead of filtering the stale list. Only the branch list
-        // can have changed — no need for the full loadGitInfo fan-out.
-        if (removedWorktrees > 0) {
-          const refreshed = await api.getBranches(repoPath).catch(() => null);
-          if (refreshed) setBranches(refreshed.branches || []);
-        } else {
-          const deletedLocals = new Set(deleted.filter(d => d.local === 'deleted').map(d => d.name));
-          setBranches(prev => prev.filter(b => !deletedLocals.has(b.name)));
-        }
       }
-      if (count > 0 && skipped.length > 0) {
-        toast(`Preserved ${preserved}`, { icon: '⚠️' });
+      if (skipped.length > 0) toast(`Preserved ${preserved}`, { icon: '⚠️' });
+      const deletedRemotes = new Set(deleted.filter(d => d.remote === 'deleted').map(d => d.name));
+      setRemoteBranches(prev => prev.filter(b => !deletedRemotes.has(b.name)));
+      // A reap also clears the `worktree` flag on whatever survived, so re-read
+      // the branches instead of filtering the stale list. Only the branch list
+      // can have changed — no need for the full loadGitInfo fan-out.
+      if (removedWorktrees > 0) {
+        const refreshed = await api.getBranches(repoPath).catch(() => null);
+        if (refreshed) setBranches(refreshed.branches || []);
+      } else {
+        const deletedLocals = new Set(deleted.filter(d => d.local === 'deleted').map(d => d.name));
+        setBranches(prev => prev.filter(b => !deletedLocals.has(b.name)));
       }
     }
   };
@@ -836,12 +847,12 @@ export default function GitTab({ appId, appName, repoPath }) {
                     {localMergedCount > 0 && !cleanupConfirm && (
                       <button
                         onClick={() => setCleanupConfirm('local')}
-                        disabled={cleaningUp}
+                        disabled={!!cleaningUp}
                         title={localCleanupTitle}
                         className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
                       >
                         <Trash2 size={12} />
-                        {cleaningUp ? 'Cleaning...' : `Clean ${localMergedCount} merged`}
+                        {cleaningUp === true ? 'Cleaning...' : `Clean ${localMergedCount} merged`}
                       </button>
                     )}
                     {localWorktreeMergedCount > 0 && !cleanupConfirm && (
@@ -852,12 +863,12 @@ export default function GitTab({ appId, appName, repoPath }) {
                     {cleanupConfirm === 'local' && (
                       <div className="flex flex-wrap items-center gap-1">
                         <button
-                          onClick={handleCleanupMerged}
-                          disabled={cleaningUp}
+                          onClick={() => handleCleanupMerged()}
+                          disabled={!!cleaningUp}
                           title={localCleanupTitle}
                           className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                         >
-                          {cleaningUp
+                          {cleaningUp === true
                             ? 'Deleting...'
                             : localWorktreeMergedCount > 0
                               ? 'Delete all merged (local + remote + worktrees)'
@@ -897,7 +908,7 @@ export default function GitTab({ appId, appName, repoPath }) {
                         {branch.worktree && (
                           <span
                             className="flex items-center gap-1 text-xs text-gray-400 px-1.5 py-0.5 bg-gray-500/10 rounded shrink-0"
-                            title="Checked out in a worktree — can't be deleted until the worktree is removed"
+                            title="Checked out in a worktree"
                           >
                             <GitBranch size={10} />
                             worktree
@@ -982,6 +993,36 @@ export default function GitTab({ appId, appName, repoPath }) {
                             </button>
                           )
                         )}
+                        {branch.merged && !branch.current && !branch.isDefault && (
+                          mergedDeleteConfirm === branch.name ? (
+                            <div className="flex flex-wrap items-center gap-1">
+                              <button
+                                onClick={() => handleCleanupMerged(branch.name)}
+                                disabled={!!cleaningUp}
+                                title={`Deletes ${branch.name} locally and on the remote${branch.worktree ? ', with its worktree, unless it still has uncommitted or unmerged work or is in use' : ''}`}
+                                className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50 inline-flex items-center gap-1`}
+                              >
+                                {cleaningUp === branch.name ? <Loader2 size={12} className="animate-spin" /> : null}
+                                {cleaningUp === branch.name ? 'Deleting...' : branch.worktree ? 'Delete branch + worktree' : 'Delete branch'}
+                              </button>
+                              <button
+                                onClick={() => setMergedDeleteConfirm(null)}
+                                className={`px-2 py-1 ${touchBtnCls} text-xs text-gray-400 hover:text-white`}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setMergedDeleteConfirm(branch.name)}
+                              disabled={!!cleaningUp}
+                              className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconBtnCls} text-gray-400 hover:text-port-error hover:bg-port-bg rounded disabled:opacity-50`}
+                              title={`Delete ${branch.name}${branch.worktree ? ' and its worktree' : ''}`} aria-label={`Delete ${branch.name}${branch.worktree ? ' and its worktree' : ''}`}
+                            >
+                              {cleaningUp === branch.name ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </button>
+                          )
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1010,22 +1051,22 @@ export default function GitTab({ appId, appName, repoPath }) {
                 {mergedBranchCount > 0 && !cleanupConfirm && (
                   <button
                     onClick={() => setCleanupConfirm('remote')}
-                    disabled={cleaningUp}
+                    disabled={!!cleaningUp}
                     className={`flex items-center gap-1 text-xs ${touchBtnCls} text-port-warning hover:text-port-error disabled:opacity-50`}
                   >
                     <Trash2 size={12} />
-                    {cleaningUp ? 'Cleaning...' : `Clean ${mergedBranchCount} merged`}
+                    {cleaningUp === true ? 'Cleaning...' : `Clean ${mergedBranchCount} merged`}
                   </button>
                 )}
                 {cleanupConfirm === 'remote' && (
                   <div className="flex flex-wrap items-center gap-1">
                     <button
-                      onClick={handleCleanupMerged}
-                      disabled={cleaningUp}
+                      onClick={() => handleCleanupMerged()}
+                      disabled={!!cleaningUp}
                       title="Deletes merged branches both locally and on the remote"
                       className={`px-2 py-1 ${touchBtnCls} text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50`}
                     >
-                      {cleaningUp ? 'Deleting...' : 'Delete all merged (local + remote)'}
+                      {cleaningUp === true ? 'Deleting...' : 'Delete all merged (local + remote)'}
                     </button>
                     <button
                       onClick={() => setCleanupConfirm(false)}
