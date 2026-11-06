@@ -237,7 +237,6 @@ const generateSchema = z.object({
     workId: z.string().min(1).max(200),
     analysisId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
-    catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }).optional(),
   // FableLoom scene render. When present, the mediaJobQueue completion hook
   // (`fableLoomSceneImageHook`) files the finished render onto that loom
@@ -261,6 +260,7 @@ const generateSchema = z.object({
   musicVideo: z.object({
     projectId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     // Selective section revision (#9011): see the matching comment on the
     // video route's musicVideo schema (server/routes/videoGen.js).
     revisionId: z.string().min(1).max(200).optional(),
