@@ -400,14 +400,13 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   }
   const falModel = backend === VIDEO_GEN_MODE.FAL
     ? getFalVideoModel(performanceParams?.modelId || body.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL) : null;
-  // Runway cannot mix keyframes with references, so an end frame keeps the clip in keyframe mode.
-  const runwayModel = backend === VIDEO_GEN_MODE.RUNWAY && !prepared.lastImagePath
+  const runwayModel = backend === VIDEO_GEN_MODE.RUNWAY
     ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
   const clipReferenceModel = falModel || runwayModel;
   const useClipReferences = Boolean(clipReferenceModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
-      musicVideoClipReferenceCapacity(backend, clipReferenceModel), { excludePath: sourceImagePath })
+      musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }), { excludePath: sourceImagePath })
     : [];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.

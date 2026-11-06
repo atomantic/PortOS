@@ -84,12 +84,12 @@ import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
-/** Hosted lanes cannot consume the generic reference inputs used by local models. */
+/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's own image picks (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
   if (backend === VIDEO_GEN_MODE.LOCAL
-    || !((body.referenceImageFiles?.length && !body.guidanceImageFile) || body.referenceVideoIds?.length
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY) || body.referenceVideoIds?.length
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
-  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models.',
+  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway models that take them.',
     { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
 }
 

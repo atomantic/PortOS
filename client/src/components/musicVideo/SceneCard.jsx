@@ -237,9 +237,6 @@ export default function SceneCard({
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
     ? scene.lastFailure : null;
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
-  // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
-  const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
-    models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
   const peerPool = ['both', 'peers'].includes(renderSettings?.renderPool?.mode);
   const referenceBackend = peerPool ? 'remote' : renderSettings?.backend || renderLane;
   const referenceModel = referenceBackend === 'fal'
@@ -252,11 +249,18 @@ export default function SceneCard({
   const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
     && renderSettings?.generationMode !== 'audioReactive';
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
-  const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
-  // Runway cannot mix keyframes with references, so an end frame sends none.
-  const endFrameBlocksReferences = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on' && !!referenceModel?.referenceImages;
-  const referenceCapacity = useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  // References the director picked turn the box on. Auto cast does not, since it
+  // costs the shot its song audio. Unticking, or asking for song audio or an end frame, wins.
+  const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0;
+  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? ltxReferencesPicked);
+  // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
+  const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
+    models: videoModels, defaultModel: defaultVideoModel, inputs: useLtxReferences ? { ...renderInputs, songAudio: false, endFrame: false } : renderInputs, plan: timing.plan });
+  // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
+  const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
+  const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
@@ -695,7 +699,7 @@ export default function SceneCard({
               <input type="checkbox" checked={useLtxReferences} disabled={ltxReferencesGreyboxBlocked}
                 onChange={(event) => setRenderInputs((prev) => ({ ...prev, ltxReferences: event.target.checked,
                   ...(event.target.checked ? { songAudio: false, endFrame: false } : {}) }))} />
-              Use LTX reference images (requires Ingredients adapter; at least 121 frames)
+              Use LTX reference images (requires Ingredients adapter; at least 121 frames; no song audio or end frame)
             </label>
           )}
           {storyboardDefault && ltxReferencesAvailable && (
@@ -705,7 +709,7 @@ export default function SceneCard({
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : undefined} endFrameBlocksReferences={endFrameBlocksReferences} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (

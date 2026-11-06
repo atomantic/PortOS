@@ -76,6 +76,31 @@ describe('buildRunwayVideoRequest — reference images', () => {
   });
 });
 
+describe('buildRunwayVideoRequest — references beside pinned frames', () => {
+  const REF = 'data:image/png;base64,REF';
+  it('Kling O3 and 4.0 keep their keyframes and send references in their own field', () => {
+    for (const modelId of ['klingO3_pro', 'kling_4']) {
+      const { body } = build(modelId, { seconds: 5, endImageUri: END, referenceImageUris: [REF] });
+      expect(body.promptImage).toEqual([{ uri: FRAME, position: 'first' }, { uri: END, position: 'last' }]);
+      expect(body.references).toEqual([{ uri: REF }]);
+    }
+  });
+  it('counts frames toward the limit', () => {
+    expect(build('klingO3_pro', { seconds: 5, referenceImageUris: Array(6).fill(REF) }).body.references).toHaveLength(6);
+    expect(() => build('klingO3_pro', { seconds: 5, endImageUri: END, referenceImageUris: Array(6).fill(REF) })).toThrow(/at most 7 images/);
+  });
+  it('WAN and H3 send references unpositioned and refuse an end frame with them', () => {
+    expect(build('wan3', { seconds: 5, referenceImageUris: [REF] }).body.promptImage).toEqual([{ uri: FRAME }, { uri: REF }]);
+    expect(build('hailuo3', { seconds: 5, referenceImageUris: [REF] }).estimatedCostUsd).toBe(0.54);
+    expect(() => build('wan3', { seconds: 5, endImageUri: END, referenceImageUris: [REF] })).toThrow(/cannot combine an end frame/);
+  });
+  it('Kling 4.0 renders an image at an auto size and text at an explicit one', () => {
+    expect(build('kling_4', { seconds: 5 }).body).toMatchObject({ model: 'kling_4', promptImage: FRAME, ratio: 'auto_720p', duration: 5 });
+    expect(buildRunwayVideoRequest({ modelId: 'kling_4', prompt: 'A coast', seconds: 5, width: 1280, height: 720 }).body).toMatchObject({ ratio: '1280:720' });
+    expect(build('kling_4', { seconds: 5, resolution: '1080p' }).estimatedCostUsd).toBe(1.175);
+  });
+});
+
 describe('buildRunwayVideoRequest — text-to-video', () => {
   it('Gen-4.5 with no start frame: /v1/text_to_video body, ratio matched to the shape, priced, Avoid folded in', () => {
     const portrait = buildRunwayVideoRequest({

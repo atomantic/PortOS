@@ -283,6 +283,12 @@ describe('buildVideoGenSubmission — local IC-LoRA, chunks and misc', () => {
 describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
   const preset = { label: 'Film noir', prompt: 'cinematic noir', negativePrompt: '' };
 
+  it('sends the picked reference images on a Runway image render only', () => {
+    const args = { hostedLane: 'runway', runwayModelId: 'seedance2_5', sourceImageFile: 'start.png', referenceImageFiles: ['one.png', ''] };
+    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image' })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
+  });
+
   it('drops carried style metadata when switching to Runway character performance', () => {
     const payload = buildVideoGenSubmission(baseArgs({
       hostedLane: 'runway', mode: 'character-performance', runwayModelId: 'act_two',

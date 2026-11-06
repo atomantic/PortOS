@@ -1680,6 +1680,23 @@ export default function VideoGen() {
             />
           )}
 
+          {isRunway && mode === 'image' && runwayModel?.referenceImages && (
+            <div className="space-y-1">
+              <ReferenceImagesPanel
+                maxImages={runwayModel.referenceImages.max}
+                files={referenceImageFiles}
+                onAdd={addReferenceImage}
+                onBrowse={(index) => setGalleryPicker({ kind: 'reference', index })}
+                onRemove={removeReferenceImage}
+              />
+              <p className="text-xs text-port-text-muted">
+                {runwayModel.referenceImages.keepsFrames
+                  ? 'Your start and end frames stay pinned, and these count toward the limit.'
+                  : 'With references, the start frame guides the clip instead of pinning its opening, and an end frame cannot be used.'}
+              </p>
+            </div>
+          )}
+
           {icModeActive && (
             <IcLoraPanel
               spec={icSpec}

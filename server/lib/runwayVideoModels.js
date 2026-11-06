@@ -26,6 +26,8 @@ const PRICES = {
   seedance2: { '480p': 0.14, '720p': 0.30, '1080p': 0.40, '4k': 1.50 },
   seedance2_fast: { '480p': 0.11, '720p': 0.24 }, seedance2_mini: { '480p': 0.07, '720p': 0.15 },
   seedance2_5: { '480p': 0.20, '720p': 0.30, '1080p': 0.68 },
+  // Kling 4.0's list price, not its discount through 2026-11-30.
+  kling_4: { '720p': 0.157, '1080p': 0.235 },
   gemini_omni_flash: 0.10, 'gemini_omni_flash_1.1': { '360p': 0.034, '720p': 0.10, '1080p': 0.15, '4k': 0.30 },
   grok_imagine_1_5: { '480p': 0.10, '720p': 0.16, '1080p': 0.29 }, grok_imagine_1_5_lite: { '480p': 0.02, '720p': 0.03, '1080p': 0.14 },
 };
@@ -38,20 +40,27 @@ const LABELS = {
   wan3: 'WAN 3.0', wan3_prime: 'WAN 3.0 Prime',
   seedance2: 'Seedance 2.0', seedance2_fast: 'Seedance 2.0 Fast', seedance2_mini: 'Seedance 2.0 Mini', seedance2_5: 'Seedance 2.5',
   gemini_omni_flash: 'Gemini Omni Flash', 'gemini_omni_flash_1.1': 'Gemini Omni Flash 1.1',
-  grok_imagine_1_5: 'Grok Imagine Video 1.5', grok_imagine_1_5_lite: 'Grok Imagine Video 1.5 Lite',
+  kling_4: 'Kling 4.0', grok_imagine_1_5: 'Grok Imagine Video 1.5', grok_imagine_1_5_lite: 'Grok Imagine Video 1.5 Lite',
 };
-// Image counts Runway documents for unpositioned `promptImage` entries (their
-// text_to_video `references` caps), start frame included. The snapshot's
-// maxReferences column only reads the image lane's `referenceImages` field, so
-// it reports 0 for these. The prompt name is Seedance's own, as on fal.
-const REFERENCE_IMAGE_MAX = { seedance2: 9, seedance2_fast: 9, seedance2_mini: 9, seedance2_5: 30 };
+// How each model takes reference images, with `max` counting the frames too. The
+// snapshot's maxReferences column only reads the image lane's `referenceImages`
+// field, so it reports 0 for these. Most send them as unpositioned `promptImage`
+// entries, which cannot be mixed with keyframes. `keepsFrames` models have their own
+// `references` field beside pinned frames. `@Image1` is Seedance's own prompt name.
+const seedance = (max) => ({ max, promptName: '@Image1' });
+const keepsFrames = (max) => ({ max, keepsFrames: true });
+const REFERENCE_IMAGES = {
+  seedance2: seedance(9), seedance2_fast: seedance(9), seedance2_mini: seedance(9), seedance2_5: seedance(30),
+  hailuo3: { max: 9 }, wan3: { max: 10 }, wan3_prime: { max: 10 },
+  klingO3_standard: keepsFrames(7), klingO3_pro: keepsFrames(7), klingO3_4k: keepsFrames(7), kling_4: keepsFrames(10),
+};
 function sizeRule(row, textOnly) {
   if (row.resolutions.length) return {
     param: 'resolution', required: true, byResolution: Object.fromEntries(row.resolutions.map((r) => [r, null])),
     default: row.id === 'h3_max' ? '768p' : row.resolutions.includes('720p') ? '720p' : row.resolutions[0],
   };
   let ratios = row.ratios;
-  if (row.id.startsWith('wan3')) ratios = ratios.filter((r) => textOnly ? !r.startsWith('auto_') : r.startsWith('auto_'));
+  if (row.id.startsWith('wan3') || row.id === 'kling_4') ratios = ratios.filter((r) => textOnly ? !r.startsWith('auto_') : r.startsWith('auto_'));
   if (!ratios.length) return null;
   const byResolution = {};
   for (const ratio of ratios) {
@@ -73,7 +82,9 @@ export const RUNWAY_VIDEO_MODELS = Object.freeze(RUNWAY_CATALOG_SNAPSHOT.image_t
     endImage: row.endImage, duration, size: sizeRule(row, false), audio: row.audio, seed: row.seed, negativePrompt: row.negativePromptMax > 0, negativePromptMaxChars: row.negativePromptMax,
     ...(text ? { textToVideo: { ratios: text.ratios.filter((r) => /^\d+:\d+$/.test(r)), size: sizeRule(text, true), promptRequired: text.promptRequired } } : {}),
     pricing: { perSecond: PRICES[row.id] ?? null, perInputImage: PER_INPUT_IMAGE[row.id] ?? 0 },
-    ...(REFERENCE_IMAGE_MAX[row.id] ? { referenceImages: { max: REFERENCE_IMAGE_MAX[row.id], promptName: '@Image1' } } : {}),
+    ...(REFERENCE_IMAGES[row.id] ? { referenceImages: REFERENCE_IMAGES[row.id] } : {}),
+    // A pinned start frame, which is not one of the numbered references in the prompt.
+    ...(REFERENCE_IMAGES[row.id]?.keepsFrames ? { image: { pinned: true } } : {}),
   });
 }));
 
@@ -109,6 +120,9 @@ export function coerceRunwayVideoSeconds(model, seconds) {
   if (rule.kind === 'enum') return rule.values.find((v) => v >= n - 1e-6) ?? rule.values[rule.values.length - 1];
   return Math.min(rule.max, Math.max(rule.min, Math.ceil(n - 1e-6)));
 }
+
+/** What a video-gen form's unlabeled pick is called in the prompt. */
+export const RUNWAY_FORM_REFERENCE_LABEL = 'what it shows';
 
 /** Clip lengths a model renders, for a length picker. */
 export function runwayVideoLengths(model) {
@@ -226,14 +240,16 @@ export function buildRunwayVideoRequest({
     if (!model.referenceImages) throw refuse(`${model.label} takes no reference images; choose a model that does`);
     if (textOnly) throw refuse('Reference images need a start frame. Supply a source image.');
     // Runway's keyframe and reference modes cannot be mixed on one request.
-    if (endImageUri) throw refuse('Runway cannot combine an end frame with reference images. Turn one of them off.');
-    if (referenceImageUris.length + 1 > model.referenceImages.max) throw refuse(`${model.label} takes at most ${model.referenceImages.max} reference images, the start frame included.`);
+    if (endImageUri && !model.referenceImages.keepsFrames) throw refuse(`${model.label} cannot combine an end frame with reference images. Turn one of them off.`);
+    if (referenceImageUris.length + (endImageUri ? 2 : 1) > model.referenceImages.max) throw refuse(`${model.label} takes at most ${model.referenceImages.max} images, its frames included.`);
   }
 
   const body = { model: model.id };
   if (!textOnly) {
     // Unpositioned entries are references, so the start frame guides the clip instead of pinning its opening.
-    body.promptImage = referenceImageUris.length ? [imageUri, ...referenceImageUris].map((uri) => ({ uri }))
+    const unpositioned = referenceImageUris.length && !model.referenceImages.keepsFrames;
+    if (referenceImageUris.length && !unpositioned) body.references = referenceImageUris.map((uri) => ({ uri }));
+    body.promptImage = unpositioned ? [imageUri, ...referenceImageUris].map((uri) => ({ uri }))
       : endImageUri ? [{ uri: imageUri, position: 'first' }, { uri: endImageUri, position: 'last' }]
         : imageUri;
   }
