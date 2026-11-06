@@ -26,7 +26,7 @@ import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
-import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokReviewFinishReason, grokToolsEscapingNoToolPosture } from './grok.js';
+import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokReviewFinishReason, grokReviewProgress, grokToolsEscapingNoToolPosture } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -114,6 +114,8 @@ export function pickCliProvider(providers, config = {}) {
  * @param {string} [args.cwd] - working directory for the child process
  * @param {string[]} [args.extraArgs] - extra argv appended after the built args (e.g. `--allowedTools …`)
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
+ * @param {number|null} [args.inactivityTimeoutMs] - When set, output refreshes this silence deadline instead of a wall-clock cap.
+ * @param {() => void} [args.onActivity] - Notify a shared review budget of output activity (no stream contents).
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
  * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env); the shared child-env composer filters inherited variables. Explicit provider.envVars still overlays it.
  * @param {object|null} [args.bootstrapEnv] - Credential-command output, filtered by buildCliChildEnv.
@@ -123,7 +125,7 @@ export function pickCliProvider(providers, config = {}) {
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null, exactPins = false, codeReview = false } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null, exactPins = false, codeReview = false, inactivityTimeoutMs = null, onActivity } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -176,12 +178,14 @@ export function runCliProviderPrompt(args = {}) {
     let settled = false;
     const startedAt = Date.now();
     const elapsed = () => Math.max(0, Date.now() - startedAt);
+    const idleWindowMs = Number.isFinite(inactivityTimeoutMs) && inactivityTimeoutMs > 0 ? inactivityTimeoutMs : null;
     const progress = { spawnMs: null, firstOutputMs: null, lastOutputMs: null, exitMs: null,
       closeMs: null, stdoutBytes: 0, stderrBytes: 0 };
     const noteOutput = (data, stream) => {
       progress.firstOutputMs ??= elapsed();
       progress.lastOutputMs = elapsed();
       progress[`${stream}Bytes`] += Buffer.byteLength(data);
+      if (!settled && idleWindowMs) { timer.refresh(); onActivity?.(); }
     };
 
     // Shared composition (provider.envVars + OpenCode models map + PWD pin +
@@ -247,7 +251,8 @@ export function runCliProviderPrompt(args = {}) {
       clearTimeout(timer);
       cleanupPromptFile();
       resolve(codeReview ? { ...result, diagnostics: { cli: { ...progress,
-        elapsedMs: elapsed(), parseMs: progress.closeMs === null ? null : elapsed() - progress.closeMs, phase: result.code === 'REVIEWER_PROCESS_TIMEOUT'
+        ...(streamFormat === GROK_STREAMING_JSON_FORMAT ? grokReviewProgress(stdout) : {}),
+        elapsedMs: elapsed(), idleMs: elapsed() - (progress.lastOutputMs ?? 0), inactivityTimeoutMs: idleWindowMs, parseMs: progress.closeMs === null ? null : elapsed() - progress.closeMs, phase: result.code === 'REVIEWER_PROCESS_TIMEOUT'
           ? progress.exitMs !== null ? 'exit-drain' : progress.firstOutputMs === null ? 'no-output' : 'output-open'
           : progress.closeMs !== null ? 'closed' : 'spawn-failed',
       } } } : result);
@@ -255,8 +260,8 @@ export function runCliProviderPrompt(args = {}) {
 
     const timer = setTimeout(() => {
       if (!child.killed) killProcessTree(child, 'SIGTERM', { processGroup });
-      done({ ...(codeReview ? { code: 'REVIEWER_PROCESS_TIMEOUT' } : {}), error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
-    }, timeoutMs);
+      done({ ...(codeReview ? { code: 'REVIEWER_PROCESS_TIMEOUT' } : {}), error: idleWindowMs ? `Provider call inactive for ${idleWindowMs}ms` : `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
+    }, idleWindowMs ?? timeoutMs);
 
     // Register listeners BEFORE writing stdin so an immediate spawn failure or
     // a dead-stdin EPIPE is caught rather than thrown. A child that exits

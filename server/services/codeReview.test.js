@@ -503,7 +503,7 @@ describe('codeReview helpers', () => {
 
     it('persists measured process timeouts in reviewer health without stream contents', async () => {
       await reportReviewerFailure('provider:example-cli', { code: 'REVIEWER_PROCESS_TIMEOUT',
-        error: 'Reviewer process emitted output but did not exit', diagnostics: { cli: {
+        error: 'Reviewer process emitted output but did not exit — no output activity for 1800000ms', text: 'quota billing', diagnostics: { cli: {
           phase: 'output-open', elapsedMs: 600000, stdoutBytes: 100, stderrBytes: 0,
           argv: '/private/prompt', firstOutputMs: 'secret',
         } } }, 1000)

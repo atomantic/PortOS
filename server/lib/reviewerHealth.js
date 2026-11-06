@@ -61,7 +61,8 @@ export function normalizeReviewFinishReason(value) {
 // argv, paths, credentials nor vendor-controlled property names are diagnostics.
 export const CLI_REVIEW_PHASES = ['no-output', 'output-open', 'exit-drain', 'closed', 'spawn-failed'];
 export const CLI_REVIEW_METRICS = ['spawnMs', 'firstOutputMs', 'lastOutputMs', 'exitMs', 'closeMs',
-  'elapsedMs', 'parseMs', 'preparationMs', 'teardownMs', 'stdoutBytes', 'stderrBytes'];
+  'elapsedMs', 'parseMs', 'preparationMs', 'teardownMs', 'stdoutBytes', 'stderrBytes',
+  'thoughtEvents', 'textEvents', 'endEvents', 'idleMs', 'inactivityTimeoutMs'];
 const cliDiagnostics = value => value && CLI_REVIEW_PHASES.includes(value.phase) ? {
   phase: value.phase,
   ...Object.fromEntries(CLI_REVIEW_METRICS.map(key => [key,

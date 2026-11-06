@@ -55,7 +55,8 @@ function diffFiles(diff) {
   });
 }
 
-/** One review round, with one shared wall-clock/call budget and immutable input.
+/** One review round, with one shared deadline/call budget and immutable input.
+ * CLI output may renew the deadline; the independent call limit never renews.
  * runBatch MUST return a validated verdict; transport success is insufficient.
  * Optional/required policy and iteration limits remain with the caller.
  */

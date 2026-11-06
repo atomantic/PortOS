@@ -16,7 +16,7 @@ vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities
 const { getProviderById, listProviders } = await import('./providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
+const { CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -500,14 +500,14 @@ describe('configured provider reviewers', () => {
       const budgetOf = () => runCliProviderPrompt.mock.lastCall[0].timeoutMs;
 
       await runLocalCodeReview({ backend, diff });
-      expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
+      expect(budgetOf()).toBe(CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS);
       expect(budgetOf()).toBeGreaterThan(getLocalCodeReviewTimeoutMs(diff));
 
       // #14499: every toolkit-created record carries the generic 300000 run
       // default, which is not a review cap the user chose.
       getProviderById.mockResolvedValue({ ...cli, timeout: 300_000 });
       await runLocalCodeReview({ backend, diff });
-      expect(budgetOf()).toBe(REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS);
+      expect(budgetOf()).toBe(CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS);
 
       getProviderById.mockResolvedValue({ ...cli, timeout: 90_000 });
       await runLocalCodeReview({ backend, diff });
@@ -520,6 +520,26 @@ describe('configured provider reviewers', () => {
       runCliProviderPrompt.mockResolvedValue({ error: 'Process timed out after 90000ms' });
       const result = await runLocalCodeReview({ backend, diff });
       expect(result.error).toContain('timed out after 90000ms');
+    } finally { clock.mockRestore(); }
+  });
+
+  it('extends the shared batch deadline on CLI output without removing the call limit', async () => {
+    let now = 100;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'grok' });
+      runCliProviderPrompt.mockImplementation(async args => {
+        expect(args.inactivityTimeoutMs).toBe(1000);
+        now += 750;
+        args.onActivity();
+        return { text: 'NO FINDINGS', partial: false };
+      });
+      const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(700)}\n`;
+      const result = await runLocalCodeReview({ backend, diff: section('a.js') + section('b.js'),
+        kind: 'claim-review', timeoutMs: 1000, maxBatchBytes: 1024, maxBatches: 2 });
+      expect(result).toMatchObject({ ok: true, verdict: 'clean', coverage: { complete: true, calls: 2, maxBatches: 2 } });
+      expect(now).toBeGreaterThan(1100);
+      expect(runCliProviderPrompt).toHaveBeenCalledTimes(2);
     } finally { clock.mockRestore(); }
   });
 

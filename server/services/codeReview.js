@@ -296,19 +296,21 @@ export function getLocalCodeReviewTimeoutMs(diff) {
 
 // Remote API reasoning models spend their latency thinking, not prefilling, so
 // the local diff-size formula starves them. A provider record's own `timeout`
-// wins (bounded); otherwise this higher default applies.
+// wins (bounded); otherwise API calls use this wall-clock default and CLI
+// reviews use the longer inactivity default below. Output renews a CLI deadline.
 export const REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS = 600_000
 export const REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS = 1_800_000
+export const CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS = 1_800_000
 
 // 300000 is the generic run default that the toolkit's create path, the
 // provider form's pre-fill and the shipped samples all write, so on a stored
 // record it means "never tuned", not a chosen review cap — and no record can
 // tell the two apart after the fact. Honoring it cut grok-cli claim reviews
 // of ordinary ~23 KiB diffs off at 300 s (#14499); every other value still wins.
-export const getRemoteCodeReviewTimeoutMs = (provider) => (
+export const getRemoteCodeReviewTimeoutMs = (provider, transport = 'api') => (
   Number.isFinite(provider?.timeout) && provider.timeout > 0 && provider.timeout !== PROVIDER_DEFAULT_TIMEOUT_MS
     ? Math.min(REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, provider.timeout)
-    : REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS
+    : transport === 'cli' ? CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS : REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS
 )
 
 const diffSizeLabel = (diffSizeBytes) => {
@@ -316,9 +318,9 @@ const diffSizeLabel = (diffSizeBytes) => {
   return `${Math.max(1, Math.ceil(bytes / KIBIBYTE))} KiB (${bytes} bytes)`
 }
 
-const isTimeoutFailure = (error) => /timed out after\s+\d+\s*ms|did not finish within\s+\d+(?:ms|s)|operation was aborted|request was aborted|abort(?:ed|ing)?/i.test(String(error || ''))
+const isTimeoutFailure = (error) => /no output activity for\s+\d+\s*ms|inactive for\s+\d+\s*ms|timed out after\s+\d+\s*ms|did not finish within\s+\d+(?:ms|s)|operation was aborted|request was aborted|abort(?:ed|ing)?/i.test(String(error || ''))
 
-function localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase }) {
+function localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase, inactivityTimeoutMs = null }) {
   const description = phase === 'no-output' ? 'reviewer process emitted no output'
     : phase === 'output-open' ? 'reviewer process emitted output but did not exit'
     : phase === 'exit-drain' ? 'reviewer process exited but output pipes did not close'
@@ -327,7 +329,8 @@ function localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase 
     : phase === 'response-body'
       ? 'backend was reachable but did not finish'
       : 'reviewer process did not finish'
-  return `${backend} ${description} — timed out after ${timeoutMs}ms for a ${diffSizeLabel(diffSizeBytes)} diff.`
+  const deadline = inactivityTimeoutMs ? `no output activity for ${inactivityTimeoutMs}ms` : `timed out after ${timeoutMs}ms`
+  return `${backend} ${description} — ${deadline} for a ${diffSizeLabel(diffSizeBytes)} diff.`
 }
 
 const effectiveLocalCodeReviewTimeout = (timeoutMs, diff) => (
@@ -1075,9 +1078,12 @@ async function runCliReviewCall({ provider, model, prompt, transport, workspace,
     const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
     const remainingMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
     if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
+    const inactivityTimeoutMs = reviewBudget?.budgetMs ?? budgetMs
+    const onActivity = () => { if (reviewBudget) reviewBudget.deadline = Date.now() + inactivityTimeoutMs }
+    onActivity()
     const preparationElapsedMs = Date.now() - preparationStartedAt
     const reply = await runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
-      safetyProfile, codeReview: true })
+      safetyProfile, codeReview: true, inactivityTimeoutMs, onActivity })
     return { ...reply, ...(reply.diagnostics?.cli ? { diagnostics: reviewFailureDiagnostics({ cli: { ...reply.diagnostics.cli, preparationMs: preparationElapsedMs } }) } : {}) }
   }).catch(error => reviewerCallRejection(error, 'Reviewer credential setup or execution failed.', reviewBudget))
   const teardownStartedAt = Date.now()
@@ -1152,7 +1158,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   const prompt = reviewMessages({ messages, userMessage, systemPromptFor }, workspace).map(message => message.content).join('\n\n')
   // API and CLI reviewers front remote reasoning models; the diff-size formula only suits local backends.
   const isRemoteTransport = transport.transport === 'api' || transport.transport === 'cli'
-  const budgetMs = !timeoutExplicit && isRemoteTransport ? getRemoteCodeReviewTimeoutMs(provider) : timeoutMs
+  const budgetMs = !timeoutExplicit && isRemoteTransport ? getRemoteCodeReviewTimeoutMs(provider, transport.transport) : timeoutMs
   const call = { provider, model, prompt, budgetMs, reviewBudget }
   const run = transport.transport === 'api'
     ? await runApiReviewCall(call)
@@ -1170,7 +1176,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
-      error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.diagnostics?.cli?.phase || result.stallPhase || 'reviewer-process' }),
+      error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.diagnostics?.cli?.phase || result.stallPhase || 'reviewer-process', inactivityTimeoutMs: result.diagnostics?.cli?.inactivityTimeoutMs }),
     }
   }
   if (!isLocalLlmReviewer(backend)) {
@@ -1289,7 +1295,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
  *   request), and `absent` is the only spelling of "use the model's own
  *   default". The response carries `effortUnsupported: true` when a pinned
  *   level was dropped for that reason.
- * @param {number} [opts.timeoutMs] - positive explicit wall-clock override;
+ * @param {number} [opts.timeoutMs] - positive explicit deadline override (silence window for CLI reviewers, wall-clock for other transports);
  *   otherwise a diff-size budget keeps the 2 min cold-load floor and grows to
  *   the documented 5 min ceiling.
  * @param {string} [opts.baseUrl] - Validated local OpenAI-compatible base URL;
@@ -1321,8 +1327,9 @@ export async function runLocalCodeReview(options = {}) {
   const providerSnapshot = isProviderReviewer(backend) ? await loadReviewProvider(backend) : null
   let selectedModel = model || providerSnapshot?.defaultModel
   const selectedEffort = effort ?? providerSnapshot?.effort ?? null
+  const transport = providerSnapshot ? (await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport : null
   const budgetMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs
-    : providerSnapshot && ['api', 'cli'].includes((await resolveProviderReviewTransport(providerSnapshot, { allowUnconfined: true })).transport) ? getRemoteCodeReviewTimeoutMs(providerSnapshot) : getLocalCodeReviewTimeoutMs(diff)
+    : ['api', 'cli'].includes(transport) ? getRemoteCodeReviewTimeoutMs(providerSnapshot, transport) : getLocalCodeReviewTimeoutMs(diff)
   const result = await runCodeReviewBatches({ diff, headSha, budgetMs, maxBatchBytes, maxBatches, startedAt,
     runBatch: async (batch, remainingMs, reviewBudget) => {
       const result = await runSingleCodeReview({ ...options, model: selectedModel, effort: selectedEffort, diff: batch,
