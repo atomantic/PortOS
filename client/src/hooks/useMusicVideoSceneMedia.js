@@ -254,6 +254,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
         ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
         // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
@@ -327,6 +328,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
         ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
@@ -476,6 +478,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         loraScales: [settings.audioReactiveScale],
       } : {}),
       musicVideo: JSON.stringify({
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
         compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(hostedPerformance ? { songAudio: false } : {}),
@@ -513,7 +516,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       mode: 'extend',
       extendFromVideoId: scene.videoHistoryId,
       sourceImageFile: scene.referenceImageId,
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true }),
+      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true, catalogBasis: project.castAndSets?.catalogCheckin?.basis }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Shot continuation failed'));

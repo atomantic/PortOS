@@ -237,6 +237,7 @@ const generateSchema = z.object({
     workId: z.string().min(1).max(200),
     analysisId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   }).optional(),
   // FableLoom scene render. When present, the mediaJobQueue completion hook
   // (`fableLoomSceneImageHook`) files the finished render onto that loom

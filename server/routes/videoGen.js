@@ -532,6 +532,7 @@ const generateBodySchema = z.object({
     z.object({
       projectId: z.string().min(1).max(200),
       sceneId: z.string().min(1).max(200),
+      catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       // Selective section revision (#9011): names the open revision this
       // generation was submitted for. The completion hook rides it along
       // unused; the submit service refuses the kickoff (409 REVISION_CLOSED)

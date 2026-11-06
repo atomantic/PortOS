@@ -74,5 +74,13 @@ it('rechecks catalog readiness at final video dispatch and rejects old files wit
   m.hydrate.mockImplementation(async project => project);
   await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
   input.params.castReferences = [];
+  m.project.castAndSets.catalogCheckin.basis = 'current-catalog';
+  input.body.musicVideo.catalogBasis = 'stale-catalog';
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  delete input.body.musicVideo.catalogBasis;
+  input.body.icReferenceImageFiles = ['old-catalog.png'];
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  input.body.musicVideo.catalogBasis = 'current-catalog';
   await expect(applyMusicVideoSubmissionGuards(input)).resolves.toBeDefined();
+  expect(input.params.musicVideoCatalogBasis).toBe('current-catalog');
 });

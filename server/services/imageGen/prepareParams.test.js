@@ -541,7 +541,7 @@ it('prepares catalog-linked frames from the live catalog without approval and re
   greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'catalog-live.png' }]);
   p.castAndSets.catalogApprovedBasis = (await resolveCatalogCheckin(p)).basis;
   getProject.mockResolvedValue(p);
-  const request = () => ({ mode: 'codex', prompt: 'Lead walks', referenceImageFiles: ['catalog-live.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1' } });
+  const request = () => ({ mode: 'codex', prompt: 'Lead walks', referenceImageFiles: ['catalog-live.png'], musicVideo: { projectId: 'mv-1', sceneId: 's1', catalogBasis: p.castAndSets.catalogApprovedBasis } });
   const prepared = await run(request());
   expect(prepared.data.referenceImagePaths).toEqual([join(PATHS.images, 'catalog-live.png')]);
   const edited = await run({ ...request(), referenceImageFiles: ['scene-start.png', 'catalog-live.png'],
@@ -552,8 +552,18 @@ it('prepares catalog-linked frames from the live catalog without approval and re
   await expect(run({ ...request(), initImageFile: 'legacy-sheet.png' }))
     .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
   greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'catalog-updated.png' }]);
-  // A catalog edit un-approves the check-in; the owner's render still prepares.
-  await expect(run(request())).resolves.toBeTruthy();
+  // Both an already-prepared job and a stale page refuse replaced references.
+  const { assertCatalogRenderParams } = await import('../musicVideo/clipCastReferences.js');
+  await expect(assertCatalogRenderParams(prepared.data, p)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  await expect(run({ ...request(), musicVideo: { projectId: 'mv-1', sceneId: 's1' } }))
+    .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  const currentBasis = (await resolveCatalogCheckin(p)).basis;
+  // Approval state remains irrelevant: current inputs still render.
+  const refreshed = await run({ ...request(), referenceImageFiles: ['catalog-updated.png'],
+    musicVideo: { ...request().musicVideo, catalogBasis: currentBasis } });
+  expect(refreshed.data.referenceImagePaths).toEqual([join(PATHS.images, 'catalog-updated.png')]);
+  expect(refreshed.data.musicVideoCatalogBasis).toBe(currentBasis);
   greyboxCatalog.getIngredient.mockResolvedValue(null);
   await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
 });
