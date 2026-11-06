@@ -27,7 +27,7 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
 import SceneClipReferences from './SceneClipReferences.jsx';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideoConditioning.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -215,8 +215,7 @@ export default function SceneCard({
   const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
-  const variantId = scene.characterVariant?.ingredientId;
-  const guidesPending = referenceCapacity > 0 && variantId && castMedia && castMedia[variantId] === undefined;
+  const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');

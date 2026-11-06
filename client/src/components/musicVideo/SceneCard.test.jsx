@@ -40,7 +40,7 @@ it('holds Render while clip references are saving or failed and releases it afte
   show('Clip');
   const clip = screen.getByRole('group', { name: 'Clip references' });
   fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
-  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Bike' }));
   const generate = screen.getByRole('button', { name: 'Render' });
   expect(generate.disabled).toBe(true);
   settle(false);
@@ -67,7 +67,7 @@ it('also waits for clip-reference edits before starting a storyboard-to-clip ren
   render(<Harness />);
   const clip = screen.getByRole('group', { name: 'Clip references' });
   fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
-  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Bike' }));
   const generate = screen.getByRole('button', { name: 'Clip from storyboard' });
   expect(generate.disabled).toBe(true);
   settle(true);

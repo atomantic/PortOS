@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
-  MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices,
+  MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds,
 } from '../../../../server/lib/musicVideoConditioning.js';
 import MediaImage from '../MediaImage';
+import SceneReferencePicker from './SceneReferencePicker.jsx';
 import { formatCount } from '../../utils/formatters.js';
 
 const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
@@ -13,7 +14,7 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
 export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, onEditLocal, onSave, onSaveState, saveState }) {
   const [adding, setAdding] = useState(false);
   const allChoices = musicVideoClipReferenceChoices(project, scene, castMedia);
-  const choices = allChoices.filter((ref) => ref.imageId !== scene.referenceImageId);
+  const choices = musicVideoOfferedReferences(allChoices).filter((ref) => ref.imageId !== scene.referenceImageId);
   const chosen = musicVideoClipConditioningReferences(project, scene, castMedia);
   const chosenIds = chosen.map((ref) => ref.id);
   const unresolved = (scene.clipReferenceIds || []).filter((id) => !allChoices.some((ref) => ref.id === id));
@@ -22,8 +23,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const auto = !Array.isArray(scene.clipReferenceIds);
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model);
   const unknownModel = !backend || (['local', 'fal'].includes(backend) && !model);
-  const guideId = scene.characterVariant?.ingredientId;
-  const locked = saveState === 'saving' || Boolean(castMedia && guideId && castMedia[guideId] === undefined);
+  const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni');
   const save = (next) => {
@@ -53,7 +53,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
       <ul className="flex flex-wrap gap-1">
         {chosen.map((ref, index) => (
           <li key={ref.id} className={`${BUTTON} pr-0.5`}>
-            <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+            <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} fallbackSrc={`/data/image-refs/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
             <span className="max-w-[10rem] truncate">{nameOf(ref)}{index >= capacity ? ' · not sent' : ''}</span>
             <button type="button" aria-label={`Remove clip reference ${nameOf(ref)}`} disabled={locked}
               onClick={() => update(chosenIds.filter((id) => id !== ref.id))}
@@ -68,19 +68,9 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
       </ul>
       {capacity > 0 && !locked && unresolved.length > 0 && <p className="text-[11px] text-port-warning">Some saved references are unavailable. Restore them or return to auto before rendering.</p>}
       {saveState === 'failed' && <button type="button" className={BUTTON} onClick={() => save(scene.clipReferenceIds ?? null)}>Retry saving clip references</button>}
-      {adding && capacity > chosen.length && (
-        <ul aria-label="Clip references to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3">
-          {others.map((ref) => (
-            <li key={ref.id} className="min-w-0">
-              <button type="button" className={`${BUTTON} w-full text-left`} disabled={locked}
-                onClick={() => { update([...chosenIds, ref.id]); setAdding(false); }}>
-                <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
-                <span className="min-w-0 truncate">{nameOf(ref)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <SceneReferencePicker open={adding && capacity > chosen.length} references={others} label="Clip references to add"
+        hint={`This model takes ${formatCount(Math.max(0, capacity - chosen.length))} more.`} onClose={() => setAdding(false)}
+        tileProps={(ref) => ({ disabled: locked, onClick: () => { update([...chosenIds, ref.id]); setAdding(false); } })} />
     </div>
   );
 }

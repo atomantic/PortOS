@@ -77,7 +77,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     localModel = route.model ? models.find((model) => model.id === route.model) : selectLocalImageModelFromSettings(settings, null, models);
   }
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
-  const castMedia = await loadSceneCastMedia(scene);
+  const castMedia = await loadSceneCastMedia(scene, { project });
   const allReferences = conditioningReferences(project, scene, castMedia, greybox);
   // As many references, in priority order, as this route's image renderer takes.
   const capacity = musicVideoReferenceCapacity(route.mode, { modelId: resolved.cloud?.modelId || route.model, localModel });

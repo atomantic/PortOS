@@ -61,7 +61,7 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
   const project = await requireCatalogRenderReady(snapshot || await getProject(projectId));
   const scene = project?.scenes?.find((entry) => entry.sceneId === sceneId);
   if (!scene) return [];
-  const castMedia = await loadSceneCastMedia(scene);
+  const castMedia = await loadSceneCastMedia(scene, { project });
   const choices = musicVideoClipReferenceChoices(project, scene, castMedia);
   if (Array.isArray(scene.clipReferenceIds) && scene.clipReferenceIds.some((id) => !choices.some((ref) => ref.id === id))) {
     throw new ServerError('A selected clip reference is unavailable. Restore it or reset the clip references.', { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });

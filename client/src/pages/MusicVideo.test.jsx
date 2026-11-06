@@ -2732,7 +2732,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());
     fireEvent.click(refs.getByRole('button', { name: 'Add' }));
-    fireEvent.click(refs.getByRole('button', { name: /Pier/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Pier/ }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: ['r2'] }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });

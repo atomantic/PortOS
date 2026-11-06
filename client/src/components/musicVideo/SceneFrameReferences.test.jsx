@@ -9,6 +9,34 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1' };
 
 describe('a shot\'s References row', () => {
+  // Uniquely catches a linked character whose face and character sheets never reach the picker.
+  it('offers every approved catalog asset of a linked character, and saves the pick', () => {
+    const onSave = vi.fn();
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const castMedia = { 'cat-chr-kit': [
+      { kind: 'portrait', mediaKey: 'kit.png' },
+      { kind: 'reference', role: 'sheet:face', mediaKey: 'kit-face.png' },
+      { kind: 'reference', role: 'sheet:standard', mediaKey: 'kit-sheet.png' },
+      { kind: 'reference', role: 'design:1', mediaKey: 'kit-candidate.png' },
+    ] };
+    render(<SceneFrameReferences project={linked} scene={scene} castMedia={castMedia} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const picker = screen.getByRole('list', { name: 'References to add' });
+    expect(picker.textContent).toContain('Kit · Portrait');
+    expect(picker.textContent).toContain('Kit · Character sheet');
+    expect(picker.textContent).not.toContain('candidate');
+    fireEvent.click(screen.getByRole('button', { name: 'Kit · Face sheet' }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r1', 'mvr-linked-kit-face.png'] });
+    expect(screen.queryByRole('list', { name: 'References to add' })).toBeNull();
+  });
+
+  it('holds a saved catalog pick and the row until its cast media loads', () => {
+    const onSave = vi.fn();
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', frameReferenceIds: ['r1', 'mvr-linked-kit-face.png'] }} castMedia={{}} onEditLocal={vi.fn()} onSave={onSave} />);
+    expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(true);
+  });
+
   // Uniquely catches a truncated reference chip with no way to see its sheet and full name, or a long-press that also adds it.
   it('previews a reference large on mouse hover, and on a long-press without adding it', () => {
     vi.useFakeTimers();
