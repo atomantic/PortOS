@@ -48,7 +48,7 @@ export const shotSheetProposeSchema = z.object({
   sceneIds: z.array(text(64).min(1)).min(1).max(SHOT_SHEET_PROPOSE_BATCH),
   instruction: text(4000).optional(), preview: z.boolean().optional(),
 }).strict();
-// Only the director ticks Checked, so a proposal can't carry it.
+// Only the director ticks Done (stored as `checked`), so a proposal can't carry it.
 export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true }).strip() }).strip();
 export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
   .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');

@@ -122,6 +122,15 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(composed).current).toBe('produce');
     expect(deriveNextAction(composed)).toMatchObject({ id: 'goto-compose', stage: 'produce', anchor: 'mv-composition' });
 
+    // Once the shot sheet is in use, Shots waits on every shot being marked Done there.
+    const sheeted = { ...ready, scenes: [scene({ shotSheet: { checked: true } }), scene({ sceneId: 's2', order: 1, shotSheet: { emotion: 'Free' } })] };
+    expect(deriveStages(sheeted).current).toBe('produce');
+    expect(deriveNextAction(sheeted)).toMatchObject({ id: 'goto-shot-sheet', stage: 'produce', anchor: 'mv-shot-sheet', label: 'Mark shots done' });
+    expect(stepNotes(sheeted).produce).toBe('1/2 shots done');
+    expect(stageChecklist('produce', sheeted).find((item) => item.id === 'shots-done')).toMatchObject({ done: false, detail: '1 of 2 done.' });
+    const allDone = { ...sheeted, scenes: sheeted.scenes.map((entry) => ({ ...entry, shotSheet: { ...entry.shotSheet, checked: true } })) };
+    expect(deriveStages(allDone).current).toBe('review');
+
     const finished = { ...ready, renderHistoryId: 'rh-1' };
     expect(stateOf(finished)).toEqual({ setup: 'done', story: 'todo', 'cast-sets': 'done', board: 'done', produce: 'done', review: 'done', publish: 'active' });
     // #9281: a rendered project moves on to the release.

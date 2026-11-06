@@ -8,8 +8,9 @@ import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
+import { SHOT_SHEET_ANCHOR } from '../../lib/musicVideoStages.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -180,7 +181,8 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
         {Number.isFinite(scene.startSec) ? formatTimecode(scene.startSec) : 'Untimed'}
         {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="block text-port-text-muted">{(scene.endSec - scene.startSec).toFixed(1)}s</span>}
         <label className="mt-1 flex min-h-[44px] items-center gap-1 sm:min-h-0">
-          <input type="checkbox" aria-label={`${label} checked`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Checked
+          {/* Done is stored as `checked`, the box's first name. */}
+          <input type="checkbox" aria-label={`${label} done`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Done
         </label>
       </td>
       <td className="w-28 p-1.5">
@@ -249,7 +251,7 @@ export default function ShotSheetPanel({ board }) {
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
   const [mapFilter, setMapFilter] = useShotSheetMapFilter();
-  const [uncheckedOnly, setUncheckedOnly] = useState(false);
+  const [notDoneOnly, setNotDoneOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -258,12 +260,12 @@ export default function ShotSheetPanel({ board }) {
   const options = useMemo(() => ['view', 'location', 'timeOfDay', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
   const cast = useMemo(() => shotSheetCast(project), [project]);
   const outdated = rows.filter((row) => row.frameOutdated).length;
-  const checked = rows.filter((row) => row.sheet.checked).length;
+  const done = rows.filter((row) => row.sheet.checked).length;
   const withProblems = rows.filter((row) => row.problems.length).length;
   const needle = query.trim().toLowerCase();
   const listed = shotSheetMapRows(rows, mapFilter).filter((row) => {
     if (outdatedOnly && !row.frameOutdated) return false;
-    if (uncheckedOnly && row.sheet.checked) return false;
+    if (notDoneOnly && row.sheet.checked) return false;
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;
     if (!needle) return true;
@@ -276,6 +278,9 @@ export default function ShotSheetPanel({ board }) {
     editSceneLocal(sceneId, { shotSheet });
     saveScene(sceneId, { shotSheet });
   };
+  const saveSheets = (edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); });
+  // Filtered, it marks only the shots listed, so a filter never ticks shots out of sight.
+  const markDoneEdits = shotSheetMarkDoneEdits(listed);
   const mediaEdits = shotSheetMediaEdits(rows);
   const matchMedia = async () => {
     const shotDirections = mediaEdits.filter((edit) => edit.medium).map(({ sceneId, medium }) => ({ sceneId, medium, mediumPinned: true }));
@@ -288,9 +293,9 @@ export default function ShotSheetPanel({ board }) {
     editProjectLocal({ cameras });
     saveProjectFields({ cameras });
   };
-  const summary = `${checked} of ${rows.length} shots checked${withProblems ? ` · ${withProblems} incomplete` : ''}${outdated ? ` · ${outdated} frame${outdated === 1 ? '' : 's'} older than ${outdated === 1 ? 'its prompt' : 'their prompts'}` : ''}`;
+  const summary = `${done} of ${rows.length} shots done${withProblems ? ` · ${withProblems} incomplete` : ''}${outdated ? ` · ${outdated} frame${outdated === 1 ? '' : 's'} older than ${outdated === 1 ? 'its prompt' : 'their prompts'}` : ''}`;
   return (
-    <StageSection id="mv-shot-sheet" title="Shot sheet" summary={summary}>
+    <StageSection id={SHOT_SHEET_ANCHOR} title="Shot sheet" summary={summary}>
       <ShotSheetMap rows={rows} active={mapFilter} onPick={setMapFilter} />
       <CameraList project={project} disabled={locked} onChange={editCameras} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -300,7 +305,7 @@ export default function ShotSheetPanel({ board }) {
           {(project.cameras || []).map((camera) => <option key={camera.id} value={camera.id}>{camera.name}</option>)}
         </select>
         <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
-          <input type="checkbox" checked={uncheckedOnly} onChange={(event) => setUncheckedOnly(event.target.checked)} /> Only not checked
+          <input type="checkbox" checked={notDoneOnly} onChange={(event) => setNotDoneOnly(event.target.checked)} /> Only not done
         </label>
         <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
           <input type="checkbox" checked={problemsOnly} onChange={(event) => setProblemsOnly(event.target.checked)} /> Only incomplete
@@ -318,14 +323,21 @@ export default function ShotSheetPanel({ board }) {
           Match {mediaEdits.length} shot{mediaEdits.length === 1 ? '' : 's'} to {mediaEdits.length === 1 ? 'its camera' : 'their cameras'}
         </button>
       )}
-      <BulkFill rows={listed} disabled={locked} onApply={(edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); })} />
-      <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Checked when it’s right. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
+      <BulkFill rows={listed} disabled={locked} onApply={saveSheets} />
+      <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Done when the shot is finished. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
       ))}
-      <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
-        {aiOpen ? 'Hide AI help' : 'AI help'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
+          {aiOpen ? 'Hide AI help' : 'AI help'}
+        </button>
+        {markDoneEdits.length > 0 && (
+          <button type="button" disabled={locked || aiApplying} onClick={() => saveSheets(markDoneEdits)} className="min-h-[44px] rounded border border-port-success px-2 py-1 text-xs text-port-success sm:min-h-0">
+            {listed.length === rows.length ? 'Mark all done' : `Mark ${markDoneEdits.length} shown done`}
+          </button>
+        )}
+      </div>
       {aiOpen && (
         <ShotSheetAi project={project} rows={listed} disabled={locked}
           onApplyingChange={setAiApplying}

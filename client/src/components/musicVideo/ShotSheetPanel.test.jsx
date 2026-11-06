@@ -31,7 +31,7 @@ describe('ShotSheetPanel', () => {
   it('shows each shot with its time, lyric, camera and outdated frame warning', () => {
     render(<ShotSheetPanel board={boardFor()} />);
     openPanel();
-    expect(screen.getByText('0 of 2 shots checked · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
+    expect(screen.getByText('0 of 2 shots done · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
     expect(within(row).getByText('Hold still')).toBeInTheDocument();
     expect(within(row).getByText('Prompt changed since this frame')).toBeInTheDocument();
@@ -85,20 +85,40 @@ describe('ShotSheetPanel', () => {
   });
 
   // Catches the human review not saving with the plan, or the filters ignoring it.
-  it('saves a Checked tick with the sheet and narrows to unchecked and incomplete shots', () => {
+  it('saves a Done tick with the sheet and narrows to not-done and incomplete shots', () => {
     const board = boardFor();
     board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
     render(<ShotSheetPanel board={board} />);
     openPanel();
-    expect(screen.getByLabelText('Shot 1 checked')).toBeChecked();
-    fireEvent.click(screen.getByLabelText('Shot 2 checked'));
+    expect(screen.getByLabelText('Shot 1 done')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Shot 2 done'));
     expect(board.saveScene).toHaveBeenCalledWith('b', { shotSheet: { checked: true } });
-    fireEvent.click(screen.getByLabelText('Only not checked'));
+    fireEvent.click(screen.getByLabelText('Only not done'));
     expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Only not checked'));
+    fireEvent.click(screen.getByLabelText('Only not done'));
     fireEvent.click(screen.getByLabelText('Only incomplete'));
     expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
     expect(screen.getByText(/Missing camera, location/)).toBeInTheDocument();
+  });
+
+  // Catches Mark all done dropping a shot's plan, re-saving shots already done, or ticking shots a filter hides.
+  it('marks every listed shot done in one tap, keeping each plan', () => {
+    const board = boardFor();
+    board.project.scenes.push({ sceneId: 'c', label: 'Shot 3', startSec: 4, endSec: 6, shotSheet: { checked: true } });
+    const { rerender } = render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark all done' }));
+    expect(board.saveScene.mock.calls).toEqual([
+      ['a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', checked: true } }],
+      ['b', { shotSheet: { checked: true } }],
+    ]);
+    board.saveScene.mockClear();
+    fireEvent.change(screen.getByLabelText('Filter by camera'), { target: { value: 'vhs' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 1 shown done' }));
+    expect(board.saveScene.mock.calls.map(([sceneId]) => sceneId)).toEqual(['a']);
+    board.project.scenes.forEach((scene) => { scene.shotSheet = { ...scene.shotSheet, checked: true }; });
+    rerender(<ShotSheetPanel board={{ ...board, project: { ...board.project } }} />);
+    expect(screen.queryByRole('button', { name: /Mark .*done/ })).not.toBeInTheDocument();
   });
 
   // Catches a column losing its pick list.

@@ -44,7 +44,7 @@ function PromptReview({ item, scene, disabled, onEdit }) {
  * AI help for the shot sheet, both ways and only on request: fill a shot's empty
  * columns from its existing prompts, or write its prompts from the sheet you
  * edited. Works on the shots currently listed. Every result is a proposal you
- * review, edit and select; nothing is saved until Apply, and Checked is yours alone.
+ * review, edit and select; nothing is saved until Apply, and Done is yours alone.
  */
 export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyingChange }) {
   const llm = useProviderModels({ withEffort: true, silent: true });
@@ -137,7 +137,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   const noProvider = !llm.selectedProviderId;
   return (
     <section aria-label="AI help" className="min-w-0 space-y-2 rounded border border-port-border p-2">
-      <p className="text-xs text-port-text-muted">Works on the shots listed below. Nothing saves until you review it and press Apply, and AI never ticks Checked.</p>
+      <p className="text-xs text-port-text-muted">Works on the shots listed below. Nothing saves until you review it and press Apply, and AI never ticks Done.</p>
       <ProviderModelSelector providers={llm.providers} selectedProviderId={llm.selectedProviderId} selectedModel={llm.selectedModel}
         availableModels={llm.availableModels} onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); setExecutionOptions({}); }} onModelChange={llm.setSelectedModel}
         effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
@@ -145,7 +145,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
       <textarea aria-label="Note for the AI" rows={2} maxLength={4000} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional note for the AI" className={input} />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={button} disabled={busy || disabled || noProvider || !backfillRows.length} onClick={() => run('from-prompts')}>
-          Fill empty columns from prompts ({backfillRows.length} unchecked)
+          Fill empty columns from prompts ({backfillRows.length} not done)
         </button>
         <button type="button" className={button} disabled={busy || disabled || noProvider || !promptRows.length} onClick={() => run('to-prompts')}>
           Propose prompts from sheet ({promptRows.length} checked)
