@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
@@ -271,7 +271,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   if (cache) {
     const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
     for (const path of sourceInventory.keys()) {
-      if (path.startsWith(`${codex}/`) && !visited.has(path)) sourceInventory.delete(path);
+      if (path.startsWith(join(codex, sep)) && !visited.has(path)) sourceInventory.delete(path);
     }
   }
   if (accounting) return {
