@@ -274,7 +274,15 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   // A publication boundary may prove its callback never started. Keep the
   // reservation while it waits, but do not mistake refused admission for an
   // uncertain write. Callers without that proof retain the conservative default.
-  const continueSettlement = (fn, { hasStarted } = {}) => currentId()
+  // Background work (an event listener, a fire-and-forget hash) can outlive the
+  // operation whose async context it inherited. Once that reservation is gone the
+  // work is detached, exactly like work with no ambient operation: running it
+  // through a dead parent would only throw "parent already settled".
+  const ambientOperationLive = () => {
+    const { id, owner } = context.getStore() ?? {};
+    return Boolean(id) && read().operations.some(op => op.id === id && sameOwner(op, owner));
+  };
+  const continueSettlement = (fn, { hasStarted } = {}) => ambientOperationLive()
     ? run('settlement', 'Output publication', fn, { continuation: true, hasStarted }) : fn();
   const run = async (kind, resource, fn, options) => {
     const permit = admit(kind, resource, options);
