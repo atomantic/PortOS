@@ -53,6 +53,19 @@ describe('ShotSheetPanel', () => {
     expect(board.editSceneLocal).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Scared' } });
   });
 
+  // Catches View going back to a one-line pick box: it holds a sentence, so it's a growing text box that saves on leave.
+  it('edits the view as free text in a text box', () => {
+    const board = boardFor();
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const view = screen.getByLabelText('Shot 1 view');
+    expect(view.tagName).toBe('TEXTAREA');
+    expect(view).not.toHaveAttribute('list');
+    fireEvent.change(view, { target: { value: 'Crooked snapshot from behind and to the right' } });
+    fireEvent.blur(view);
+    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', view: 'Crooked snapshot from behind and to the right' } });
+  });
+
   // Catches an observer keeping a holder: it isn't in their world, so nobody holds it.
   it('clears the holder when a shot changes to the observer and hides the held-by picker', () => {
     const board = boardFor();
