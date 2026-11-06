@@ -50,7 +50,6 @@ import { captureSystemCapabilities, withHardwareCompatibility } from '../lib/sys
 // no import cycle: the store deliberately does not import this module.
 import { getMeasuredFits } from './localModelAssessmentStore.js'
 import { commandExists } from '../lib/commandExists.js'
-import { fetchHomebrewLatestVersion, homebrewPackageFor } from '../lib/homebrewPackage.js'
 import { whichFirst } from '../lib/processEnv.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
@@ -340,6 +339,7 @@ async function getHomebrewOllamaVersion(channel) {
   const age = Date.now() - homebrewOllamaCache.fetchedAt
   if (homebrewOllamaCache.version && age < HOMEBREW_VERSION_TTL_MS) return homebrewOllamaCache.version
   if (!homebrewOllamaCache.version && homebrewOllamaCache.fetchedAt && age < LATEST_VERSION_ERROR_TTL_MS) return null
+  const { fetchHomebrewLatestVersion } = await import('../lib/homebrewPackage.js')
   const version = await fetchHomebrewLatestVersion(channel).catch(() => null)
   homebrewOllamaCache = { version, fetchedAt: Date.now() }
   return version
@@ -353,6 +353,7 @@ async function getHomebrewOllamaVersion(channel) {
  */
 async function getOllamaHomebrewChannel() {
   if (process.platform !== 'darwin' || await pathExists(macAppPath('ollama'))) return null
+  const { homebrewPackageFor } = await import('../lib/homebrewPackage.js')
   const channel = homebrewPackageFor(await whichFirst('ollama').catch(() => null))
   return channel && !channel.thirdPartyTap ? channel : null
 }

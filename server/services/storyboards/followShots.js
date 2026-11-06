@@ -40,6 +40,14 @@ export function panelLength(scene) {
   return [scene.panelId, hundredths(scene.endSec - scene.startSec)];
 }
 
+/** Refuse before saving shots: the panel store would otherwise shorten this length. */
+export function assertBoardHoldsShotLengths(project, scenes) {
+  if (!boardFollowsShots(project)) return;
+  if (scenes.some((scene) => panelLength(scene)?.[1] > STORYBOARD_LIMITS.panelSecondsMax)) {
+    throw new ServerError(`This video's shots follow its storyboard, where a panel can run at most ${STORYBOARD_LIMITS.panelSecondsMax}s. Keep each shot within that length.`, { status: 400, code: 'STORYBOARD_PANEL_LENGTH' });
+  }
+}
+
 /** Id a new panel for each later piece of a split, refusing before the shots change if the board has no room. */
 export async function reservePanelsForSplit(project, sceneId, count) {
   const panelId = project.scenes?.find((scene) => scene.sceneId === sceneId)?.panelId;

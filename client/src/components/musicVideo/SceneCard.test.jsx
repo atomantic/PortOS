@@ -360,6 +360,24 @@ describe('Merge with next (#10810)', () => {
     for (const name of [/Split shot/, /Merge over previous/, /Merge with next/]) expect(within(group).getByRole('button', { name })).toBeEnabled();
   });
 
+  // Uniquely catches the slider offering cuts that leave less than the server's minimum piece at fractional boundaries.
+  it('keeps both split slider endpoints inside a fractionally timed shot', () => {
+    const onSplit = vi.fn();
+    render(<SceneCard scene={{ ...scene, startSec: 0.04, endSec: 0.96 }} {...props} onSplit={onSplit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Split shot' }));
+    let slider = screen.getByRole('slider', { name: 'Split at' });
+    expect(slider.min).toBe('0.2');
+    expect(slider.max).toBe('0.8');
+    fireEvent.change(slider, { target: { value: slider.min } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split here' }));
+    expect(onSplit).toHaveBeenLastCalledWith('s1', null, 0.2);
+    fireEvent.click(screen.getByRole('button', { name: 'Split shot' }));
+    slider = screen.getByRole('slider', { name: 'Split at' });
+    fireEvent.change(slider, { target: { value: slider.max } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split here' }));
+    expect(onSplit).toHaveBeenLastCalledWith('s1', null, 0.8);
+  });
+
   // Uniquely catches a typed duration saving the end alone, leaving the next shot behind.
   it('moves the cut after the shot when its duration or end is edited', async () => {
     const onMoveEnd = vi.fn(() => Promise.resolve());

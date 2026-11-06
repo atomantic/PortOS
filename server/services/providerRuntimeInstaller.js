@@ -40,7 +40,6 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandOutput } from '../lib/commandExists.js';
-import { homebrewPackageFor } from '../lib/homebrewPackage.js';
 import { adoptNpmGlobalBinDir, inspectNpmGlobalCommand } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
@@ -294,6 +293,7 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSp
     : null;
   const installed = typeof probed === 'string';
   const { parseHarnessVersion } = await import('../lib/harnessOutput.js');
+  const { homebrewPackageFor } = await import('../lib/homebrewPackage.js');
   const version = parseHarnessVersion(probed);
 
   // Windows-only gap: the script-installed vendors publish a PowerShell

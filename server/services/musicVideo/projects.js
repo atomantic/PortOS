@@ -433,9 +433,14 @@ export async function recutProjectToPacing(id, revision) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
-  const { mergeNextScene } = await import('./projectsLogic.js');
+  const [{ mergeNextScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   let before = [];
-  const outcome = await mutateProjectRecord(id, (current) => { before = current.scenes || []; return mergeNextScene(current, sceneId, options); });
+  const outcome = await mutateProjectRecord(id, (current) => {
+    before = current.scenes || [];
+    const merged = mergeNextScene(current, sceneId, options);
+    assertBoardHoldsShotLengths(current, [merged.scene]);
+    return merged;
+  });
   return mergeIntoBoard(id, before, outcome);
 }
 
@@ -445,9 +450,14 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
  * Returns `{ project, scene }`.
  */
 export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
-  const { mergePreviousScene } = await import('./projectsLogic.js');
+  const [{ mergePreviousScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   let before = [];
-  const outcome = await mutateProjectRecord(id, (current) => { before = current.scenes || []; return mergePreviousScene(current, sceneId, options); });
+  const outcome = await mutateProjectRecord(id, (current) => {
+    before = current.scenes || [];
+    const merged = mergePreviousScene(current, sceneId, options);
+    assertBoardHoldsShotLengths(current, [merged.scene]);
+    return merged;
+  });
   return mergeIntoBoard(id, before, outcome);
 }
 
@@ -456,7 +466,7 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
-  const [{ applySceneUpdate }, { assertBoardHoldsFirstStart }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const [{ applySceneUpdate }, { assertBoardHoldsFirstStart, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
@@ -472,6 +482,7 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     }
     let project = applySceneUpdate(current, sceneId, { startSec }).project;
     if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
+    assertBoardHoldsShotLengths(current, [project.scenes[index], previous ? project.scenes[index - 1] : null]);
     return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
   });
   return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
@@ -486,7 +497,7 @@ const MIN_SHOT_SEC = 0.1;
  * shot just ends there, inside the song. Returns `{ project, scene, next }`.
  */
 export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
-  const [{ applySceneUpdate }, { assertBoardHoldsLastEnd }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const [{ applySceneUpdate }, { assertBoardHoldsLastEnd, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
@@ -507,6 +518,7 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     if (!next) assertBoardHoldsLastEnd(current, endSec);
     let project = applySceneUpdate(current, sceneId, { endSec }).project;
     if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
+    assertBoardHoldsShotLengths(current, [project.scenes[index], next ? project.scenes[index + 1] : null]);
     return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
   });
   return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);

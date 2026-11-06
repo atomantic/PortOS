@@ -34,7 +34,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { hasCredentialBootstrap, resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { commandOutput } from '../lib/commandExists.js';
-import { fetchHomebrewLatestVersion } from '../lib/homebrewPackage.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
 import { isDerivedPreset } from '../lib/providerGraphRecords.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -119,6 +118,7 @@ async function resolveLatestVersion(runtime, status, { fresh, run, fetchImpl }) 
   // can share with an unrelated homebrew-core one.
   if (!channel || channel.thirdPartyTap) return { latestVersion: npm, latestVersionSource: 'npm', npmAheadVersion: null };
   const brew = await latestVersions.read(`homebrew:${channel.kind}:${channel.name}`, async () => {
+    const { fetchHomebrewLatestVersion } = await import('../lib/homebrewPackage.js');
     const version = await fetchHomebrewLatestVersion(channel, { fetchImpl });
     if (!version) throw new Error(`Homebrew has no version for ${channel.name}`);
     return version;
