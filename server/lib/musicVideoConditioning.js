@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
 import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
@@ -59,16 +60,16 @@ export function musicVideoReferenceCapacity(mode, { modelId = null, localModel =
 export const isOutsideMusicVideoReference = (ref) => String(ref?.id || '').startsWith('mvr-board-')
   || String(ref?.imageId || '').startsWith('pinterest-');
 
-const namesIn = (text, phrase) => {
+const namesIn = (text, phrase, { role = false } = {}) => {
   const p = String(phrase || '').trim();
-  return p.length >= 3 && new RegExp(`\\b${escapeRegExp(p)}\\b`, 'i').test(text);
+  return !!p && (!role || p.length >= 3) && new RegExp(`\\b${escapeRegExp(p)}\\b`, p.length < 3 ? '' : 'i').test(text);
 };
 
 /** The supporting cast members a scene's frame or shot prompt names, by name or role. */
 function featuredCast(direction, scene) {
   const text = [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
   if (!text) return [];
-  return (direction?.cast || []).filter((c) => namesIn(text, c.name) || namesIn(text, c.role));
+  return (direction?.cast || []).filter((c) => namesIn(text, c.name) || namesIn(text, c.role, { role: true }));
 }
 
 // A close framing: the face fills the frame, so the set barely shows and the face sheets matter most.
@@ -117,7 +118,7 @@ function overflowFaceReferences(project) {
 /** The references a director can send with a shot's frames: every one with an image except outside inspiration. */
 export const musicVideoReferenceChoices = (project) => [
   ...musicVideoCatalogReferences(project), ...(project?.visualSpec?.references || []), ...overflowFaceReferences(project),
-].filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref) && !isLegacyCatalogReference(project, ref));
+].filter((ref) => ref?.id && ref.imageId && !isOutsideMusicVideoReference(ref) && !isLegacyCatalogReference(project, ref) && isActiveMusicVideoReference(project, ref));
 
 // Keep saved sheets and shot picks for history, but never use them for a new catalog-linked render.
 export function isLegacyCatalogReference(project, ref) {
@@ -190,9 +191,11 @@ const CAST_IMAGE_KINDS = new Set(['portrait', 'reference']);
  */
 export function musicVideoCastGuideReferences(project, scene, castMedia) {
   const variant = sceneCastVariant(scene);
+  if (variant && (project?.concept?.subjects || []).some(s => s.ingredientId === variant.ingredientId)
+    && !activeMusicVideoSubjects(project?.concept).some(s => s.ingredientId === variant.ingredientId)) return [];
   const media = variant && castMedia?.[variant.ingredientId];
   if (!Array.isArray(media)) return [];
-  const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
+  const name = activeMusicVideoSubjects(project?.concept).find((s) => s?.ingredientId === variant.ingredientId)?.name || 'Cast guide';
   // Frame renders accept only a png/jpg/jpeg/webp basename (routes/imageGen.js). Filtering before
   // the pick lets the next candidate take an unsendable file's slot. The guide-vs-fallback choice
   // reads the member's real guide flags: with guides flagged, only sendable guides qualify (none
@@ -233,7 +236,7 @@ function linkedAssetDetail(m, sheet, kind) {
 }
 
 /** The linked catalog ids (cast, sets, props) a project's shots may pick catalog assets from. */
-export const musicVideoLinkedCastIds = (project) => [...new Set((project?.concept?.subjects || [])
+export const musicVideoLinkedCastIds = (project) => [...new Set(activeMusicVideoSubjects(project?.concept)
   .filter((subject) => LINKED_KINDS[subject?.kind] && subject.ingredientId).map((subject) => subject.ingredientId))];
 
 /**
@@ -246,7 +249,7 @@ export const musicVideoLinkedCastIds = (project) => [...new Set((project?.concep
  */
 export function musicVideoLinkedCastReferences(project, castMedia) {
   const seen = new Set();
-  return (project?.concept?.subjects || []).flatMap((subject) => {
+  return activeMusicVideoSubjects(project?.concept).flatMap((subject) => {
     const kind = LINKED_KINDS[subject?.kind];
     const media = kind && castMedia?.[subject.ingredientId];
     if (!Array.isArray(media)) return [];
@@ -366,6 +369,7 @@ function sceneCatalogSubjectIds(project, scene) {
   const mappedSet = direction?.sets?.find(set => set.id === mappedSetId);
   const matches = items.filter(item => {
     const subject = project?.concept?.subjects?.find(entry => entry.id === item.subjectId);
+    if (subject && !activeMusicVideoSubjects(project?.concept).includes(subject)) return false;
     const names = [item.name, subject?.name].filter(Boolean);
     const named = names.some(name => namesIn(text, name));
     if (item.kind === 'character') {
@@ -375,10 +379,10 @@ function sceneCatalogSubjectIds(project, scene) {
       }
       if (Array.isArray(sheet?.characters)) {
         return sheet.characters.some(name => [item.subjectId, item.ingredientId, ...names].some(value =>
-          String(value || '').toLowerCase() === name.toLowerCase()));
+          String(value || '').length < 3 ? value === name : String(value || '').toLowerCase() === name.toLowerCase()));
       }
       const cast = direction?.cast?.find(entry => entry.id === item.subjectId || names.includes(entry.name));
-      return named || (cast && namesIn(text, cast.role));
+      return named || (cast && namesIn(text, cast.role, { role: true }));
     }
     if (['place', 'location'].includes(item.kind)) {
       if (scene?.setReference?.subjectId) return scene.setReference.subjectId === item.subjectId;
@@ -493,7 +497,7 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
   const ordered = greybox?.reference
     ? [greybox.reference, ...references.filter((r) => r.imageId !== greybox.reference.imageId && !r.id?.startsWith('mvr-cs-set-') && !(r.catalogSubjectId && r.role === 'set'))]
     : references;
-  const current = ordered.filter((ref) => !isLegacyCatalogReference(project, ref));
+  const current = ordered.filter((ref) => !isLegacyCatalogReference(project, ref) && isActiveMusicVideoReference(project, ref));
   const panel = !Array.isArray(scene?.frameReferenceIds) && current.find((ref) => ref.panelArt);
   const ids = musicVideoLimitReferenceFiles(current.map((ref) => ref.imageId), limit, {
     panelImageId: panel?.imageId, protectedCount: greybox?.reference ? 1 : 0,

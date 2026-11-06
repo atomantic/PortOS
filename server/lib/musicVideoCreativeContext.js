@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 import { trimTo } from './textUtils.js';
 
 const CONTEXT_MAX = 6000;
@@ -60,7 +61,7 @@ export function musicVideoCreativeContext(concept, { moodBoard = true, look = ''
     moodBoard && directorLook && !sameAsStyle && `Look (palette, light and texture only): ${directorLook}`,
     moodBoard && boardLook && `${MOOD_BOARD_LOOK_LABEL}: ${boardLook}`,
   ].filter(Boolean);
-  const subjects = (concept.subjects || []).slice(0, 24);
+  const subjects = activeMusicVideoSubjects(concept).slice(0, 24);
   const identities = subjects.map((s) =>
     `${s.kind}${s.kind === 'character' && s.role ? ` (${s.role})` : ''}: ${trimTo(s.name, 120)}`);
   // Reserve every identity first; share the remaining description budget so

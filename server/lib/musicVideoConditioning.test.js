@@ -1,3 +1,6 @@
+import { musicVideoFrameModelInput } from './musicVideoShotPrompt.js';
+import { shotSheetCast } from './musicVideoShotSheet.js';
+import { musicVideoConceptSchema } from './musicVideoValidation.js';
 import { describe, it, expect } from 'vitest';
 import { musicVideoCastGuideReferences, musicVideoReferenceChoices, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoReferenceCapacity } from './musicVideoConditioning.js';
 import { getFalVideoModel } from './falVideoModels.js';
@@ -352,4 +355,59 @@ describe('catalog-linked check-in conditioning', () => {
       expect(musicVideoConditioningReferences(p, { frameReferenceIds: ['mvr-cs-character', 'renamed-sheet'] })).toEqual([]);
     }
   });
+});
+
+// Pins the public render inputs together: switching an alternate must switch both text and pixels.
+it('uses only the active alternate in the frame bible, references and shot-sheet picker', () => {
+  const subjects = [
+    { id: 'one', kind: 'character', name: 'Q', description: 'Silver coat', ingredientId: 'cast-one' },
+    { id: 'two', kind: 'character', name: 'Q', description: 'Copper dress', ingredientId: 'cast-two' },
+  ];
+  const p = { concept: { subjects }, visualSpec: { references: [] }, castAndSets: {
+    source: 'catalog', catalogCheckin: { approved: true, problems: [], items: subjects.map(subject => ({
+      subjectId: subject.id, ingredientId: subject.ingredientId, name: subject.name, kind: subject.kind, images: [`${subject.id}.png`],
+    })) },
+  } };
+  const scene = { framePrompt: 'Q stands by the window' };
+  const assertChoice = (image, present, absent) => {
+    const references = musicVideoConditioningReferences(p, scene);
+    expect(ids(references)).toEqual([image]);
+    const input = musicVideoFrameModelInput(p, scene, { references });
+    expect(input.prompt).toContain(present);
+    expect(input.prompt).not.toContain(absent);
+    expect(shotSheetCast(p)).toEqual(['Q']);
+  };
+  assertChoice('one.png', 'Silver coat', 'Copper dress');
+  p.concept = musicVideoConceptSchema.parse({ subjects: subjects.map(subject => ({ ...subject, active: subject.id === 'two' })) });
+  assertChoice('two.png', 'Copper dress', 'Silver coat');
+  expect(ids(musicVideoConditioningReferences(p, { shotSheet: { characters: ['Q'] } }))).toEqual(['two.png']);
+  expect(musicVideoConditioningReferences(p, { framePrompt: 'q stands by the window' })).toEqual([]);
+  const oldPick = musicVideoReferenceChoices({ ...p, concept: { subjects } })[0].id;
+  expect(musicVideoConditioningReferences(p, { ...scene, frameReferenceIds: [oldPick] })).toEqual([]);
+});
+
+it('matches short cast names as exact whole words and keeps short role words out of conditioning', () => {
+  const p = { castAndSets: { status: 'approved', direction: { cast: [{ id: 'guest', name: 'Q', role: 'DJ' }] } }, visualSpec: { references: [
+    { id: 'mvr-cs-character', imageId: 'lead.png' },
+    { id: 'mvr-cs-cast-guest', imageId: 'guest.png' },
+    { id: 'authored', role: 'character', label: 'Xi — portrait', imageId: 'authored.png' },
+  ] } };
+  expect(ids(musicVideoConditioningReferences(p, { prompt: 'Q meets Xi' }))).toEqual(['lead.png', 'guest.png', 'authored.png']);
+  expect(ids(musicVideoConditioningReferences(p, { prompt: 'q meets xi at a DJ booth with Qwerty' }))).toEqual(['lead.png']);
+});
+
+it('drops inactive generated cast sheets and catalog-image aliases from new renders', () => {
+  const p = { concept: { subjects: [
+    { id: 'cs-protagonist', kind: 'character', role: 'protagonist', name: 'Q', active: false },
+    { id: 'cs-cast-guest', kind: 'character', name: 'Q', active: true },
+  ] }, castAndSets: { status: 'approved', direction: { cast: [{ id: 'guest', name: 'Q' }] },
+    catalogCheckin: { items: [{ subjectId: 'cs-protagonist', images: ['old.png'] }] },
+  }, visualSpec: { references: [
+    { id: 'mvr-cs-character', imageId: 'old.png', condition: true },
+    { id: 'old-alias', imageId: 'old.png', condition: true },
+    { id: 'mvr-cs-cast-guest', imageId: 'new.png', condition: true },
+  ] } };
+  expect(ids(musicVideoConditioningReferences(p, { prompt: 'Q walks' }))).toEqual(['new.png']);
+  p.concept.subjects = p.concept.subjects.map(subject => ({ ...subject, active: !subject.active }));
+  expect(ids(musicVideoConditioningReferences(p, { prompt: 'Q walks' }))).toEqual(['old.png']);
 });

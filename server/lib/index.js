@@ -913,6 +913,7 @@ export * from './databaseRestoreRecovery.js';
 
 export * from './databaseWriterRegistry.js';
 
+export * from './musicVideoCastSelection.js';
 export * from './musicVideoCreativeContext.js';
 export * from './musicVideoCharacterStyles.js';
 export * from './moodBoardStyleContext.js';

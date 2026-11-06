@@ -859,7 +859,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v43 = image-to-image wipes on a shot's cuts (`scene.wipeIn`/`wipeOut`: style, length,
   // edge color), which a v42 strict scene schema strips on save and a v42 re-plan drops.
   // Optional, no backfill: absent plays the cut as before.
-  musicVideoProjects: 43,
+  // v44 = active cast alternates; older peers ignore the choice and render both identities.
+  // Optional, no backfill: legacy duplicates deterministically choose the first.
+  musicVideoProjects: 44,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

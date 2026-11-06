@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video — Cast & Sets creative direction (pure): the LLM prompt, the
@@ -202,7 +203,7 @@ export function subjectNameParts(name) {
  */
 export function fixedCasting(project) {
   const refs = project?.visualSpec?.references || [];
-  return (project?.concept?.subjects || [])
+  return activeMusicVideoSubjects(project?.concept)
     .filter((s) => s?.ingredientId && s.name && (s.kind === 'character' || s.kind === 'place')
       && !(String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX) && s.ingredientId === musicVideoCastIngredientId(project.id, s)))
     .map((s) => {
@@ -231,7 +232,7 @@ export const formSubjects = (project) => fixedCasting(project).filter((f) => f.k
  * the protagonist's own catalog record (that one belongs in protagonist.forms).
  */
 export function fixedSupportingCast(project) {
-  const subjects = project?.concept?.subjects || [];
+  const subjects = activeMusicVideoSubjects(project?.concept);
   const leadRecords = new Set(subjects.filter((s) => s?.role === 'protagonist' && s.ingredientId).map((s) => s.ingredientId));
   const recordOf = new Map(subjects.map((s) => [s?.id, s?.ingredientId]));
   return formSubjects(project)
@@ -244,7 +245,7 @@ export function fixedSupportingCast(project) {
  * direction keeps each as a prop under its own name and description.
  */
 export function fixedProps(project) {
-  return (project?.concept?.subjects || [])
+  return activeMusicVideoSubjects(project?.concept)
     .filter((s) => s?.kind === 'object' && s.name && !String(s.id || '').startsWith(CAST_SETS_SUBJECT_PREFIX))
     .map((s) => ({ id: s.id, name: s.name.trim(), description: s.description || '' }))
     .slice(0, CAST_SETS_LIMITS.props);

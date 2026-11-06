@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideoCastSelection.js';
 import { useEffect, useState } from 'react';
 import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
@@ -50,6 +51,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
   const universeReady = !universeId || (!loading && universe?.id === universeId);
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
+  const activeSubjects = activeMusicVideoSubjects({ subjects });
   const overlongSubjects = subjects.filter((subject) => (subject.description || '').length > SUBJECT_DESCRIPTION_MAX);
   const idFor = (name) => `mv-creative-${project.id}-${name}`;
   // The saved tools and policy disagree (no video tool, yet generated footage is still planned).
@@ -128,7 +130,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
       {!editing && <button type="button" onClick={begin} aria-label={subjects.length || project.concept?.characterStyleId ? 'Edit creative direction' : undefined} className="text-sm text-port-accent min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10">{subjects.length || project.concept?.characterStyleId ? 'Edit' : 'Set up creative direction'}</button>}
     </div>
     {!editing && project.concept?.characterStyleId && <p className="text-xs">Character style: {project.concept.characterStyle?.split(':')[0] || project.concept.characterStyleId}</p>}
-    {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
+    {!editing ? <p className="text-xs text-port-text-muted">{subjects.length ? subjects.map((s) => `${s.name}${!activeSubjects.includes(s) ? ' (alternate)' : ''}${s.role === 'protagonist' ? ' (protagonist)' : s.role === 'band' ? ' (band)' : ''}`).join(' · ') : 'Create the band or protagonist, choose a universe, and select the places and objects that anchor the story.'}</p> : <fieldset disabled={saving} className="space-y-3 min-w-0">
       <p className="text-xs text-port-text-muted">Save this setup before planning or generating. Editing a linked description also updates its catalog record; other canon and style settings remain snapshots.</p>
       <div className="grid grid-cols-1 gap-3">
         <CharacterStylePicker project={project} idFor={idFor} value={draft.characterStyleId} onChange={(characterStyleId) => setDraft((d) => ({ ...d, characterStyleId }))} />
@@ -173,10 +175,14 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
           add(kind, ingredient.name || '', payload.physicalDescription || payload.description || '', catalogEntry(ingredient));
         }}
       />
-      <p className="text-xs text-port-text-muted">Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
+      <p className="text-xs text-port-text-muted">Cast entries with the same name are alternates; choose one to use. Up to 24 subjects. Selected canon images are added as look references when space is available; enable “Condition frames” in Look references to use their pixels.</p>
       <ul className="space-y-2">{subjects.map((subject) => <li key={subject.id} className="border border-port-border rounded p-2 space-y-1">
         <div className="flex flex-wrap items-center gap-2"><span className="text-sm min-w-0 flex-1 break-words">{subject.name} · {subject.kind}</span>
           {subject.kind === 'character' && <><label htmlFor={idFor(subject.id)} className="sr-only">Role for {subject.name}</label><select id={idFor(subject.id)} className="bg-port-bg border border-port-border rounded text-xs" value={subject.role || 'supporting'} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => s.id === subject.id ? { ...s, role: e.target.value } : s) }))}><option value="protagonist">Protagonist</option><option value="band">Band</option><option value="supporting">Supporting</option></select></>}
+          {subject.kind === 'character' && subjects.filter(s => s.kind === 'character' && s.name.trim() === subject.name.trim()).length > 1 && <div className="flex items-center gap-2 min-h-[44px]">
+            <input type="radio" id={idFor(`active-${subject.id}`)} name={idFor(`active-role-${subject.name}`)} checked={activeSubjects.includes(subject)} onChange={() => setDraft(d => ({ ...d, subjects: d.subjects.map(s => s.kind === 'character' && s.name.trim() === subject.name.trim() ? { ...s, active: s.id === subject.id } : s) }))} />
+            <label htmlFor={idFor(`active-${subject.id}`)} className="text-xs">Use this alternate</label>
+          </div>}
           <button type="button" aria-label={`Remove ${subject.name}`} className="ml-auto text-xs text-port-error min-h-[44px]" onClick={() => setDraft((d) => ({ ...d, subjects: d.subjects.filter((s) => s.id !== subject.id) }))}>Remove</button>
         </div>
         {subject.ingredientId
