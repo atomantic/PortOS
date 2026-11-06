@@ -34,7 +34,7 @@ describe('ShotSheetPanel', () => {
     expect(screen.getByText('0 of 2 shots done · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
     expect(within(row).getByText('Hold still')).toBeInTheDocument();
-    expect(within(row).getByText('Prompt changed since this frame')).toBeInTheDocument();
+    expect(within(row).getByText('Details changed since this frame')).toBeInTheDocument();
     expect(within(row).getByLabelText('Shot 1 camera')).toHaveValue('vhs');
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
   });

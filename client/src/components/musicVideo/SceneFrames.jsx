@@ -36,10 +36,16 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
   );
 }
 
+// The frame prompt and the Clip tab's motion prompt read alike, so each box names the model it feeds.
+const FRAME_PROMPT_HELP = 'What this still image shows. The image model renders the frame from this text plus the additions listed under it. How the shot moves is the motion prompt on the Clip tab.';
+
 function FramePrompt({ id, label, value, ...props }) {
   return (
     <>
-      <label htmlFor={id} className="sr-only">{label}</label>
+      <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
+        <label htmlFor={id}>{label}</label>
+        <InfoTooltip label={`About the ${label.toLowerCase()}`} placement="below" align="start" width={280}>{FRAME_PROMPT_HELP}</InfoTooltip>
+      </div>
       <AutoSizeTextarea id={id} value={value} rows={3} {...props}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
     </>
@@ -116,10 +122,10 @@ export default function SceneFrames({
       <div key={which} className="min-w-0 space-y-1.5">
         <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
-        <FramePrompt id={id(`${which}-prompt`)} label={start ? 'Reference frame prompt' : 'End frame prompt'} value={scene[field] || ''}
+        <FramePrompt id={id(`${which}-prompt`)} label={start ? (endFrames ? 'Start frame prompt' : 'Still prompt') : 'End frame prompt'} value={scene[field] || ''}
           onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
-          placeholder={start ? 'Start frame prompt (defaults to the shot prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
+          placeholder={start ? 'What the still shows (empty: uses the motion prompt)' : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* A greybox or a storyboard panel adds to the still's prompt, so its full input shows here. */}
         {project && (greybox?.reference || scene.panelId) && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}

@@ -16,7 +16,7 @@ it('edits and saves each frame prompt on blur', () => {
       onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
   }
   render(<Harness />);
-  const start = screen.getByRole('textbox', { name: 'Reference frame prompt' });
+  const start = screen.getByRole('textbox', { name: 'Start frame prompt' });
   fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
   fireEvent.blur(start);
   expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
@@ -167,7 +167,7 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: 'Reference frame prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('textbox', { name: 'Still prompt' }).value).toBe('Door opens');
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);
   expect(screen.getByRole('button', { name: 'New frame take' }).disabled).toBe(true);
