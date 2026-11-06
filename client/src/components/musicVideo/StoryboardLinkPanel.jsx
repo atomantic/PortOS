@@ -128,7 +128,7 @@ export default function StoryboardLinkPanel({ project, onLink, openPath, refresh
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-gray-400">Plan the story on a storyboard: beats and panels you can sketch and play before the song is final.</p>
+      <p className="text-xs text-gray-400">Optional step for simple sketches and shot pre-planning. Skip it if you already know your shots.</p>
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor="mv-storyboard-link" className="sr-only">Link a storyboard</label>
         <select id="mv-storyboard-link" value="" onFocus={loadBoards} onPointerDown={loadBoards} onChange={(e) => e.target.value && onLink(e.target.value)}
