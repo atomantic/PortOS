@@ -59,6 +59,11 @@ describe('SyncBadge', () => {
     expect(btn.className).toMatch(/gray/);
   });
 
+  it('shows an unknown badge for a status from a newer server', () => {
+    render(<SyncBadge status="future-status" onClick={() => {}} />);
+    expect(screen.getByRole('button', { name: /sync unknown/i })).toBeInTheDocument();
+  });
+
   it('renders peer-unreachable with distinct offline copy', () => {
     render(<SyncBadge status="peer-unreachable" onClick={() => {}} />);
     expect(screen.getByRole('button', { name: /peer offline/i })).toHaveAttribute('title', expect.stringMatching(/offline/i));

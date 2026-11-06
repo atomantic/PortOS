@@ -52,6 +52,7 @@ import {
   describeCodexAccountStatus,
   isCodexAuthError,
   normalizeCodexAccount,
+  normalizeCodexAccountUsage,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
   redactCodexMessage,
@@ -553,6 +554,14 @@ export async function getCodexAccountReadiness({ fresh = false } = {}) {
   const readiness = await readReadiness();
   readinessCache = { at: Date.now(), readiness };
   return readiness;
+}
+
+/** Explicit read only: no boot hook, inference, auth writes or ledger mutation.
+ * No persistent cache: the signed-in account can change between requests.
+ */
+export async function getCodexAccountUsage() {
+  const usage = normalizeCodexAccountUsage(await call(CODEX_RPC.usageRead));
+  return { ...usage, fetchedAt: new Date().toISOString() };
 }
 
 /**

@@ -27,7 +27,7 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
 import SceneClipReferences from './SceneClipReferences.jsx';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideoConditioning.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
@@ -42,6 +42,7 @@ const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
+import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
 import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
 import ScenePoster from './ScenePoster.jsx';
@@ -56,6 +57,7 @@ import { shotEffectLabel, shotEffects } from '../../lib/musicVideoShotEffects.js
 import SceneGlitches from './SceneGlitches.jsx';
 import { PreMusicSound, PreMusicTiming } from './ScenePreMusic.jsx';
 import { isPreMusicShot, normalizePreMusic, preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.js';
+import { sceneShotName } from '../../lib/musicVideoStages.js';
 import SceneLyricType from './SceneLyricType.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import SceneImageEffect from './SceneImageEffect.jsx';
@@ -135,12 +137,12 @@ function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImage
 }
 
 export default function SceneCard({
-  scene, index, shotNumber = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
+  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
   expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
@@ -214,8 +216,7 @@ export default function SceneCard({
   const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
-  const variantId = scene.characterVariant?.ingredientId;
-  const guidesPending = referenceCapacity > 0 && variantId && castMedia && castMedia[variantId] === undefined;
+  const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
@@ -230,7 +231,7 @@ export default function SceneCard({
   // an unknown Local model and required performance/audio-reactive inputs for the server to validate.
   const songAudioState = cardRequest.songAudio.state;
   const silentHostedCutaway = !performance && songAudioState === 'unavailable'
-    && ['grok', 'fal', 'runway'].includes(renderSettings?.backend);
+    && ['grok', 'fal', 'runway', 'gemini'].includes(renderSettings?.backend);
   const songAudioField = songAudioState === 'on' || songAudioState === 'off' || silentHostedCutaway
     ? { songAudio: songAudioState === 'on' } : {};
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;
@@ -349,9 +350,10 @@ export default function SceneCard({
   );
   // What this shot's render covers and costs, and what blocks it, stays beside Render.
   const timingPlan = !preMusic && (
-    <SceneTimingPlan timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
-      span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
+    <SceneTimingPlan timing={timing} lipSyncBackend={renderLane} />
   );
+  // A timed shot's cuts move with the shot beside them; an untimed one sets its own times first.
+  const cutMoves = sceneHasAuthoredSpan(scene) ? { startSec: onMoveStart, endSec: onMoveEnd } : {};
   const settingsGroups = (
     <>
       <ShotEditorGroup title="Timing" summary={timingSummary} testId="shot-group-timing">
@@ -361,9 +363,14 @@ export default function SceneCard({
         {!preMusic && onMoveStart && sceneHasAuthoredSpan(scene) && (
           <SceneStartFrame id={fieldId('start-frame')} scene={scene} joinsPrevious={(scene.order ?? index) > 0} onMove={onMoveStart} />
         )}
+        {/* How long the shot runs; the next shot grows or shrinks to meet the new end. */}
+        {!preMusic && onMoveEnd && sceneHasAuthoredSpan(scene) && (
+          <SceneDuration id={fieldId('duration')} scene={scene} nextEndSec={isLast ? null : nextEndSec} songDurationSec={songDurationSec} onMoveEnd={onMoveEnd} />
+        )}
         <div className="flex flex-wrap gap-2 items-center text-xs">
           {!preMusic && SCENE_TIME_FIELDS.map(([labelText, key]) => {
             const toValue = (v) => (v === '' ? null : Number(v));
+            if (cutMoves[key]) return <SceneCutField key={key} label={labelText} value={scene[key]} onCommit={(sec) => cutMoves[key](scene.sceneId, sec)} />;
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
                 <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
@@ -383,6 +390,11 @@ export default function SceneCard({
             Loop clip
           </label>
         </div>
+        {/* Split and merge belong to the shot, not its render, so a photo or a shot with no clip has them too. */}
+        {!preMusic && (
+          <SceneShotCuts timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
+            span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
+        )}
       </ShotEditorGroup>
       {preMusic && (
         <ShotEditorGroup title="Sound" summary={preMusicSoundSummary(scene.preMusic).toLowerCase()} testId="shot-group-sound">
@@ -494,7 +506,7 @@ export default function SceneCard({
         <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {[shotNumber ? `Shot ${shotNumber}` : null, scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`}
+            {shotName || sceneShotName(scene)}
           </div>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
@@ -695,7 +707,7 @@ export default function SceneCard({
               grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
-                musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, promptAsTyped: true, ...songAudioField },
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}

@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { startMaintenanceRun, hydrateCosAgentDescription, triggerCosJob } from './apiAgents';
+import toast from '../components/ui/Toast';
+import { startMaintenanceRun, hydrateCosAgentDescription, triggerCosJob, getFeatureAgents } from './apiAgents';
+
+vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 // Exercise the real API wrapper through HTTP serialization: mocking the wrapper
 // in the form test cannot catch a selected mode being dropped before POST.
@@ -75,4 +78,15 @@ it('puts a one-off run configuration in the trigger body, and sends none without
   await triggerCosJob('job-1', { silent: true });
   const [, asSaved] = fetchMock.mock.calls[1];
   expect(asSaved.body).toBeUndefined();
+});
+
+it('passes silent options through for Feature Agents list reads', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({ error: 'unavailable' }) });
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(getFeatureAgents({ silent: true })).rejects.toThrow('unavailable');
+
+  expect(fetchMock.mock.calls[0][0]).toContain('/feature-agents');
+  expect(fetchMock.mock.calls[0][1]).not.toHaveProperty('silent');
+  expect(toast.error).not.toHaveBeenCalled();
 });

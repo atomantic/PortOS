@@ -63,6 +63,7 @@ const {
   deleteCommission,
   getCommission,
   listCommissions,
+  listCommissionsForIntegrity,
   recordCommissionRun,
   getCommissionMusicContextForProject,
   recordCommissionMusicOutput,
@@ -515,6 +516,17 @@ describe('recordCommissionRun', () => {
 });
 
 describe('deleteCommission', () => {
+  it('lists the brief clock and tombstones in the integrity inventory', async () => {
+    const live = await createCommission(validInput());
+    records.get(live.id).briefUpdatedAt = '2026-01-01T00:00:00.000Z';
+    records.get(live.id).updatedAt = '2026-02-01T00:00:00.000Z';
+    const gone = await createCommission(validInput());
+    await deleteCommission(gone.id);
+    const inventory = await listCommissionsForIntegrity();
+    expect(inventory).toContainEqual(expect.objectContaining({ id: live.id, updatedAt: '2026-01-01T00:00:00.000Z', deleted: false }));
+    expect(inventory).toContainEqual(expect.objectContaining({ id: gone.id, deleted: true }));
+    expect(inventory.find((r) => r.id === live.id)).not.toHaveProperty('schedule');
+  });
   it('SOFT-deletes (tombstones) the record so the deletion federates (#2686)', async () => {
     const created = await createCommission(validInput());
     const r = await deleteCommission(created.id);

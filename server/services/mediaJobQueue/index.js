@@ -233,6 +233,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [VIDEO_GEN_MODE.FAL]: () => import('../videoGen/fal.js'),
       [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
       [VIDEO_GEN_MODE.RUNWAY]: () => import('../videoGen/runway.js'),
+      [VIDEO_GEN_MODE.GEMINI]: () => import('../videoGen/geminiWeb.js'),
       default: () => import('../videoGen/local.js'),
     },
     invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),
@@ -2026,9 +2027,9 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
         job.progress = 1;
         job.statusMsg = 'Completed';
       }
-      // failed/canceled intentionally retain the last mid-render progress/statusMsg
-      // (how far it got) — consumers gate the progress UI on status === 'running',
-      // so the residual values are not displayed for terminal jobs.
+      // failed/canceled retain progress and any status message supplied by apply
+      // (for example, a retained image after finishing fails). Consumers gate
+      // the progress UI on status === 'running'.
       job.completedAt = new Date().toISOString();
     }, async () => {
       // The terminal snapshot is durable now; a restart no longer rebuilds
@@ -2068,16 +2069,21 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
       const { remoteInputsDisposable, remoteRecoverySettlement, ...result } = payload;
       if (job.kind === 'image' && job.params?.visualProfile) {
         if (job.visualProfileFinishing || !canRequestCancellation(job)) return;
+        const applyFilmFinish = !job.params.catalogAttach && !job.params.characterSheet;
+        const phase = applyFilmFinish ? 'Film finishing' : 'Image metadata save';
         const controller = new AbortController();
         job.visualProfileFinishing = controller;
         const finishWatchdog = setTimeout(() => {
-          controller.abort(new Error('Film finishing exceeded its 3-minute deadline'));
+          controller.abort(new Error(`${phase} exceeded its 3-minute deadline`));
         }, VISUAL_PROFILE_FINISH_TIMEOUT_MS);
         finishWatchdog.unref?.();
-        if (job.cancelRequested) controller.abort(new Error('Canceled during film finishing'));
+        if (job.cancelRequested) controller.abort(new Error(`Canceled during ${phase.toLowerCase()}`));
         clearInterval(watchdogTimer);
-        handlers.progress({ type: 'progress', progress: 0.95, message: 'Saving universe visual profile and film finish' });
-        trackTerminalOperation((async () => {
+        handlers.progress({ type: 'progress', progress: 0.95, message: applyFilmFinish
+          ? 'Saving universe visual profile and film finish' : 'Saving image visual profile' });
+        // The provider publication settles after this synchronous event.
+        // Keep asynchronous post-processing under our longer-lived media owner.
+        trackTerminalOperation(permit.run(async () => {
           try {
             // Retry resumes only the local finish. Persist the completed source
             // before opening a browser so a failed finish cannot buy another image.
@@ -2086,16 +2092,17 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
             controller.signal.throwIfAborted();
             const { finishVisualProfileImage } = await import('../imageGen/finishVisualProfile.js');
             const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
-              revision: job.params.visualProfileRevision, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
+              revision: job.params.visualProfileRevision, applyFilmFinish, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
             controller.signal.throwIfAborted();
             await terminate('completed', j => { j.result = finished; }, remoteInputsDisposable === true);
           } catch (error) {
             await terminate(job.cancelRequested ? 'canceled' : 'failed', j => {
               j.result = result;
-              j.error = job.cancelRequested ? 'Canceled during film finishing; original image retained' : `Film finishing failed; original image retained: ${error.message}`;
+              j.statusMsg = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained`;
+              j.error = job.cancelRequested ? `Canceled during ${phase.toLowerCase()}; original image retained` : `${phase} failed; original image retained: ${error.message}`;
             }, remoteInputsDisposable === true);
           } finally { clearTimeout(finishWatchdog); delete job.visualProfileFinishing; }
-        })().catch(e => console.error(`❌ media-job [${job.id.slice(0, 8)}] film finishing handler failed: ${e.message}`)));
+        }).catch(e => console.error(`❌ media-job [${job.id.slice(0, 8)}] film finishing handler failed: ${e.message}`)));
         return;
       }
       trackTerminalOperation(
@@ -2384,6 +2391,10 @@ async function assertMusicVideoJobPolicy(kind, params) {
     const project = await getProject(params.musicVideo.projectId);
     if (!project) throw new Error('Music Video project not found');
     assertMusicVideoMedia(project, kind, 'generation');
+    if (project.castAndSets?.source === 'catalog') {
+      const { assertCatalogRenderParams } = await import('../musicVideo/clipCastReferences.js');
+      await assertCatalogRenderParams(params, project);
+    }
   }
 }
 
@@ -2591,7 +2602,7 @@ export async function cancelJob(jobId) {
     // Set intent before a provider can emit failure synchronously.
     applyCancellationIntent(runningJob);
     if (runningJob.visualProfileFinishing) {
-      runningJob.visualProfileFinishing.abort(new Error('Canceled during film finishing'));
+      runningJob.visualProfileFinishing.abort(new Error('Canceled during image post-processing'));
       // The finish handler may not settle before a crash. Persist both the
       // local intent and any remote cancellation marker before acknowledging it.
       await persist();

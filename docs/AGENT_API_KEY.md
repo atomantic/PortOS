@@ -103,3 +103,12 @@ that separate transport. Its success establishes availability and key validity,
 not the cause of the injected token's failure. Do not enable or rotate credentials
 merely to make an investigation pass. Public-content reviewers must remain
 without host API credentials.
+
+Codex can override the CoS-injected token in its own shell commands. If a fresh
+Codex TUI still receives a 401, check the effective Codex configuration for
+`shell_environment_policy.set.PORTOS_API_TOKEN` (normally in
+`~/.codex/config.toml`, or `config.toml` under `CODEX_HOME`). A static value there
+replaces the token inherited by Codex's shell tools. Remove only a stale entry,
+preserve the other settings, and start a fresh agent before testing again. Do
+not print or copy the configured value. A 401 alone does not prove that this
+override is present or caused the rejection.

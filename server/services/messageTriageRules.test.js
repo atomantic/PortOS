@@ -26,6 +26,13 @@ beforeEach(() => {
 });
 
 describe('messageTriageRules write serialization', () => {
+  it('does not include the sender address in correction logs', async () => {
+    const log = vi.spyOn(console, 'log');
+    await recordCorrection(corr('alice@example.com'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('archive -> delete'));
+    expect(log.mock.calls.flat().join(' ')).not.toContain('alice@example.com');
+  });
+
   it('persists both rules for overlapping corrections from different senders', async () => {
     let release;
     fs.gate = new Promise(r => { release = r; });

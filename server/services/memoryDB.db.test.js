@@ -476,6 +476,31 @@ describe.skipIf(!runDb)('stored memory search lexemes', () => {
     expect((await memoryDB.hybridSearchMemories('aurora', null)).memories.map(row => row.id)).toEqual([strongest.id]);
     expect((await memoryDB.hybridSearchMemories('coast', null)).memories).toEqual([]);
   });
+
+  it('scopes to the owner before the cap and matches conversational text by term coverage', async () => {
+    await resetMemories();
+    for (let i = 0; i < 12; i += 1) {
+      await memoryDB.createMemory({ type: 'fact', content: 'Zebra zebra migration migration.', sourceAgentId: 'other-agent' });
+    }
+    const owner = 'example-mind';
+    const covering = await memoryDB.createMemory({ type: 'fact', content: 'A long note where the zebra migration window is decided among many other unrelated words.', sourceAgentId: owner });
+    const repeated = await memoryDB.createMemory({ type: 'fact', content: 'Migration migration migration migration.', sourceAgentId: owner });
+    await memoryDB.createMemory({ type: 'fact', content: 'Zebra migration window, archived.', sourceAgentId: owner, status: 'archived' });
+
+    const message = 'What about the zebra migration window?';
+    // Default websearch semantics require every term, so they stay unchanged for other callers.
+    const allTerms = await memoryDB.hybridSearchMemories('zebra migration window', null, { sourceAgentId: owner });
+    expect(allTerms.memories.map(row => row.id)).toEqual([covering.id]);
+    expect(allTerms.memories[0].sourceAgentId).toBe(owner);
+
+    const anyTerm = await memoryDB.hybridSearchMemories(message, null, { sourceAgentId: owner, lexicalMatch: 'any', limit: 1 });
+    expect(anyTerm.memories.map(row => row.id)).toEqual([covering.id]);
+    const uncapped = await memoryDB.hybridSearchMemories(message, null, { sourceAgentId: owner, lexicalMatch: 'any' });
+    expect(uncapped.memories.map(row => row.id)).toEqual([covering.id, repeated.id]);
+
+    expect((await memoryDB.hybridSearchMemories('the and of', null, { sourceAgentId: owner, lexicalMatch: 'any' })).memories).toEqual([]);
+    expect((await memoryDB.hybridSearchMemories('zebra', null, { sourceAgentId: 'nobody', lexicalMatch: 'any' })).memories).toEqual([]);
+  });
 });
 
 describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
@@ -1336,4 +1361,82 @@ describe.skipIf(!runDb)('durable brain memory identity (#11007)', () => {
   });
 
   afterAll(async () => { await query('DELETE FROM brain_memory_links'); });
+});
+
+describe.skipIf(!runDb)('mind memory review transactions', () => {
+  const provenance = { mindId: 'cos-persistent-mind', turnId: 'synthetic-turn', providerId: 'synthetic-provider', model: 'synthetic-model' };
+  const seed = (fields = {}) => memoryDB.createMemory({ type: 'observation', content: 'Synthetic observation.', sourceAgentId: provenance.mindId, ...fields });
+  const review = (source, verdict, extra = {}) => memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: source.version, verdict, ...extra }, provenance);
+  beforeEach(async () => { await query('DELETE FROM memories'); });
+
+  it('atomically learns once, exposes provenance and preserves the source until an explicit archive', async () => {
+    const source = await seed();
+    await review(source, 'defer', { rationale: 'Uncertain; do not archive yet.' });
+    expect(await memoryDB.peekMemory(source.id)).toMatchObject({ status: 'active', content: source.content, importance: source.importance, accessCount: 0, updatedAt: source.updatedAt });
+    const [a, b] = await Promise.all([review(source, 'learn', { lesson: 'Synthetic lesson' }), review(source, 'learn', { lesson: 'Synthetic lesson' })]);
+    expect(a.review.lessonId).toBe(b.review.lessonId);
+    expect([a.duplicate, b.duplicate].sort()).toEqual([false, true]);
+    expect(a.review).toMatchObject({ ...provenance, expectedVersion: source.version });
+    const links = await query("SELECT * FROM memory_links WHERE source_id = $1 AND target_id = $2 AND link_type = 'derived-from'", [a.review.lessonId, source.id]);
+    expect(links.rows).toHaveLength(1);
+    expect(await memoryDB.peekMemory(a.review.lessonId)).toMatchObject({ type: 'learning', sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId });
+    expect(await memoryDB.peekMemory(source.id)).toMatchObject({ content: source.content, status: 'active', version: source.version, lastReview: { outcomes: { learn: a.review } } });
+    await review(source, 'archive', { rationale: 'Details retired explicitly.' });
+    expect(await review(source, 'archive', { rationale: 'Details retired explicitly.' })).toMatchObject({ duplicate: true });
+    expect((await memoryDB.peekMemory(source.id)).status).toBe('archived');
+    expect((await memoryDB.getMemories({ sourceAgentId: provenance.mindId })).total).toBe(1);
+    expect((await query('SELECT COUNT(*)::int AS count FROM memories')).rows[0].count).toBe(2);
+    const corrected = await memoryDB.updateMemory(source.id, { content: 'Corrected source', status: 'active' });
+    await review(corrected, 'keep');
+    expect((await memoryDB.peekMemory(a.review.lessonId)).reviewOrigin).toMatchObject({ sourceId: source.id, sourceVersion: source.version, ...provenance });
+    await memoryDB.updateMemory(a.review.lessonId, { reviewOrigin: { sourceId: 'spoofed' } });
+    expect((await memoryDB.peekMemory(a.review.lessonId)).reviewOrigin.sourceId).toBe(source.id);
+  });
+
+  it('rejects a correction/protection committed while the review waits on the source lock', async () => {
+    const source = await seed();
+    let pending;
+    await withTransaction(async client => {
+      await client.query('SELECT id FROM memories WHERE id = $1 FOR UPDATE', [source.id]);
+      pending = review(source, 'learn', { lesson: 'Must not be persisted' });
+      // Attach a handler before releasing the transaction so rejection is owned.
+      pending.catch(() => {});
+      await client.query("UPDATE memories SET content = 'Corrected synthetic observation', tags = ARRAY['mind:important'] WHERE id = $1", [source.id]);
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    const corrected = await memoryDB.peekMemory(source.id);
+    await expect(review(corrected, 'archive')).rejects.toMatchObject({ code: 'MEMORY_PROTECTED' });
+    const foreign = await seed({ sourceAgentId: 'another-agent' });
+    await expect(review(foreign, 'keep')).rejects.toMatchObject({ status: 404 });
+    expect((await memoryDB.getMemories()).total).toBe(2);
+    expect((await memoryDB.getMemoryVersion(source.id, source.version)).content).toBe(source.content);
+  });
+
+  it('rolls back a lesson and review if the provenance link fails', async () => {
+    const source = await seed();
+    await query("ALTER TABLE memory_links ADD CONSTRAINT test_review_link_failure CHECK (note IS DISTINCT FROM 'synthetic-forced-link-failure') NOT VALID");
+    try {
+      await expect(review(source, 'learn', { lesson: 'Rolled back lesson', rationale: 'synthetic-forced-link-failure' })).rejects.toThrow();
+      expect((await memoryDB.getMemories()).total).toBe(1);
+      expect(await memoryDB.peekMemory(source.id)).toMatchObject({ status: 'active', lastReview: null, content: source.content });
+    } finally {
+      await query('ALTER TABLE memory_links DROP CONSTRAINT test_review_link_failure');
+    }
+  });
+});
+
+describe.skipIf(!runDb)('mind reflection selection', () => {
+  it('filters ownership, retention, age and settled versions before LIMIT without access writes', async () => {
+    const owner = 'synthetic-reflection-mind';
+    const source = await memoryDB.createMemory({ content: 'Fading owned source', type: 'observation', importance: 0.1, sourceAgentId: owner });
+    const foreign = await memoryDB.createMemory({ content: 'Foreign source', type: 'fact', importance: 0.1, sourceAgentId: 'other-reflection-mind' });
+    const protectedSource = await memoryDB.createMemory({ content: 'Protected source', type: 'fact', tags: ['mind:important'], importance: 0.1, sourceAgentId: owner });
+    await query("UPDATE memories SET created_at = NOW() - INTERVAL '60 days' WHERE id = ANY($1)", [[source.id, foreign.id, protectedSource.id]]);
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, accessCount: 0 });
+    await memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: 1, verdict: 'keep' }, { mindId: owner, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toBeNull();
+    await memoryDB.updateMemory(source.id, { content: 'New source version' });
+    expect(await memoryDB.selectMindMemoryForReview(owner)).toMatchObject({ id: source.id, version: 2, accessCount: 0 });
+    await query('DELETE FROM memories WHERE id = ANY($1)', [[source.id, foreign.id, protectedSource.id]]);
+  });
 });

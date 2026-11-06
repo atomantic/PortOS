@@ -49,6 +49,10 @@ export const saveMusicVideoStorySummary = (id, body, options = {}) => request(`/
 export const proposeMusicVideoStory = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Ask AI about a batch of shots, in either direction. Body: { providerId, model?, effort?, executionOptions?, direction, sceneIds, instruction?, preview? }. Nothing is saved.
+export const proposeMusicVideoShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/shot-sheet/propose`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // Draft the Cast guide, Environment guide and Visual language from the story summary.
 // Body: { providerId, model?, effort?, executionOptions?, instruction?, preview? }. Nothing is saved.
 export const proposeMusicVideoArtGuides = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/story/art-guides`, {
@@ -202,6 +206,11 @@ export const mergeMusicVideoPreviousScene = (id, sceneId, backend, options = {})
 export const moveMusicVideoSceneStart = (id, sceneId, startSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/start`, {
     method: 'POST', body: JSON.stringify({ startSec }), ...options,
+  });
+// Move a shot's end; the next shot starts there too, growing or shrinking → { project, scene, next }.
+export const moveMusicVideoSceneEnd = (id, sceneId, endSec, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/end`, {
+    method: 'POST', body: JSON.stringify({ endSec }), ...options,
   });
 // Optional vocal stem (#8977): a full-length vocal bounce on the master's
 // timebase that performance shots are conditioned on. Both → the project.
@@ -619,6 +628,11 @@ export const deleteMusicVideoDevArtifact = (id, artifactId, options = {}) =>
 // advances server-side and reports over the `music-video:cast-and-sets` socket event.
 export const getMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
+export const linkMusicVideoCastAndSetsToCatalog = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog`, { method: 'POST', body: '{}', ...options });
+// Saves a new version of a catalog stage's visual guide: `{ project, stage, artifact, catalogCheckin }`.
+export const rebuildMusicVideoCatalogGuide = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog/guide`, { method: 'POST', body: '{}', ...options });
 // `{ changes: null | { images: [{ key, label }], cast: [name] } }`: Casting changes since the sheet was built.
 export const getMusicVideoCastAndSetsCastingChanges = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/casting-changes`, options);
@@ -647,6 +661,12 @@ export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
 // sheet (standing feedback the direction keeps honoring); a target names one image.
 export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const renderMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/render`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const refreshMusicVideoCastAndSetsFeedbackRenderer = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/refresh-renderer`, { method: 'POST', body: JSON.stringify(body), ...options });
+export const removeMusicVideoCastAndSetsImageFeedback = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/remove-image-note`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const removeMusicVideoCastAndSetsFeedback = (id, feedbackId, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/feedback/${encodeURIComponent(feedbackId)}`, { method: 'DELETE', ...options });
 export const resumeMusicVideoCastAndSets = (id, options = {}) =>
@@ -656,11 +676,11 @@ export const inspectMusicVideoCastAndSetsImages = (id, body = {}, options = {}) 
 export const acknowledgeMusicVideoCastAndSetsImage = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/acknowledge-image`, { method: 'POST', body: JSON.stringify(body), ...options });
 
-export const approveMusicVideoCastAndSets = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...options });
+export const approveMusicVideoCastAndSets = (id, { catalogBasis, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/approve`, { method: 'POST', ...(catalogBasis ? { body: JSON.stringify({ catalogBasis }) } : {}), ...options });
 // "Keep approved" (#10141): re-stamp an approved check-in on the project's current concept, style, subjects and song.
-export const reconfirmMusicVideoCastAndSets = (id, options = {}) =>
-  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...options });
+export const reconfirmMusicVideoCastAndSets = (id, { catalogBasis, ...options } = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/reconfirm`, { method: 'POST', ...(catalogBasis ? { body: JSON.stringify({ catalogBasis }) } : {}), ...options });
 export const skipMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/skip`, { method: 'POST', ...options });
 // Start over: drop a check-in that is not approved (its images stay in the gallery).

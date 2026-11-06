@@ -1,3 +1,4 @@
+import { GEMINI_OMNI_WEB_MODEL } from '../../../server/lib/geminiWebVideo.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { formatUsd } from '../utils/formatters.js';
 
@@ -30,10 +31,14 @@ export function videosButtonLabel({ renderableCount, footageCount, waiting }) {
 /**
  * The confirm line for a clip batch. fal and Runway takes are priced per scene
  * with the same `meteredSceneTake` the scene card shows; a scene it cannot
- * price is counted as unpriced. Local and Grok renders show the count only.
+ * price is counted as unpriced. Local and Grok renders show the count only;
+ * Gemini also says where the images go, since no key or price signals it.
  */
 export function videoBatchPreview({ scenes, backend, videoSettings, songDurationSec = null }) {
   const count = scenes.length;
+  if (backend === 'gemini') {
+    return { count, backend, text: `Generate ${plural(count, 'clip')} on ${GEMINI_OMNI_WEB_MODEL.label}: sends prompts and images to Google and uses the video quota of the account signed in to the PortOS Browser` };
+  }
   if (backend !== 'fal' && backend !== 'runway') return { count, backend, text: `Generate ${plural(count, 'clip')} on ${backend === 'grok' ? 'Grok' : 'the local renderer'}` };
   const takes = scenes.map((scene) => meteredSceneTake(backend, { scene, videoSettings, songDurationSec }));
   const priced = takes.filter((take) => take.costUsd != null);

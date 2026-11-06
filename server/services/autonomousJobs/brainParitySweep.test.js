@@ -60,6 +60,26 @@ describe('runBrainParitySweep', () => {
     expect(result.outOfParityRecords).toBe(0)
   })
 
+  it('preserves legacy warning counts while identifying unverified timestamps', async () => {
+    const check = vi.fn().mockResolvedValue({ reports: [peerReport({
+      summary: { total: 1, 'in-parity': 0, 'local-only': 0, 'peer-only': 0, diverged: 1, unknown: 1 },
+      checksums: { local: 'aaa', peer: 'bbb', match: false }
+    })] })
+    const result = await runBrainParitySweep({ check })
+    expect(result).toMatchObject({ peersOutOfParity: 1, outOfParityRecords: 1, peersWithTimestampTies: 1, timestampTieRecords: 1 })
+    expect(result.peers[0]).toMatchObject({ outOfParity: 1, timestampTies: 1, checksumMatch: false })
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('unverified'))
+  })
+
+  it('logs all flagged records and peer names alongside timestamp ties', async () => {
+    const check = vi.fn().mockResolvedValue({ reports: [peerReport({
+      summary: { total: 6, 'in-parity': 0, 'local-only': 5, 'peer-only': 0, diverged: 1, unknown: 1 }
+    })] })
+    const result = await runBrainParitySweep({ check })
+    expect(result).toMatchObject({ outOfParityRecords: 6, timestampTieRecords: 1 })
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/6 record\(s\) flagged, 1 timestamp tie\(s\) unverified.*Peer One/))
+  })
+
   it('does not treat an unverified checksum as divergence', async () => {
     // A peer too old to serve a checksum yields match:null — unknown, not a
     // mismatch. Reporting it as out of parity would cry wolf on every sweep.
@@ -68,6 +88,7 @@ describe('runBrainParitySweep', () => {
     })
     const result = await runBrainParitySweep({ check })
     expect(result.peersOutOfParity).toBe(0)
+    expect(result.peersWithTimestampTies).toBe(0)
     expect(result.peers[0].checksumMatch).toBeNull()
   })
 

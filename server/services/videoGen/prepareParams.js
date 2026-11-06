@@ -95,7 +95,7 @@ export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
 
 /**
  * Extra reference images (`referenceImage1..3` + `referenceLabel1..3`) condition
- * a Grok image-to-video render beside its source frame. Any other lane or a
+ * a Grok or Gemini image-to-video render beside its source frame. Any other lane or a
  * request with no source frame would drop them silently, so each is refused with a 400 instead. The caller owns cleanup.
  */
 export function referenceImageUploadsError({ backend, body, uploads = {} }) {
@@ -106,7 +106,7 @@ export function referenceImageUploadsError({ backend, body, uploads = {} }) {
   const refuse = (message, code) => new ServerError(message, { status: 400, code });
   if (orphanLabel >= 0) return refuse(`referenceLabel${orphanLabel + 1} needs a matching referenceImage${orphanLabel + 1} upload.`, 'VIDEO_REFERENCE_LABEL_ORPHANED');
   if (slots.length > MAX_VIDEO_REFERENCE_IMAGES) return refuse(`At most ${MAX_VIDEO_REFERENCE_IMAGES} reference images are supported (referenceImage1..${MAX_VIDEO_REFERENCE_IMAGES}).`, 'VIDEO_REFERENCE_IMAGES_TOO_MANY');
-  if (backend !== VIDEO_GEN_MODE.GROK) return refuse('referenceImage uploads are only used by the Grok backend.', 'VIDEO_REFERENCE_IMAGES_GROK_ONLY');
+  if (backend !== VIDEO_GEN_MODE.GROK && backend !== VIDEO_GEN_MODE.GEMINI) return refuse('referenceImage uploads are only used by the Grok and Gemini backends.', 'VIDEO_REFERENCE_IMAGES_GROK_ONLY');
   if (!uploads.sourceImage && !body.sourceImageFile) return refuse('referenceImage uploads need a source image (sourceImage) to animate.', 'VIDEO_REFERENCE_IMAGES_NEED_SOURCE');
   return null;
 }

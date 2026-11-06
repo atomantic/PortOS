@@ -20,26 +20,24 @@ function changed(project) {
 export const getProductionReview = async id => present(await requireProject(id));
 
 /**
- * A director's shot still or clip needs the approved art direction, not a
- * separate shot or storyboard lock. Production runs still wait for the
- * reviewed storyboard. A production run's bulk work also waits for the animated proof, except the
+ * A director's own shot still or clip is never gated on an approval: the owner
+ * edits prompts and renders shots whenever they choose. Review state (art
+ * direction, a flagged rendering defect) stays advice shown in Production
+ * review and on the take. Production runs still wait for the reviewed
+ * storyboard, and their bulk work also waits for the animated proof, except the
  * stills of a run that stops before clips: the proof is made from clips.
  */
 export async function assertMusicVideoSceneReview(tag, kind = null) {
-  if (!tag?.projectId || !tag.sceneId) return;
+  if (!tag?.projectId || !tag.sceneId || !tag.productionRunId) return;
   const project = await requireProject(tag.projectId);
   const scene = project.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const take = scene && selectedPlateTake(scene);
   if (kind === 'video' && currentPlateEvidence(scene, take)?.checks.some((check) => check.id === 'render-quality' && check.status === 'fail')
     && !renderQualityAcknowledged(scene, take)) throw new ServerError('Rendering defect: regenerate this still or explicitly acknowledge its defect before animation.', { status: 409, code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
-  const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
-  if (boardShot) assertProductionApproval(project, 'art');
-  else assertProductionApproval(project, 'storyboard');
-  if (tag.productionRunId) {
-    const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
-    const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
-    if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
-  }
+  assertProductionApproval(project, 'storyboard');
+  const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
+  const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
+  if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
 }
 
 /** Preserve the original handoff verbatim in an immutable artifact, never its approvals. */
@@ -218,7 +216,8 @@ export async function prepareProductionReview(id, options = {}) {
   if (project.productionReview?.draft?.storyboardSource === 'document') return present(project);
   const stage = project.castAndSets;
   const hasManualGuide = !productionReadiness(project).art.problems.length;
-  if (!hasManualGuide && (!stage?.direction || !stage.artifactId)) {
+  if (stage?.source === 'catalog' && !stage.catalogCheckin?.approved) return present(project);
+  if (stage?.source !== 'catalog' && !hasManualGuide && (!stage?.direction || !stage.artifactId)) {
     if (!stage || ['failed', 'skipped'].includes(stage.status)) {
       const { startCastAndSets } = await import('./castAndSetsService.js');
       await startCastAndSets(id, options);
@@ -227,14 +226,14 @@ export async function prepareProductionReview(id, options = {}) {
   }
   // Applying references does not grant production approval. That lives only in
   // productionReview.approvals and requires the operator route.
-  if (!hasManualGuide && stage?.status === 'review') {
+  if (stage?.source !== 'catalog' && !hasManualGuide && stage?.status === 'review') {
     const { approveCastAndSets } = await import('./castAndSetsService.js');
     await approveCastAndSets(id);
     project = await requireProject(id);
   }
   // Merge against the latest draft while holding the write lock: a guide job
   // may finish while the operator is editing its text.
-  await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
+  if (stage?.source !== 'catalog') await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
   project = await requireProject(id);
   if (project.productionReview?.draft?.storyboardSource === 'document' || !productionReadiness(project).art.approved) return present(project);
   if (!project.scenes?.length) {

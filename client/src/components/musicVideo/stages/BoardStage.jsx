@@ -5,6 +5,8 @@ import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
 import SceneCard from '../SceneCard.jsx';
+import useShotSheetMapFilter from '../../../hooks/useShotSheetMapFilter.js';
+import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../../../server/lib/musicVideoShotSheet.js';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
@@ -16,7 +18,7 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, shotUsesEffect } from '../../../lib/musicVideoShotEffects.js';
-import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
+import { FOOTAGE_OPTIONAL_MODES, sceneShotName } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
 import { getStoryboard } from '../../../services/api';
@@ -102,9 +104,7 @@ export default function BoardStage({ board }) {
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const numbers = shotNumbers(scenes);
   const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
-  const shotName = (scene) => [coldNumbers.has(scene.sceneId) ? `Cold open ${coldNumbers.get(scene.sceneId)}`
-    : numbers.has(scene.sceneId) ? `Shot ${numbers.get(scene.sceneId)}` : null,
-    scene.sectionLabel || scene.label].filter(Boolean).join(' · ') || `Scene ${scene.order + 1}`;
+  const shotName = (scene) => sceneShotName(scene, { number: numbers.get(scene.sceneId), coldOpen: coldNumbers.get(scene.sceneId) });
   const counts = { all: scenes.length, attention: 0, missing: 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
@@ -119,8 +119,11 @@ export default function BoardStage({ board }) {
     if (next) params.set('effect', next); else params.delete('effect');
     return params;
   }, { replace: true });
+  const [mapFilter, setMapFilter] = useShotSheetMapFilter();
+  const onMap = new Set(shotSheetMapRows(shotSheetRows(project), mapFilter).map((row) => row.scene.sceneId));
   // The open scene stays listed while it is edited, even once fixing it drops it from the filter.
   const visible = scenes.filter((scene) => scene.sceneId === activeSceneId || (sceneMatchesFilter(codesById.get(scene.sceneId), filter)
+    && onMap.has(scene.sceneId)
     && (!effectFilter || shotUsesEffect(effectsById.get(scene.sceneId), effectFilter))));
   const visibleIds = visible.map((scene) => scene.sceneId).join('\n');
   const thumbnailsRef = useRef(new Map());
@@ -207,6 +210,12 @@ export default function BoardStage({ board }) {
               {shotEffectLabel(effectFilter)} <X size={12} aria-hidden="true" />
             </button>
           )}
+          {mapFilter && (
+            <button type="button" onClick={() => setMapFilter(null)} aria-label="Clear the map filter"
+              className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent sm:min-h-0">
+              {SHOT_SHEET_MAP_BARS.find(([id]) => id === mapFilter.bar)[1]}: {mapFilter.value || 'Not set'} <X size={12} aria-hidden="true" />
+            </button>
+          )}
           <span className="hidden text-port-text-muted sm:inline">j / k to move between scenes</span>
         </div>
       )}
@@ -239,10 +248,10 @@ export default function BoardStage({ board }) {
             {codesById.get(scene.sceneId).length > 0 && <span className="block text-xs text-port-warning">{SCENE_ATTENTION_LABELS[codesById.get(scene.sceneId)[0]]}</span>}
             {PANEL_NOTICES[panelOf(scene)?.state] && <span className="block text-xs text-port-warning">{PANEL_NOTICES[panelOf(scene).state]}</span>}
           </button>)}
-          {scenes.length > 0 && filter === 'all' && (
+          {scenes.length > 0 && filter === 'all' && !mapFilter && (
             <EndingThumbnail project={project} open={endingOpen} onOpen={endingOpen ? closeEnding : () => openEnding('1')} />
           )}
-          {scenes.length > 0 && filter === 'all' && (
+          {scenes.length > 0 && filter === 'all' && !mapFilter && (
             <CreditsThumbnail project={project} open={creditsOpen} onOpen={creditsOpen ? closeEnding : () => openEnding('credits')} />
           )}
         </div>
@@ -275,7 +284,7 @@ export default function BoardStage({ board }) {
               stepShot={stepShot}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
-              shotNumber={numbers.get(scene.sceneId)}
+              shotName={shotName(scene)}
               isLast={idx === scenes.length - 1}
               generatingFrame={sceneMedia.genScenes[scene.sceneId]}
               generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
@@ -300,6 +309,7 @@ export default function BoardStage({ board }) {
               onMergePrevious={board.onMergePreviousScene}
               prevStartSec={scenes[idx - 1]?.startSec ?? null}
               onMoveStart={board.onMoveSceneStart}
+              onMoveEnd={board.onMoveSceneEnd}
               nextEndSec={scenes[idx + 1]?.endSec ?? null}
               onRepairPerformance={['code', 'document'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}

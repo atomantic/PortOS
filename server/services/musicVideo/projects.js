@@ -68,8 +68,13 @@ function announceNewProject(id) {
   autoSubscribeRecordToAllPeers('musicVideoProject', id).catch(() => {});
 }
 
+const hasLinkedSubjects = (project) => Array.isArray(project?.concept?.subjects) && project.concept.subjects.some((subject) => subject?.ingredientId);
+
 export async function listProjects(options = {}) {
-  return (await selectBackend()).listProjects(options);
+  const projects = await (await selectBackend()).listProjects(options);
+  if (getBackendName() !== 'postgres' || !projects.some(hasLinkedSubjects)) return projects;
+  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return resolveProjectsCatalogDescriptions(projects);
 }
 
 /** Live `{ id, name }` rows for the sidebar's Music Video sub-nav. */
@@ -78,12 +83,32 @@ export async function listProjectNames() {
 }
 
 export async function listProjectPage(options = {}) {
-  return (await selectBackend()).listProjectPage(options);
+  const page = await (await selectBackend()).listProjectPage(options);
+  if (getBackendName() !== 'postgres' || !page.items.some(hasLinkedSubjects)) return page;
+  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
 }
 
-/** Null when missing; a caller that answers 404 for that uses requireProject.js. */
-export async function getProject(id, options = {}) {
+/** The stored snapshots, used when offering a legacy difference for review. */
+export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
+}
+
+async function withCatalogDescriptions(project) {
+  let current = project;
+  if (getBackendName() === 'postgres' && hasLinkedSubjects(project)) {
+    const { resolveProjectCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+    current = await resolveProjectCatalogDescriptions(project);
+  }
+  if (current?.castAndSets?.source !== 'catalog') return current;
+  const { withCatalogCheckin } = await import('./catalogCheckin.js');
+  return withCatalogCheckin(current);
+}
+
+/** Null when missing; linked descriptions come from the catalog when usable. */
+export async function getProject(id, options = {}) {
+  const backend = await selectBackend();
+  return presentMusicVideoDependencies(await withCatalogDescriptions(await backend.getProject(id, options)));
 }
 
 /** Live project ids (or all when includeDeleted) — used by tombstone GC sweeps. */
@@ -195,36 +220,37 @@ export async function createProject(input) {
   const project = await (await selectBackend()).createProject(snapshotted);
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);
-  return project;
+  return withCatalogDescriptions(project);
 }
 
 export async function cloneProject(id, options = {}) {
   const project = await (await selectBackend()).cloneProject(id, options);
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);
-  return project;
+  return withCatalogDescriptions(project);
 }
 
 export async function updateProject(id, patch) {
   const backend = await selectBackend();
   const seeded = await seedTrackMetadataOnUpdate(id, patch);
-  const needsSnapshot = seeded?.concept?.universeId !== undefined || seeded?.concept?.characterStyleId !== undefined
-    || seeded?.visualSpec?.moodBoardId !== undefined;
-  const resolved = needsSnapshot ? await withStyleSnapshots(seeded, await backend.getProject(id)) : seeded;
+  const { catalogDescriptionBases = [], ...projectPatch } = seeded;
+  const needsSnapshot = projectPatch?.concept?.universeId !== undefined || projectPatch?.concept?.characterStyleId !== undefined
+    || projectPatch?.visualSpec?.moodBoardId !== undefined;
+  const resolved = needsSnapshot ? await withStyleSnapshots(projectPatch, await backend.getProject(id)) : projectPatch;
   const castChanged = resolved?.concept?.subjects !== undefined;
   // A reference added from the gallery or a mood board takes its catalog record's name.
   // Linking the cast alone leaves approvals current, so naming then must not stale them.
   const referencesChanged = resolved?.visualSpec?.references !== undefined;
   const nameReferences = async (saved) => (referencesChanged || castChanged
     ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);
-  if (!Array.isArray(resolved.scenes)) {
+  if (!castChanged && !Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
-    if (castChanged) queueProjectCatalogLinkSync(id);
-    return nameReferences(next);
+    return nameReferences(await withCatalogDescriptions(next));
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
-  const { project } = await mutateProjectRecord(id, current => ({ project: applyProjectPatch(current, resolved) }));
+  const { project } = await mutateProjectRecord(id, (current) => ({ project: applyProjectPatch(current, resolved) }),
+    { catalogDescriptionBases, includeNewLinks: true });
   if (castChanged) queueProjectCatalogLinkSync(id);
   return nameReferences(project);
 }
@@ -259,13 +285,13 @@ export async function deleteProject(id) {
 export async function setProjectAnalysis(id, analysis, sourceProject) {
   const next = await (await selectBackend()).setProjectAnalysis(id, analysis, sourceProject);
   emitRecordUpdated('musicVideoProject', id);
-  return next;
+  return withCatalogDescriptions(next);
 }
 
 export async function setProjectMidiTranscription(id, midi) {
   const next = await (await selectBackend()).setProjectMidiTranscription(id, midi);
   emitRecordUpdated('musicVideoProject', id);
-  return next;
+  return withCatalogDescriptions(next);
 }
 
 /** Add a director's shot at its time; shots locked before stay locked. */
@@ -323,12 +349,60 @@ export async function reorderProjectScenes(id, orderedIds) {
  * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
-  const [{ splitScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
-    const outcome = splitScene(current, sceneId, options);
-    const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
-    return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
+  const [{ splitScene }, { carryShotLocks }, followShots] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js'), import('../storyboards/followShots.js')]);
+  // A board with no room for the new panels refuses before the shots change.
+  const stored = await (await selectBackend()).getProject(id);
+  if (!stored) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
+  const panelIds = followShots.boardFollowsShots(stored)
+    ? await followShots.reservePanelsForSplit(stored, sceneId, splitScene(stored, sceneId, options).scenes.length - 1) : [];
+  const outcome = await mutateProjectRecord(id, (current) => {
+    const split = splitScene(current, sceneId, options);
+    const from = Object.fromEntries(split.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
+    if (!panelIds.length) return { ...split, project: carryShotLocks(current, split.project, { from }) };
+    if (split.scenes.length - 1 !== panelIds.length) throw new ServerError('The shot changed while it was being split. Try again.', { status: 409, code: 'SHOTS_CHANGED' });
+    // Each later piece gets a panel of its own, so the shots stay 1:1 with the board.
+    const ownPanel = new Map(split.scenes.slice(1).map((piece, i) => [piece.sceneId, panelIds[i]]));
+    const scenes = split.project.scenes.map((scene) => (ownPanel.has(scene.sceneId) ? { ...scene, panelId: ownPanel.get(scene.sceneId) } : scene));
+    const project = carryShotLocks(current, { ...split.project, scenes }, { from });
+    return { project, scenes: split.scenes.map((piece) => (ownPanel.has(piece.sceneId) ? { ...piece, panelId: ownPanel.get(piece.sceneId) } : piece)) };
   });
+  if (!panelIds.length) return outcome;
+  const [first, ...later] = outcome.scenes;
+  await followShots.applyShotEditToBoard(outcome.project, {
+    lengths: [followShots.panelLength(first)].filter(Boolean),
+    copies: later.map((piece) => ({ fromPanelId: first.panelId, id: piece.panelId, seconds: followShots.panelLength(piece)[1] })),
+  });
+  return afterBoardWrite(id, outcome);
+}
+
+// The board write's sync may have touched the shots, so answer with the record as it is now.
+async function afterBoardWrite(id, outcome) {
+  const project = await getProject(id);
+  const fresh = (scene) => project.scenes?.find((entry) => entry.sceneId === scene?.sceneId) ?? scene;
+  return { ...outcome, project,
+    ...(outcome.scene ? { scene: fresh(outcome.scene) } : {}),
+    ...(outcome.scenes ? { scenes: outcome.scenes.map(fresh) } : {}),
+    ...(outcome.previous ? { previous: fresh(outcome.previous) } : {}),
+    ...(outcome.next ? { next: fresh(outcome.next) } : {}),
+  };
+}
+
+/** A merge's panels: the kept shot's takes the joined length and the removed shot's goes. */
+async function mergeIntoBoard(id, before, outcome) {
+  const followShots = await import('../storyboards/followShots.js');
+  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  const stillThere = new Set(outcome.project.scenes.map((scene) => scene.sceneId));
+  const removed = before.filter((scene) => !stillThere.has(scene.sceneId) && scene.panelId && scene.panelId !== outcome.scene.panelId).map((scene) => scene.panelId);
+  await followShots.applyShotEditToBoard(outcome.project, { lengths: [followShots.panelLength(outcome.scene)].filter(Boolean), remove: removed });
+  return afterBoardWrite(id, outcome);
+}
+
+/** A moved cut's panels: both shots beside it take their new lengths. */
+async function moveCutOnBoard(id, outcome, shots) {
+  const followShots = await import('../storyboards/followShots.js');
+  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  await followShots.applyShotEditToBoard(outcome.project, { lengths: shots.map(followShots.panelLength).filter(Boolean) });
+  return afterBoardWrite(id, outcome);
 }
 
 /** Cut shots on sung words over the chosen lyric lines, or lay them out on an empty board (projectsLogic.cutScenesOnLyricWords, #14820). */
@@ -359,8 +433,15 @@ export async function recutProjectToPacing(id, revision) {
  * of the split. Returns `{ project, scene }`.
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
-  const { mergeNextScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
+  const [{ mergeNextScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  let before = [];
+  const outcome = await mutateProjectRecord(id, (current) => {
+    before = current.scenes || [];
+    const merged = mergeNextScene(current, sceneId, options);
+    assertBoardHoldsShotLengths(current, [merged.scene]);
+    return merged;
+  });
+  return mergeIntoBoard(id, before, outcome);
 }
 
 /**
@@ -369,8 +450,15 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
  * Returns `{ project, scene }`.
  */
 export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
-  const { mergePreviousScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergePreviousScene(current, sceneId, options));
+  const [{ mergePreviousScene }, { assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  let before = [];
+  const outcome = await mutateProjectRecord(id, (current) => {
+    before = current.scenes || [];
+    const merged = mergePreviousScene(current, sceneId, options);
+    assertBoardHoldsShotLengths(current, [merged.scene]);
+    return merged;
+  });
+  return mergeIntoBoard(id, before, outcome);
 }
 
 /**
@@ -378,13 +466,14 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
-  const { applySceneUpdate } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => {
+  const [{ applySceneUpdate }, { assertBoardHoldsFirstStart, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
     if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
     const scene = scenes[index];
     const previous = index > 0 ? scenes[index - 1] : null;
+    if (typeof previous?.startSec !== 'number') assertBoardHoldsFirstStart(current, startSec);
     if (typeof scene.endSec === 'number' && startSec >= scene.endSec) {
       throw new ServerError('A shot has to start before it ends', { status: 400, code: 'VALIDATION_ERROR' });
     }
@@ -393,8 +482,46 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     }
     let project = applySceneUpdate(current, sceneId, { startSec }).project;
     if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
+    assertBoardHoldsShotLengths(current, [project.scenes[index], previous ? project.scenes[index - 1] : null]);
     return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
   });
+  return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
+}
+
+// The shortest shot a moved end leaves behind it (projectsLogic MIN_SPLIT_PIECE_SEC).
+const MIN_SHOT_SEC = 0.1;
+
+/**
+ * Move the cut after a shot: the shot ends at `endSec` and the next shot starts
+ * there, growing or shrinking to meet it while its own end stays put. The last
+ * shot just ends there, inside the song. Returns `{ project, scene, next }`.
+ */
+export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
+  const [{ applySceneUpdate }, { assertBoardHoldsLastEnd, assertBoardHoldsShotLengths }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const outcome = await mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
+    if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+    const scene = scenes[index];
+    const following = scenes[index + 1];
+    const next = following && typeof following.startSec === 'number' && typeof following.endSec === 'number' ? following : null;
+    if (typeof scene.startSec === 'number' && endSec < scene.startSec + MIN_SHOT_SEC) {
+      throw new ServerError(`A shot has to run at least ${MIN_SHOT_SEC}s`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (next && endSec > next.endSec - MIN_SHOT_SEC) {
+      throw new ServerError('That would leave the next shot with no length. Merge the two shots instead, or pick an earlier end.', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const songSec = current.audioAnalysis?.durationSec;
+    if (!next && songSec > 0 && endSec > songSec) {
+      throw new ServerError('The last shot can\'t run past the end of the song', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (!next) assertBoardHoldsLastEnd(current, endSec);
+    let project = applySceneUpdate(current, sceneId, { endSec }).project;
+    if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
+    assertBoardHoldsShotLengths(current, [project.scenes[index], next ? project.scenes[index + 1] : null]);
+    return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
+  });
+  return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
 }
 
 /**
@@ -528,19 +655,52 @@ export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
-async function mutateProjectRecordAdmitted(id, transform, _options = {}, mutate = null) {
+async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate = null) {
   let dropped = null;
+  let catalogRecords = [];
+  let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
-  const outcome = await write(id, async (current) => {
+  const outcome = await write(id, async (stored, context = {}) => {
+    if (context.client && hasLinkedSubjects(stored)) descriptions = await import('./subjectDescriptionSync.js');
+    let current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
+    if (current?.castAndSets?.source === 'catalog') {
+      const { withCatalogCheckin } = await import('./catalogCheckin.js');
+      current = await withCatalogCheckin(current, { client: context.client });
+    }
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
-    const outcome = await transform(current);
-    await assertNewMediaSelections(current, outcome.project);
-    dropped = { project: current, assets: droppedTakeAssets(current, outcome.project) };
-    return { ...outcome, project: retainMusicVideoDependencies(current, outcome.project) };
+    const outcome = await transform(current, { ...context, storedProject: stored });
+    if (outcome.project?.castAndSets?.catalogCheckin) {
+      const { catalogCheckin: _projection, ...stage } = outcome.project.castAndSets;
+      outcome.project = { ...outcome.project, castAndSets: stage };
+    }
+    // A newly linked subject may be the first catalog link on this project.
+    if (context.client && !descriptions && hasLinkedSubjects(outcome.project)) descriptions = await import('./subjectDescriptionSync.js');
+    const bases = options.catalogDescriptionBases ?? (current.concept?.subjects || []).map((subject) => ({ subjectId: subject.id, description: subject.description || '' }));
+    const synced = descriptions && !outcome.skipPersist && !options.skipDescriptionSync
+      ? await descriptions.syncEditedSubjectDescriptions(current, outcome.project, { client: context.client, bases, includeNewLinks: options.includeNewLinks })
+      : { project: outcome.project, records: [] };
+    catalogRecords = [...(outcome.catalogRecords || []), ...synced.records];
+    const next = descriptions ? descriptions.preserveUnchangedDescriptionSnapshots(stored, current, synced.project, options.commitSubjectIds) : synced.project;
+    await assertNewMediaSelections(stored, next);
+    dropped = { project: stored, assets: droppedTakeAssets(stored, next) };
+    return { ...outcome, project: retainMusicVideoDependencies(stored, next) };
   });
   emitRecordUpdated('musicVideoProject', id);
   // A cut shot, a merge or a re-plan drops takes from the board: they stay findable in the project's collection.
   if (dropped?.assets.length) await fileMusicVideoMedia(dropped.project, dropped.assets);
+  if (descriptions) {
+    // The project and catalog are already committed; a notification failure
+    // must not report the saved edit as failed and invite a conflicting retry.
+    await descriptions.announceDescriptionEdits(catalogRecords)
+      .catch((err) => console.error(`🔁 catalog change notification failed: ${err.message}`));
+    outcome.project = await descriptions.resolveProjectCatalogDescriptions(outcome.project);
+  }
+  // Presentation is reconstructed after commit: sockets and mutation replies need
+  // the same live catalog state as GET, without storing its derived media list.
+  if (outcome.project?.castAndSets?.source === 'catalog') {
+    const { withCatalogCheckin } = await import('./catalogCheckin.js');
+    outcome.project = await withCatalogCheckin(outcome.project);
+  }
   return outcome;
 }
 

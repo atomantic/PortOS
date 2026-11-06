@@ -159,7 +159,8 @@ export async function reviewArtifact(projectId, artifactId, { status, note = nul
   const project = await requireProject(projectId);
   findDevArtifact(project, artifactId);
   const stage = project.castAndSets;
-  if (status === 'approved' && stage?.artifactId === artifactId && stage.status === 'review') {
+  // A catalog stage approves against its live catalog basis, on the stage itself; its guide is an ordinary artifact.
+  if (status === 'approved' && stage?.artifactId === artifactId && stage.status === 'review' && stage.source !== 'catalog') {
     const { approveCastAndSets } = await import('./castAndSetsService.js');
     if (note) await addNote(projectId, artifactId, { text: note });
     const approved = await approveCastAndSets(projectId);

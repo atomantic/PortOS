@@ -39,11 +39,18 @@ export function buildSceneTimingPresentation({
   const mergedSpan = typeof scene.startSec === 'number' && typeof nextEndSec === 'number' ? nextEndSec - scene.startSec : null;
   const canMerge = hasMergeNext && !isLast && !manifestOwnsShots
     && (splitLimit == null || (mergedSpan != null && mergedSpan <= splitLimit + 1e-6));
+  // A merge one take can't hold stays visible, disabled, so the control never just vanishes.
+  const tooLongToMerge = (span) => (splitLimit != null && (span == null || span > splitLimit + 1e-6)
+    ? (span == null ? 'Give both shots a start and end first.' : `The merged shot would run ${span.toFixed(2)}s; this renderer's longest take is ${splitLimit.toFixed(2)}s. Pick another renderer to merge them.`)
+    : null);
+  const mergeBlocked = hasMergeNext && !isLast && !manifestOwnsShots ? tooLongToMerge(mergedSpan) : null;
   // Merge over previous keeps this shot and starts it where the previous one did.
   const mergedPreviousSpan = typeof prevStartSec === 'number' && typeof scene.endSec === 'number' ? scene.endSec - prevStartSec : null;
   const canMergePrevious = hasMergePrevious && !isFirst && !manifestOwnsShots
     && (splitLimit == null || (mergedPreviousSpan != null && mergedPreviousSpan <= splitLimit + 1e-6));
+  const mergePreviousBlocked = hasMergePrevious && !isFirst && !manifestOwnsShots ? tooLongToMerge(mergedPreviousSpan) : null;
   return {
+    mergeBlocked, mergePreviousBlocked,
     performance, capability, timedSpan, plan, performanceBlocked, grokPlan,
     falTake, falCost, performanceCost, splitLimit, canSplit, mergedSpan, canMerge, canMergePrevious,
   };

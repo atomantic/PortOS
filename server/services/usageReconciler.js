@@ -1,3 +1,4 @@
+import { assertCodexInventoryComplete, readCodexAccountingSources, codexSessionClaimKey, codexIdentityHash } from './codexUsageSources.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
@@ -39,6 +40,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  */
 
 import { homedir } from 'os';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
@@ -61,7 +63,7 @@ import {
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
-import { recordRunUsage } from './usage.js';
+import { getRecentCodexUsageClaims, recordRunUsage } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -102,6 +104,21 @@ export const CLAIM_RETENTION_MS = 48 * 60 * 60 * 1000;
 // across that boundary; see `usageBackfill.js`. A restart loses the ledger,
 // but a run that already completed is never reconciled again.
 const claimedMessages = new Map();
+const completionClaims = new AsyncLocalStorage();
+const pendingCompletions = new Set();
+
+function admitCompletion(metadata, opts, work) {
+  const home = opts?.home ?? homedir();
+  const workspace = metadata?.workspacePath ?? null;
+  // cwdMatches includes child directories: a parent-workspace completion can
+  // consume the same Codex cumulative stream as a child-workspace completion.
+  const predecessors = [...pendingCompletions].filter(entry => entry.home === home
+    && (cwdMatches(entry.workspace, workspace) || cwdMatches(workspace, entry.workspace)));
+  const done = Promise.allSettled(predecessors.map(entry => entry.done)).then(work);
+  const entry = { home, workspace, done };
+  pendingCompletions.add(entry);
+  return done.finally(() => pendingCompletions.delete(entry));
+}
 
 const isClaimed = (fileKey, messageKey) => claimedMessages.get(fileKey)?.has(messageKey) === true;
 
@@ -122,7 +139,7 @@ const removeClaim = (fileKey, messageKey) => {
 };
 
 // The ABSOLUTE cumulative position of each Codex rollout that has already been
-// billed, keyed by file path. Codex reports cumulative totals, so a rollout that
+// billed, keyed by versioned logical session identity (legacy paths are adopted). Codex reports cumulative totals, so a rollout that
 // grows between two runs would otherwise re-include the earlier run's tokens.
 // Stored in absolute rollout units (not "tokens we billed") so the delta is a
 // plain subtraction: a windowed parse already nets out the earlier snapshot, so
@@ -350,36 +367,6 @@ export const listSubdirs = async (dir) => {
 };
 
 /**
- * Every date directory (`YYYY/MM/DD`) a run could have written a Codex rollout
- * into. A run spanning midnight (or a UTC/local boundary) touches two days, so
- * the window's start and end days are both included.
- */
-function codexDateDirs(root, fromMs, toMs) {
-  const days = new Set();
-  const start = Number.isFinite(fromMs) ? fromMs : Date.now();
-  const end = Number.isFinite(toMs) ? toMs : start;
-  // Step a day at a time from start to end, plus a day either side for
-  // timezone skew between the CLI's clock and ours.
-  for (let ms = start - 86_400_000; ms <= end + 86_400_000; ms += 86_400_000) {
-    const d = new Date(ms);
-    days.add(join(
-      root,
-      String(d.getUTCFullYear()),
-      String(d.getUTCMonth() + 1).padStart(2, '0'),
-      String(d.getUTCDate()).padStart(2, '0')
-    ));
-    // The CLI files rollouts by LOCAL date; add that path too.
-    days.add(join(
-      root,
-      String(d.getFullYear()),
-      String(d.getMonth() + 1).padStart(2, '0'),
-      String(d.getDate()).padStart(2, '0')
-    ));
-  }
-  return [...days];
-}
-
-/**
  * Token buckets for a `parseAgyTranscript` result. When the transcript carries
  * measured token counts (`input_tokens`, `output_tokens`), those counts are
  * preserved with source `measured`. Otherwise figures fall back to chars/4
@@ -565,57 +552,62 @@ async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFr
 }
 
 async function readCodexSessions({ home, workspacePath, from, to, fold, codexReserved }) {
-  const sessionsRoot = join(home, '.codex', 'sessions');
-  for (const dir of codexDateDirs(sessionsRoot, from ?? Date.now(), to ?? from ?? Date.now())) {
-    for (const file of await listDir(dir)) {
-      if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
-      const path = join(dir, file);
-      const text = await tryReadFile(path);
-      if (!text) continue;
-      // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
-      // not enough: a rollout that GROWS between two overlapping runs presents
-      // a later snapshot under a different key, and its delta (measured from a
-      // baseline before both runs) re-includes what the first run already
-      // billed. Track the highest cumulative boundary billed per file and
-      // re-parse from there, so each run charges only the genuinely new part.
-      // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
-      // absolute (no lower bound) so the watermark arithmetic below is a plain
-      // subtraction, but capped at `to` so a run only ever bills through its
-      // own end. Both halves are load-bearing:
-      //   - Absolute (no `from`): a windowed parse already nets out the earlier
-      //     snapshot as its baseline, so subtracting the watermark from it would
-      //     double-subtract (measured: a later run billed 50, not 150). It also
-      //     keeps the math immune to several snapshots sharing one epoch ms,
-      //     which is why the timestamp boundary this replaced was unsound.
-      //   - Capped at `to`: without it, an EARLY run reading the file after it
-      //     grew would bill growth generated after its own window and advance
-      //     the watermark past it, leaving the run that actually produced those
-      //     tokens with nothing (measured: early run billed 250, late run 0).
-      const absolute = parseCodexRollout(text, { to });
-      if (!cwdMatches(absolute.cwd, workspacePath)) continue;
-      // Require the run's own window to overlap this rollout at all, so a
-      // rollout from an unrelated period isn't attributed to this run.
-      if (totalTranscriptTokens(parseCodexRollout(text, { from, to })) === 0) continue;
+  const inventory = await readCodexAccountingSources({ home, modifiedSince: from });
+  // Unknown/conflicting copies can overlap otherwise valid sessions.
+  assertCodexInventoryComplete(inventory);
+  for (const session of inventory.sessions) {
+    // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
+    // not enough: a rollout that GROWS between two overlapping runs presents
+    // a later snapshot under a different key, and its delta (measured from a
+    // baseline before both runs) re-includes what the first run already
+    // billed. Track the highest cumulative boundary billed per file and
+    // re-parse from there, so each run charges only the genuinely new part.
+    // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
+    // absolute (no lower bound) so the watermark arithmetic below is a plain
+    // subtraction, but capped at `to` so a run only ever bills through its
+    // own end. Both halves are load-bearing:
+    //   - Absolute (no `from`): a windowed parse already nets out the earlier
+    //     snapshot as its baseline, so subtracting the watermark from it would
+    //     double-subtract (measured: a later run billed 50, not 150). It also
+    //     keeps the math immune to several snapshots sharing one epoch ms,
+    //     which is why the timestamp boundary this replaced was unsound.
+    //   - Capped at `to`: without it, an EARLY run reading the file after it
+    //     grew would bill growth generated after its own window and advance
+    //     the watermark past it, leaving the run that actually produced those
+    //     tokens with nothing (measured: early run billed 250, late run 0).
+    const absolute = parseCodexRollout(session.records, { to });
+    if (!cwdMatches(session.cwd, workspacePath)) continue;
+    // Require the run's own window to overlap this rollout at all, so a
+    // rollout from an unrelated period isn't attributed to this run.
+    if (totalTranscriptTokens(parseCodexRollout(session.records, { from, to })) === 0) continue;
 
-      const billed = codexHighWater.get(path);
-      const net = { ...absolute, ...subtractBuckets(absolute, billed) };
-      if (totalTranscriptTokens(net) === 0) continue;
-
-      // Advance the mark to the absolute position just read, before the next
-      // `await` — for the same reason the Claude claim reserves per file: two
-      // overlapping runs must not both act on the pre-update value. `Math.max`
-      // guards a rollout that was truncated/rewritten smaller, so the mark
-      // never moves backwards and re-bills what it already charged.
-      codexHighWater.set(path, maxBuckets(billed, absolute));
-      codexReserved.push([path, billed]);
-      // Mirror the net into `byModel` — callers bill from the per-model records,
-      // so leaving them at absolute totals would re-charge the billed portion.
-      // Codex reports one model per rollout, so the whole net is that model's.
-      const modelKey = Object.keys(absolute.byModel || {})[0];
-      fold(modelKey
-        ? { ...net, byModel: { [modelKey]: addBuckets({}, net) } }
-        : net);
+    const path = codexSessionClaimKey(session.id);
+    const previous = codexHighWater.get(path);
+    // Old snapshots used a raw source path. Adopt an extant alias or the
+    // standard rollout filename identity even after it moved/compressed.
+    let billed = previous;
+    for (const [key, counts] of codexHighWater) {
+      const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
+      if (session.paths.includes(key) || legacyId && codexIdentityHash(legacyId) === session.id) billed = maxBuckets(billed, counts);
     }
+    const net = { ...absolute, ...subtractBuckets(absolute, billed) };
+    if (totalTranscriptTokens(net) === 0) continue;
+
+    // Advance the mark to the absolute position just read, before the next
+    // `await` — for the same reason the Claude claim reserves per file: two
+    // overlapping runs must not both act on the pre-update value. `Math.max`
+    // guards a rollout that was truncated/rewritten smaller, so the mark
+    // never moves backwards and re-bills what it already charged.
+    const boundary = maxBuckets(billed, absolute);
+    codexHighWater.set(path, boundary);
+    codexReserved.push([path, previous, boundary]);
+    // Mirror the net into `byModel` — callers bill from the per-model records,
+    // so leaving them at absolute totals would re-charge the billed portion.
+    // Codex reports one model per rollout, so the whole net is that model's.
+    const modelKey = Object.keys(absolute.byModel || {})[0];
+    fold(modelKey
+      ? { ...net, byModel: { [modelKey]: addBuckets({}, net) } }
+      : net);
   }
 }
 
@@ -650,7 +642,7 @@ const FAMILY_READERS = Object.assign(Object.create(null), {
  *   died mid-turn, and Antigravity is always an estimate (it writes no token
  *   counts anywhere).
  */
-export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null } = {}) {
+export async function readMeasuredUsage({ workspacePath, startTime, endTime, family, home = homedir(), seenUntil = null, onCodexClaims = null } = {}) {
   if (!workspacePath || !family) return null;
 
   const startMs = Date.parse(startTime || '');
@@ -735,12 +727,22 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
   };
 
   const scan = { home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim, codexReserved };
-  await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
+  try {
+    await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
+  } catch (error) {
+    releaseReserved();
+    throw error;
+  }
 
   if (totals.sessions === 0) {
     releaseReserved();
     return null;
   }
+  completionClaims.getStore()?.push(releaseReserved);
+  // Capture this read's boundaries now, not the global map after other runs
+  // have advanced it while subsequent family reads or persistence await.
+  if (codexReserved.length) onCodexClaims?.(codexReserved.map(([path, , boundary]) => [path, { ...boundary }]));
+
   totals.model = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   totals.byModel = Object.fromEntries(byModel);
   totals.source = sourcesSeen.size === 1 ? [...sourcesSeen][0] : 'mixed';
@@ -883,16 +885,19 @@ export function resolveFamilyProvider(providers, family, measured = null) {
  *   the provider's own count, its input still a chars estimate.
  * @returns {Promise<object|Array<object>>}
  */
-export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null, estimateSource = null } = {}) {
+export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null, estimateSource = null, onCodexClaims = null } = {}) {
   const workspacePath = run?.workspacePath;
   const startTime = run?.startTime;
   const endTime = run?.endTime;
 
   // Best-effort: an unreadable home dir, a permissions error, or a CLI format
   // change must degrade to the estimate, never throw into the completion hook.
-  const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home })
+  const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home, onCodexClaims })
     .catch((err) => {
-      console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
+      // The interactive scan reports an incomplete inventory once and surfaces it
+      // in the usage UI; a run falling back to its estimate is the handled outcome.
+      if (err.code === 'CODEX_SOURCES_INCOMPLETE') console.log(`⏭️ Usage reconcile kept the estimate for ${run?.providerId} (${family}): ${err.message}`);
+      else console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
       return null;
     });
 
@@ -957,7 +962,10 @@ export async function recordCompletedRunUsage(metadata, output, opts) {
   // The synchronous estimate prefix in the body runs before its inner catch
   // chain, so own the whole call here (#12978).
   try {
-    await recordCompletedRunUsageUnguarded(metadata, output, opts);
+    // Only completions that can claim the same transcripts wait for each other.
+    // Otherwise a later Codex delta could depend on an uncommitted high-water
+    // mark and make rolling back the earlier failed write impossible.
+    await admitCompletion(metadata, opts, () => recordCompletedRunUsageUnguarded(metadata, output, opts));
   } catch (err) {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Failed to record usage: ${err.message}`);
@@ -997,10 +1005,29 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
     .catch(() => null);
   // Same condition `reconcileRunUsage` scans siblings under.
   const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
+  // Restore only nearby completions from the existing ledger. Exact observed
+  // counters, unlike replaying a window through its later commit timestamp,
+  // cannot consume transcript growth that arrived while accounting awaited.
+  const since = Date.parse(metadata.startTime) - 2 * WINDOW_SLACK_MS;
+  if (Number.isFinite(since)) {
+    mergeUsageClaims({ codexHighWater: await getRecentCodexUsageClaims(since) });
+  }
+  const codexClaims = [];
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
-  await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
-    .then((records) => recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned }))
+  const releases = [];
+  await completionClaims.run(releases, async () => {
+    try {
+      const records = await reconcileRunUsage(metadata, estimate, {
+        home, providers: resolved, estimateSource,
+        onCodexClaims: (claims) => codexClaims.push(...claims)
+      });
+      await recordRunUsage(records, { reconciledRunId: metadata?.id ?? null, siblings: siblingsScanned, codexHighWater: codexClaims });
+    } catch (error) {
+      for (const release of releases.reverse()) release();
+      throw error;
+    }
+  })
     .then(async () => {
       if (!metadata?.id) return;
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');

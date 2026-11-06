@@ -307,17 +307,29 @@ export async function launchCompositionBrowser({
     const ready = await new Promise((resolve, reject) => {
       let tail = '';
       let sawOutput = false;
+      let startupGroup = 'not-requested';
+      // Sample the retained group just before the deadline, without holding up
+      // startup or cleanup for diagnostics. A snapshot describes state, not cause.
+      const sampleTimer = setTimeout(() => {
+        if (!ownsProcessGroup || !proc.pid || exited) return;
+        startupGroup = 'pending';
+        observeBrowserProcessGroup(proc.pid, 500)
+          .then(facts => { startupGroup = facts; })
+          .catch(() => { startupGroup = 'unavailable'; });
+      }, Math.max(0, startupMs - 1000));
+      sampleTimer.unref?.();
       // Elapsed time and the last phase reached tell a slow runner from a hang
       // without copying browser output; the error text survives CI quiet mode.
       const startupPhase = () => !spawned ? 'before-spawn'
         : !sawOutput ? 'spawned-no-output'
           : piped ? 'awaiting-handshake' : 'awaiting-devtools-endpoint';
       const timer = setTimeout(() => finish(new Error(
-        `Composition browser startup exceeded its deadline (elapsedMs=${observedMs()}, deadlineMs=${startupMs}, phase=${startupPhase()}, spawnMs=${observed.spawnMs ?? 'none'})`,
+        `Composition browser startup exceeded its deadline (elapsedMs=${observedMs()}, deadlineMs=${startupMs}, phase=${startupPhase()}, spawnMs=${observed.spawnMs ?? 'none'}, group=${startupGroup})`,
       )), startupMs);
       const finish = (error, value) => {
         rejectStartupPipe = null;
         clearTimeout(timer);
+        clearTimeout(sampleTimer);
         proc.stderr?.removeListener('data', onData);
         transport?.removeListener('message', onHandshake);
         proc.removeListener('error', fail);

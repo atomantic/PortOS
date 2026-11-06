@@ -289,8 +289,30 @@ export async function acknowledgeAcceptanceProjection(projectId, decisionId) {
   return present(rows[0]) || getProjectRecord(projectId);
 }
 
-export async function pageAcceptedOutputs({ limit, offset }) {
-  const { rows } = await query(`SELECT id, title, data->'acceptedOutput' AS accepted FROM code_animation_projects
-    WHERE data ? 'acceptedOutput' ORDER BY data->'acceptedOutput'->>'acceptedAt' DESC, id DESC LIMIT $1 OFFSET $2`, [limit + 1, offset]);
-  return { items: rows.slice(0, limit), nextCursor: rows.length > limit ? String(offset + limit) : null };
+function decodeAcceptedCursor(cursor) {
+  if (!cursor) return null;
+  try {
+    const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (!Array.isArray(value) || value.length !== 2 || typeof value[0] !== 'string'
+      || typeof value[1] !== 'string' || !value[1]) throw new Error('invalid cursor');
+    return value;
+  } catch {
+    throw new ServerError('Invalid page cursor', { status: 400, code: 'INVALID_CURSOR' });
+  }
+}
+
+export async function pageAcceptedOutputs({ limit, cursor }) {
+  const after = decodeAcceptedCursor(cursor);
+  // The normal writer always stores an ISO timestamp. Treat a missing one as
+  // oldest so a legacy record can still be reached and used as a boundary.
+  const { rows } = await query(`SELECT id, title, data->'acceptedOutput' AS accepted,
+    COALESCE(data->'acceptedOutput'->>'acceptedAt', '') AS "cursorAcceptedAt" FROM code_animation_projects
+    WHERE data ? 'acceptedOutput' AND ($1::text IS NULL OR (COALESCE(data->'acceptedOutput'->>'acceptedAt', ''), id) < ($1::text, $2::text))
+    ORDER BY COALESCE(data->'acceptedOutput'->>'acceptedAt', '') DESC, id DESC LIMIT $3`, [after?.[0] ?? null, after?.[1] ?? null, limit + 1]);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    items: page.map(({ cursorAcceptedAt: _cursorAcceptedAt, ...item }) => item),
+    nextCursor: rows.length > limit ? Buffer.from(JSON.stringify([last.cursorAcceptedAt, last.id])).toString('base64url') : null,
+  };
 }

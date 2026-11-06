@@ -62,7 +62,7 @@ import {
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
 } from '../services/sharing/peerSync.js';
-import { buildLocalManifest, getPeerIntegrity } from '../services/sharing/integrity.js';
+import { buildLocalManifest, getPeerIntegrity, isLegacyManifestKind, PEER_MANIFEST_VERSION } from '../services/sharing/integrity.js';
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
 
 const router = Router();
@@ -162,8 +162,13 @@ router.get('/manifest', asyncHandler(async (req, res) => {
   }
   // Same per-peer gate as /record — a manifest for a category the peer isn't
   // allowed to sync still leaks every record id + asset hash for that kind.
-  await authorizePeerPull(req, { recordKind: kind, route: `manifest ${kind}` });
-  res.json({ records: await buildLocalManifest(kind) });
+  // The newly populated inventories had no prior sharing behavior to preserve.
+  // Enforce their category scope while allowing a genuine local operator.
+  const newlySupported = !isLegacyManifestKind(kind);
+  await authorizePeerPull(req, {
+    recordKind: kind, route: `manifest ${kind}`, alwaysEnforce: newlySupported, allowOperator: newlySupported,
+  });
+  res.json({ manifestVersion: PEER_MANIFEST_VERSION, records: await buildLocalManifest(kind) });
 }));
 
 // --- GET /library-manifest --- advertise this instance's STANDALONE media

@@ -68,9 +68,32 @@ describe('BrainParityPanel', () => {
       />,
     );
 
-    expect(screen.getByText('content mismatch')).toBeInTheDocument();
+    expect(screen.getByText('checksum mismatch')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Brain parity/ }));
     expect(screen.getByText(/whole-brain checksums differ/)).toBeInTheDocument();
+  });
+
+  it.each([false, null, true])('does not claim parity or a proven mismatch for an unverified clock (checksum %s)', async (match) => {
+    const user = userEvent.setup();
+    const counts = summary({ total: 1, diverged: 1, unknown: 1 });
+    render(<BrainParityPanel peer={PEER} report={report({
+      summary: counts, checksums: { local: 'a', peer: match === null ? null : 'b', match },
+      byType: [{ type: 'people', counts, records: [{ id: 'p1', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' }] }],
+    })} />);
+    expect(screen.getByText('unverified')).toBeInTheDocument();
+    expect(screen.queryByText('checksum mismatch')).not.toBeInTheDocument();
+    expect(screen.queryByText('in parity')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Brain parity/ }));
+    expect(screen.getByText(/timestamps compare equal at millisecond precision/i)).toBeInTheDocument();
+    expect(screen.getByText('p1')).toBeInTheDocument();
+    expect(screen.queryByText('every record matches')).not.toBeInTheDocument();
+  });
+
+  it('does not double-count unverified records as definite divergences', () => {
+    render(<BrainParityPanel peer={PEER} report={report({
+      summary: summary({ total: 2, diverged: 2, unknown: 1 }), checksums: { local: 'a', peer: 'b', match: false },
+    })} />);
+    expect(screen.getByText('1 out of parity')).toBeInTheDocument();
   });
 
   it('lists the diverged record ids per entity type once expanded', async () => {
@@ -116,21 +139,23 @@ describe('BrainParityPanel', () => {
     expect(screen.queryByText('every record matches')).not.toBeInTheDocument();
   });
 
-  it('says a content mismatch will NOT self-heal — equal clocks defeat last-writer-wins', async () => {
+  it('does not attribute a checksum mismatch to a live record when tombstones may differ', async () => {
     const user = userEvent.setup();
     render(
       <BrainParityPanel
         peer={PEER}
         report={report({
-          summary: summary({ total: 5, 'in-parity': 5 }),
+          summary: summary({ total: 0, 'in-parity': 0 }),
           checksums: { local: 'a', peer: 'b', match: false },
         })}
       />,
     );
 
     await user.click(screen.getByRole('button', { name: /Brain parity/ }));
-    expect(screen.getByText(/last-writer-wins skips the peer/)).toBeInTheDocument();
-    expect(screen.getByText(/Edit the record on the side you want to win/)).toBeInTheDocument();
+    expect(screen.getByText(/active record ids and clocks match/)).toBeInTheDocument();
+    expect(screen.getByText(/deleted-record timestamps may differ/)).toBeInTheDocument();
+    expect(screen.getByText(/last-writer-wins may keep both copies/)).toBeInTheDocument();
+    expect(screen.queryByText(/Edit the record on the side you want to win/)).not.toBeInTheDocument();
   });
 
   it('drops a fresh report when the peer identity behind the card changes', async () => {

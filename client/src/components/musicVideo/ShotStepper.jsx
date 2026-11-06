@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Pencil, SkipBack, SkipForward } from 'lucide-react';
+import { ChevronFirst, Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
 import { isPreMusicShot } from '../../../../server/lib/musicVideoColdOpen.js';
 
@@ -11,12 +11,11 @@ const ON_START_SEC = 0.05;
 // A shot before the song (the cold open) keeps no place on the song's clock.
 const onSongClock = (scene) => Number.isFinite(scene?.startSec) && !isPreMusicShot(scene);
 
-const startsIn = (scenes, range) => (scenes || [])
+const shotsIn = (scenes, range) => (scenes || [])
   .filter(onSongClock)
-  .map((scene) => scene.startSec)
-  .filter((start) => Number.isFinite(start)
-    && (!range || (start >= range.startSec - ON_START_SEC && (range.endSec == null || start < range.endSec))))
-  .sort((a, b) => a - b);
+  .filter((scene) => Number.isFinite(scene.startSec)
+    && (!range || (scene.startSec >= range.startSec - ON_START_SEC && (range.endSec == null || scene.startSec < range.endSec))))
+  .sort((a, b) => a.startSec - b.startSec);
 
 /**
  * Where Back and Next go from song time `t`: Back to the current shot's start
@@ -25,14 +24,15 @@ const startsIn = (scenes, range) => (scenes || [])
  * excerpt. `index`/`count` name the shot on screen (1-based; 0 before the first).
  */
 export function shotSteps(scenes, t, range = null) {
-  const starts = startsIn(scenes, range);
+  const shots = shotsIn(scenes, range);
+  const starts = shots.map((scene) => scene.startSec);
   let current = -1;
   starts.forEach((start, i) => { if (start <= t + ON_START_SEC) current = i; });
   const back = current < 0
     ? null
     : t - starts[current] > RESTART_SEC || current === 0 ? starts[current] : starts[current - 1];
   const next = starts[current + 1] ?? null;
-  return { back, next, index: current + 1, count: starts.length };
+  return { back, next, index: current + 1, count: starts.length, scene: current < 0 ? null : shots[current] };
 }
 
 /**
@@ -56,14 +56,16 @@ function shotOnScreen(scenes, t) {
 const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text disabled:opacity-40 sm:min-h-[28px] sm:min-w-[28px]';
 
 /**
- * Back and Next buttons that jump the player to a shot's start, with the shot
- * number between them. `onSeek(songSec)` moves the player and leaves it playing
+ * A Start button (the song's start, or the excerpt's), then Back and Next
+ * buttons that jump the player to a shot's start, with the shot number between
+ * them. `onSeek(songSec)` moves the player and leaves it playing
  * or paused as it was. `keys` also binds the left and right arrows on the page.
  * With `onEditShot(sceneId)`, an Edit shot button opens the shot on screen.
  */
 export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, range = null, disabled = false, keys = false, className = '' }) {
   const { back, next, index, count } = shotSteps(scenes, time, range);
   const onScreen = shotOnScreen(scenes, time);
+  const start = range?.startSec ?? 0;
   const latest = useRef({ back, next, onSeek, disabled });
   latest.current = { back, next, onSeek, disabled };
   useEffect(() => {
@@ -84,6 +86,9 @@ export default function ShotStepper({ scenes, time, onSeek, onEditShot = null, r
   if (!count) return null;
   return (
     <div className={`flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-port-text-muted ${className}`}>
+      <button type="button" onClick={() => onSeek(start)} disabled={disabled || time <= start + ON_START_SEC} aria-label="Jump to start" title="Jump to start" className={buttonCls}>
+        <ChevronFirst size={14} aria-hidden="true" />
+      </button>
       <button type="button" onClick={() => onSeek(back)} disabled={disabled || back == null} aria-label="Previous shot" title="Previous shot" className={buttonCls}>
         <SkipBack size={14} aria-hidden="true" />
       </button>

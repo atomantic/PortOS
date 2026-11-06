@@ -115,6 +115,14 @@ export function seedArtDraft(project, stage = project.castAndSets) {
   return { ...project, productionReview: { ...project.productionReview, draft, seededDraft } };
 }
 
+/** Point Art at `artifactId` unless a live guide is already selected; the director's own choice stands. */
+export function selectArtGuideIfNone(project, artifactId) {
+  const prior = project.productionReview?.draft || {};
+  if (artifact(project, prior.guideArtifactId) || !artifact(project, artifactId)) return project;
+  return { ...project, productionReview: { ...project.productionReview,
+    draft: { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior, guideArtifactId: artifactId } } };
+}
+
 /**
  * The art-direction guides the director wrote (or accepted from a story
  * draft): cast, environments, visual language. A field still holding the text
@@ -473,6 +481,12 @@ function castAndSetsStoryStale(project) {
  */
 function castAndSetsApproval(project) {
   const stage = project.castAndSets;
+  if (stage?.source === 'catalog') {
+    const checkin = stage.catalogCheckin;
+    return { approved: !!checkin?.approved, stale: stage.status === 'approved' && !checkin?.approved
+      ? { approvedAt: stage.approvedAt || null, changedFields: ['catalog links or images'] } : null, storyStale: null,
+    problems: checkin?.problems || [{ code: 'CATALOG_UNRESOLVED', message: 'Reload the current catalog check-in.' }] };
+  }
   const approved = stage?.status === 'approved';
   const storyStale = castAndSetsStoryStale(project);
   if (!approved || !stage.approvedInputs) return { approved, stale: null, storyStale };

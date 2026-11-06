@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
+vi.mock('../catalogDB.js', () => catalog);
 const getProject = vi.fn();
 const loadSceneCastMedia = vi.fn();
 vi.mock('./projects.js', () => ({ getProject: (...args) => getProject(...args) }));
 vi.mock('./castGuideMedia.js', () => ({ loadSceneCastMedia: (...args) => loadSceneCastMedia(...args) }));
 vi.mock('../../lib/pathSafety.js', () => ({
+  resolveImageRef: file => file === 'guide-refs.png' ? '/inputs/guide-refs.png' : null,
+  isSafeFilename: () => true,
   resolveGalleryImage: (file) => (['gone.png', 'guide-refs.png'].includes(file) ? null : `/gallery/${file}`),
   resolveImageInputPath: (file) => (file === 'gone.png' ? null : file === 'guide-refs.png' ? `/inputs/${file}` : `/gallery/${file}`),
 }));
@@ -119,4 +123,25 @@ describe('musicVideoLocalReferencePaths', () => {
     await expect(musicVideoLocalReferencePaths({ projectId: 'mv-1', sceneId: 'shot-example' }, 1))
       .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
   });
+});
+
+
+// Uniquely catches a changed (unapproved) catalog check-in refusing a render, or a stale snapshot's images being sent.
+it('resolves the live catalog for a supplied snapshot, refusing only links that cannot resolve', async () => {
+  const { resolveCatalogCheckin } = await import('./catalogCheckin.js');
+  const p = { id: 'mv-1', concept: { subjects: [{ id: 'lead', ingredientId: 'catalog-lead', kind: 'character' }] },
+    castAndSets: { source: 'catalog', status: 'approved' }, scenes: [{ sceneId: 's1', prompt: 'Lead walks' }] };
+  catalog.getIngredient.mockResolvedValue({ id: 'catalog-lead', type: 'character', name: 'Lead', payload: {} });
+  catalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'guide-refs.png' }]);
+  const approved = await resolveCatalogCheckin(p);
+  p.castAndSets.catalogApprovedBasis = approved.basis;
+  expect(await musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
+    .toEqual([{ path: '/inputs/guide-refs.png', label: 'Lead' }]);
+  p.castAndSets.catalogCheckin = { ...approved, approved: true };
+  catalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'new-guide.png' }]);
+  expect(await musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
+    .toEqual([{ path: '/gallery/new-guide.png', label: 'Lead' }]);
+  catalog.getIngredient.mockResolvedValue(null);
+  await expect(musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
+    .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
 });

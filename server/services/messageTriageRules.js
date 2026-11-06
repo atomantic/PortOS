@@ -75,7 +75,7 @@ async function applyCorrection({ from, subject, triaged, corrected }) {
     });
   }
   await saveRules(data);
-  console.log(`📧 Triage rule recorded: "${senderPattern}" ${triaged} -> ${corrected}`);
+  console.log(`📧 Triage rule recorded: ${triaged} -> ${corrected}`);
 }
 
 /**

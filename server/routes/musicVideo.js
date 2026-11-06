@@ -41,6 +41,7 @@ import {
   musicVideoLyricCutSchema,
   musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
+  musicVideoSceneEndSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
@@ -99,6 +100,9 @@ import {
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
   musicVideoCastAndSetsFeedbackSchema,
+  musicVideoCastAndSetsFeedbackPlanSchema,
+  musicVideoCastAndSetsFeedbackRenderSchema,
+  musicVideoCastAndSetsImageNoteRemovalSchema,
   musicVideoCastAndSetsRegenerateSchema,
   musicVideoDocumentDirectoryImportSchema,
   musicVideoDocumentFileQuerySchema,
@@ -137,6 +141,7 @@ import {
   mergeProjectNextScene,
   mergeProjectPreviousScene,
   moveProjectSceneStart,
+  moveProjectSceneEnd,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -235,7 +240,10 @@ import {
   startCastAndSets,
   editCastAndSetsDirection,
   applyCastAndSetsFeedback,
+  renderCastAndSetsFeedback,
+  refreshCastAndSetsFeedbackRenderer,
   removeCastAndSetsFeedbackEntry,
+  removeCastAndSetsImageFeedback,
   editCastAndSetsImage,
   previewCastAndSetsImageEdit,
   acceptCastAndSetsImageEdit,
@@ -252,6 +260,8 @@ import {
   getCastAndSets,
   getCastAndSetsCastingChanges,
   presentProjectCastAndSets,
+  useCatalogCheckin,
+  rebuildCatalogGuide,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
   summarizeMusicVideoProject,
@@ -289,6 +299,10 @@ async function presentProjectForRead(project) {
   if (project?.publishKit?.youtubeThumbnail?.pending) {
     const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
     current = await reconcileInterruptedYoutubeThumbnail(project);
+  }
+  if (current?.castAndSets?.source === 'catalog') {
+    const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
+    current = await withCatalogCheckin(current);
   }
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
   // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
@@ -1642,6 +1656,14 @@ router.delete('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) =>
 // direction call and the reference images advance in the background and
 // report over `music-video:cast-and-sets`. Only these requests (or a
 // production run the director started) begin work — nothing at boot does.
+router.post('/:id/cast-and-sets/catalog', asyncHandler(async (req, res) => {
+  res.json(await useCatalogCheckin(req.params.id));
+}));
+
+router.post('/:id/cast-and-sets/catalog/guide', asyncHandler(async (req, res) => {
+  res.json(await rebuildCatalogGuide(req.params.id));
+}));
+
 router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
   res.json(await getCastAndSets(req.params.id));
 }));
@@ -1702,6 +1724,23 @@ router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
   res.status(202).json(await applyCastAndSetsFeedback(req.params.id, input));
 }));
 
+router.post('/:id/cast-and-sets/feedback/render', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackRenderSchema, req.body || {});
+  const { assertHostControl } = await import('../services/authGate.js');
+  assertHostControl(req);
+  res.status(202).json(await renderCastAndSetsFeedback(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback/refresh-renderer', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsFeedbackPlanSchema, req.body || {});
+  res.status(202).json(await refreshCastAndSetsFeedbackRenderer(req.params.id, input));
+}));
+
+router.post('/:id/cast-and-sets/feedback/remove-image-note', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsImageNoteRemovalSchema, req.body || {});
+  res.json(await removeCastAndSetsImageFeedback(req.params.id, input));
+}));
+
 router.delete('/:id/cast-and-sets/feedback/:feedbackId', asyncHandler(async (req, res) => {
   res.json(await removeCastAndSetsFeedbackEntry(req.params.id, req.params.feedbackId));
 }));
@@ -1734,13 +1773,17 @@ router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res
 }));
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
-  res.json(await approveCastAndSets(req.params.id));
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
+  res.json(await approveCastAndSets(req.params.id, input));
 }));
 
 // "Keep approved": an approved check-in whose concept, style, subjects or song
 // changed since is re-stamped on the current inputs (#10141). No body.
 router.post('/:id/cast-and-sets/reconfirm', asyncHandler(async (req, res) => {
-  res.json(await reconfirmCastAndSets(req.params.id));
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
+  res.json(await reconfirmCastAndSets(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/skip', asyncHandler(async (req, res) => {
@@ -1818,6 +1861,12 @@ router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res)
 router.post('/:id/scenes/:sceneId/start', asyncHandler(async (req, res) => {
   const { startSec } = validateRequest(musicVideoSceneStartSchema, req.body ?? {});
   res.json(await moveProjectSceneStart(req.params.id, req.params.sceneId, { startSec }));
+}));
+
+// Move a shot's end; the next shot starts at the same time, so it grows or shrinks to meet it.
+router.post('/:id/scenes/:sceneId/end', asyncHandler(async (req, res) => {
+  const { endSec } = validateRequest(musicVideoSceneEndSchema, req.body ?? {});
+  res.json(await moveProjectSceneEnd(req.params.id, req.params.sceneId, { endSec }));
 }));
 
 // --- Scene takes (#8965) ---

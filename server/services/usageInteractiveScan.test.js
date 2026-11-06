@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
@@ -7,10 +7,16 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const applied = [];
+const lifecycle = vi.hoisted(() => ({ projections: [] }));
+vi.mock('./agentRunEventLog.js', () => ({
+  MAX_READ_LIMIT: 10000,
+  getRunProjections: vi.fn(async () => lifecycle.projections)
+}));
 // Stand-in for usage.json's `interactiveScan`: a commit lands only when the mocked save succeeds.
-const ledger = vi.hoisted(() => ({ scan: null, failStateSave: false }));
+const ledger = vi.hoisted(() => ({ scan: null, failStateSave: false, failApply: false }));
 vi.mock('./usage.js', () => ({
   applyHistoricalUsageCorrections: vi.fn(async (corrections, { interactiveScan = null } = {}) => {
+    if (ledger.failApply) throw new Error('simulated correction write failure');
     applied.push(...corrections);
     if (interactiveScan) ledger.scan = structuredClone(interactiveScan);
     return { corrected: corrections.length, correctedRunIds: [] };
@@ -59,8 +65,10 @@ describe('refreshInteractiveUsage', () => {
   let runsDir;
   beforeEach(async () => {
     applied.length = 0;
+    lifecycle.projections = [];
     ledger.scan = null;
     ledger.failStateSave = false;
+    ledger.failApply = false;
     home = await mkdtemp(join(tmpdir(), 'interactive-home-'));
     runsDir = await mkdtemp(join(tmpdir(), 'interactive-runs-'));
     await rm(INTERACTIVE_SCAN_FILE, { force: true });
@@ -75,6 +83,65 @@ describe('refreshInteractiveUsage', () => {
   afterEach(async () => {
     await rm(home, { recursive: true, force: true });
     await rm(runsDir, { recursive: true, force: true });
+  });
+
+  it('holds the Codex watermark on incomplete archives, then bills moved duplicate sources only once', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    const text = [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'archive-session', cwd: CWD, model: 'example-codex-model' } }),
+      JSON.stringify({ timestamp: new Date(P1).toISOString(), payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+    ].join('\n');
+    await writeFile(join(archive, 'one.jsonl'), text);
+    await writeFile(join(archive, 'copy.jsonl.zst'), Buffer.from('incomplete'));
+    const args = { home, runsDir, providers: [CODEX], now: NOW };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const held = await refreshInteractiveUsage({ ...args, providers: [CODEX, GROK] });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { invalid_compression: 1 } });
+    // One family's inventory never holds another family's billing.
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(ledger.scan.codexCoverage).toMatchObject({ issues: { invalid_compression: 1 }, sources: [{ source: join('archived_sessions', 'copy.jsonl.zst') }] });
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('invalid_compression');
+    await refreshInteractiveUsage({ ...args, now: NOW + 1 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+    await writeFile(join(archive, 'copy.jsonl.zst'), zstdCompressSync(text));
+    expect((await refreshInteractiveUsage(args)).families.codex.tokens).toBe(150);
+    expect(ledger.scan.codexCoverage).toBeNull();
+    await rm(join(archive, 'one.jsonl'));
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + HOUR });
+    expect(applied).toEqual([]);
+  });
+
+  it('replays deferred archived Codex records after lifecycle resolution without rebilling', async () => {
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    await writeFile(join(archive, 'deferred.jsonl'), [
+      JSON.stringify({ type: 'session_meta', payload: { id: 'deferred-archive', cwd: CWD, model: 'example-codex-model' } }),
+      ...[P1, P2].map((at, i) => JSON.stringify({ timestamp: new Date(at).toISOString(),
+        payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100 * (i + 1), output_tokens: 50 * (i + 1) } } } }))
+    ].join('\n'));
+    const runDir = join(runsDir, 'archived-owner');
+    await mkdir(runDir);
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({
+      workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null
+    }));
+    const args = { home, runsDir, providers: [CODEX], now: NOW };
+    await refreshInteractiveUsage(args);
+    expect(applied).toEqual([]);
+    expect(ledger.scan.deferred.codex.length).toBeGreaterThan(0);
+    lifecycle.projections = [{ id: 'archived-owner', status: 'completed', endedAt: new Date(P1 + 60_000).toISOString(), success: true }];
+    const recovered = await refreshInteractiveUsage({ ...args, now: NOW + 60_000 });
+    expect(recovered.families.codex.tokens).toBe(150);
+    expect(ledger.scan.deferred.codex).toEqual([]);
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + 120_000 });
+    expect(applied).toEqual([]);
   });
 
   it('bills terminal sessions per UTC day, outside PortOS run windows, exactly once', async () => {
@@ -99,6 +166,58 @@ describe('refreshInteractiveUsage', () => {
 
     applied.length = 0;
     await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 60_000 });
+    expect(applied).toEqual([]);
+  });
+
+  it('bounds a dead open run by its observed lifecycle end without changing metadata', async () => {
+    const runDir = join(runsDir, 'dead-run');
+    await mkdir(runDir, { recursive: true });
+    const metadata = { workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null };
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify(metadata));
+    await utimes(runDir, new Date(P1 - 40 * 24 * HOUR), new Date(P1 - 40 * 24 * HOUR));
+    lifecycle.projections = [{ id: 'dead-run', status: 'completed', endedAt: new Date(P1 + 60_000).toISOString(), success: true }];
+    const summary = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+    expect(summary.unresolved).toEqual([]);
+    expect(summary.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+    expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toEqual(metadata);
+  });
+
+  it('retains active and unknown coverage, then retries only the unbilled suffix after lifecycle resolution', async () => {
+    const runDir = join(runsDir, 'open-run');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({ workspacePath: CWD, startTime: new Date(P2 - 60_000).toISOString(), endTime: null }));
+    const unrelatedDir = join(home, '.grok', 'sessions', encodeURIComponent('/different/workspace'), 'session-2');
+    await mkdir(unrelatedDir, { recursive: true });
+    await writeFile(join(unrelatedDir, 'updates.jsonl'), grokTurn('unrelated', P3, 50));
+    lifecycle.projections = [{ id: 'open-run', status: 'running' }];
+    const first = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+    expect(first.families.grok.tokens).toBe(2150);
+    const watermark = ledger.scan.watermarks.grok;
+    expect(ledger.scan.unresolved).toMatchObject([{ runId: 'open-run' }]);
+    lifecycle.projections = [];
+    applied.length = 0;
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 60_000 });
+    expect(applied).toEqual([]);
+    expect(ledger.scan.watermarks.grok).toBeGreaterThan(watermark);
+    expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    const savedMetadata = await readFile(join(runDir, 'metadata.json'), 'utf8');
+    await rm(runDir, { recursive: true });
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 90_000 });
+    expect(applied).toEqual([]);
+    expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    await mkdir(runDir);
+    await writeFile(join(runDir, 'metadata.json'), savedMetadata);
+    lifecycle.projections = [{ id: 'open-run', status: 'completed', endedAt: new Date(P2 + 60_000).toISOString(), success: true }];
+    ledger.failApply = true;
+    const beforeFailure = structuredClone(ledger.scan);
+    await expect(refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 120_000 })).rejects.toThrow('simulated correction write failure');
+    expect(ledger.scan).toEqual(beforeFailure);
+    ledger.failApply = false;
+    const recovered = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 120_000 });
+    expect(recovered.families.grok.tokens).toBe(1300);
+    expect(ledger.scan.unresolved).toEqual([]);
+    applied.length = 0;
+    await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 180_000 });
     expect(applied).toEqual([]);
   });
 

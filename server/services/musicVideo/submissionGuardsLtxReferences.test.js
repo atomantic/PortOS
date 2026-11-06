@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ project: null, references: vi.fn() }));
+const m = vi.hoisted(() => ({ project: null, references: vi.fn(), hydrate: vi.fn() }));
 vi.mock('./projects.js', () => ({ getProject: async () => m.project }));
-vi.mock('./clipCastReferences.js', () => ({ musicVideoClipReferences: (...args) => m.references(...args) }));
+vi.mock('./clipCastReferences.js', async (original) => ({ ...(await original()), musicVideoClipReferences: (...args) => m.references(...args) }));
+vi.mock('./catalogCheckin.js', async (original) => ({ ...(await original()), withCatalogCheckin: (...args) => m.hydrate(...args) }));
 vi.mock('./greyboxReferences.js', () => ({ loadMusicVideoGreybox: async () => null }));
 
 import { applyMusicVideoSubmissionGuards } from './submissionGuards.js';
@@ -56,4 +57,30 @@ describe('LTX clip reference snapshot', () => {
       expect.objectContaining({ role: 'clipReferences', untrackedCastGuides: false }),
     ]));
   });
+});
+
+
+it('rechecks catalog readiness at final video dispatch and rejects old files without a client reference snapshot', async () => {
+  const input = request();
+  input.body.mode = 'grok';
+  input.backend = 'grok';
+  input.body.musicVideo = { projectId: 'project', sceneId: 'shot', promptAsTyped: true };
+  input.params = { prompt: 'A rider turns', castReferences: [{ path: '/gallery/legacy-sheet.png' }] };
+  m.project.castAndSets = { source: 'catalog', status: 'approved', images: { character: { imageId: 'legacy-sheet.png' } },
+    catalogCheckin: { approved: true, problems: [], items: [] } };
+  m.hydrate.mockImplementation(async project => ({ ...project, castAndSets: { ...project.castAndSets,
+    catalogCheckin: { approved: false, problems: [{ code: 'CATALOG_RECORD_MISSING', message: 'Restore or relink the catalog record for Lead.' }], items: [] } } }));
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
+  m.hydrate.mockImplementation(async project => project);
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  input.params.castReferences = [];
+  m.project.castAndSets.catalogCheckin.basis = 'current-catalog';
+  input.body.musicVideo.catalogBasis = 'stale-catalog';
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  delete input.body.musicVideo.catalogBasis;
+  input.body.icReferenceImageFiles = ['old-catalog.png'];
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  input.body.musicVideo.catalogBasis = 'current-catalog';
+  await expect(applyMusicVideoSubmissionGuards(input)).resolves.toBeDefined();
+  expect(input.params.musicVideoCatalogBasis).toBe('current-catalog');
 });

@@ -24,6 +24,7 @@ const STATUS_META = [
   { key: 'local-only', label: 'only here', tone: 'warning' },
   { key: 'peer-only', label: 'only there', tone: 'warning' },
   { key: 'diverged', label: 'diverged', tone: 'warning' },
+  { key: 'unknown', label: 'unverified', tone: 'note' },
 ];
 
 const REASON_HELP = {
@@ -40,19 +41,22 @@ const REASON_LABELS = {
   'fetch-failed': 'check failed',
 };
 
+// Unknown is included in the legacy `diverged` count for older clients.
+const countFor = (summary, key) => key === 'diverged'
+  ? Math.max(0, (summary?.diverged ?? 0) - (summary?.unknown ?? 0))
+  : (summary?.[key] ?? 0);
 const outOfParityCount = (summary) =>
-  STATUS_META.reduce((total, { key }) => total + (summary?.[key] ?? 0), 0);
+  ['local-only', 'peer-only', 'diverged'].reduce((total, key) => total + countFor(summary, key), 0);
 
 /**
  * One-line verdict for the collapsed header.
  *
  * Three distinct clean-ish outcomes, never collapsed into one green pill:
- *   - `content mismatch` — the manifest agrees on every id AND clock, but the
- *     whole-brain checksums differ, so at least one record BODY differs. Only
- *     the checksum can see this.
- *   - `unverified` — ids and clocks agree but the peer returned no checksum
- *     (too old, or the fetch failed), so bodies were never compared. Reporting
- *     "in parity" here would claim a verification that did not happen.
+ *   - `checksum mismatch` — the manifest shows no live record difference, but
+ *     the whole-brain checksums differ. Deleted records are omitted from the
+ *     manifest comparison and can also explain a mismatch.
+ *   - `unverified` — a timestamp tie or unavailable checksum leaves record
+ *     contents unverified. Reporting "in parity" would claim too much.
  *   - `in parity` — ids, clocks, AND the checksum all agree.
  */
 function verdict(report) {
@@ -60,7 +64,8 @@ function verdict(report) {
   if (report.available === false) return { label: REASON_LABELS[report.reason] || 'unavailable', tone: 'note' };
   const outOfParity = outOfParityCount(report.summary);
   if (outOfParity > 0) return { label: `${outOfParity} out of parity`, tone: 'warning' };
-  if (report.checksums?.match === false) return { label: 'content mismatch', tone: 'warning' };
+  if (countFor(report.summary, 'unknown') > 0) return { label: 'unverified', tone: 'note' };
+  if (report.checksums?.match === false) return { label: 'checksum mismatch', tone: 'warning' };
   if (report.checksums?.match !== true) return { label: 'unverified', tone: 'note' };
   return { label: 'in parity', tone: 'success' };
 }
@@ -111,7 +116,7 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
         <button
           type="button"
           onClick={() => setExpanded((value) => !value)}
-          className="flex items-center gap-1.5 flex-1 text-left group"
+          className="flex items-center gap-1.5 flex-1 text-left group py-1.5 pointer-coarse:min-h-11"
           aria-expanded={expanded}
         >
           {expanded ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}
@@ -125,7 +130,7 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
           type="button"
           onClick={runCheck}
           disabled={running}
-          className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 pointer-coarse:min-h-11 pointer-coarse:px-3 transition-colors disabled:opacity-50"
           title="Compare every brain record with this peer — on demand, not part of the sync cycle"
         >
           <RefreshCw size={10} className={running ? 'animate-spin' : ''} />
@@ -153,31 +158,37 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
               <div className="flex flex-wrap items-center gap-1.5">
                 <Pill tone="muted" size="xs" bordered={false}>{formatCount(report.summary?.total, { fallback: '0' })} records compared</Pill>
                 {STATUS_META.map(({ key, label: statusLabel, tone: statusTone }) => (
-                  report.summary?.[key] > 0 && (
+                  countFor(report.summary, key) > 0 && (
                     <Pill key={key} tone={statusTone} size="xs" bordered={false}>
-                      {report.summary[key]} {statusLabel}
+                      {countFor(report.summary, key)} {statusLabel}
                     </Pill>
                   )
                 ))}
-                {outOfParityCount(report.summary) === 0 && (
+                {outOfParityCount(report.summary) === 0 && countFor(report.summary, 'unknown') === 0 && (
                   report.checksums?.match === true
                     ? <Pill tone="success" size="xs" bordered={false}>every record matches</Pill>
-                    : <Pill tone="muted" size="xs" bordered={false}>every record id and clock matches</Pill>
+                    : <Pill tone="muted" size="xs" bordered={false}>active record ids and clocks match</Pill>
                 )}
               </div>
 
-              {report.checksums?.match === false && outOfParityCount(report.summary) === 0 && (
+              {countFor(report.summary, 'unknown') > 0 && (
+                <p className="text-gray-400">
+                  Some different timestamps compare equal at millisecond precision. Record contents may still differ,
+                  and last-writer-wins may keep both copies while the times tie.
+                  {report.checksums?.match === false && ' The whole-brain checksums differ; timestamps or content may explain the difference.'}
+                </p>
+              )}
+
+              {report.checksums?.match === false && outOfParityCount(report.summary) === 0 && countFor(report.summary, 'unknown') === 0 && (
                 <p className="text-port-warning">
-                  Every record id and timestamp matches, but the whole-brain checksums differ — at least one record
-                  body differs between the two installs. Anti-entropy reconcile will <strong>not</strong> resolve this
-                  on its own: with equal timestamps, last-writer-wins skips the peer&apos;s copy in both directions.
-                  Edit the record on the side you want to win so its clock advances, then re-check.
+                  The whole-brain checksums differ. Record contents or deleted-record timestamps may differ.
+                  If update times tie, last-writer-wins may keep both copies; inspect the records before making changes.
                 </p>
               )}
 
               {report.checksums?.match !== true && report.checksums?.match !== false && (
                 <p className="text-gray-500">
-                  Record ids and timestamps were compared, but this peer returned no brain checksum, so record
+                  Active record ids and timestamps were compared, but this peer returned no brain checksum, so record
                   <em> contents</em> were not verified. Two records can share an id and a timestamp and still differ.
                 </p>
               )}
@@ -189,9 +200,9 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
                       <div className="flex items-center gap-1.5">
                         <span className="text-gray-300">{entry.type}</span>
                         {STATUS_META.map(({ key, label: statusLabel }) => (
-                          entry.counts[key] > 0 && (
+                          countFor(entry.counts, key) > 0 && (
                             <span key={key} className="text-[10px] text-gray-500">
-                              {entry.counts[key]} {statusLabel}
+                              {countFor(entry.counts, key)} {statusLabel}
                             </span>
                           )
                         ))}

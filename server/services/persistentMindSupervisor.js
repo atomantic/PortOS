@@ -1,3 +1,4 @@
+import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 /**
@@ -1045,12 +1046,15 @@ async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, 
     callBoundary: trackInFlightCall(turn.id, prepared.provider, target.model, callBoundary.call),
   });
   // Context/memory orchestration is only needed once admission succeeds.
-  const { preparePersistentMindContext } = await import('./persistentMindContext.js');
+  const { preparePersistentMindContext, readPersistentMindReflection, recordPersistentMindRecallAccess } = await import('./persistentMindContext.js');
+  const reflection = await readPersistentMindReflection({ enabled: normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities).manageMind });
   const context = await preparePersistentMindContext({
     mindId,
     identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
     instructions: prepared.instructions || '',
     memories: Array.isArray(prepared.memories) ? prepared.memories : [],
+    memoryRecall: prepared.memoryRecall,
+    reflection,
     // A local window's adapter bounds the recalled context so the wake
     // prompt leaves room for its tool rounds; absent means the default cap.
     ...(Number.isInteger(prepared.contextMaxChars) && prepared.contextMaxChars > 0 ? { maxChars: prepared.contextMaxChars } : {}),
@@ -1075,6 +1079,10 @@ async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, 
       thinkingPresetId,
       contextChars: context.chars,
       contextSummaryState: context.summaryState,
+      memoryReflectionState: context.reflection?.state || 'disabled',
+      memoryRecallState: context.memoryRecall?.state || 'none',
+      memoryRecallIds: context.memoryRecall?.includedIds || [],
+      memoryRecallOmittedIds: context.memoryRecall?.omittedIds || [],
     },
   });
   if (!await alive()) return;
@@ -1096,6 +1104,7 @@ async function runAdmittedTurn({ turn, mindId, route, callBoundary, generation, 
       });
     },
   });
+  await recordPersistentMindRecallAccess(context.memoryRecall?.includedIds);
   for (const event of Array.isArray(result?.events) ? result.events : []) {
     await appendMindEvent({
       kind: event.kind,

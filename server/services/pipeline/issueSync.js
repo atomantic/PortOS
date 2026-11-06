@@ -15,6 +15,7 @@ import {
 } from '../../lib/conflictJournal.js';
 import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue, TEXT_STAGE_IDS } from './issuesShared.js';
 import { isStr } from '../../lib/textUtils.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 
 /**
  * Sync-orchestrator entry point. Merges a remote peer's issues array into
@@ -96,9 +97,7 @@ export async function mergeIssuesFromSync(remoteIssues, {
         // mergeUniversesFromSync for the contract.
         continue;
       } else {
-        const localTs = local.updatedAt || '';
-        const remoteTs = sanitized.updatedAt || '';
-        if (remoteTs > localTs) {
+        if (compareNewerWins(sanitized.updatedAt, local.updatedAt)) {
           // An older sender cannot represent `climax`: its sanitizer either
           // omitted the role or coerced it to another legacy value. Accept its
           // newer fields while preserving the local v3-only role.

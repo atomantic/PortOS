@@ -4,8 +4,8 @@ import { Loader2 } from 'lucide-react';
 // live in a dense action area (a card's button row, a list-row's trailing
 // controls) — the sibling of <InlineConfirmRow> for when there's no room for a
 // full question row. The question, if any, is a short inline word ("Delete?").
-// Both buttons keep a 36px minimum height so the pair stays a usable touch
-// target on mobile even at this text-xs density.
+// Buttons stay compact for fine pointers and gain 44px targets on coarse
+// pointers, even at this text-xs density.
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `bg-port-${tone}/20` would NOT generate the utility. Spell it out.
@@ -41,7 +41,7 @@ export default function ConfirmButtonPair({
     ? 'min-h-[44px] min-w-[44px] justify-center'
     : responsiveTouchTargets
       ? 'min-h-[44px] min-w-[44px] justify-center sm:min-h-9 sm:min-w-0'
-    : 'min-h-[36px]';
+    : 'min-h-[36px] pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center';
   // While in-flight, the confirm icon becomes a spinner and both buttons
   // disable; the label additionally swaps to the in-flight word ("Deleting")
   // when a busyText is supplied, otherwise it stays put.

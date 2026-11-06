@@ -313,7 +313,7 @@ const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -532,6 +532,7 @@ const generateBodySchema = z.object({
     z.object({
       projectId: z.string().min(1).max(200),
       sceneId: z.string().min(1).max(200),
+      catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       // Selective section revision (#9011): names the open revision this
       // generation was submitted for. The completion hook rides it along
       // unused; the submit service refuses the kickoff (409 REVISION_CLOSED)
@@ -651,6 +652,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
     reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
     runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
+    geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
   });
 }));
 

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
+import SceneReferencePicker from './SceneReferencePicker.jsx';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
 const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
 const LONG_PRESS_MS = 450;
-const thumb = (ref) => <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
+const thumb = (ref) => <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} fallbackSrc={`/data/image-refs/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
+const PICKER_HINT = 'Each render sends the shot\'s references in order, up to its renderer\'s limit (Codex 5).';
 
 /**
  * The character and set references sent with this shot's frame renders (start,
@@ -17,7 +19,8 @@ const nameOf = (ref) => ref.label || ref.role || 'Reference';
  * the automatic set (the main character, the section's set and anyone the
  * prompt names); a change is kept on the shot (`frameReferenceIds`), and Auto
  * puts the automatic set back. A shot naming a Casting cast member
- * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`.
+ * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`,
+ * and Add also offers the approved assets of every character linked from the catalog.
  */
 export default function SceneFrameReferences({ project, scene, castMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
@@ -26,17 +29,18 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project)];
+  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
   if (!choices.length) return null;
   // The selected greybox is added separately and is not one of the saved picks.
   const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
   const chosenIds = chosen.map((ref) => ref.id);
   const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
-  const others = choices.filter((ref) => !chosenIds.includes(ref.id));
+  const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.frameReferenceIds);
   // Unresolved saved guides still occupy slots and must survive an edit.
-  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => refId.startsWith('mvr-guide-') && !ids.includes(refId));
+  const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
   const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
+  const notOffered = auto ? [] : musicVideoCatalogPickPlans(project, [scene])[0]?.unmappedFrame || [];
   const previewProps = (ref) => ({
     title: nameOf(ref),
     onPointerEnter: (e) => { if (e.pointerType === 'mouse') setPreview(ref); },
@@ -60,13 +64,26 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
     action();
   };
   // Until the cast member's guides load, an edit would save the row without them.
-  const variantId = scene.characterVariant?.ingredientId;
-  const locked = disabled || Boolean(castMedia && variantId && castMedia[variantId] === undefined);
+  const locked = disabled || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   const set = (picked) => {
     const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
     onEditLocal(scene.sceneId, { frameReferenceIds: next });
     onSave(scene.sceneId, { frameReferenceIds: next });
   };
+
+  const previewFigure = preview && (
+        <figure aria-label={`Preview of ${nameOf(preview)}`} className="relative space-y-1 rounded border border-port-border bg-port-bg p-1">
+          <img src={`/data/images/${encodeURIComponent(preview.imageId)}`} alt="" className="max-h-[60vh] w-full rounded bg-black object-contain" />
+          <figcaption className="pr-10 text-xs text-port-text">
+            {nameOf(preview)}
+            {preview.note && <span className="block text-port-text-muted">{preview.note}</span>}
+          </figcaption>
+          <button type="button" onClick={() => setPreview(null)} aria-label="Close preview"
+            className="absolute bottom-1 right-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded hover:bg-port-border sm:min-h-[32px] sm:min-w-[32px]">
+            <X size={14} aria-hidden="true" />
+          </button>
+        </figure>
+  );
 
   return (
     <div role="group" aria-label="References selected for the frames" className="space-y-1">
@@ -97,33 +114,15 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           </li>
         )}
       </ul>
+      {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
+      {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
       {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
-      {adding && !full && (
-        <ul aria-label="References to add" className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-4">
-          {others.map((ref) => (
-            <li key={ref.id} className="min-w-0">
-              <button type="button" onClick={unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); })} disabled={locked} {...previewProps(ref)}
-                className={`${CHIP} w-full text-left hover:bg-port-border/40`}>
-                {thumb(ref)}<span className="min-w-0 truncate">{nameOf(ref)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {preview && (
-        <figure aria-label={`Preview of ${nameOf(preview)}`} className="relative space-y-1 rounded border border-port-border bg-port-bg p-1">
-          <img src={`/data/images/${encodeURIComponent(preview.imageId)}`} alt="" className="max-h-[60vh] w-full rounded bg-black object-contain" />
-          <figcaption className="pr-10 text-xs text-port-text">
-            {nameOf(preview)}
-            {preview.note && <span className="block text-port-text-muted">{preview.note}</span>}
-          </figcaption>
-          <button type="button" onClick={() => setPreview(null)} aria-label="Close preview"
-            className="absolute bottom-1 right-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded hover:bg-port-border sm:min-h-[32px] sm:min-w-[32px]">
-            <X size={14} aria-hidden="true" />
-          </button>
-        </figure>
-      )}
+      <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}
+        tileProps={(ref) => ({ disabled: locked, onClick: unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); }), ...previewProps(ref) })}>
+        {adding && previewFigure}
+      </SceneReferencePicker>
+      {!adding && previewFigure}
       {chosen.length > 0 && (
         <details className="text-[11px] text-port-text-muted">
           <summary className="cursor-pointer">Note sent with refines and end frames</summary>

@@ -218,6 +218,15 @@ beforeEach(() => {
 });
 
 describe('CatalogIngredient — character sheet', () => {
+  it.each(['character', 'place', 'object'])('puts the %s creative redesign action beside Save without a separate body trigger', async (type) => {
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, type }));
+    await renderPage(`/catalog/${type}/cat-chr-1`);
+    const header = screen.getByRole('button', { name: 'Save', exact: true }).closest('header');
+    expect(within(header).getByRole('button', { name: 'Redesign with a creative assistant' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getAllByRole('button', { name: 'Redesign with a creative assistant' })).toHaveLength(1);
+    expect(document.getElementById('catalog-redesign')).not.toBeVisible();
+  });
+
   it('aborts an uncommitted agreement without saving or discarding the existing creative draft', async () => {
     const receipt = { id: 'example-abort-operation', sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, localOwner: 'canonical-owner', sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', state: 'proposed', planHash: 'example-hash',
       plan: { sourceId: 'example-source', survivorId: CHAR_FIXTURE.id, sourceOwner: 'source-owner', survivorOwner: 'canonical-owner', source: { ingredients: [{ id: 'example-source', type: 'character', name: 'Original subject' }] }, survivor: { ingredients: [CHAR_FIXTURE] }, proposed: { name: CHAR_FIXTURE.name } } };
@@ -604,6 +613,18 @@ describe('CatalogIngredient — character sheet', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
     expect(screen.getByLabelText('Physical Description')).toHaveValue('Sharp eyes, ink-stained cuffs.');
     expect(screen.getByLabelText('Pronouns')).toHaveValue('she/her');
+  });
+
+  it('shows the music-video limit and prevents saving an overlong linked description', async () => {
+    const linked = { ...CHAR_FIXTURE, refs: [...CHAR_FIXTURE.refs, { refKind: 'music-video', refId: 'mv-example', role: 'cast' }] };
+    getCatalogIngredientDetails.mockResolvedValue(detailsOf(linked));
+    await renderPage('/casting/cat-chr-1');
+    const description = screen.getByLabelText('Physical Description');
+    fireEvent.change(description, { target: { value: 'x'.repeat(1001) } });
+    expect(screen.getByText('1,001 / 1,000 characters for linked music videos')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    fireEvent.change(description, { target: { value: 'A concise appearance.' } });
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
   });
 
   it('edits the full shared character sheet and preserves unedited legacy fields', async () => {
@@ -1625,6 +1646,7 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await renderPage('/casting/cat-chr-hero/sheets');
     fireEvent.click(await screen.findByRole('button', { name: /Generate sheet/ }));
     await screen.findByTestId('job-thumb-manual-canon-fail');
+    await waitFor(() => expect(socketHandlers.has('reference-sheet:changed')).toBe(true));
     await act(async () => { emitSocket('reference-sheet:changed', { jobId: 'manual-canon-fail', status: 'failed' }); });
     expect(toast.error).toHaveBeenCalledWith('Standard turnaround render finished but the sheet could not be saved');
     expect(screen.queryByTestId('job-thumb-manual-canon-fail')).toBeNull();

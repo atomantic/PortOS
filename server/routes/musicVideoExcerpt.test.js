@@ -108,7 +108,7 @@ describe('draft excerpt deletion (#8986)', () => {
     const r = await request(app).delete(`${base(project.id)}/excerpt/mve-1`);
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('EXCERPT_REGISTERED_PROOF');
-    expect(r.body.error || r.body.message).toMatch(/Revoke/);
+    expect(r.body.error || r.body.message).toMatch(/Open proof controls in Shots/);
     expect((await projects.getProject(project.id)).excerpts).toHaveLength(1);
   });
 

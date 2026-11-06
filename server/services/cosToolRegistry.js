@@ -51,7 +51,7 @@ import {
   eidoversePlaceLayoutInputSchema,
 } from '../lib/eidoverseCreativeToolkit.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
-import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
+import { persistentMindProtectMemorySchema, persistentMindReviewMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
@@ -252,6 +252,19 @@ const mindProtectMemoryTool = Object.freeze({
     idempotent: true, async: false, confirmation: 'capability-grant',
   },
   adapter: { kind: 'persistent-mind-memory-protection' },
+});
+
+const mindReviewMemoryTool = Object.freeze({
+  type: 'portos_tool', name: 'mind.review-memory', version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'mind_review_memory', aliases: ['mind_review_memory'],
+  description: 'Review one owned active memory at its exact content version: keep, learn, archive, or defer. Learn requires your written lesson and keeps the source active; archive refuses protected records. Identical retries return the saved outcome; defer can precede learn, and archive must be a separate explicit decision. Keep/defer do not strengthen importance or evidence.',
+  input_schema: zodToOpenApiSchema(persistentMindReviewMemorySchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'], requiredCapabilities: ['manageMind'], sideEffect: 'write',
+    idempotent: true, async: false, confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'persistent-mind-memory-review' },
 });
 
 const mindChooseNameTool = Object.freeze({
@@ -629,7 +642,7 @@ const reportTools = [
   policy: { scopes: ['mind'], requiredCapabilities: ['auditReports', 'readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: name },
 }));
-const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, maintenanceRefreshTool, ...eidoverseTools];
+const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindReviewMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, maintenanceRefreshTool, ...eidoverseTools];
 const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
@@ -653,6 +666,7 @@ const MIND_FAMILY_BY_TOOL_NAME = Object.freeze({
   'reports.record': 'reports',
   'mind.cleanup': 'mind',
   'mind.protect-memory': 'mind',
+  'mind.review-memory': 'mind',
   'mind.choose-name': 'mind',
   'mind.thinking-presets': 'mind',
   'mind.request-thinking-preset': 'mind',
@@ -1090,6 +1104,11 @@ const chooseMindName = async (tool, args) => {
   return choosePersistentMindName(args);
 };
 
+const reviewMindMemory = async (tool, args, context) => {
+  const { reviewPersistentMindMemory } = await import('./persistentMindContext.js');
+  return reviewPersistentMindMemory(args, context);
+};
+
 const protectMindMemory = async (tool, args) => {
   const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
   return protectPersistentMindMemory(args);
@@ -1301,6 +1320,7 @@ const ADAPTER_HANDLERS = {
   'tools-deactivate': toggleToolFamilies,
   'voice-tool': runVoiceTool,
   'persistent-mind-name': chooseMindName,
+  'persistent-mind-memory-review': reviewMindMemory,
   'persistent-mind-memory-protection': protectMindMemory,
   'persistent-mind-maintenance': runMindMaintenance,
   'development-maintenance': readDevelopmentMaintenance,
@@ -1399,7 +1419,7 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
     if (authority.capabilities[accessCapability] !== true) throw new ServerError('Recipe access is not granted', { status: 403, code: 'TOOL_CAPABILITY_DENIED' });
     const { getRecipeByName } = await import('./mindToolRecipes.js');
     tool = await resolveRecipeInvocation(await getRecipeByName(parsedCall.name), getCosToolCatalog({ scope }).tools, { scope });
-  } else if (tool?.adapter.kind === 'recipe-management' && authority?.scope === 'mind') {
+  } else if (['recipe-management', 'persistent-mind-memory-review'].includes(tool?.adapter.kind) && authority?.scope === 'mind') {
     authority = await currentMindAuthority(authority);
   }
   if (!tool) throw new ServerError(`Unknown tool '${parsedCall.name}'`, { status: 404, code: 'TOOL_NOT_FOUND' });
@@ -1411,20 +1431,25 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   }
   const fingerprint = sha256Text(canonicalStringify({ name: tool.name, arguments: args, scope: authority?.scope || 'ui', ...(tool.adapter.kind.startsWith('reports.') ? { turnId: context.turnId || null } : {}), ...(tool.adapter.kind === 'recipe' ? { recipeId: tool.adapter.recipe.id, revision: tool.adapter.recipe.activeRevision } : {}) }));
   pruneToolCallFingerprints();
+  // Durable memory outcomes must recheck ownership/version/protection on retries,
+  // while retaining the shared request-id conflict and lease-renewal contracts.
+  const durableReplay = tool.adapter.kind === 'persistent-mind-memory-review';
   const existing = toolCalls.get(parsedCall.requestId);
   if (existing) {
     if (existing.fingerprint !== fingerprint) {
       throw new ServerError('requestId was already used for a different tool call', { status: 409, code: 'TOOL_IDEMPOTENCY_CONFLICT' });
     }
-    const result = await existing.promise;
-    return { ...result, duplicate: true };
+    if (!durableReplay) {
+      const result = await existing.promise;
+      return { ...result, duplicate: true };
+    }
   }
   const retainedFingerprint = toolCallFingerprints.get(parsedCall.requestId);
   if (retainedFingerprint) {
     if (retainedFingerprint.fingerprint !== fingerprint) {
       throw new ServerError('requestId was already used for a different tool call', { status: 409, code: 'TOOL_IDEMPOTENCY_CONFLICT' });
     }
-    throw new ServerError('requestId result has expired and cannot be replayed safely', { status: 409, code: 'TOOL_IDEMPOTENCY_EXPIRED' });
+    if (!durableReplay) throw new ServerError('requestId result has expired and cannot be replayed safely', { status: 409, code: 'TOOL_IDEMPOTENCY_EXPIRED' });
   }
 
   const promise = Promise.resolve()

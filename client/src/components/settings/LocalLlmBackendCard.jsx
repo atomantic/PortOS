@@ -55,6 +55,11 @@ export default function LocalLlmBackendCard({
             {' · '}v{data.latestVersion} available
           </span>
         )}
+        {backend.id === 'ollama' && data?.upstreamAheadVersion && (
+          <span title="Homebrew manages this copy, so a new release can be installed once Homebrew publishes it">
+            {' · '}v{data.upstreamAheadVersion} is out, waiting on Homebrew
+          </span>
+        )}
         {startupService?.supported && <> · {runsAtStartup ? 'runs at login' : 'startup off'}</>}
         {runtimeContextLabel && (
           <span
@@ -80,7 +85,7 @@ export default function LocalLlmBackendCard({
                 )}
                 disabled={busy}
                 className={`${btnClass} bg-port-success/20 hover:bg-port-success/30 text-port-success`}
-                title={`Update Ollama from v${data.version} to v${data.latestVersion} in place (downloads the latest release and restarts it)`}
+                title={`Update Ollama from v${data.version} to v${data.latestVersion} in place (${data.latestVersionSource === 'homebrew' ? 'upgrades it through Homebrew' : 'downloads the latest release'} and restarts it)`}
               >
                 {actionInProgress === 'upgrade-ollama' ? <BrailleSpinner /> : <ArrowUpCircle size={12} />}
                 Update to v{data.latestVersion}

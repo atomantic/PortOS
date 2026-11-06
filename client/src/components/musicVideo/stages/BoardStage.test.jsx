@@ -125,11 +125,11 @@ describe('BoardStage thumbnail marks', () => {
 describe('BoardStage scene cards', () => {
   it('numbers shots in song order, keeps candidate review visible, and marks a code-rendered clip', () => {
     const pending = { takes: [{ takeId: 't1', kind: 'video', assetId: 'v', status: 'selected' }, { takeId: 't2', kind: 'video', assetId: 'v2', status: 'candidate' }] };
-    const scenes = [scene(1, { startSec: 3, endSec: 6, sectionLabel: 'Verse', ...pending }), scene(2, { startSec: 0, endSec: 3, sectionLabel: 'Intro' }),
-      scene(3, { startSec: 6, endSec: 9, sectionLabel: 'Code', referenceImageId: null, videoHistoryId: 'upload-1', codeClip: true })];
+    const scenes = [scene(1, { startSec: 3, endSec: 6, label: 'Verse · 1/2', sectionLabel: 'Verse', ...pending }), scene(2, { startSec: 0, endSec: 3, label: null, sectionLabel: 'Intro' }),
+      scene(3, { startSec: 6, endSec: 9, label: 'Code', referenceImageId: null, videoHistoryId: 'upload-1', codeClip: true })];
     render(<MemoryRouter><BoardStage board={board(scenes, { project: { id: 'p', scenes, composition: { mode: 'composed' } } })} /></MemoryRouter>);
     expect(screen.getByRole('button', { name: 'Open Shot 1 · Intro' })).toBeTruthy();
-    const verse = screen.getByRole('button', { name: 'Open Shot 2 · Verse' });
+    const verse = screen.getByRole('button', { name: 'Open Shot 2 · Verse · 1/2' });
     expect(verse.textContent).toContain('Takes to review');
     const code = screen.getByRole('button', { name: 'Open Shot 3 · Code' });
     expect(document.getElementById('scene-media-s3').textContent).toBe('Code');
@@ -220,5 +220,18 @@ describe('Board pacing beat review', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mark beat ready' }));
     expect(editSceneLocal).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
     expect(saveScene).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
+  });
+
+  // Catches the board ignoring a stretch tapped on the shot sheet's map, or no way to clear it from the board.
+  it('narrows to the stretch selected on the shot sheet map and clears from a chip', () => {
+    const scenes = [
+      { sceneId: 'a', label: 'Shot 1', startSec: 0, endSec: 2, shotSheet: { location: 'Mall' } },
+      { sceneId: 'b', label: 'Shot 2', startSec: 2, endSec: 4, shotSheet: { location: 'Street' } },
+    ];
+    render(<MemoryRouter initialEntries={['/?mapBar=location&mapValue=Mall']}><BoardStage board={board(scenes)} /></MemoryRouter>);
+    expect(screen.getByText(/Shot 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Shot 2/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the map filter' }));
+    expect(screen.getByText(/Shot 2/)).toBeInTheDocument();
   });
 });

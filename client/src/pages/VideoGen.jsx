@@ -1,4 +1,5 @@
 import A2vLoraStageControls from '../components/videoGen/A2vLoraStageControls';
+import { GEMINI_OMNI_WEB_MODEL } from '../../../server/lib/geminiWebVideo.js';
 import { isDefaultA2vLoraStages } from '../lib/videoLoraStages';
 import { useRunwayCatalog } from '../hooks/useRunwayCatalog.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, getRunwaySpecialVideoModel } from '../../../server/lib/runwaySpecialVideoModels.js';
@@ -243,6 +244,7 @@ export default function VideoGen() {
   const falEnabled = status?.falEnabled === true;
   const reactorEnabled = status?.reactorEnabled === true;
   const runwayEnabled = status?.runwayEnabled === true;
+  const geminiEnabled = status?.geminiEnabled === true;
   const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
@@ -280,7 +282,7 @@ export default function VideoGen() {
   // Every field the form submits, plus the payload builder both submit paths
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
-    backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange, grokDuration, setGrokDuration,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, handleBackendChange, grokDuration, setGrokDuration,
     runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution, runwayInputs, setRunwayInputs,
     falDuration, setFalDuration, falModelId, setFalModelId,
     falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
@@ -326,7 +328,7 @@ export default function VideoGen() {
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
-    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled, runwayEnabled,
+    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled, runwayEnabled, geminiEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
     displaySleepEnabled,
   });
@@ -362,6 +364,7 @@ export default function VideoGen() {
       ['the fal.ai backend', isFal],
       ['the reactor.inc backend', isReactor],
       ['the Runway backend', isRunway],
+      ['the Gemini backend', isGemini],
       // Each remaining pipeline semantic has its own input listed below, but the
       // mode can be set before that input is filled — so gate the mode too
       // rather than letting an a2v render reach the peer as plain text-to-video.
@@ -388,7 +391,7 @@ export default function VideoGen() {
       return `${model?.modelName || 'The selected peer model'} renders only from a source image — add a start frame, or pick a text-to-video model.`;
     }
     return null;
-  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, isRunway, mode, sourceImageFile, sourceImageUpload,
+  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, isRunway, isGemini, mode, sourceImageFile, sourceImageUpload,
     lastImageFile, lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
     icReferenceVideoId, icReferenceImageFiles, selectedLoras, chunks]);
   // One reading for the Generate button, the enqueue guard and the caption.
@@ -1114,13 +1117,13 @@ export default function VideoGen() {
   }, [promptCap, submittedPromptLength, prompt]);
 
   // Only grok folds a negative prompt into its request (as an "Avoid:" line);
-  // fal's queue body and reactor's enqueue command have no such field, and a
+  // fal's queue body, reactor's enqueue command and Gemini's composer have no such field, and a
   // CFG-distilled local model ignores one. Hide the box rather than showing a
   // dead field that quietly does nothing. A federated render is the PEER's
   // model to judge, so the local selection's gate must not take away a field
   // that lane does submit.
   const negativePromptSupported = isGrok || isRunway || remoteTarget.isRemote
-    || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
+    || (!isFal && !isReactor && !isGemini && currentModel?.supportsNegativePrompt !== false);
 
   // Every completed reactor render stamps its fast-h3 clip id on the history
   // record; those ids are the only thing continue_from_clip_id can address, so
@@ -1264,7 +1267,7 @@ export default function VideoGen() {
           cloud backend's image-to-video only supports text (image-first) and
           image modes, so switching to one snaps an unsupported mode back to
           the nearest one. */}
-      {(grokEnabled || falEnabled || reactorEnabled || runwayEnabled) && (
+      {(grokEnabled || falEnabled || reactorEnabled || runwayEnabled || geminiEnabled) && (
         <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
           {[
             { id: 'local', label: 'Local' },
@@ -1272,6 +1275,7 @@ export default function VideoGen() {
             ...(falEnabled ? [{ id: 'fal', label: 'fal.ai' }] : []),
             ...(reactorEnabled ? [{ id: 'reactor', label: 'Reactor.inc' }] : []),
             ...(runwayEnabled ? [{ id: 'runway', label: 'Runway' }] : []),
+            ...(geminiEnabled ? [{ id: 'gemini', label: GEMINI_OMNI_WEB_MODEL.label }] : []),
           ].map(({ id, label }) => (
             <button
               key={id}
@@ -1289,7 +1293,9 @@ export default function VideoGen() {
                     ? 'Render via the reactor.inc fast-h3 API. Counts against your reactor.inc balance.'
                     : id === 'runway'
                       ? 'Render from text or animate a start frame via the Runway API. Counts against your Runway credits.'
-                      : 'Render on this machine with the local runtimes.'}
+                      : id === 'gemini'
+                        ? 'Render through the Gemini web app in the PortOS Browser. Counts against the signed-in Google account.'
+                        : 'Render on this machine with the local runtimes.'}
             >
               {label}
             </button>
@@ -1757,6 +1763,22 @@ export default function VideoGen() {
               width={width}
               height={height}
             />
+          ) : isGemini ? (
+            <div className="space-y-3">
+              <ResolutionField
+                presets={VIDEO_RESOLUTIONS}
+                width={width}
+                height={height}
+                onChange={handleResolutionChange}
+                {...VIDEO_EDGE_BOUNDS}
+                snapOnBlur
+                note="Only picks Landscape or Portrait. Gemini chooses the exact size."
+              />
+              <p className="text-[11px] text-gray-500 leading-snug">
+                PortOS opens the Gemini web app in the PortOS Browser, attaches your start frame, sends the prompt and downloads the clip.
+                Gemini sets the length (about {GEMINI_OMNI_WEB_MODEL.clipSeconds} seconds), and renders count against the Google account signed in there.
+              </p>
+            </div>
           ) : isRunway ? (
             <RunwayVideoSettings
               mode={mode}

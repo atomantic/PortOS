@@ -1,11 +1,12 @@
 // Saves a music video's cast, sets and props to the catalog so Casting,
-// Environments and Objects hold them for reuse. Two callers share it: approving
-// Cast & Sets saves the check-in's new cast automatically, and the importer
-// (dry run, review, commit) backfills videos made before the catalog link.
+// Environments and Objects hold them for reuse. Three callers share it: approving
+// Cast & Sets saves the check-in's new cast automatically, the importer (dry run,
+// review, commit) backfills videos made before the catalog link, and Save to
+// catalog creates one subject's record from Manage catalog links.
 //
 // A subject is saved by stamping `ingredientId` on it; catalogLinks.js then
 // keeps the music-video ref in step. `localOnly` marks a subject the director
-// keeps in this video only, so neither caller offers it again.
+// keeps in this video only, so only an explicit Save to catalog saves it.
 //
 // Catalog ids are deterministic per (project, subject), like the universe canon
 // promotion, so two machines saving the same synced video converge on one row.
@@ -15,6 +16,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideoSubjectLimits.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
 import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
@@ -23,7 +25,6 @@ const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', ob
 const UNIVERSE_FIELD = { character: 'characters', place: 'places', object: 'objects' };
 const REFERENCE_ROLE = { character: 'character', place: 'set', object: 'prop' };
 const MAX_VIDEO_SUBJECTS = 24;
-const SUBJECT_DESCRIPTION_MAX = 1000;
 const queueCheckinSave = createKeyCachedQueue();
 
 // The Cast & Sets image behind each check-in subject: the protagonist's
@@ -53,13 +54,14 @@ function referenceImage(project, subject) {
 
 /**
  * The subjects of a project not yet in the catalog, with the image that shows
- * each. `checkinOnly` limits it to the ones Cast & Sets created.
+ * each. `checkinOnly` limits it to the ones Cast & Sets created; `includeLocal`
+ * adds the subjects kept in this video, for an explicit save of one.
  */
-function catalogCastCandidates(project, { checkinOnly = false } = {}) {
+function catalogCastCandidates(project, { checkinOnly = false, includeLocal = false } = {}) {
   if (!project || project.deleted) return [];
   const sheets = checkinImages(project);
   return (project.concept?.subjects || [])
-    .filter((s) => s?.id && s.name && TYPE_PREFIX[s.kind] && !s.ingredientId && !s.localOnly)
+    .filter((s) => s?.id && s.name && TYPE_PREFIX[s.kind] && !s.ingredientId && (includeLocal || !s.localOnly))
     .filter((s) => !checkinOnly || s.id.startsWith(CAST_SETS_SUBJECT_PREFIX))
     .map((s) => ({
       subjectId: s.id,
@@ -271,7 +273,7 @@ async function commitCatalogCast(projectId, decisions, deps) {
   const { catalogDB, getProject, mutateProjectRecord, queueProjectCatalogLinkSync } = deps;
   const project = await getProject(projectId);
   if (!project || project.deleted || !decisions.length) return { project, created: 0, linked: 0, kept: 0 };
-  const images = new Map(catalogCastCandidates(project).map((c) => [c.subjectId, c.imageId]));
+  const images = new Map(catalogCastCandidates(project, { includeLocal: true }).map((c) => [c.subjectId, c.imageId]));
   const stamps = new Map();
   const stats = { created: 0, linked: 0, kept: 0 };
   for (const d of decisions) {
@@ -318,11 +320,16 @@ async function commitCatalogCast(projectId, decisions, deps) {
       ...current,
       concept: {
         ...(current.concept || {}),
-        subjects: (current.concept?.subjects || []).map((s) => (stamps.has(s.id) && !s.ingredientId ? { ...s, ...stamps.get(s.id) } : s)),
+        subjects: (current.concept?.subjects || []).map((s) => {
+          if (!stamps.has(s.id) || s.ingredientId) return s;
+          const { localOnly: _localOnly, ...rest } = s;
+          return { ...rest, ...stamps.get(s.id) };
+        }),
       },
     },
   }));
-  queueProjectCatalogLinkSync(projectId);
+  // Awaited so the catalog's story filter shows the change when this returns.
+  await queueProjectCatalogLinkSync(projectId);
   return { project: saved, ...stats };
 }
 
@@ -334,11 +341,11 @@ async function defaultDeps() {
     import('./catalogLinks.js'),
     import('../catalogPrimitives.js'),
   ]);
-  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
+  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }
 
 async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {
-  if (!project?.castAndSets || (!selectedKey && project.castAndSets.status !== 'approved')) return;
+  if (!project?.castAndSets || project.castAndSets.source === 'catalog' || (!selectedKey && project.castAndSets.status !== 'approved')) return;
   const sheets = checkinImages(project, selectedKey);
   const keys = checkinImageKeys(project.castAndSets);
   for (const subject of project.concept?.subjects || []) {
@@ -391,7 +398,7 @@ export async function saveCheckinCastToCatalog(projectId, deps = null) {
   return queueCheckinSave(projectId, async () => {
     const d = deps || await defaultDeps();
     const project = await d.getProject(projectId);
-    if (!project || project.deleted || project.castAndSets?.status !== 'approved') return null;
+    if (!project || project.deleted || project.castAndSets?.source === 'catalog' || project.castAndSets?.status !== 'approved') return null;
     const candidates = catalogCastCandidates(project, { checkinOnly: true });
     const plan = candidates.length ? await planCatalogCast(project, candidates, d) : [];
     const result = await commitCatalogCast(projectId, plan.map(({ subjectId, action, ingredientId }) => ({ subjectId, action, ingredientId })), d);
@@ -486,7 +493,7 @@ const loadVideo = async (projectId, d) => {
  */
 export async function listVideoSubjectLinks(projectId, { type } = {}, deps = null) {
   const d = deps || await defaultDeps();
-  const project = await loadVideo(projectId, d);
+  const project = d.getStoredProject ? await loadVideo(projectId, { ...d, getProject: d.getStoredProject }) : await loadVideo(projectId, d);
   const universeId = project.concept?.universeId || null;
   const subjects = (project.concept?.subjects || []).filter((s) => s?.id && TYPE_PREFIX[s.kind] && (!type || s.kind === type));
   const records = new Map();
@@ -558,12 +565,53 @@ export async function linkVideoSubjects(projectId, links, deps = null) {
         }),
       },
     },
-  }));
+  }), { commitSubjectIds: [...stamps].filter(([, stamp]) => stamp?.description !== undefined).map(([subjectId]) => subjectId) });
   // Awaited so the catalog's story filter shows the change when this returns.
   await d.queueProjectCatalogLinkSync(projectId);
   const linked = [...stamps.values()].filter(Boolean).length;
   console.log(`🎭 Music video ${String(projectId).slice(0, 11)}: ${linked} subject(s) linked, ${stamps.size - linked} unlinked`);
   return { project: saved, linked, unlinked: stamps.size - linked };
+}
+
+/**
+ * "Save to catalog" for one subject: create and link its deterministic record
+ * with the importer's logic. A director's explicit save overrides `localOnly`.
+ * `kept: 1` means that record was deleted, so it is not brought back.
+ */
+export async function saveVideoSubjectToCatalog(projectId, subjectId, deps = null) {
+  const d = deps || await defaultDeps();
+  const project = await loadVideo(projectId, d);
+  if (!(project.concept?.subjects || []).some((s) => s.id === subjectId)) {
+    throw new ServerError(`This video has no subject ${subjectId}.`, { status: 404, code: 'NOT_FOUND' });
+  }
+  const { project: saved, created, kept } = await commitCatalogCast(projectId, [{ subjectId, action: 'create' }], d);
+  console.log(`🎭 Music video ${String(projectId).slice(0, 11)}: subject save to catalog, ${created} created, ${kept} kept in the video`);
+  return { project: saved, created, kept };
+}
+
+/** Restore a reviewed legacy video snapshot to its linked catalog look. */
+export async function restoreVideoSubjectDescription(projectId, input, deps = null) {
+  const d = deps || await defaultDeps();
+  const descriptions = await import('./subjectDescriptionSync.js');
+  const { project } = await d.mutateProjectRecord(projectId, async (current, { client, storedProject } = {}) => {
+    const raw = (storedProject?.concept?.subjects || []).find((subject) => subject.id === input.subjectId);
+    const subject = (current.concept?.subjects || []).find((item) => item.id === input.subjectId);
+    if (!client || !raw || !subject || raw.ingredientId !== input.ingredientId || subject.ingredientId !== input.ingredientId
+      || raw.kind !== subject.kind || (raw.castForm?.id || '') !== (input.formId || '')
+      || (subject.castForm?.id || '') !== (input.formId || '') || (raw.description || '') !== input.videoDescription) {
+      throw new ServerError('The video or its catalog link changed. Review the latest descriptions first.', { status: 409, code: 'CATALOG_DESCRIPTION_CONFLICT' });
+    }
+    const before = { concept: { subjects: [{ ...subject, description: input.catalogDescription }] } };
+    const after = { concept: { subjects: [{ ...subject, description: input.videoDescription }] } };
+    const result = await descriptions.syncEditedSubjectDescriptions(before, after, {
+      client, bases: [{ subjectId: subject.id, description: input.catalogDescription }], catalogDB: d.catalogDB,
+    });
+    return {
+      project: { ...current, concept: { ...current.concept, subjects: current.concept.subjects.map((item) => item.id === subject.id ? { ...item, description: input.videoDescription } : item) } },
+      catalogRecords: result.records,
+    };
+  }, { skipDescriptionSync: true, commitSubjectIds: [input.subjectId] });
+  return { project };
 }
 
 /**

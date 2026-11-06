@@ -29,7 +29,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -182,7 +182,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
   ]);
   const [greybox, panel, castMedia] = await Promise.all([
     loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
-    castGuideMedia?.loadSceneCastMedia(scene),
+    castGuideMedia?.loadSceneCastMedia(scene, { project }),
   ]);
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
@@ -221,7 +221,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
     const sentInitCount = initInputCount;
-    const known = [greybox?.reference, ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project)];
+    const known = [greybox?.reference, ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.
@@ -360,7 +360,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   let localModelCandidates = [];
   const source = data.mode ? null : RECORD_PIN_SOURCES.find((s) => data[s.tag]?.[s.idKey]);
   if (source) {
-    const record = await source.load(data[source.tag][source.idKey]).catch(() => null);
+    const record = await source.load(data[source.tag][source.idKey]).catch(error => {
+      if (source.tag === 'musicVideo') throw error;
+      return null;
+    });
     if (source.tag === 'musicVideo') { musicVideoProject = record; musicVideoProjectLoaded = true; }
     const pin = recordRenderPin(record || {});
     const resolved = resolveRenderTargetConfig(settings, source.target, {
@@ -391,12 +394,17 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
-    const project = musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId).catch(() => null);
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');
+    const project = await requireCatalogRenderReady(musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId));
+    assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
+    assertCatalogReferenceFiles(project, [...namedReferenceFiles, data.initImageFile]);
+    if (project?.castAndSets?.source === 'catalog') data.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
     const standardSize = musicVideoFrameGenSize(project);
     if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
       Object.assign(data, musicVideoFrameGenSize(project, localModel));
     }
     await applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount });
+    assertCatalogReferenceFiles(project, namedReferenceFiles);
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = initInputCount + referenceImageCount;

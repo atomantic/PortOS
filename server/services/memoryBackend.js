@@ -278,3 +278,13 @@ export async function getMemoryVersion(id, version) {
   const b = await getBackend();
   return b.getMemoryVersion ? b.getMemoryVersion(id, version) : null;
 }
+
+export async function reviewMindMemory(input, provenance) {
+  const b = await getBackend();
+  return b.reviewMindMemory(input, provenance);
+}
+
+export async function selectMindMemoryForReview(mindId) {
+  const b = await getBackend();
+  return b.selectMindMemoryForReview(mindId);
+}

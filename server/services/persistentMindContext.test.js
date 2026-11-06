@@ -9,6 +9,9 @@ const mock = vi.hoisted(() => ({
   memoryApi: {
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
+    getMemory: vi.fn(),
+    hybridSearchMemories: vi.fn(),
+    selectMindMemoryForReview: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
     archiveMemory: vi.fn(async (id) => ({ success: true, id })),
     updateMemory: vi.fn(),
@@ -35,12 +38,15 @@ vi.mock('./memoryBackend.js', () => mock.memoryApi);
 
 const {
   appendPersistentMindAnnotation,
+  applyPersistentMindContinuationNote,
   archivePersistentMindMemories,
   clearPersistentMindRollups,
   createPersistentMindMemoryFromCandidate,
   createPersistentMindMemory,
   choosePersistentMindName,
   readPersistentMindMemories,
+  readPersistentMindRecall,
+  recordPersistentMindRecallAccess,
   updatePersistentMindMemory,
   protectPersistentMindMemory,
   preparePersistentMindContext,
@@ -80,6 +86,151 @@ beforeEach(() => {
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
+
+describe('current-message memory recall', () => {
+  const mindId = 'cos-persistent-mind';
+  const wake = (text) => ({ kind: 'message', message: { id: 'message-1', text } });
+  const owned = (id, content, extra = {}) => ({
+    id, content, type: 'fact', category: 'other', tags: [], importance: 0.5, status: 'active', sourceAgentId: mindId, ...extra,
+  });
+  const identity = owned('identity', 'Enduring synthetic identity.', { tags: ['mind:core-identity'], importance: 0.1 });
+  const relevant = owned('relevant', 'The zebra migration ships behind a blue green switch.', { importance: 0.01 });
+
+  // The store's contract: importance-ordered pages, and a lexical search over
+  // the caller's owner scope. Real scoping is pinned in memory.test.js and
+  // memoryDB.db.test.js; this suite owns what reaches the outbound context.
+  const seedStore = (records) => {
+    const byId = new Map(records.map((memory) => [memory.id, memory]));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => byId.get(id));
+    mock.memoryApi.getMemories.mockImplementation(async ({ tags, limit = 100 }) => ({
+      memories: records
+        .filter((memory) => !tags || memory.tags.some((tag) => tags.includes(tag)))
+        .sort((a, b) => b.importance - a.importance)
+        .slice(0, limit),
+    }));
+    mock.memoryApi.hybridSearchMemories.mockImplementation(async (text, _embedding, { sourceAgentId }) => ({
+      memories: records.filter((memory) => memory.sourceAgentId === sourceAgentId && /zebra/i.test(text) && /zebra/i.test(memory.content)),
+    }));
+  };
+  const outbound = async (message, options = {}) => preparePersistentMindContext({
+    memories: await readPersistentMindMemories(),
+    memoryRecall: await readPersistentMindRecall(wake(message)),
+    ...options,
+  });
+  const irrelevant = Array.from({ length: 120 }, (_, index) => owned(`noise-${index}`, `Unrelated durable synthetic note number ${index}.`, { importance: 0.9 }));
+
+  beforeEach(() => {
+    mock.memoryApi.peekMemory.mockReset();
+    mock.memoryApi.getMemory.mockReset();
+    mock.memoryApi.getMemories.mockReset();
+    mock.memoryApi.hybridSearchMemories.mockReset();
+  });
+
+  it('puts a low-importance owned match in the outbound context past 100 better-ranked records', async () => {
+    seedStore([identity, relevant, ...irrelevant]);
+    const baseline = await readPersistentMindMemories();
+    expect(baseline.map((memory) => memory.id)).not.toContain('relevant');
+
+    const context = await outbound('What did we decide about the zebra migration?');
+
+    expect(mock.memoryApi.hybridSearchMemories).toHaveBeenCalledWith('What did we decide about the zebra migration?', null, expect.objectContaining({ sourceAgentId: mindId, lexicalMatch: 'any' }));
+    expect(context.text).toContain(`id=relevant; recalled=current-message] ${relevant.content}`);
+    expect(context.text).toContain(identity.content);
+    expect(context.memoryRecall).toEqual({ state: 'included', includedIds: ['relevant'], omittedIds: [] });
+    expect(mock.memoryApi.getMemory).not.toHaveBeenCalled();
+  });
+
+  it('never admits a foreign hit, even from a backend that ignored the scope', async () => {
+    seedStore([identity, relevant]);
+    const foreign = owned('foreign', 'The zebra migration belongs to another agent.', { sourceAgentId: 'other-agent' });
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [foreign, relevant] });
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => ({ foreign, relevant, identity })[id]);
+
+    const context = await outbound('zebra migration status');
+
+    expect(context.text).not.toContain(foreign.content);
+    expect(context.memoryRecall.includedIds).toEqual(['relevant']);
+  });
+
+  it('leaves the continuation note to its own section rather than recalling it', async () => {
+    const note = owned('note', 'Zebra migration is the current thread.', { tags: ['mind:continuation-note'] });
+    seedStore([identity, relevant, note]);
+    expect((await readPersistentMindRecall(wake('zebra migration'))).memories.map((memory) => memory.id)).toEqual(['relevant']);
+  });
+
+  it('forces no context for acknowledgements, unrelated prompts or self-wakes', async () => {
+    seedStore([identity, relevant]);
+    expect(await readPersistentMindRecall(wake('Thanks, sounds great!'))).toEqual({ state: 'none', memories: [] });
+    expect(await readPersistentMindRecall({ kind: 'self', reason: 'zebra migration reflection' })).toEqual({ state: 'none', memories: [] });
+    expect(mock.memoryApi.hybridSearchMemories).not.toHaveBeenCalled();
+
+    // A ranked backend always returns a "best" row; the gate still refuses it.
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [relevant] });
+    expect(await readPersistentMindRecall(wake('Is the zebra exhibit open at the city park today?')))
+      .toEqual({ state: 'no-match', memories: [] });
+  });
+
+  it('renders a record once when it is in both the baseline and the recall', async () => {
+    seedStore([identity, relevant]);
+    const context = await outbound('zebra migration');
+    expect(context.text.match(/id=relevant/g)).toHaveLength(1);
+    expect(context.memoryCount).toBe(2);
+
+    const protectedHit = owned('protected-hit', 'Zebra migration is a foundational commitment.', { tags: ['mind:important'] });
+    seedStore([protectedHit]);
+    const protectedContext = await outbound('zebra migration');
+    expect(protectedContext.text.match(/id=protected-hit/g)).toHaveLength(1);
+    expect(protectedContext.memoryRecall).toEqual({ state: 'already-in-baseline', includedIds: [], omittedIds: [] });
+  });
+
+  it('holds the memory cap by cutting ordinary context, and omits an oversized match whole', async () => {
+    const large = Array.from({ length: 40 }, (_, index) => owned(`large-${index}`, `Bulky synthetic note ${index}. ${'x'.repeat(500)}`, { importance: 0.9 }));
+    const oversized = owned('oversized', `Zebra migration appendix. ${'y'.repeat(3_000)}`);
+    seedStore([identity, relevant, oversized, ...large]);
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [oversized, relevant] });
+
+    const context = await outbound('zebra migration');
+
+    expect(context.text).toContain(relevant.content);
+    expect(context.text).toContain(identity.content);
+    expect(context.text).not.toContain('y'.repeat(50));
+    expect(context.memoryRecall).toEqual({ state: 'included', includedIds: ['relevant'], omittedIds: ['oversized'] });
+    expect(context.text).toContain('Bulky synthetic note 0');
+    expect(context.text).not.toContain('Bulky synthetic note 39');
+    expect(context.chars).toBeLessThanOrEqual(32_000);
+
+    // A record that fits no reservation is reported, never cut.
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [oversized] });
+    const tight = await outbound('zebra migration', { maxChars: 1_000 });
+    expect(tight.memoryRecall.state).toBe('omitted-budget');
+    expect(tight.text).not.toContain('recalled=current-message');
+    expect(tight.text).toContain(identity.content);
+  });
+
+  it('keeps thinking on the normal context when retrieval fails, and reports it', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    seedStore([identity]);
+    mock.memoryApi.hybridSearchMemories.mockRejectedValue(new Error('synthetic backend outage'));
+
+    const context = await outbound('zebra migration');
+
+    expect(context.memoryRecall).toEqual({ state: 'unavailable', includedIds: [], omittedIds: [] });
+    expect(context.text).toContain(identity.content);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('synthetic backend outage'));
+    stderr.mockRestore();
+  });
+
+  it('records access only through the explicit sent-context step, surviving one failure', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mock.memoryApi.getMemory.mockResolvedValueOnce(relevant).mockRejectedValueOnce(new Error('synthetic write failure'));
+
+    await expect(recordPersistentMindRecallAccess(['relevant', 'missing'])).resolves.toBeUndefined();
+
+    expect(mock.memoryApi.getMemory.mock.calls).toEqual([['relevant'], ['missing']]);
+    expect(stderr).toHaveBeenCalledOnce();
+    stderr.mockRestore();
+  });
+});
 
 describe('chosen identity continuity', () => {
   it('selects and later renames one protected record across reload, cleanup and provider changes', async () => {
@@ -512,5 +663,160 @@ describe('trajectory annotations and Brain promotion', () => {
       memoryApi,
     })).resolves.toMatchObject({ success: true, duplicate: true, memory: { id: 'memory-1' } });
     expect(memoryApi.createMemory).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('distinguishes disabled, empty, unavailable and stale reflection reads without writes', async () => {
+  const { readPersistentMindReflection, revalidatePersistentMindReflection } = await import('./persistentMindContext.js');
+  const source = { id: 'source', version: 1, status: 'active', sourceAgentId: 'cos-persistent-mind', tags: [], content: 'Exact source' };
+  mock.memoryApi.selectMindMemoryForReview.mockResolvedValue(source);
+  expect(await readPersistentMindReflection()).toMatchObject({ state: 'disabled' });
+  expect(mock.memoryApi.selectMindMemoryForReview).not.toHaveBeenCalled();
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'pending', source });
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: undefined });
+  expect(await revalidatePersistentMindReflection({ source }, true)).toBe('pending');
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: 2 });
+  expect(await revalidatePersistentMindReflection({ source }, true)).toBe('changed');
+  mock.history = [{ data: { memoryReview: { memoryId: source.id } } }];
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, lastReview: { expectedVersion: 1, latestVerdict: 'keep' } });
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ inspected: { id: source.id, lastReview: { latestVerdict: 'keep' } } });
+  mock.memoryApi.selectMindMemoryForReview.mockResolvedValue(null);
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'empty' });
+  mock.memoryApi.selectMindMemoryForReview.mockRejectedValue(new Error('Unavailable'));
+  expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'unavailable' });
+  expect(mock.memoryApi.createMemory).not.toHaveBeenCalled();
+});
+
+describe('continuation note', () => {
+  const NOTE = 'Open thread: the draft is waiting on review. Next: read ```the reply``` first.';
+  let records;
+
+  const installStore = () => {
+    records = new Map();
+    let created = 0;
+    mock.memoryApi.getMemories.mockImplementation(async ({ tags, status, offset = 0, limit = 100 }) => ({
+      memories: [...records.values()]
+        .filter((memory) => memory.status === status && (!tags || tags.some((tag) => memory.tags.includes(tag))))
+        .slice(offset, offset + limit),
+    }));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
+    mock.memoryApi.createMemory.mockImplementation(async (input) => {
+      const memory = { id: `note-${++created}`, version: 1, updatedAt: '2026-01-01T00:00:00.000Z', ...input };
+      records.set(memory.id, memory);
+      return structuredClone(memory);
+    });
+    mock.memoryApi.updateMemory.mockImplementation(async (id, { expectedVersion, changedBy: _by, changeReason: _reason, ...updates }) => {
+      const memory = records.get(id);
+      if (expectedVersion !== undefined && expectedVersion !== memory.version) {
+        throw Object.assign(new Error('conflict'), { code: 'MEMORY_VERSION_CONFLICT' });
+      }
+      const next = { ...memory, ...updates, version: memory.version + Number(updates.content !== undefined) };
+      records.set(id, next);
+      return structuredClone(next);
+    });
+    mock.appendMindEvent.mockImplementation(async (event) => {
+      mock.history.push({ ...event, at: '2026-01-02T00:00:00.000Z' });
+      return { appended: true, event };
+    });
+  };
+
+  const write = (turnId, note, overrides = {}) => applyPersistentMindContinuationNote({
+    turnId, note, providerId: 'provider-a', model: 'model-a', ...overrides,
+  });
+
+  beforeEach(() => {
+    mock.history = [];
+    installStore();
+  });
+
+  it('reaches later wakes unchanged, once, across provider swaps and past the ordinary memory page', async () => {
+    for (let index = 0; index < 150; index += 1) {
+      records.set(`ordinary-${index}`, { id: `ordinary-${index}`, status: 'active', sourceAgentId: 'cos-persistent-mind', content: `Ordinary ${index}`, tags: [], importance: 1 });
+    }
+    await write('turn-1', NOTE);
+    const memories = await readPersistentMindMemories();
+    expect(memories.some((memory) => memory.content === NOTE)).toBe(false);
+
+    const context = await preparePersistentMindContext({ memories, providerId: 'provider-b', model: 'model-b', maxChars: 100_000 });
+    expect(context.text.split(NOTE)).toHaveLength(2);
+    expect(context.text).toContain('Written by this mind at 2026-01-02T00:00:00.000Z, turn turn-1, on provider-a/model-a.');
+    expect(context.continuationNote).toMatchObject({ state: 'included', content: NOTE, version: 1 });
+    expect(mock.history).toHaveLength(1);
+    expect(JSON.stringify(mock.history)).not.toContain('the draft');
+  });
+
+  it('replaces through a version, clears to history, and starts a fresh record afterward', async () => {
+    await write('turn-1', NOTE);
+    expect(await write('turn-2', 'Second note')).toMatchObject({ action: 'updated', version: 2 });
+    expect(records.get('note-1').content).toBe('Second note');
+
+    expect(await write('turn-3', '')).toMatchObject({ action: 'cleared', memoryId: 'note-1' });
+    expect(records.get('note-1')).toMatchObject({ status: 'archived', content: 'Second note' });
+    expect((await preparePersistentMindContext({})).continuationNote).toEqual({ state: 'none' });
+    expect(mock.history.at(-1)).toMatchObject({ kind: 'mind.continuation.cleared', turnId: 'turn-3' });
+
+    expect(await write('turn-4', 'Third note')).toMatchObject({ action: 'created', memoryId: 'note-2' });
+  });
+
+  it('applies one turn once and refuses a replacement of a note it did not read', async () => {
+    await write('turn-1', NOTE);
+    expect(await write('turn-1', 'Different retry text')).toMatchObject({ action: 'replayed' });
+    expect(records.get('note-1')).toMatchObject({ content: NOTE, version: 1 });
+
+    expect(await write('turn-2', NOTE)).toMatchObject({ action: 'unchanged' });
+    expect(records.get('note-1').version).toBe(1);
+
+    expect(await write('turn-3', 'Stale', { expected: { memoryId: 'note-1', version: 9 } })).toEqual({ action: 'stale' });
+    expect(await write('turn-3', 'Stale', { expected: { memoryId: null, version: null } })).toEqual({ action: 'stale' });
+    mock.memoryApi.updateMemory.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'MEMORY_VERSION_CONFLICT' }));
+    expect(await write('turn-3', 'Raced')).toEqual({ action: 'stale' });
+    expect(records.get('note-1').content).toBe(NOTE);
+    expect(mock.history).toHaveLength(1);
+  });
+
+  it('survives bulk cleanup without counting as an archivable memory', async () => {
+    await write('turn-1', NOTE);
+    expect(await archivePersistentMindMemories()).toEqual({ archived: 0, preserved: 1 });
+    expect(records.get('note-1').status).toBe('active');
+  });
+
+  it('admits the whole note or reports it omitted, keeping identity and the newest message', async () => {
+    const long = `${'word '.repeat(300)}END`;
+    await write('turn-1', long);
+    mock.history.push({
+      kind: 'mind.message.accepted', mindId: 'cos-persistent-mind', eventId: 'message-1', sequence: 5,
+      at: '2026-01-03T00:00:00.000Z', data: { displayText: 'Latest human message', previousSequence: null },
+    });
+    const small = await preparePersistentMindContext({
+      identity: 'Stable identity', maxChars: 1_500,
+      memories: [{ id: 'core', content: 'Core commitment', tags: ['mind:core-identity'], status: 'active' }],
+    });
+    expect(small.continuationNote.state).toBe('omitted-budget');
+    expect(small.text).toContain('# Continuation note\n(omitted due to context budget');
+    expect(small.text).not.toContain('word word');
+    for (const kept of ['Stable identity', 'Core commitment', 'Latest human message']) expect(small.text).toContain(kept);
+
+    const roomy = await preparePersistentMindContext({ identity: 'Stable identity', maxChars: 5_000 });
+    expect(roomy.continuationNote.state).toBe('included');
+    expect(roomy.text).toContain(long);
+  });
+
+  it('cannot be forged through ordinary memory paths or attributed after an outside edit', async () => {
+    await createPersistentMindMemory({ content: 'Posing as the note', tags: ['mind:continuation-note'] });
+    await createPersistentMindMemoryFromCandidate({ candidateId: 'turn-9:0', turnId: 'turn-9', content: 'Candidate posing', tags: ['mind:continuation-note'] });
+    await promotePersistentMindMemory({ id: 'promotion-1', approved: true, content: 'Promoted posing', tags: ['mind:continuation-note'] });
+    expect((await preparePersistentMindContext({})).continuationNote).toEqual({ state: 'none' });
+
+    await write('turn-1', NOTE);
+    await expect(updatePersistentMindMemory('note-4', { content: 'Custodian edit' })).rejects.toMatchObject({ status: 409 });
+    expect(await protectPersistentMindMemory({ memoryId: 'note-4', protection: 'core-identity' })).toMatchObject({ ok: false });
+    expect(records.get('note-4')).toMatchObject({ content: NOTE, tags: ['mind:continuation-note', 'mind:important'] });
+
+    // A legacy record or an edit through the generic Brain surface is never re-signed.
+    records.set('note-4', { ...records.get('note-4'), content: 'Edited elsewhere' });
+    const edited = await preparePersistentMindContext({});
+    expect(edited.continuationNote.provenance).toBeNull();
+    expect(edited.text).toContain('Author unknown');
+    expect(edited.text).not.toContain('Written by this mind');
   });
 });

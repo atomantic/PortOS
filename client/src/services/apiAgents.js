@@ -51,6 +51,7 @@ export const getPersistentMind = (filters = {}, options = {}) =>
 export const cancelPersistentMindThinkingRequest = (options = {}) =>
   request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindMaintainer = (options = {}) => request('/cos/mind/maintainer', options);
+export const getPersistentMindReflection = (options = {}) => request('/cos/mind/reflection', options);
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
 export const getPersistentMindJournal = ({ kind, status, ...options } = {}) => {
@@ -444,7 +445,7 @@ export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { m
 export const getCosWorkflow = (hours = 168, options) => request(`/cos/workflow?hours=${hours}`, options);
 
 // Feature Agents
-export const getFeatureAgents = () => request('/feature-agents');
+export const getFeatureAgents = (options) => request('/feature-agents', options);
 export const getFeatureAgent = (id, options) => request(`/feature-agents/${id}`, options);
 export const createFeatureAgent = (data, options = {}) => request('/feature-agents', {
   method: 'POST',

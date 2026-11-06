@@ -6,6 +6,7 @@
  * the merge of an authorized peer tombstone. Kept light: the sync paths load it,
  * and local.js (the render graph) is imported lazily.
  */
+import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { existsSync } from 'fs';
 import { stat } from 'fs/promises';
 import { join } from 'path';
@@ -139,7 +140,9 @@ let stampHandler = null;
 export function initImageOriginStamping() {
   if (!stampHandler) {
     stampHandler = (payload) => {
-      stampRenderOrigin(payload).catch((err) => console.error(`❌ Image origin stamp failed for ${payload?.filename}: ${err.message}`));
+      // Acquire our own publication before the first await: the provider
+      // releases its admission as soon as this synchronous fan-out returns.
+      withBackupAssetPublication(() => stampRenderOrigin(payload)).catch((err) => console.error(`❌ Image origin stamp failed for ${payload?.filename}: ${err.message}`));
     };
     imageGenEvents.on('completed', stampHandler);
   }

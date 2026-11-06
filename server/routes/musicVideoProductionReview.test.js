@@ -217,10 +217,14 @@ describe('human-reviewed Music Video workflow', () => {
     expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
   });
 
-  it('lets a planned shot render stills and clips after art review without a shot or storyboard lock', async () => {
+  // Uniquely catches an approval gate returning on the owner's own shot renders.
+  it('lets the director render a shot still and clip with no art, shot or storyboard approval', async () => {
     const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
     const tag = { projectId: project.id, sceneId: (await store.getProject(project.id)).scenes[0].sceneId };
-    await expect(assertMusicVideoSceneReview(tag, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview(tag, 'image')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).resolves.toBeUndefined();
+    await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('art')).status).toBe(200);
     await expect(assertMusicVideoSceneReview(tag, 'image')).resolves.toBeUndefined();
     await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
@@ -238,7 +242,7 @@ describe('human-reviewed Music Video workflow', () => {
       shotApprovals: { [tag.sceneId]: { basis: 'legacy' } }, clipApprovals: { [tag.sceneId]: { videoHistoryId: 'old-clip' } } } } }));
     await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
     await expect(assertMusicVideoSceneReview({ ...tag, productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
-    await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    await expect(assertMusicVideoSceneReview({ ...tag, sceneId: 'scene-missing', productionRunId: 'run-example' }, 'image')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     expect((await approve('storyboard')).status).toBe(200);
     await expect(assertMusicVideoSceneReview(tag, 'video')).resolves.toBeUndefined();
   });

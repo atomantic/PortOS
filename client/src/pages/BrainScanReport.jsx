@@ -4,6 +4,7 @@ import { ArrowLeft, FileText, RefreshCw, ShieldAlert, ShieldCheck, Skull } from 
 import * as api from '../services/api';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 import { useSocketResource } from '../hooks/useSocketResource';
 
 const REPORT_EVENTS = ['brain:links:changed'];
@@ -37,7 +38,7 @@ function ScanReportForLink({ id }) {
     ]);
     return { id, link, report };
   }, [id]);
-  const { data, loading, refetch } = useSocketResource(fetchReport, {
+  const { data, loading, error, refetch } = useSocketResource(fetchReport, {
     events: REPORT_EVENTS,
     matchesEvent: payload => payload?.id === id
   });
@@ -55,7 +56,18 @@ function ScanReportForLink({ id }) {
     );
   }
 
-  if (!data) {
+  if (!data && error) {
+    return (
+      <Shell>
+        <div className="py-12">
+          <ListLoadError what="the scan report" error={error} onRetry={refetch} />
+          <Link to="/brain/links" className="mt-3 inline-block text-sm text-port-accent hover:underline">Back to links</Link>
+        </div>
+      </Shell>
+    );
+  }
+
+  if (!data || !data.report) {
     return (
       <Shell>
         <div className="py-12 text-center">

@@ -41,6 +41,26 @@ const readUsageDoc = async () => {
 };
 
 describe('migration 434: stamp-sibling-reconciled-runs', () => {
+  it('preserves exact-boundary markers without inferring a sibling scan from their timestamps', async () => {
+    const at = '2026-10-01T10:00:00.000Z';
+    const marker = { at, codexHighWater: [['/example/rollout.jsonl', { tokensOut: 10 }]] };
+    await writeUsageDoc({
+      reconciledRuns: { scanned: marker, unscanned: marker, legacy: at },
+      siblingReconciledRuns: { scanned: at }
+    });
+    // New-format counts and sibling markers commit atomically before metadata.
+    // Simulate interrupted metadata stamping for both provider-list outcomes.
+    for (const id of ['scanned', 'unscanned']) {
+      await writeRunMetadata(id, { id, usageReconciled: false });
+    }
+    await migration.up({ rootDir });
+    const after = await readUsageDoc();
+    expect(after.reconciledRuns).toEqual({ scanned: marker, unscanned: marker, legacy: at });
+    expect(after.siblingReconciledRuns).toEqual({ scanned: at, legacy: at });
+    expect((await readRunMetadata('unscanned')).usageSiblingsReconciled).toBeUndefined();
+    expect(await migration.up({ rootDir })).toEqual({ stampedRuns: 0, stampedUsageRuns: 0 });
+  });
+
   it('stamps runs reconciled live on or after #5831, updates usage.json, and leaves pre-#5831 runs sibling-pending', async () => {
     const postShipRunId = 'run-post-5831';
     const preShipRunId = 'run-pre-5831';

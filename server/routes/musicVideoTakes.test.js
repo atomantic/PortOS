@@ -135,12 +135,15 @@ describe('scene takes routes', () => {
     race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
     expect((await request(app).patch(url).send({ ...body, reviewer: { kind: 'human' } })).status).toBe(400);
     const { assertMusicVideoSceneReview } = await import('../services/musicVideo/productionReviewService.js');
-    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
+    // The director's own clip is never refused for a flagged defect; a production run's is until acknowledged.
+    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).resolves.toBeUndefined();
+    const runTag = { projectId: project.id, sceneId: sceneA.sceneId, productionRunId: 'run-example' };
+    await expect(assertMusicVideoSceneReview(runTag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
     const response = await request(app).patch(url).send(body);
     expect(response.status).toBe(200);
     expect(response.body.takes[0].renderQualityAcknowledgement).toMatchObject({ ...body.acknowledgeRenderQuality, reviewer: { kind: 'local' } });
-    // The defect refusal is gone; the independent art approval gate remains.
-    await expect(assertMusicVideoSceneReview({ projectId: project.id, sceneId: sceneA.sceneId }, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
+    // The defect refusal is gone; the run's independent storyboard approval gate remains.
+    await expect(assertMusicVideoSceneReview(runTag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).patch(url).send(body)).status).toBe(409);
   });

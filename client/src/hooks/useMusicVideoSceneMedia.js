@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { normalizePreMusic, preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -168,12 +168,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
     return () => { live = false; };
   }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
-  // The Casting media of every cast member a shot names in its `characterVariant`
-  // (#12763), keyed by ingredient id: an array once loaded, null when the first load
+  // The Casting media of every character linked from the catalog and every cast member
+  // a shot names in its `characterVariant` (#12763), keyed by ingredient id: an array once loaded, null when the first load
   // failed, absent while pending. A shot's frames lead with that member's guides;
   // without an array the shot uses the automatic set. Casting has no change event,
   // so the board reloads them when its tab comes back into view.
-  const castIds = [...new Set((project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean))].sort().join(',');
+  const castIds = [...new Set([...musicVideoLinkedCastIds(project), ...(project?.scenes || []).map((scene) => scene?.characterVariant?.ingredientId).filter(Boolean)])].sort().join(',');
   const [castMedia, setCastMedia] = useState({});
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
   const [castRefresh, setCastRefresh] = useState(0);
@@ -189,8 +189,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   }, [castIds, castRefresh]);
   // A render before the shot's cast guides load would silently go out without them.
   const castGuidesPending = (scene) => {
-    const id = scene?.characterVariant?.ingredientId;
-    if (!id || castMedia[id] !== undefined) return false;
+    if (musicVideoSceneCastIds(project, scene).every((id) => castMedia[id] !== undefined)) return false;
     toast.error('Cast guides are still loading. Try again in a moment.');
     return true;
   };
@@ -230,6 +229,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
+    if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
+      toast.error('A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.');
+      return Promise.resolve({ ok: false });
+    }
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
     const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
     if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
@@ -251,6 +254,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
         ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
         // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
@@ -324,6 +328,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
       musicVideo: {
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
         ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
@@ -447,7 +452,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // resolution.
         : falFields || runwayFields
           ? falFields || runwayFields
-          : settings.backend === 'local'
+          : settings.backend === 'gemini'
+            // Gemini's composer has no length or audio control.
+            ? {}
+            : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
             ? { modelId: settings.modelId || undefined,
               ...(useLtxReferences ? { numFrames: referenceFrames,
@@ -470,6 +478,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         loraScales: [settings.audioReactiveScale],
       } : {}),
       musicVideo: JSON.stringify({
+        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
         projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
         compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(hostedPerformance ? { songAudio: false } : {}),
@@ -507,7 +516,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       mode: 'extend',
       extendFromVideoId: scene.videoHistoryId,
       sourceImageFile: scene.referenceImageId,
-      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true }),
+      musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true, catalogBasis: project.castAndSets?.catalogCheckin?.basis }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId))
       .catch((err) => handleVideoError(err, scene.sceneId, 'Shot continuation failed'));

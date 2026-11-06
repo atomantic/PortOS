@@ -17,7 +17,7 @@ import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { isDefaultSpeedProfile } from '../../lib/videoSpeedProfiles.js';
 import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
-import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
 import { prepareRemoteMediaJob, negotiateVideoConstraints } from '../federatedMedia/remoteSubmission.js';
 import { getLoom } from '../fableLoom/records.js';
@@ -96,6 +96,7 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       ['an explicit continuation strategy', body.continuityStrategy != null],
       ['warm render batches', body.batchSize > 1],
       ['the Grok backend', body.backend === 'grok'],
+      ['the Gemini backend', body.backend === 'gemini'],
       ['a FableLoom scene tag', body.fableLoom],
       // Inspire is a per-runtime capability the caller cannot prove for a peer.
       // Refuse it instead of returning an anchored clip under an Inspire label.
@@ -193,6 +194,7 @@ const CONDITIONING_MODEL_BY_BACKEND = {
   [VIDEO_GEN_MODE.FAL]: { id: 'fal-video', supportedModes: ['text', 'image'] },
   [VIDEO_GEN_MODE.REACTOR]: { id: 'reactor-video', supportedModes: ['text', 'image'] },
   [VIDEO_GEN_MODE.RUNWAY]: { id: 'runway-video', supportedModes: ['text', 'image'] },
+  [VIDEO_GEN_MODE.GEMINI]: { id: 'gemini-video', supportedModes: ['text', 'image'] },
 };
 
 /** The tagged loom's render dimensions, applied to `body`; null when untagged or the loom is gone. */
@@ -374,19 +376,23 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   // the model takes an aspect ratio, and its frames cropped to it where the
   // output follows the start frame (falFrameAspect.js). An explicit
   // visual-conditioning aspect (FableLoom) still wins.
-  const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
+  const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY || backend === VIDEO_GEN_MODE.GEMINI) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
     ? await musicVideoProjectAspect(body.musicVideo.projectId)
     : null;
-  // A Music Video shot animated on Grok carries its cast sheets beside the still,
+  // A Music Video shot animated on Grok or Gemini carries its cast sheets beside the still,
   // so people stay recognizable once the clip moves past the opening frame.
-  const musicVideoReferences = backend === VIDEO_GEN_MODE.GROK && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
-    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipCastReferences(body.musicVideo)
+  const carriesCast = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI;
+  const castReferenceLimit = musicVideoClipReferenceCapacity(backend);
+  const musicVideoReferences = carriesCast && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
+    ? await import('../musicVideo/clipCastReferences.js').then((mod) => (backend === VIDEO_GEN_MODE.GROK
+      ? mod.musicVideoClipCastReferences(body.musicVideo)
+      : mod.musicVideoClipReferences(body.musicVideo, castReferenceLimit)))
     : [];
-  // Caller-uploaded reference images (staged by the Grok lane) follow any Music
-  // Video sheets, in upload order. Only a Grok render with a source frame uses them.
-  const castReferences = [...musicVideoReferences, ...(backend === VIDEO_GEN_MODE.GROK && sourceImagePath ? prepared.castReferences || [] : [])];
-  if (castReferences.length > MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT) {
-    throw new ServerError(`Grok can send at most ${MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT} combined clip references.`,
+  // Caller-uploaded reference images (staged by the lane) follow any Music Video
+  // sheets, in upload order. Only a render with a source frame uses them.
+  const castReferences = [...musicVideoReferences, ...(carriesCast && sourceImagePath ? prepared.castReferences || [] : [])];
+  if (castReferences.length > castReferenceLimit) {
+    throw new ServerError(`${backend === VIDEO_GEN_MODE.GROK ? 'Grok' : 'Gemini'} can send at most ${castReferenceLimit} combined clip references.`,
       { status: 400, code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
   }
   const falModel = backend === VIDEO_GEN_MODE.FAL

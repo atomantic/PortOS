@@ -48,11 +48,13 @@ export const VIDEO_GEN_MODE = Object.freeze({
   REACTOR: 'reactor',
   // Runway's developer API (services/videoGen/runway.js).
   RUNWAY: IMAGE_GEN_MODE.RUNWAY,
+  // Gemini Omni through the Gemini web app in the PortOS Browser (services/videoGen/geminiWeb.js).
+  GEMINI: 'gemini',
 });
 
 export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
 export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
-  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY,
+  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI,
 ]);
 
 /**

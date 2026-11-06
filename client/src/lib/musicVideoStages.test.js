@@ -58,6 +58,8 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(waiting).current).toBe('board');
     expect(stateOf(waiting)).toMatchObject({ setup: 'done', board: 'active', 'cast-sets': 'todo' });
     expect(deriveNextAction(waiting)).toMatchObject({ id: 'approve-cast-sets', kind: 'run' });
+    expect(deriveNextAction({ ...waiting, castAndSets: { status: 'review', feedbackRenderPlan: { phase: 'ready', keys: ['character'] } } }))
+      .toMatchObject({ id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin' });
 
     const notStarted = { ...waiting, castAndSets: null };
     expect(deriveNextAction(notStarted)).toMatchObject({ id: 'kickoff' });
@@ -489,8 +491,8 @@ describe('stageChecklist', () => {
       productionReview: { draft: { cast: 'c', environments: ' ', visualLanguage: '', motionLanguage: 'm', guideArtifactId: 'gone' } },
     }), { ...NOT_APPROVED, art: { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] } });
     // No sheet built yet: the row builds it, or the director writes the rest by hand.
-    expect(items[0]).toMatchObject({ done: false, detail: 'Still missing: sets, visual language. Build the cast & sets to draft it from your creative direction, song style and mood board.',
-      action: { label: 'Build cast & sets', run: 'start-cast-sets' }, secondary: { label: 'Write it yourself', anchor: 'mv-art-direction-editor' } });
+    expect(items[0]).toMatchObject({ done: false, detail: 'Still missing: sets, visual language. Link the cast & sets from the catalog, then write the art direction separately.',
+      action: { label: 'Link cast & sets', run: 'start-cast-sets' }, secondary: { label: 'Write it yourself', anchor: 'mv-art-direction-editor' } });
     expect(items[1]).toMatchObject({ done: false, label: 'Visual guide chosen', action: { label: 'Choose a guide', anchor: 'mv-look-guides' } });
     // With nothing to approve the approval row neither repeats the server's reasons nor sends anywhere.
     expect(items[2]).toMatchObject({ done: false, detail: 'Opens once the art direction is written and a guide is chosen.', action: null });

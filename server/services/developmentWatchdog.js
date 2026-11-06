@@ -18,6 +18,25 @@ const forgeAccountFor = (target, app) => isUpstreamOwner(target?.fullName) ? UPS
 // and drive their own PR to merge. PortOS never creates that prefix, so a
 // watchdog coordinator there would only race the live session.
 const EXTERNAL_AGENT_BRANCH_RE = /^claude\//;
+const PR_QUIET_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+function withActiveAgentOwnership(tasks, peerTasks, agents) {
+  const allTasks = [...tasks, ...peerTasks];
+  for (const agent of agents) {
+    const task = tasks.find(item => item.id === agent.taskId);
+    if (task) allTasks.push({ ...task, status: 'running' });
+    else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
+    // Registration retains a review target even if the task is gone or stale.
+    // Project only that target: other agent metadata can omit a pinned claim
+    // and would otherwise turn it into ownership of every issue in the app.
+    if (agent.metadata?.reviewLoopMergeTarget?.url) allTasks.push({
+      id: agent.taskId || agent.id,
+      status: 'running',
+      metadata: { app: agent.metadata.taskApp, reviewLoopPRUrl: agent.metadata.reviewLoopMergeTarget.url },
+    });
+  }
+  return allTasks;
+}
 
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
@@ -126,6 +145,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   for (const pr of prs.pullRequests) {
     const owner = active.find(task => sameDevelopmentWork(task, ownershipTask(app, pr)));
     let disposition = 'eligible';
+    let unknownReason = 'external-claim-owner-unverified';
     if (owner) disposition = owner.status === 'blocked' ? 'blocked' : 'actively-owned';
     else if (!pr.headSha) disposition = 'unknown';
     else if (pr.isDraft) disposition = 'draft';
@@ -147,8 +167,13 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
           || (claim.state === 'OPEN' && claim.labels.some(label => label.name === 'in-progress'))) disposition = 'unknown';
       }
     }
+    if (disposition === 'eligible') {
+      const updatedAt = typeof pr.updatedAt === 'string' ? Date.parse(pr.updatedAt) : NaN;
+      if (!Number.isFinite(updatedAt)) { disposition = 'unknown'; unknownReason = 'activity-time-unverified'; }
+      else if (Date.now() - updatedAt < PR_QUIET_WINDOW_MS) disposition = 'recently-active';
+    }
     row.pullRequests.push({ number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
-      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? 'external-claim-owner-unverified' : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
+      reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? unknownReason : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
   }
   if (localReviewTasks.length) {
     const { getPullRequestState } = await import('./github.js');
@@ -224,8 +249,8 @@ async function dispatch(app, decision) {
   const { getAllTasks, addTask } = await import('./cosTaskStore.js');
   const peers = await participatingPeerTasks();
   if (peers.blockers.length) return { reason: 'peer-ownership-unknown' };
-  const liveTasks = [...tasksFrom(await getAllTasks()), ...peers.tasks];
   const agents = Object.values(current.agents || {}).filter(a => ACTIVE_AGENT_STATUSES.has(a.status));
+  const liveTasks = withActiveAgentOwnership(tasksFrom(await getAllTasks()), peers.tasks, agents);
   const queued = liveTasks.filter(t => t.status === 'pending');
   const project = a => (a.metadata?.app || a.metadata?.taskApp) === app.id;
   if (agents.length + queued.length >= (current.config.maxConcurrentAgents || 1)
@@ -306,19 +331,13 @@ async function collectActiveWork(state) {
   const taskSources = await getAllTasks();
   const tasks = tasksFrom(taskSources);
   const peers = await participatingPeerTasks();
-  const allTasks = [...tasks, ...peers.tasks];
   // Include finalization and queued ownership, not only live subprocesses.
   const activeAgents = Object.values(state.agents || {}).filter(agent => ACTIVE_AGENT_STATUSES.has(agent.status));
+  const allTasks = withActiveAgentOwnership(tasks, peers.tasks, activeAgents);
   const activeAgentTaskIds = new Set([
     ...activeAgents.map(agent => agent.taskId),
     ...allTasks.filter(task => ['queued', 'running', 'in_progress', 'finalizing', 'paused'].includes(task.status)).map(task => task.id),
   ].filter(Boolean));
-  // A live agent owns its work even when its task record is gone or already terminal.
-  for (const agent of activeAgents) {
-    const task = tasks.find(t => t.id === agent.taskId);
-    if (task) allTasks.push({ ...task, status: 'running' });
-    else if (agent.metadata) allTasks.push({ ...agent, status: 'running' });
-  }
   return {
     tasks, allTasks, peers, activeAgents, activeAgentTaskIds,
     localReviewTasks: taskSources.cos?.tasks || [],
@@ -437,7 +456,7 @@ function receiptCounts(receipt) {
     dispatched: receipt.decisions.filter(d => d.outcome === 'queued').length,
     ownedSkips: receipt.apps.reduce((n, app) => n + [...app.pullRequests, ...app.issues].filter(item => ['actively-owned', 'external-claim'].includes(item.disposition)).length, 0),
     duplicateAdmissionsPrevented: receipt.decisions.filter(d => d.duplicate).length,
-    deferred: receipt.decisions.filter(d => ['deferred', 'capacity-full'].includes(d.outcome)).length,
+    deferred: receipt.decisions.filter(d => ['deferred', 'capacity-full'].includes(d.outcome)).length + receipt.apps.reduce((n, app) => n + app.pullRequests.filter(pr => pr.disposition === 'recently-active').length, 0),
     deterministicActions: 0,
     modelCalls: 0,
   };

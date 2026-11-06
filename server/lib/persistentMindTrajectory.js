@@ -50,6 +50,12 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   'mind.call.requested',
   'mind.call.placed',
   'mind.call.suppressed',
+  // Provenance for the continuation note: who wrote which wording. The note's
+  // text lives in the versioned memory record, never in the ledger or prompt
+  // events, so it cannot be compacted into a rollup.
+  'mind.continuation.updated',
+  'mind.continuation.cleared',
+  'mind.continuation.refused',
 ]);
 
 const MIND_KIND_SET = new Set(PERSISTENT_MIND_EVENT_KINDS);
@@ -62,6 +68,9 @@ export const PERSISTENT_MIND_TRAJECTORY_LIMITS = Object.freeze({
   maxIdentityChars: PERSISTENT_MIND_PROMPT_LIMITS.identityChars,
   maxInstructionsChars: PERSISTENT_MIND_PROMPT_LIMITS.instructionsChars,
   maxMemoriesChars: 8_000,
+  // Share of the memory budget ordinary importance-ranked records cannot crowd
+  // out of a human message's recalled memories.
+  recalledMemoryBudgetShare: 0.25,
   // The journal is what the mind still owes the user. It is short by design
   // (one line per live commitment), so a small slice buys the answer to "what
   // is still open?" that no amount of rollup prose could give.
@@ -313,6 +322,22 @@ export function buildPersistentMindRollup({
   });
 }
 
+// Longer than any backtick run in the body, so exact text cannot close its fence.
+const fenceFor = (body) => '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((match) => match[0].length + 1)));
+
+const continuationNoteAttribution = ({ provenance, updatedAt }) => (provenance
+  ? `Written by this mind at ${provenance.at}, turn ${provenance.turnId || 'unknown'}, on ${provenance.providerId || 'unknown'}/${provenance.model || 'default'}.`
+  : `Author unknown: no retained runtime event attests this wording. Last changed ${updatedAt || 'at an unknown time'}.`);
+
+// Exact stored wording inside its own fence. No clamp or fence rewrite: it is
+// admitted whole or reported as omitted.
+const renderContinuationNote = (note) => {
+  const fence = fenceFor(note.content);
+  return `# Continuation note\nYour note to your next wake, kept outside compaction. ${continuationNoteAttribution(note)}\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}text\n${note.content}\n${fence}`;
+};
+
+const renderOmittedContinuationNote = (note) => `# Continuation note\n(omitted due to context budget: ${note.content.length} chars. The stored note is unchanged. Omit continuationNote to keep it.)`;
+
 /**
  * Render stable identity + older rollups + recent verbatim events into a hard
  * character budget. Unavailable/failed/stale summary state is explicit;
@@ -323,6 +348,9 @@ export function assemblePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  continuationNote = null,
+  memoryRecall = null,
+  reflection = null,
   events = [],
   rollups = [],
   journalDigest = null,
@@ -386,25 +414,29 @@ export function assemblePersistentMindContext({
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
   );
   const seenMemoryContent = new Set();
-  const memoryLines = (Array.isArray(memories) ? memories : [])
+  let coreIdentityChars = 0;
+  const renderMemory = (memory, note = '') => {
+    const content = typeof memory.content === 'string' && memory.content.trim()
+      ? memory.content.trim()
+      : typeof memory.summary === 'string' ? memory.summary.trim() : '';
+    const key = content.replace(/\s+/g, ' ');
+    if (!content || seenMemoryContent.has(key)) return null;
+    const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
+    const protection = persistentMindMemoryProtection(memory);
+    return { key, line: `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}${note}] ${content}` };
+  };
+  const renderBaseline = (records) => records.flatMap((memory) => {
+    const rendered = renderMemory(memory);
+    if (!rendered) return [];
+    seenMemoryContent.add(rendered.key);
+    if (persistentMindMemoryProtection(memory) === 'core-identity') coreIdentityChars += rendered.line.length + 1;
+    return [rendered.line];
+  });
+  const isProtected = (memory) => persistentMindMemoryProtection(memory) !== 'standard';
+  const baseline = (Array.isArray(memories) ? memories : [])
     .filter((memory) => memory && typeof memory === 'object')
-    .sort(comparePersistentMindMemories)
-    .map((memory) => {
-      const content = typeof memory.content === 'string' && memory.content.trim()
-        ? memory.content.trim()
-        : typeof memory.summary === 'string' ? memory.summary.trim() : '';
-      const key = content.replace(/\s+/g, ' ');
-      if (!content || seenMemoryContent.has(key)) return null;
-      seenMemoryContent.add(key);
-      const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
-      const protection = persistentMindMemoryProtection(memory);
-      return `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}] ${content}`;
-    })
-    .filter(Boolean);
-  const memoryText = bounded(
-    memoryLines.join('\n'),
-    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
-  );
+    .sort(comparePersistentMindMemories);
+  const protectedLines = renderBaseline(baseline.filter(isProtected));
   // Superseded wording never reaches the prompt: the digest carries only what
   // is still true plus the settled history that explains it. The caller renders
   // it — this module is reached by ~300 suites for its id/kind constants alone,
@@ -414,18 +446,65 @@ export function assemblePersistentMindContext({
     ? journalDigest
     : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
   const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
+  // Identity, instructions, protected identity memories, and the newest human
+  // input outrank the note. Whatever is left admits it whole or not at all.
+  const latestInput = recent.findLast((event) => ['mind.message.accepted', 'mind.annotation.accepted'].includes(event.kind));
+  const requiredChars = identityText.length + instructionsText.length + mindId.length + 500
+    + Math.min(coreIdentityChars, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars)
+    + (latestInput ? renderPersistentMindContextEvent(latestInput).length : 0);
+  const fullNoteSection = continuationNote ? renderContinuationNote(continuationNote) : '';
+  const noteAdmitted = Boolean(continuationNote) && fullNoteSection.length <= cap - requiredChars;
+  const noteSection = !continuationNote ? ''
+    : noteAdmitted ? fullNoteSection : renderOmittedContinuationNote(continuationNote);
   // Leave room for the full delimiter even with a small context budget.
   // Truncating the assembled prefix must never cut through a memory fence.
   const memoryBudget = Math.max(0, Math.min(
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
-    cap - identityText.length - instructionsText.length - mindId.length - 500,
+    cap - identityText.length - instructionsText.length - mindId.length - 500 - noteSection.length,
   ));
+
+  // Order is the priority: protected identity, recalled records, then ordinary
+  // records. The final bound can therefore only cut ordinary context, so a
+  // recalled record is either whole in the prompt or reported as omitted.
+  const usedByProtected = protectedLines.length ? protectedLines.join('\n').length + 1 : 0;
+  let recallRoom = Math.min(
+    Math.floor(memoryBudget * PERSISTENT_MIND_TRAJECTORY_LIMITS.recalledMemoryBudgetShare),
+    memoryBudget - usedByProtected,
+  );
+  const recalledLines = [];
+  const includedIds = [];
+  const omittedIds = [];
+  for (const memory of Array.isArray(memoryRecall?.memories) ? memoryRecall.memories : []) {
+    if (isProtected(memory)) continue;
+    const rendered = renderMemory(memory, '; recalled=current-message');
+    if (!rendered) continue;
+    const needed = rendered.line.length + (recalledLines.length ? 1 : 0);
+    if (needed > recallRoom) {
+      omittedIds.push(memory.id);
+      continue;
+    }
+    recallRoom -= needed;
+    seenMemoryContent.add(rendered.key);
+    recalledLines.push(rendered.line);
+    includedIds.push(memory.id);
+  }
+  const ordinaryLines = renderBaseline(baseline.filter((memory) => !isProtected(memory)));
+  const memoryLines = [...protectedLines, ...recalledLines, ...ordinaryLines];
+  const memoryText = bounded(
+    memoryLines.join('\n'),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
+  );
+  const recallState = memoryRecall?.state === 'matched'
+    ? (includedIds.length ? 'included' : omittedIds.length ? 'omitted-budget' : 'already-in-baseline')
+    : memoryRecall?.state || 'none';
   const memoryBlock = memoryBudget > 0
     ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
     : '(omitted due to context budget)';
   const prefix = [
     `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
     `# Operating instructions\n${instructionsText || '(none)'}`,
+    // Ahead of the sections the final slice can cut, so an admitted note stays whole.
+    ...(noteSection ? [noteSection] : []),
     `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`,
     `# Decision journal\n${journalText || '(none)'}`,
   ].join('\n\n');
@@ -468,7 +547,21 @@ export function assemblePersistentMindContext({
     `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`,
     `# Recent trajectory\n${recentLines.join('\n')}`,
   ];
-  const text = sections.join('\n\n').slice(0, cap);
+  let text = sections.join('\n\n').slice(0, cap);
+  let reflectionState = reflection?.state || 'disabled';
+  let reflectionBlock = '';
+  if (reflectionState === 'pending' && reflection.source) {
+    const source = reflection.source;
+    const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version ?? 1, content: source.content });
+    const fence = fenceFor(body);
+    const invitation = `\n\n# Optional memory reflection\nYou may revisit this fading experience with mind.review-memory (memoryId and expectedVersion below; verdict keep, learn, archive, or defer), or ignore it. A lesson does not authorize archival. No follow-up wake or maintenance quota is requested.\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}json\n${body}\n${fence}`;
+    if (body.length <= PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars && text.length + invitation.length <= cap) {
+      reflectionBlock = invitation;
+      text += invitation;
+    } else {
+      reflectionState = 'omitted-budget';
+    }
+  }
   return {
     mindId,
     text,
@@ -484,6 +577,11 @@ export function assemblePersistentMindContext({
     } : null,
     recentEventCount: recentLines.length,
     memoryCount: memoryLines.length,
+    continuationNote: continuationNote
+      ? { ...continuationNote, state: noteAdmitted ? 'included' : 'omitted-budget' }
+      : { state: 'none' },
+    memoryRecall: { state: recallState, includedIds, omittedIds },
+    reflection: { ...reflection, state: reflectionState, block: reflectionBlock },
     journalActiveCount: journalSummary.activeCount,
     identityChars: identityText.length,
     instructionsChars: instructionsText.length,

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react';
+import { musicVideoLinkedReferenceId } from '../../../server/lib/musicVideoConditioning.js';
 
 // Every listener per event, like the real socket: the frame and end-frame
 // lanes both listen on music-video:scene-image (#11173).
@@ -112,6 +113,22 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
     expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
     expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+  });
+
+  // Uniquely catches a paid frame going out without the catalog sheet the director picked.
+  it.each(['linked', 'guide'])('refuses a frame whose picked %s asset failed to load', async (kind) => {
+    listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+    const cast = {
+      id: 'p2',
+      concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: [kind === 'guide' ? 'mvr-guide-face.png' : musicVideoLinkedReferenceId('face.png')] }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());
+    let outcome;
+    await act(async () => { outcome = await result.current.generateFrame(cast.scenes[0]); });
+    expect(outcome).toEqual({ ok: false });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.
@@ -259,5 +276,28 @@ it('asks for a shorter clip when a cold open exceeds the LTX frame limit', async
   expect(outcome).toEqual({ ok: false });
   expect(generateVideo).not.toHaveBeenCalled();
   expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/split it or choose a shorter clip length/i));
+  cleanup();
+});
+
+// Uniquely catches losing the reference picker's catalog snapshot on start/end still and clip submits.
+it('binds shot render inputs to the catalog basis the board displayed', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', prompt: 'A rider turns', endFramePrompt: 'A rider leaves', referenceImageId: 'start.png',
+    startSec: 0, endSec: 4, takes: [] };
+  const catalogBasis = 'a'.repeat(64);
+  const project = { id: 'p-basis', scenes: [shot], castAndSets: { source: 'catalog', catalogCheckin: { basis: catalogBasis, items: [] } } };
+  getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+  generateImage.mockClear();
+  generateVideo.mockResolvedValue({ jobId: 'clip', status: 'queued' });
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project,
+    videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
+  await act(async () => { await result.current.generateFrame(shot); });
+  await act(async () => { await result.current.generateEndFrame(shot); });
+  expect(generateImage.mock.calls.map(([body]) => body.musicVideo)).toEqual([
+    expect.objectContaining({ catalogBasis, sceneId: 's1' }),
+    expect.objectContaining({ catalogBasis, sceneId: 's1', slot: 'end' }),
+  ]);
+  await act(async () => { await result.current.generateSceneVideo(shot); });
+  expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ catalogBasis });
   cleanup();
 });

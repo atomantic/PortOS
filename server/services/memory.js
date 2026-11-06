@@ -11,8 +11,9 @@
  * import sites (and `memoryBackend.js`'s dynamic import) keep working.
  */
 
+import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { persistentMindMemoryProtection } from '../lib/persistentMindMemory.js';
+import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -57,6 +58,9 @@ export async function createMemory(data, embedding = null) {
 
     const memory = {
       id,
+      version: 1,
+      lastReview: null,
+      reviewOrigin: null,
       type: data.type,
       content: data.content,
       summary: data.summary || generateSummary(data.content),
@@ -168,6 +172,11 @@ export async function updateMemory(id, updates) {
     const memory = await loadMemory(id);
     if (!memory) return null;
 
+    if (updates.expectedVersion !== undefined && updates.expectedVersion !== (memory.version ?? 1)) {
+      throw new ServerError('Memory changed since it was loaded. Reload before saving.', { status: 409, code: 'MEMORY_VERSION_CONFLICT' });
+    }
+    const versionFields = ['content', 'summary', 'type', 'category', 'tags'];
+    const beforeContent = JSON.stringify(versionFields.map(key => memory[key]));
     // Apply updates
     const updatableFields = ['content', 'summary', 'type', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt', 'sourceAppId'];
     for (const field of updatableFields) {
@@ -185,6 +194,7 @@ export async function updateMemory(id, updates) {
       memory.summary = generateSummary(updates.content);
     }
 
+    memory.version = (memory.version ?? 1) + Number(beforeContent !== JSON.stringify(versionFields.map(key => memory[key])));
     memory.updatedAt = new Date().toISOString();
     await saveMemory(memory);
 
@@ -432,16 +442,20 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
   const embeddings = await loadEmbeddings()
   const indexMap = new Map(index.memories.map(m => [m.id, m]))
 
-  // Get BM25 results
+  // Filter before capping and ranking: scoped results must not lose their only
+  // match to a global top-N of records the caller can never receive.
+  const eligible = ({ id }) => passesHybridMetaFilters(indexMap.get(id), options)
+
+  // Get BM25 results (any-term by construction, so options.lexicalMatch needs no branch)
   const bm25Results = query
-    ? await memoryBM25.searchBM25(query, { limit: limit * 2, threshold: 0.05 })
+    ? (await memoryBM25.searchBM25(query, { limit: Infinity, threshold: 0.05 })).filter(eligible).slice(0, limit * 2)
     : []
 
   // Get vector results
   let vectorResults = []
   if (queryEmbedding && Object.keys(embeddings.vectors).length > 0) {
     const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance * 0.5)
-    vectorResults = similar.slice(0, limit * 2).map(r => ({
+    vectorResults = similar.filter(eligible).slice(0, limit * 2).map(r => ({
       id: r.id,
       score: r.similarity
     }))
@@ -452,20 +466,14 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
 
   // Filter and sort by RRF score
   let results = Array.from(rrfScores.entries())
-    .map(([id, data]) => {
-      const meta = indexMap.get(id)
-      if (!passesHybridMetaFilters(meta, options)) return null
-
-      return {
-        ...meta,
-        rrfScore: data.rrfScore,
-        bm25Rank: data.bm25Rank,
-        vectorRank: data.vectorRank,
-        searchMethod: data.bm25Rank && data.vectorRank ? 'hybrid' :
-                     data.bm25Rank ? 'bm25' : 'vector'
-      }
-    })
-    .filter(Boolean)
+    .map(([id, data]) => ({
+      ...indexMap.get(id),
+      rrfScore: data.rrfScore,
+      bm25Rank: data.bm25Rank,
+      vectorRank: data.vectorRank,
+      searchMethod: data.bm25Rank && data.vectorRank ? 'hybrid' :
+                   data.bm25Rank ? 'bm25' : 'vector'
+    }))
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, limit)
 
@@ -944,4 +952,70 @@ export async function getStats() {
  */
 export async function flushBM25Index() {
   return memoryBM25.flush();
+}
+
+/** Dev/test adapter: serialize with every memory writer and roll back failed writes. */
+export function reviewMindMemory(input, provenance) {
+  return withMemoryLock(async () => {
+    const source = await loadMemory(input.memoryId);
+    const previous = existingPersistentMindReview(source, input, provenance.mindId);
+    if (previous) return { ok: true, duplicate: true, memoryId: source.id, review: previous };
+    const originalIndex = structuredClone(await loadIndex());
+    const index = structuredClone(originalIndex);
+    const now = new Date().toISOString();
+    const lesson = input.verdict === 'learn' ? {
+      id: uuidv4(), version: 1, lastReview: null, reviewOrigin: createPersistentMindReviewOrigin(input, provenance), type: 'learning', content: input.lesson,
+      summary: generateSummary(input.lesson), category: source.category, tags: [], relatedMemories: [],
+      sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId, sourceAppId: null,
+      confidence: source.confidence, importance: source.importance,
+      embedding: null, embeddingModel: null, accessCount: 0, lastAccessed: null,
+      createdAt: now, updatedAt: now, expiresAt: null, status: 'active',
+      typedLinks: [{ id: uuidv4(), targetId: source.id, linkType: 'derived-from',
+        note: input.rationale ?? null, createdBy: provenance.mindId, createdAt: now }],
+    } : null;
+    const review = createPersistentMindReview(input, provenance, lesson?.id ?? null);
+    const updated = { ...source, lastReview: mergePersistentMindReview(source, review),
+      ...(input.verdict === 'archive' ? { status: 'archived', archiveReason: input.rationale ?? null, updatedAt: now } : {}) };
+    const persist = async () => {
+      if (lesson) {
+        await saveMemory(lesson);
+        index.memories.push(projectIndexMeta(lesson));
+      }
+      index.memories = index.memories.map(meta => meta.id === source.id ? projectIndexMeta(updated) : meta);
+      index.count = index.memories.length;
+      await saveIndex(index);
+      await saveMemory(updated);
+    };
+    await persist().catch(async error => {
+      await saveMemory(source);
+      await saveIndex(originalIndex);
+      if (lesson) await deleteMemoryFiles(lesson.id);
+      throw error;
+    });
+    if (lesson) {
+      await memoryBM25.indexMemory({ id: lesson.id, content: lesson.content, type: lesson.type, tags: lesson.tags, source: lesson.sourceAppId })
+        .catch(error => console.error(`⚠️ BM25 index error: ${error.message}`));
+      cosEvents.emit('memory:created', { id: lesson.id, type: 'learning', summary: lesson.summary });
+    }
+    cosEvents.emit('memory:updated', { id: source.id, updates: { lastReview: updated.lastReview, ...(input.verdict === 'archive' ? { status: 'archived' } : {}) } });
+    return { ok: true, duplicate: false, memoryId: source.id, review, lastReview: updated.lastReview };
+  });
+}
+
+/** Filter the index before loading source prose; no access or retention writes. */
+export async function selectMindMemoryForReview(mindId) {
+  const cutoff = Date.now() - 30 * 86400000;
+  const index = await loadIndex();
+  const candidates = index.memories.filter(meta => meta.sourceAgentId === mindId
+    && meta.status === 'active' && meta.importance < 0.15
+    && Date.parse(meta.createdAt) < cutoff && persistentMindMemoryProtection(meta) === 'standard')
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id));
+  for (const meta of candidates) {
+    const source = await loadMemory(meta.id);
+    if (source?.sourceAgentId === mindId && source.status === 'active'
+        && source.importance < 0.15 && Date.parse(source.createdAt) < cutoff
+        && persistentMindMemoryProtection(source) === 'standard'
+        && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)) return source;
+  }
+  return null;
 }

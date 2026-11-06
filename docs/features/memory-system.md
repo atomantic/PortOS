@@ -25,6 +25,22 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 8. **Real-time Updates**: WebSocket events for memory changes
 9. **Graph Visualization**: D3.js relationship graph (planned)
 
+## Persistent Mind message recall
+
+A human message also recalls up to three of the mind's own active memories that
+share enough terms with the unchanged message text, even when many other memories
+outrank them by importance. Search is lexical and scoped to the mind's records
+before ranking; nothing is sent to a provider and no query is generated.
+Acknowledgements, unrelated messages and self-wakes recall nothing.
+
+Recalled records follow protected memories in the context and are marked
+`recalled=current-message`. They share a reserved quarter of the memory budget,
+so each is either whole in the prompt or left out. The turn's `mind.model.request`
+event records `memoryRecallState` (`none`, `no-match`, `unavailable`, `included`,
+`omitted-budget`, `already-in-baseline`), `memoryRecallIds` and
+`memoryRecallOmittedIds`. A failed search leaves the normal context in place.
+Access stats change only for records in a prompt whose turn ran.
+
 ## Persistent Mind memory protection
 
 Persistent Mind memories have an explicit cleanup protection level, separate from
@@ -54,6 +70,28 @@ projects those tags as `protection`; older clients editing ordinary tags preserv
 the protection unless they explicitly supply a new protection level. The cleanup
 guards require this version of PortOS; downgrading to an older build cannot
 provide these retention guarantees.
+
+### Continuation note
+
+The mind can add an optional `continuationNote` (at most 4,000 characters) to a
+turn: its own note to its next wake, holding the current thread, open threads, and
+next useful action. Leaving the field out keeps the note, a new string replaces it,
+and an empty string clears it. Only a successful turn changes the note; a turn
+replays once, and a replacement of a note changed since that wake read it is refused.
+
+There is one current record, a `context` memory tagged `mind:continuation-note`
+and `mind:important`. Replacements use the versioned update path, a clear archives
+the record with its wording intact, and neither the record nor its text enters
+federation, the portability bundle, or the trajectory events that rollups compact.
+Every wake receives it word for word in its own fenced section, read independently
+of the ordinary memory page. If it does not fit after identity, instructions,
+protected identity memories, and the newest human input, the wake is told it was
+omitted instead of receiving part of it.
+
+The context panel shows the note read-only. Its author, turn, provider, and model
+come from `mind.continuation.updated` runtime events, never from model-supplied
+text. Wording with no matching retained event, including a later edit through Brain
+or a note whose events were cleared with the history, is shown as author unknown.
 
 ## Memory Schema
 

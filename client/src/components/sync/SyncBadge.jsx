@@ -60,9 +60,7 @@ const STATUS_CONFIG = {
     label: 'Sync unknown',
     className: 'bg-gray-600/20 text-gray-400 hover:bg-gray-600/30',
     Icon: HelpCircle,
-    // Sync IS configured, but every eligible peer was unreachable / too-old /
-    // errored, so we couldn't compute parity. Distinct from 'not-syncing'.
-    title: 'Sync status unavailable — peer offline, unreachable, or on an older PortOS',
+    title: 'Sync status could not be verified — open details',
   },
   'peer-unreachable': {
     label: 'Peer offline',
@@ -87,8 +85,7 @@ const STATUS_CONFIG = {
 export default function SyncBadge({ status, onClick }) {
   if (!status) return null;
 
-  const config = STATUS_CONFIG[status];
-  if (!config) return null;
+  const config = Object.hasOwn(STATUS_CONFIG, status) ? STATUS_CONFIG[status] : STATUS_CONFIG.unknown;
 
   const { label, className, Icon, title } = config;
 

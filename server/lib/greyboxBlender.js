@@ -444,6 +444,8 @@ def apply_look(look):
         mat.node_tree.links.new(scatter.outputs['Volume'], nodes.get('Material Output').inputs['Volume'])
         mesh.materials.append(mat)
         volume.visible_shadow = False
+        # Renders keep the haze; in an opened .blend the box would hide the set.
+        volume.hide_viewport = True
         look_lights.objects.link(volume)
     scene.view_settings.exposure = look['atmosphere'].get('exposure', 0)
 
@@ -544,6 +546,48 @@ def fly_camera(fly):
     scene.frame_end = last
     scene.render.fps = fly['fps']
     scene.camera = cam
+
+def frame_viewport():
+    # Blender opens a .blend with its saved 3D views, and the factory ones orbit
+    # the origin from far above: in or over a large set's ceiling. Stand every 3D
+    # view at the first saved shot (or mid-floor when there is none), orbiting a
+    # point a few metres ahead so zoom and pan stay fine-grained, in Material
+    # Preview lit by the scene's own lights.
+    lens = 35
+    if grey['shots']:
+        shot = grey['shots'][0]
+        eye, ahead = to_blender(shot['position']), to_blender(shot['target']) - to_blender(shot['position'])
+        lens = shot.get('focalLengthMm', lens)
+    else:
+        corners = [o.matrix_world @ Vector(c) for o in scene.objects
+            if o.type == 'MESH' and not o.hide_viewport for c in o.bound_box]
+        if not corners:
+            return
+        low = Vector([min(c[i] for c in corners) for i in range(3)])
+        high = Vector([max(c[i] for c in corners) for i in range(3)])
+        eye = Vector(((low.x + high.x) / 2, (low.y + high.y) / 2, low.z + 1.6))
+        ahead = Vector((0, 5, -0.75))
+    if ahead.length < 1e-6:
+        return
+    pivot = eye + ahead.normalized() * min(ahead.length, 5)
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            for space in area.spaces:
+                if space.type != 'VIEW_3D':
+                    continue
+                space.lens = lens
+                space.clip_start = 0.05
+                space.clip_end = 2000
+                space.shading.type = 'MATERIAL'
+                space.shading.use_scene_lights = True
+                space.shading.use_scene_world = True
+                view = space.region_3d
+                view.view_perspective = 'PERSP'
+                view.view_location = pivot
+                view.view_rotation = ahead.to_track_quat('-Z', 'Y')
+                view.view_distance = (pivot - eye).length
+
+frame_viewport()
 
 fly = job.get('flythrough')
 if fly:

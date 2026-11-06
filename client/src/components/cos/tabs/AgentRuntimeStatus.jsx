@@ -108,7 +108,7 @@ export function AgentRuntimeStatus({
       {!inactive && tuiSessionId && (
         <Link
           to={`/shell?session=${encodeURIComponent(tuiSessionId)}`}
-          className="flex items-center gap-1.5 px-3 py-1 rounded font-semibold bg-emerald-500 text-black hover:bg-emerald-400 shadow-sm ring-1 ring-emerald-400/50 whitespace-nowrap transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1 pointer-coarse:min-h-11 rounded font-semibold bg-emerald-500 text-black hover:bg-emerald-400 shadow-sm ring-1 ring-emerald-400/50 whitespace-nowrap transition-colors"
           title="Open the live TUI shell to inspect and interact with this agent"
         >
           <Terminal size={14} aria-hidden="true" className="shrink-0" />

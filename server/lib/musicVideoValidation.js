@@ -1,4 +1,5 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_CAMERA_OUTPUTS, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
@@ -23,6 +24,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
@@ -141,7 +143,7 @@ export const musicVideoConceptSchema = z.object({
     id: z.string().min(1).max(64),
     kind: z.enum(['character', 'place', 'object']),
     name: z.string().trim().min(1).max(120),
-    description: z.string().max(1000).optional(),
+    description: z.string().max(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX).optional(),
     role: z.enum(['protagonist', 'band', 'supporting']).optional(),
     canonId: z.string().max(64).optional(),
     // The catalog record this subject was cast from (Casting / Environments /
@@ -154,8 +156,9 @@ export const musicVideoConceptSchema = z.object({
       label: z.string().max(80),
       age: z.number().int().min(0).max(150).optional(),
     }).strict().optional(),
-    // Kept in this video only: never offered for saving to the catalog.
+    // Kept in this video only: saved to the catalog only when explicitly asked.
     localOnly: z.boolean().optional(),
+    active: z.boolean().optional(),
   }).strict()).max(24).optional(),
 }).strict();
 
@@ -174,7 +177,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
   // (see generationMode below). 'runway' is Runway's developer API
   // (services/videoGen/runway.js), cutaways only.
-  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
@@ -261,6 +264,25 @@ export const musicVideoPacingSchema = z.object({
   minShotSec: z.number().min(0.5).max(60).optional(),
   maxShotSec: z.number().min(1).max(120).optional(),
   hookSec: z.number().min(0.5).max(60).optional(),
+}).strict();
+
+// The cameras that exist in this video, and each shot's plan (lib/musicVideoShotSheet.js).
+export const musicVideoCameraSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(120),
+  kind: z.enum(SHOT_CAMERA_KINDS),
+  output: z.enum(SHOT_CAMERA_OUTPUTS).nullable().optional(),
+  owner: z.string().trim().max(120).optional(),
+  // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
+  rule: z.string().trim().max(1000).optional(),
+}).strict();
+export const musicVideoShotSheetSchema = z.object({
+  cameraId: z.string().min(1).max(64).nullable().optional(),
+  holder: z.string().trim().max(120).nullable().optional(),
+  characters: z.array(z.string().trim().min(1).max(120)).max(SHOT_SHEET_CHARACTERS_MAX).optional(),
+  // The director has read this shot's plan and it's right.
+  checked: z.boolean().optional(),
+  ...Object.fromEntries(SHOT_SHEET_TEXT_FIELDS.map(([field, max]) => [field, z.string().max(max).optional()])),
 }).strict();
 
 // Lyric-sheet structure: a section header (`[Chorus]`) or a stage direction
@@ -1512,6 +1534,20 @@ export const musicVideoCastAndSetsFeedbackSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
 }).strict();
 
+export const musicVideoCastAndSetsFeedbackPlanSchema = z.object({
+  revision: z.number().int().positive(),
+}).strict();
+
+export const musicVideoCastAndSetsFeedbackRenderSchema = musicVideoCastAndSetsFeedbackPlanSchema.extend({
+  count: z.number().int().nonnegative(),
+}).strict();
+
+export const musicVideoCastAndSetsImageNoteRemovalSchema = z.object({
+  key: z.string().min(1).max(80),
+  index: z.number().int().nonnegative(),
+  text: z.string().min(1).max(2000),
+}).strict();
+
 // Direct edits to a direction. A present text field replaces the current value
 // (empty clears it); an absent one keeps it. List items are patched by id (or
 // a test by its 1-based index); `remove: true` drops one.
@@ -1694,6 +1730,8 @@ export const musicVideoProjectCreateSchema = z.object({
 }).strict();
 
 export const musicVideoProjectUpdateSchema = z.object({
+  // The descriptions the editor started from, used only for conflict checks.
+  catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(24).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
   storySummary: z.string().max(20000).optional(),
   mediaMode: z.enum(MUSIC_VIDEO_MEDIA_MODES).optional(),
@@ -1716,6 +1754,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   lyricMarkers: lyricMarkerList.optional(),
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
+  cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
@@ -1922,6 +1961,7 @@ export const musicVideoSceneUpdateSchema = z.object({
   cameoVariantId: z.string().regex(MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN, 'Invalid variant id').nullable().optional(),
   // This shot's own on-screen name for its cameo (an alias, e.g. Spoodle for the Cockapoo); null uses the cameo's label.
   cameoLabel: z.string().trim().max(120).nullable().optional(),
+  shotSheet: musicVideoShotSheetSchema.nullable().optional(),
   ...scenePanelFields,
 }).strict();
 
@@ -1998,7 +2038,7 @@ export const musicVideoSceneReorderSchema = z.object({
 // Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
@@ -2014,6 +2054,11 @@ export const musicVideoPacingRecutSchema = z.object({ revision: z.string().regex
 // Move where a shot starts; the shot before it ends there too, so the cut moves and nothing gaps or overlaps.
 export const musicVideoSceneStartSchema = z.object({
   startSec: z.number().finite().nonnegative(),
+}).strict();
+
+// Move where a shot ends; the next shot starts there too, so it grows or shrinks to meet it.
+export const musicVideoSceneEndSchema = z.object({
+  endSec: z.number().finite().positive(),
 }).strict();
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.

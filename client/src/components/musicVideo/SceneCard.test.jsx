@@ -40,7 +40,7 @@ it('holds Render while clip references are saving or failed and releases it afte
   show('Clip');
   const clip = screen.getByRole('group', { name: 'Clip references' });
   fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
-  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Bike' }));
   const generate = screen.getByRole('button', { name: 'Render' });
   expect(generate.disabled).toBe(true);
   settle(false);
@@ -67,7 +67,7 @@ it('also waits for clip-reference edits before starting a storyboard-to-clip ren
   render(<Harness />);
   const clip = screen.getByRole('group', { name: 'Clip references' });
   fireEvent.click(within(clip).getByRole('button', { name: 'Add' }));
-  fireEvent.click(within(clip).getByRole('button', { name: 'Bike' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Bike' }));
   const generate = screen.getByRole('button', { name: 'Clip from storyboard' });
   expect(generate.disabled).toBe(true);
   settle(true);
@@ -336,20 +336,73 @@ describe('Merge with next (#10810)', () => {
   const scene = { sceneId: 's1', startSec: 0, endSec: 4, takes: [] };
   const props = { index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges into the next scene, and hides when last, when the manifest owns the shots, or past the backend limit', () => {
+  it('merges into the next scene, disables past the backend limit, and hides when last or when the manifest owns the shots', () => {
     const onMergeNext = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} lipSyncBackend="grok" />);
-    show('Clip');
     fireEvent.click(screen.getByRole('button', { name: /Merge with next/ }));
     expect(onMergeNext).toHaveBeenCalledWith('s1', 'grok');
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={19} lipSyncBackend="grok" />);
-    expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
+    const tooLong = screen.getByRole('button', { name: /Merge with next/ });
+    expect(tooLong).toBeDisabled();
+    expect(tooLong.title).toMatch(/would run 19\.00s/);
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} isLast />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} manifestOwnsShots />);
     expect(screen.queryByRole('button', { name: /Merge with next/ })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergeNext={onMergeNext} nextEndSec={8} documentComposition />);
     expect(screen.getByRole('button', { name: /Merge with next/ })).toBeTruthy();
+  });
+
+  // Uniquely catches split and merge going back inside the Clip tab, where a photo has neither.
+  it('offers split and merge on a photo, whichever tab is showing', () => {
+    render(<SceneCard scene={{ ...scene, visualLayer: 'still' }} {...props} layered onSplit={vi.fn()} onMergeNext={vi.fn()} onMergePrevious={vi.fn()} index={1} prevStartSec={0} nextEndSec={8} />);
+    const group = screen.getByTestId('shot-group-timing');
+    for (const name of [/Split shot/, /Merge over previous/, /Merge with next/]) expect(within(group).getByRole('button', { name })).toBeEnabled();
+  });
+
+  // Uniquely catches the slider offering cuts that leave less than the server's minimum piece at fractional boundaries.
+  it('keeps both split slider endpoints inside a fractionally timed shot', () => {
+    const onSplit = vi.fn();
+    render(<SceneCard scene={{ ...scene, startSec: 0.04, endSec: 0.96 }} {...props} onSplit={onSplit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Split shot' }));
+    let slider = screen.getByRole('slider', { name: 'Split at' });
+    expect(slider.min).toBe('0.2');
+    expect(slider.max).toBe('0.8');
+    fireEvent.change(slider, { target: { value: slider.min } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split here' }));
+    expect(onSplit).toHaveBeenLastCalledWith('s1', null, 0.2);
+    fireEvent.click(screen.getByRole('button', { name: 'Split shot' }));
+    slider = screen.getByRole('slider', { name: 'Split at' });
+    fireEvent.change(slider, { target: { value: slider.max } });
+    fireEvent.click(screen.getByRole('button', { name: 'Split here' }));
+    expect(onSplit).toHaveBeenLastCalledWith('s1', null, 0.8);
+  });
+
+  // Uniquely catches a typed duration saving the end alone, leaving the next shot behind.
+  it('moves the cut after the shot when its duration or end is edited', async () => {
+    const onMoveEnd = vi.fn(() => Promise.resolve());
+    const onMoveStart = vi.fn(() => Promise.resolve());
+    render(<SceneCard scene={{ ...scene, startSec: 1, endSec: 3 }} {...props} onMoveEnd={onMoveEnd} onMoveStart={onMoveStart} nextEndSec={6} />);
+    const duration = screen.getByLabelText('Duration');
+    expect(duration.value).toBe('2');
+    expect(screen.getByTestId('shot-duration-note').textContent).toMatch(/48 fr · .* the next shot starts here/);
+    fireEvent.change(duration, { target: { value: '3.5' } });
+    fireEvent.blur(duration);
+    expect(onMoveEnd).toHaveBeenLastCalledWith('s1', 4.5);
+    await waitFor(() => expect(screen.getByLabelText('Duration')).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'One frame shorter' }));
+    expect(onMoveEnd).toHaveBeenLastCalledWith('s1', 2.958);
+    await waitFor(() => expect(screen.getByLabelText('Duration')).toBeEnabled());
+    const end = screen.getByLabelText(/^End/);
+    fireEvent.change(end, { target: { value: '5' } });
+    fireEvent.blur(end);
+    expect(onMoveEnd).toHaveBeenLastCalledWith('s1', 5);
+    await waitFor(() => expect(screen.getByLabelText(/^End/).value).toBe('3'));
+    const start = screen.getByLabelText(/^Startfr/);
+    fireEvent.change(start, { target: { value: '0.5' } });
+    fireEvent.blur(start);
+    expect(onMoveStart).toHaveBeenLastCalledWith('s1', 0.5);
+    await waitFor(() => expect(screen.getByLabelText(/^Startfr/).value).toBe('1'));
   });
 });
 
@@ -358,14 +411,13 @@ describe('Merge over previous', () => {
   const scene = { sceneId: 's2', startSec: 4, endSec: 8, takes: [] };
   const props = { index: 1, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn() };
 
-  it('merges this shot over the previous one, and hides when first, when the manifest owns the shots, or past the backend limit', () => {
+  it('merges this shot over the previous one, disables past the backend limit, and hides when first or when the manifest owns the shots', () => {
     const onMergePrevious = vi.fn();
     const { rerender } = render(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
-    show('Clip');
     fireEvent.click(screen.getByRole('button', { name: 'Merge over previous' }));
     expect(onMergePrevious).toHaveBeenCalledWith('s2', 'grok');
     rerender(<SceneCard scene={{ ...scene, endSec: 19 }} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} lipSyncBackend="grok" />);
-    expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Merge over previous' })).toBeDisabled();
     rerender(<SceneCard scene={scene} {...props} index={0} onMergePrevious={onMergePrevious} prevStartSec={0} />);
     expect(screen.queryByRole('button', { name: 'Merge over previous' })).toBeNull();
     rerender(<SceneCard scene={scene} {...props} onMergePrevious={onMergePrevious} prevStartSec={0} manifestOwnsShots />);
@@ -448,9 +500,9 @@ describe('scene timing and provider presentation (#11046)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
     expect(onMergeNext).toHaveBeenLastCalledWith('timing', 'grok');
     rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" nextEndSec={GROK_MAX + 2e-6} onMergeNext={onMergeNext} />);
-    expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Merge with next' })).toBeDisabled();
     rerender(<SceneCard {...props} scene={current} lipSyncBackend="grok" onMergeNext={onMergeNext} />);
-    expect(screen.queryByRole('button', { name: 'Merge with next' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Merge with next' })).toBeDisabled();
     rerender(<SceneCard {...props} scene={current} onMergeNext={onMergeNext} />);
     fireEvent.click(screen.getByRole('button', { name: 'Merge with next' }));
     expect(onMergeNext).toHaveBeenLastCalledWith('timing', null);

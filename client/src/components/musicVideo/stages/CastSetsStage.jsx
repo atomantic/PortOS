@@ -1,11 +1,13 @@
+import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
+import CastAndSetsReferenceProgress from '../CastAndSetsReferenceProgress.jsx';
 import CastAndSetsCheckin from '../CastAndSetsCheckin.jsx';
+import CatalogShotReferenceProblems from '../CatalogShotReferenceProblems.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
-import LinkedObjectReferences from '../LinkedObjectReferences.jsx';
+import CatalogLookReferences from '../CatalogLookReferences.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import CameoRosterPanel from '../CameoRosterPanel.jsx';
-import { VideoCastLinksDisclosure } from '../VideoCastLinks.jsx';
 import { formatCount } from '../../../utils/formatters.js';
 import useMusicVideoCastingChanges from '../../../hooks/useMusicVideoCastingChanges.js';
 import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideoStages.js';
@@ -41,7 +43,11 @@ export const directionSummary = (project) => {
  */
 export default function CastSetsStage({ board }) {
   const { project, locked, castSets, kickoff } = board;
-  const subjects = project.concept?.subjects || [];
+  const catalogMode = project.castAndSets?.source === 'catalog';
+  const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin);
+  const catalogBusy = locked || castSets.busy || kickoff.running;
+  const canApproveCatalog = !!catalog.checkin && !catalog.checkin.problems.length && !catalog.checkin.approved;
+
   const { changes: castingChanges, loadError: castingChangesError, retry: retryCastingChanges } = useMusicVideoCastingChanges(project);
   return (
     <div className="min-w-0 space-y-3">
@@ -49,23 +55,35 @@ export default function CastSetsStage({ board }) {
         Concept, song style and cast are on the{' '}
         <button type="button" onClick={() => board.goToStage('story', 'mv-story-direction')} className="min-h-[44px] text-port-accent hover:underline sm:min-h-0">Story step</button>.
       </p>
-      {subjects.length > 0 && (
-        <div className="min-w-0 rounded-lg border border-port-border bg-port-card px-3 pb-1">
-          <VideoCastLinksDisclosure
-            summary={`Catalog links · ${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked`}
-            summaryClassName="flex min-h-[44px] cursor-pointer items-center text-sm font-medium"
-            projectId={project.id} universeId={project.concept?.universeId || null} onLinked={board.applyCastLinks} idPrefix={`mv-look-link-${project.id}`} />
-        </div>
-      )}
-      <LinkedObjectReferences key={`objects-${project.id}`} project={project} onSaveSpec={board.saveVisualSpec} disabled={locked} />
-      <StageSection title="Visual guidance" summary={directionSummary(project)}>
+      <CatalogLookReferences key={`catalog-${project.id}`} project={project} onLinked={board.applyCastLinks}
+        checkin={catalog.checkin} catalogOnly={catalogMode} disabled={catalogBusy}>
+        {catalogMode ? <div id={CAST_CHECKIN_ANCHOR} style={ANCHOR_STYLE} className="space-y-2" aria-label="Catalog Cast & Sets check-in">
+          <p className="text-sm font-medium">Cast &amp; Sets check-in · {catalog.checkin?.approved ? 'Approved' : 'Review catalog links'}</p>
+          {catalog.error ? <p role="alert" className="text-xs text-port-error">{catalog.error} <button type="button" className="min-h-11 rounded border border-port-border px-2" onClick={catalog.retry}>Retry catalog check-in</button></p>
+            : !catalog.checkin ? <p className="text-xs">Loading current catalog check-in…</p> : null}
+          {catalog.checkin?.problems.length > 0 && <ul className="list-disc pl-5 text-xs text-port-warning">{catalog.checkin.problems.map((problem, index) => <li key={`${problem.subjectId}:${problem.code}:${index}`}>{problem.message}</li>)}</ul>}
+          <CatalogShotReferenceProblems checkin={catalog.checkin} disabled={catalogBusy} onRemap={castSets.remapCatalogReferences} onOpenShot={board.onEditShot} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !canApproveCatalog}
+              onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
+            <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !catalog.checkin || catalog.checkin.problems.length > 0}
+              onClick={() => castSets.rebuildCatalogGuide().then((res) => { if (res?.artifact) board.openArtifact(res.artifact.id); })}>Rebuild guide</button>
+          </div>
+        </div> : castSets.linkCatalog && <div className="space-y-1">
+          <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Generated sheets stay in history. Shots that picked one move to the same image in the catalog, and any shot the catalog cannot serve is listed here.</p>
+          <button type="button" disabled={catalogBusy} className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" onClick={castSets.linkCatalog}>Use catalog-only check-in</button>
+        </div>}
+      </CatalogLookReferences>
+      <StageSection title="Mood board & other asset links" summary={directionSummary(project)}>
         <LookReferencesPanel key={`look-${project.id}`} project={project}
           onSave={board.saveStyleReferences} onSaveSpec={board.saveVisualSpec} onAddReference={board.onAddReference}
           onReferenceLabels={board.applyReferenceLabels} onPendingChange={board.setStyleReferencesPending} />
         <fieldset disabled={locked} className="min-w-0"><VisualSpecPanel key={project.id} project={project} onSave={board.saveVisualSpec} /></fieldset>
       </StageSection>
       <CameoRosterPanel project={project} onApply={board.applyCameos} disabled={locked} />
-      {project.castAndSets ? (
+      {catalogMode ? (project.castAndSets.plan && <StageSection title="Previous generated sheet · history" summary="Saved outputs and submitted inputs; not current Cast & Sets">
+        <CastAndSetsReferenceProgress stage={project.castAndSets} onOpenPreview={board.openPreview} />
+      </StageSection>) : project.castAndSets ? (
         <CastAndSetsCheckin
           id={CAST_CHECKIN_ANCHOR}
           project={project}
@@ -89,7 +107,10 @@ export default function CastSetsStage({ board }) {
           onDiscardImageEdit={castSets.discardImageEdit}
           onRefresh={castSets.refresh}
           onApplyFeedback={castSets.applyFeedback}
+          onRenderFeedback={castSets.renderFeedback}
+          onRefreshFeedbackRenderer={castSets.refreshFeedbackRenderer}
           onRemoveFeedback={castSets.removeFeedback}
+          onRemoveImageFeedback={castSets.removeImageFeedback}
           onRegenerateWithNotes={castSets.regenerate}
           onResume={() => castSets.resume()}
           onRebuild={() => castSets.start()}
@@ -117,8 +138,8 @@ export default function CastSetsStage({ board }) {
         onUpload={board.onUploadArtifact}
         onUseAsGuide={board.useAsGuide}
         guideId={project.productionReview?.draft?.guideArtifactId || null}
-        title="Cast & Sets sheets and visual guides"
-        emptyText="The check-in sheet appears here once the cast and sets are built — or import your own guide"
+        title={catalogMode ? "Visual guides & sheet history" : "Cast & Sets sheets and visual guides"}
+        emptyText={catalogMode ? "Optional visual guides are separate from the catalog Cast & Sets check-in." : "The check-in sheet appears here once the cast and sets are built — or import your own guide"}
       />
     </div>
   );

@@ -153,7 +153,20 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
       musicVideo.productionStepKey, { sceneId: musicVideo.sceneId, kind: 'video' });
   }
   const { getProject } = await import('./projects.js');
-  const project = await getProject(musicVideo.projectId);
+  let project = await getProject(musicVideo.projectId);
+  if (project?.castAndSets?.source === 'catalog') {
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('./clipCastReferences.js');
+    project = await requireCatalogRenderReady(project);
+    assertCatalogInputBasis(project, musicVideo.catalogBasis, {
+      required: !!(body.referenceImageFiles?.length || body.icReferenceImageFiles?.length),
+    });
+    params.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
+    assertCatalogReferenceFiles(project, [
+      prepared.sourceImagePath, prepared.lastImagePath, params.lastImagePath,
+      ...(params.referenceImagePaths || []), ...(params.icReferencePaths || []),
+      ...(params.castReferences || []).map(ref => ref.path),
+    ].filter(Boolean).map(file => basename(file)));
+  }
   const run = musicVideo.productionRunId && project?.productionRuns?.find((entry) => entry.id === musicVideo.productionRunId);
   if (run?.limits?.spendCapUsd != null && backend === VIDEO_GEN_MODE.FAL
     && params.modelId === 'minimax/h3-max/reference-to-video' && params.referenceImagePaths?.length) {
@@ -182,7 +195,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
-    const actual = backend === VIDEO_GEN_MODE.GROK ? (params.castReferences || []).map((ref) => basename(ref.path))
+    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).map((ref) => basename(ref.path))
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
         .map((path) => basename(path));
     if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {

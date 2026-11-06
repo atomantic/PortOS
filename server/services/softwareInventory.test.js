@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { __testing, getInstalledBlenderCandidates, getSoftwareInventory } from './softwareInventory.js';
 
-const { blenderRow, browserRow, condaRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
+const { blenderRow, browserRow, condaRows, harnessRows, localLlmRows, nodeRows, readBlenderVersion, ytDlpRow } = __testing;
 
 const runtime = (overrides = {}) => ({
   node: { version: 'v26.12.1', inSupportedRange: true, securityBaseline: { compliant: true }, pinned: '/x/node' },
@@ -82,6 +82,21 @@ describe('component rows', () => {
       publishedVersions: { mac_arm64: '140.0.3', mac: '140.0.4' } }, 'arm64');
     expect(row).toMatchObject({ state: 'update', version: '140.0.1', latest: '140.0.3' });
     expect(browserRow(null).state).toBe('unknown');
+  });
+
+  it('names the Homebrew package and the release Homebrew has not published yet', () => {
+    const lmstudio = { installed: false };
+    const ollama = { installed: true, available: true, modelCount: 3, version: '0.40.14', latestVersion: '0.40.14',
+      latestVersionSource: 'homebrew', upstreamAheadVersion: '0.40.15', installChannel: { kind: 'formula', name: 'ollama' }, updateAvailable: false, canUpgrade: true };
+    const [row] = localLlmRows({ ollama, lmstudio });
+    expect(row).toMatchObject({ state: 'current', latest: '0.40.14', action: null });
+    expect(row.summary).toBe('3 models. Homebrew formula ollama. GitHub has 0.40.15; it can be installed once Homebrew publishes it.');
+    expect(localLlmRows({ ollama: { ...ollama, latestVersionSource: 'github', upstreamAheadVersion: null, installChannel: null }, lmstudio })[0].summary).toBe('3 models.');
+
+    const harness = { id: 'codex', label: 'Codex', installed: true, version: '1.0.0', latestVersion: '1.0.0', package: '@openai/codex' };
+    expect(harnessRows([{ ...harness, latestVersionSource: 'npm' }])[0].summary).toBe('npm @openai/codex');
+    expect(harnessRows([{ ...harness, latestVersionSource: 'homebrew', installChannel: { kind: 'cask', name: 'codex' }, npmAheadVersion: '1.1.0' }])[0].summary)
+      .toBe('Homebrew cask codex. npm has 1.1.0; it can be installed once Homebrew publishes it.');
   });
 
   it('offers yt-dlp updates only when its updater can run', () => {

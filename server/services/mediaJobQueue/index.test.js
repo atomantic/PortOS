@@ -1,3 +1,5 @@
+const catalogDispatch = vi.hoisted(() => ({ hydrate: vi.fn(async project => project) }));
+vi.mock('../musicVideo/catalogCheckin.js', async original => ({ ...await original(), withCatalogCheckin: (...args) => catalogDispatch.hydrate(...args) }));
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
@@ -508,6 +510,29 @@ describe('mediaJobQueue', () => {
     const { jobId } = await mediaJobQueue.enqueueJob(request);
     await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
     expect(mediaJobQueue.getJob(jobId).error).toContain('planning guides');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches an unapproved catalog check-in refusing the owner's render, or a catalog edit while queued slipping through.
+  it('dispatches on an unapproved catalog check-in but refuses one whose catalog changed while queued', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    const project = { castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'original' } } };
+    const unapproved = { castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [], basis: 'original' } } };
+    const request = { kind: 'image', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };
+    stubs.generateImage.mockClear();
+    getProject.mockResolvedValueOnce(unapproved).mockResolvedValueOnce(unapproved);
+    catalogDispatch.hydrate.mockResolvedValueOnce(unapproved).mockResolvedValueOnce(unapproved);
+    const admitted = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => stubs.generateImage.mock.calls.length === 1);
+    imageGenEvents.emit('failed', { generationId: admitted.jobId, error: 'synthetic finish', inputProcessSettled: true });
+    await waitFor(() => mediaJobQueue.getJob(admitted.jobId).status === 'failed');
+    stubs.generateImage.mockClear();
+    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+    catalogDispatch.hydrate.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project,
+      castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'changed' } } });
+    const changed = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(changed.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(changed.jobId).error).toContain('after these render inputs were prepared');
     expect(stubs.generateImage).not.toHaveBeenCalled();
   });
 
@@ -1345,6 +1370,30 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(jobId).result).toMatchObject({ filename: 'example-source.png', finishedVariant: { filename: 'example-finished.png' } });
   });
 
+  it.each([{}, { catalogAttach: { ingredientId: 'example', kind: 'reference' } }, { characterSheet: { entryId: 'example' } }])(
+    'finishes under the media owner after provider publication settles, with catalog policy %j', async target => {
+      stubs.generateImageCodex.mockResolvedValue({});
+      let releaseFinish;
+      const delayed = new Promise(resolve => { releaseFinish = resolve; });
+      stubs.finishVisualProfile.mockImplementation(async ({ result, applyFilmFinish }) => {
+        await delayed;
+        return currentAdmission.continueSettlement(() => ({ ...result, applyFilmFinish }));
+      });
+      const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: {
+        mode: 'codex', prompt: 'Example', visualProfile: { version: 1 }, ...target,
+      } });
+      await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+      // Real providers emit synchronously inside a short-lived publication.
+      await currentAdmission.run('settlement', 'provider publication', () => {
+        imageGenEvents.emit('completed', { generationId: jobId, filename: 'example-source.png' });
+      });
+      await waitFor(() => stubs.finishVisualProfile.mock.calls.length === 1);
+      releaseFinish();
+      await waitFor(() => mediaJobQueue.getJob(jobId).status === 'completed');
+      expect(mediaJobQueue.getJob(jobId).result.applyFilmFinish).toBe(!target.catalogAttach && !target.characterSheet);
+    },
+  );
+
   it('cancels the finish browser independently after the provider has settled', async () => {
     stubs.generateImageCodex.mockImplementation(async () => ({}));
     stubs.finishVisualProfile.mockImplementation(({ signal }) => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
@@ -1495,6 +1544,10 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
     const failed = mediaJobQueue.getJob(jobId);
     expect(failed.error).toContain('original image retained');
+    expect(failed.statusMsg).toBe('Film finishing failed; original image retained');
+    // The live failed status is published only after its snapshot is durable.
+    const saved = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.find(row => row.id === jobId);
+    expect(saved).toMatchObject({ status: 'failed', statusMsg: failed.statusMsg, result: { filename: 'example-source.png' } });
     const retry = await mediaJobQueue.enqueueJob({ kind: 'image', params: failed.params });
     await waitFor(() => mediaJobQueue.getJob(retry.jobId).status === 'completed');
     expect(stubs.generateImageCodex).toHaveBeenCalledTimes(1);

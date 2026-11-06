@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import StoryboardAnimatic from './StoryboardAnimatic.jsx';
 import { capturePreviewFrame } from '../../lib/musicVideoFrameCapture.js';
 import { uploadGalleryImage } from '../../services/apiSystem.js';
+import toast from '../ui/Toast.jsx';
 
 vi.mock('../../services/apiImageVideo.js', () => ({
   getVideoHistoryItem: vi.fn(async () => ({ id: 'clip', filename: 'clip.webm' })),
@@ -17,6 +18,7 @@ vi.mock('../../lib/musicVideoFrameCapture.js', async original => ({
 // A decoder can be ready before loadeddata reveals the selected clip. Capture
 // must wait for that clip's paused surface rather than freeze its transient still.
 it('waits for a decoded selected clip while its wrapper is still transparent', async () => {
+  const success = vi.spyOn(toast, 'success');
   const frames = new Map();
   let nextFrame = 0;
   vi.stubGlobal('requestAnimationFrame', tick => { frames.set(++nextFrame, tick); return nextFrame; });
@@ -31,10 +33,10 @@ it('waits for a decoded selected clip while its wrapper is still transparent', a
   };
   try {
     render(<StoryboardAnimatic project={{ id: 'capture', scenes: [{
-      sceneId: 'selected', startSec: 0, endSec: 4, label: 'Selected',
+      sceneId: 'selected', startSec: 0, endSec: 4, label: 'Shot 3',
       referenceImageId: 'still.png', videoHistoryId: 'clip',
     }] }} audioUrl="/song.wav" />);
-    const video = await screen.findByLabelText('Clip for Selected');
+    const video = await screen.findByLabelText('Clip for Shot 3');
     await waitFor(() => expect(video.getAttribute('src')).toBe('/data/videos/clip.webm'));
     await paint(); await paint();
     Object.defineProperties(video, {
@@ -56,11 +58,13 @@ it('waits for a decoded selected clip while its wrapper is still transparent', a
     await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledWith(
       expect.any(Blob), { silent: true },
     ));
+    expect(success).toHaveBeenCalledWith('Saved Shot 3 · frame 0 to the image gallery');
     expect(video.dataset.pausedFrame).toBe(String(video.currentTime));
     expect(video.parentElement.className).toContain('opacity-100');
   } finally {
     cleanup();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    success.mockRestore();
   }
 });

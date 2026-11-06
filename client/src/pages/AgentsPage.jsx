@@ -7,6 +7,7 @@ import socket from '../services/socket';
 import useMounted from '../hooks/useMounted';
 import { formatCount, formatDateTime, formatPercent } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
 
 const AGENT_EVENTS = [];
 
@@ -16,10 +17,11 @@ export function AgentsPage() {
   const mounted = useMounted();
 
   const loadAgents = useCallback(() => api.getAgents({ silent: true }), []);
-  const { data, loading, refetch, updateData } = useSocketResource(loadAgents, {
+  const { data, loading, error, refetch, updateData } = useSocketResource(loadAgents, {
     namespace: 'agent-processes', events: AGENT_EVENTS,
   });
   const agents = data ?? [];
+  const initialLoadFailed = data === null && error;
 
   useEffect(() => {
     const onSnapshot = frame => {
@@ -77,6 +79,11 @@ export function AgentsPage() {
       <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6">
       <div className="space-y-4 lg:space-y-6">
 
+      {initialLoadFailed ? (
+        <ListLoadError what="AI agents" error={error} onRetry={refetch} />
+      ) : <>
+      {error && <ListLoadError what="AI agents" error={error} onRetry={refetch} />}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <div className="bg-port-card border border-port-border rounded-lg sm:rounded-xl p-2 sm:p-5 flex items-center justify-between">
@@ -125,7 +132,7 @@ export function AgentsPage() {
                 <button
                   onClick={() => handleKill(agent.pid)}
                   disabled={killing[agent.pid]}
-                  className="shrink-0 px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
+                  className="shrink-0 px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:px-3 bg-port-error/20 text-port-error hover:bg-port-error/30 hover:text-port-error/80 disabled:opacity-50 rounded text-xs font-medium flex items-center gap-1"
                 >
                   <XCircle size={14} className={killing[agent.pid] ? 'animate-pulse' : ''} />
                   Kill
@@ -144,7 +151,7 @@ export function AgentsPage() {
               </div>
               <button
                 onClick={() => toggleExpand(agent.pid)}
-                className="mt-2 text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                className="mt-2 pointer-coarse:min-h-11 inline-flex items-center text-xs text-gray-500 hover:text-white gap-1"
               >
                 <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>
                 {expandedPid === agent.pid ? 'Hide details' : 'Show details'}
@@ -365,6 +372,7 @@ export function AgentsPage() {
         </table>
         </div>
       </div>
+      </>}
     </div>
       </div>
     </div>

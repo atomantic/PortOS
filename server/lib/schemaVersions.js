@@ -574,7 +574,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v13 records each canon image's input root and content digest, so exact
   // replay can prove the canon bytes it sent. A v12 sanitizer strips them; old
   // inbound edits preserve them under the same same-render rule as v12.
-  fableLoom: 13,
+  // v14 lets `renderSettings.videoMode` name the Gemini web video backend.
+  fableLoom: 14,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -858,7 +859,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v43 = image-to-image wipes on a shot's cuts (`scene.wipeIn`/`wipeOut`: style, length,
   // edge color), which a v42 strict scene schema strips on save and a v42 re-plan drops.
   // Optional, no backfill: absent plays the cut as before.
-  musicVideoProjects: 43,
+  // v44 = active cast alternates; older peers ignore the choice and render both identities.
+  // Optional, no backfill: legacy duplicates deterministically choose the first.
+  musicVideoProjects: 44,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -902,7 +905,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // onto the newer peer. Any new `IMAGE_GEN_MODES`/`VIDEO_GEN_MODES` value needs
   // another bump (guarded in schemaVersions.test.js).
   // v6 adds Runway image backend pins; older peers would coerce them to auto.
-  creativeCommissions: 6,
+  // v7 lets `generation.videoMode` pin the Gemini web video backend.
+  creativeCommissions: 7,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

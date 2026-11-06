@@ -30,6 +30,12 @@ export const memorySearchDdl = [
 ];
 
 // Local history also captures current-row replacements arriving through federation.
+export const memoryReviewDdl = [
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB`,
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15`,
+];
+
 export const memoryHistoryDdl = [
     `ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid()`,
     `ALTER TABLE memory_links ADD COLUMN IF NOT EXISTS link_type VARCHAR(32) NOT NULL DEFAULT 'related'`,
@@ -150,6 +156,7 @@ export const coreDdl = [
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
     ...memoryHistoryDdl,
+    ...memoryReviewDdl,
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,
       category TEXT NOT NULL,

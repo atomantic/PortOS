@@ -33,6 +33,7 @@ const {
   cancelCodexChatGptLogin,
   codexLogout,
   getCodexAccountReadiness,
+  getCodexAccountUsage,
   peekCodexAccountReadiness,
   startCodexChatGptLogin,
   stopCodexAppServer,
@@ -465,5 +466,31 @@ describe('failure paths settle exactly once', () => {
   it('is a no-op on shutdown when nothing was ever spawned', async () => {
     await expect(stopCodexAppServer()).resolves.toBeUndefined();
     expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('native account usage', () => {
+  const summary = { lifetimeTokens: 123, peakDailyTokens: 123, longestRunningTurnSec: null,
+    currentStreakDays: 1, longestStreakDays: 1 };
+  it('reads account history without starting a thread or exposing extra payload fields', async () => {
+    const result = await scripted(child, getCodexAccountUsage(), [
+      ['initialize', {}],
+      ['account/usage/read', { summary, dailyUsageBuckets: [{ startDate: '2026-02-01', tokens: 123 }],
+        threadUsage: { privateField: 'must not escape' } }],
+    ]);
+    expect(result).toEqual({ summary, dailyUsageBuckets: [{ startDate: '2026-02-01', tokens: 123 }],
+      fetchedAt: expect.any(String) });
+    expect(child.written.map(frame => frame.method)).toEqual(['initialize', 'initialized', 'account/usage/read']);
+    expect(child.lastRequest('account/usage/read').params).toEqual({});
+  });
+  it('rejects an unsupported endpoint rather than manufacturing zero usage', async () => {
+    const pending = getCodexAccountUsage();
+    const rejected = expect(pending).rejects.toMatchObject({ code: CODEX_ERROR_CODES.protocol });
+    await scripted(child, pending.catch(() => null), [
+      ['initialize', {}],
+      ['account/usage/read', frame => child.replyError(frame, { code: -32601, message: 'Method not found' })],
+    ]);
+    await rejected;
   });
 });

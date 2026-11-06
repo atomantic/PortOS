@@ -17,6 +17,7 @@ import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokens
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import MonthlyUsageCard from '../components/usage/MonthlyUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
+import CodexUsagePreview from '../components/usage/CodexUsagePreview';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
@@ -1018,7 +1019,10 @@ function InternalUsageMetrics({ onBillingSaved }) {
   }, { errorMessage: 'Failed to start historical usage reconciliation' });
 
   useEffect(() => {
-    if (backfill?.status === 'complete') fetchUsage();
+    if (backfill?.mode !== 'preview' && (backfill?.status === 'complete' || backfill?.status === 'error')) {
+      setFleetRevision((value) => value + 1);
+      fetchUsage();
+    }
   }, [backfill, fetchUsage]);
 
 
@@ -1076,8 +1080,8 @@ function InternalUsageMetrics({ onBillingSaved }) {
     <div className="space-y-6">
       <h2 className="text-lg font-semibold text-white">PortOS AI Usage</h2>
       {/* Trailing 30 days across every instance — independent of the range below. */}
-      <RollingCostCard coverage={usage.coverage} fleetRevision={fleetRevision} />
-      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} />
+      <RollingCostCard fleetRevision={fleetRevision} onReconcile={startBackfill} reconciling={startingBackfill || backfill?.status === 'running'} />
+      <MonthlyUsageCard history={usage.monthlyHistory} series={usage.monthlySeries} instanceCount={usage.monthlyInstanceCount} rangeTooWide={usage.monthlyRangeTooWide} coverage={usage.coverage} onReconcile={startBackfill} reconciling={startingBackfill || backfill?.status === 'running'} />
       {reportControls}
       {usage.coverage && (
         <div className="text-xs text-gray-400 space-y-1" role="status">
@@ -1100,14 +1104,14 @@ function InternalUsageMetrics({ onBillingSaved }) {
             Reconcile historical usage
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes recorded history but makes no provider calls.
+            Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes this machine’s recorded history but makes no provider calls. It cannot repair peer classifications or restore deleted transcripts; use the chart’s coverage details for those gaps.
           </p>
-          {backfill?.status === 'running' && (
+          {backfill?.mode !== 'preview' && backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
               Processing {backfill.processed || 0} of {backfill.total || 0} runs…
             </p>
           )}
-          {backfill?.status === 'complete' && (
+          {backfill?.mode !== 'preview' && backfill?.status === 'complete' && (
             <p className="text-xs text-port-success mt-1" role="status">
               Corrected {backfill.corrected || 0} run{backfill.corrected === 1 ? '' : 's'}.
             </p>
@@ -1118,20 +1122,22 @@ function InternalUsageMetrics({ onBillingSaved }) {
           {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
           )}
-          {backfill?.status === 'error' && (
+          {backfill?.mode !== 'preview' && backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>
           )}
         </div>
         <button
           type="button"
           onClick={startBackfill}
-          disabled={startingBackfill || backfill?.status === 'running'}
+          disabled={startingBackfill || backfill?.status === 'running' || backfill?.status === 'cancelling'}
           className="shrink-0 inline-flex items-center justify-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {(startingBackfill || backfill?.status === 'running') ? <BrailleSpinner /> : <DatabaseZap size={15} />}
-          {backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
+          {backfill?.mode === 'preview' && ['running', 'cancelling'].includes(backfill?.status) ? 'Preview in progress' : backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
         </button>
       </div>
+
+      <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} coverage={usage.codexCoverage} />
 
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">

@@ -658,7 +658,7 @@ export default function Catalog() {
         <button
           type="button"
           onClick={() => updateParams({ type: '' })}
-          className={`shrink-0 whitespace-nowrap text-xs px-3 py-2 sm:py-1.5 rounded-full border ${
+          className={`pointer-coarse:min-h-11 inline-flex items-center shrink-0 whitespace-nowrap text-xs px-3 py-2 sm:py-1.5 rounded-full border ${
             selectedType === ''
               ? 'bg-port-accent border-port-accent text-white'
               : 'border-port-border text-gray-300 hover:text-white'
@@ -671,7 +671,7 @@ export default function Catalog() {
             key={t.id}
             type="button"
             onClick={() => updateParams({ type: selectedType === t.id ? '' : t.id })}
-            className={`shrink-0 whitespace-nowrap text-xs px-3 py-2 sm:py-1.5 rounded-full border ${
+            className={`pointer-coarse:min-h-11 inline-flex items-center shrink-0 whitespace-nowrap text-xs px-3 py-2 sm:py-1.5 rounded-full border ${
               selectedType === t.id
                 ? 'bg-port-accent border-port-accent text-white'
                 : 'border-port-border text-gray-300 hover:text-white'
@@ -693,7 +693,7 @@ export default function Catalog() {
             Filtered by source{scrapTitle ? <>: <span className="text-white font-medium">{scrapTitle}</span></> : ' scrap'}
           </span>
           <button type="button" onClick={() => updateParams({ scrap: '' })}
-            className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white shrink-0">
+            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center gap-1 -mr-1.5 p-1.5 text-xs text-gray-400 hover:text-white shrink-0">
             <X size={12} aria-hidden="true" /> Clear
           </button>
         </div>

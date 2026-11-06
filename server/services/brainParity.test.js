@@ -179,6 +179,32 @@ describe('diffBrainManifests', () => {
 });
 
 describe('checkPeerBrainParity', () => {
+  it('keeps an unverified row and a conservative legacy count when a checksum differs', async () => {
+    stores({ people: { p1: { id: 'p1', updatedAt: '2026-01-01T00:00:00Z' } } });
+    peerRoutes({
+      '/api/brain/reconcile/manifest': jsonResponse({ types: { people: [{ id: 'p1', updatedAt: '2026-01-01T00:00:00.000Z' }] } }),
+      '/api/brain/reconcile/checksum': jsonResponse({ checksum: 'different-checksum' }),
+    });
+    const report = await checkPeerBrainParity(PEER);
+    expect(report.checksums.match).toBe(false);
+    expect(report.summary).toMatchObject({ total: 1, 'in-parity': 0, diverged: 1, unknown: 1 });
+    expect(report.byType.find((t) => t.type === 'people').records).toEqual([
+      { id: 'p1', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' },
+    ]);
+  });
+
+  it('keeps both-deleted records omitted even when their timestamp formats differ', async () => {
+    stores({ people: { p1: { id: 'p1', _deleted: true, updatedAt: '2026-01-01T00:00:00Z' } } });
+    peerRoutes({
+      '/api/brain/reconcile/manifest': jsonResponse({ types: { people: [{ id: 'p1', deleted: true, updatedAt: '2026-01-01T00:00:00.000Z' }] } }),
+      '/api/brain/reconcile/checksum': jsonResponse({ checksum: 'different-checksum' }),
+    });
+    const report = await checkPeerBrainParity(PEER);
+    expect(report.checksums.match).toBe(false);
+    expect(report.summary).toMatchObject({ total: 0, diverged: 0, unknown: 0 });
+    expect(report.byType.find((t) => t.type === 'people').records).toEqual([]);
+  });
+
   it('reports the divergence when a record exists only on the peer', async () => {
     stores({ people: { p1: { id: 'p1', updatedAt: 'T1' } } });
     peerRoutes({

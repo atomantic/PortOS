@@ -113,7 +113,7 @@ function DayButtons({ days, onChange }) {
           aria-pressed={selected.has(day.value)}
           aria-label={day.label}
           title={day.label}
-          className={`min-h-9 min-w-9 rounded text-xs font-medium transition-colors ${
+          className={`min-h-9 min-w-9 pointer-coarse:min-h-11 pointer-coarse:min-w-11 rounded text-xs font-medium transition-colors ${
             selected.has(day.value)
               ? 'bg-port-accent text-white'
               : 'border border-port-border bg-port-bg text-gray-400 hover:border-port-accent'
@@ -175,7 +175,7 @@ function CronExpressionPicker({ value, onChange, className, showAdvanced, showSu
             onClick={() => setAdvanced(current => !current)}
             aria-expanded={advanced}
             aria-controls={advancedContainerId}
-            className="text-xs text-gray-500 underline decoration-dotted hover:text-gray-300"
+            className="inline-flex items-center pointer-coarse:min-h-11 text-xs text-gray-500 underline decoration-dotted hover:text-gray-300"
           >
             {advanced ? 'Hide advanced' : 'Advanced cron'}
           </button>

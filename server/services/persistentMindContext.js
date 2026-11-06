@@ -37,13 +37,19 @@ import {
 } from './persistentMindJournal.js';
 import { persistentMindJournalDigest } from '../lib/persistentMindJournal.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG, persistentMindChooseNameSchema, resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
+import { PERSISTENT_MIND_RECALL_LIMITS, persistentMindRecallTerms, selectPersistentMindRecall } from '../lib/persistentMindRecall.js';
 import * as memoryBackend from './memoryBackend.js';
+import { ServerError } from '../lib/errorHandler.js';
 import {
+  PERSISTENT_MIND_CONTINUATION_TAG,
   PERSISTENT_MIND_MEMORY_PROTECTION_TAGS,
   comparePersistentMindMemories,
+  isPersistentMindContinuationNote,
+  persistentMindContinuationNoteTags,
   persistentMindMemoryProtection,
   persistentMindMemoryTags,
   persistentMindProtectMemorySchema,
+  validatePersistentMindReview,
   projectPersistentMindMemory,
 } from '../lib/persistentMindMemory.js';
 
@@ -97,8 +103,121 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   ]);
   const candidates = [...new Map(pages.flatMap((page) => page.memories || []).map((memory) => [memory.id, memory])).values()];
   const details = await Promise.all(candidates.map((memory) => memoryBackend.peekMemory(memory.id)));
-  return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId)
+  return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId
+    && !isPersistentMindContinuationNote(memory))
     .sort(comparePersistentMindMemories).slice(0, 100).map(projectPersistentMindMemory);
+}
+
+/**
+ * The one current continuation note, read independently of the ordinary memory
+ * page. Attribution comes only from a runtime event matching this exact wording,
+ * so an edited or legacy record reads as unattributed rather than mind-authored.
+ */
+async function readPersistentMindContinuationNote(mindId = PERSISTENT_MIND_ID, history = null) {
+  const { memories = [] } = await memoryBackend.getMemories({
+    status: 'active', sourceAgentId: mindId, tags: [PERSISTENT_MIND_CONTINUATION_TAG],
+    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1,
+  });
+  const memory = memories[0] ? await memoryBackend.peekMemory(memories[0].id) : null;
+  if (memory?.sourceAgentId !== mindId || memory.status !== 'active'
+    || !isPersistentMindContinuationNote(memory) || typeof memory.content !== 'string') return null;
+  const events = history ?? await readPersistentMindHistory(mindId);
+  const contentSha = sha256Text(memory.content);
+  const written = events.findLast((event) => event.kind === 'mind.continuation.updated'
+    && event.data?.memoryId === memory.id && event.data?.contentSha === contentSha);
+  return {
+    memoryId: memory.id,
+    version: memory.version ?? 1,
+    content: memory.content,
+    updatedAt: memory.updatedAt ?? null,
+    provenance: written
+      ? { turnId: written.turnId ?? null, providerId: written.data.providerId ?? null, model: written.data.model ?? null, at: written.at }
+      : null,
+  };
+}
+
+/**
+ * Apply one successful turn's note: replace through the versioned update path,
+ * or archive on an explicit clear so the prior wording stays in history.
+ * `expected` is the record this wake was shown; a change since then is refused.
+ */
+export function applyPersistentMindContinuationNote({
+  mindId = PERSISTENT_MIND_ID, turnId, note, providerId = null, model = null, expected,
+}) {
+  return queueMemoryWrite(async () => {
+    const history = await readPersistentMindHistory(mindId);
+    const replayed = history.find((event) => event.turnId === turnId
+      && ['mind.continuation.updated', 'mind.continuation.cleared'].includes(event.kind));
+    if (replayed) return { action: 'replayed', memoryId: replayed.data?.memoryId ?? null };
+    const current = await readPersistentMindContinuationNote(mindId, history);
+    if (expected !== undefined && ((current?.memoryId ?? null) !== (expected.memoryId ?? null)
+      || (current?.version ?? null) !== (expected.version ?? null))) return { action: 'stale' };
+    if (note === '' && !current) return { action: 'none' };
+    if (note === current?.content) return { action: 'unchanged', memoryId: current.memoryId };
+
+    const change = { changedBy: 'persistent-mind', expectedVersion: current?.version };
+    const memory = await (note === ''
+      ? memoryBackend.updateMemory(current.memoryId, { ...change, status: 'archived', changeReason: `Cleared by the mind in turn ${turnId}` })
+      : current
+        ? memoryBackend.updateMemory(current.memoryId, { ...change, content: note, summary: 'Current continuation note', changeReason: `Replaced by the mind in turn ${turnId}` })
+        : memoryBackend.createMemory({
+          type: 'context', content: note, summary: 'Current continuation note', category: 'other',
+          tags: persistentMindContinuationNoteTags(), importance: 1,
+          sourceTaskId: turnId, sourceAgentId: mindId, status: 'active',
+        })).catch((error) => {
+      if (error?.code === 'MEMORY_VERSION_CONFLICT') return null;
+      throw error;
+    });
+    if (!memory) return { action: 'stale' };
+    const action = note === '' ? 'cleared' : current ? 'updated' : 'created';
+    await appendMindEvent({
+      kind: note === '' ? 'mind.continuation.cleared' : 'mind.continuation.updated',
+      mindId,
+      turnId,
+      eventId: `mind-continuation-note:${turnId}`,
+      data: {
+        displayText: note === '' ? 'Cleared the continuation note' : 'Updated the continuation note',
+        memoryId: memory.id,
+        version: memory.version ?? 1,
+        contentSha: sha256Text(note === '' ? current.content : note),
+        providerId,
+        model,
+      },
+    });
+    return { action, memoryId: memory.id, version: memory.version ?? 1 };
+  });
+}
+
+/**
+ * Records relevant to a human message, searched with its unchanged text. Lexical
+ * only: no setting yet authorizes sending message text to the embedding route.
+ * Peeks only, so a record that never reaches a prompt keeps its access stats.
+ */
+export async function readPersistentMindRecall(wake, mindId = PERSISTENT_MIND_ID) {
+  const message = wake?.kind === 'message' ? wake.message?.text : null;
+  if (persistentMindRecallTerms(message).length === 0) return { state: 'none', memories: [] };
+  try {
+    const { memories: hits = [] } = await memoryBackend.hybridSearchMemories(message, null, {
+      sourceAgentId: mindId,
+      lexicalMatch: 'any',
+      limit: PERSISTENT_MIND_RECALL_LIMITS.candidates,
+    });
+    const candidates = await Promise.all(hits.map((hit) => memoryBackend.peekMemory(hit.id)));
+    // The continuation note has its own context section and budget.
+    const recallable = candidates.filter((memory) => !isPersistentMindContinuationNote(memory));
+    const memories = selectPersistentMindRecall({ message, candidates: recallable, mindId }).map(projectPersistentMindMemory);
+    return { state: memories.length ? 'matched' : 'no-match', memories };
+  } catch (error) {
+    console.error(`❌ Persistent mind memory recall unavailable: ${error.message}`);
+    return { state: 'unavailable', memories: [] };
+  }
+}
+
+/** Counts as access only records that were in a prompt a turn actually sent. */
+export async function recordPersistentMindRecallAccess(memoryIds = []) {
+  const results = await Promise.allSettled(memoryIds.map((id) => memoryBackend.getMemory(id)));
+  const failed = results.filter((result) => result.status === 'rejected').length;
+  if (failed > 0) console.error(`❌ Failed to record access for ${failed} recalled persistent mind memories`);
 }
 
 /** Named installs need only one record for frequent page/turn identity refreshes. */
@@ -208,6 +327,8 @@ export async function preparePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  memoryRecall = null,
+  reflection = null,
   maxChars,
   recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
   promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
@@ -333,6 +454,7 @@ export async function preparePersistentMindContext({
   }
 
   const chosenName = resolvePersistentMindChosenName(memories);
+  const continuationNote = await readPersistentMindContinuationNote(mindId, history);
   return assemblePersistentMindContext({
     mindId,
     identity: [chosenName
@@ -340,6 +462,9 @@ export async function preparePersistentMindContext({
       : 'No chosen display name yet.', identity].filter(Boolean).join('\n'),
     instructions,
     memories,
+    continuationNote,
+    memoryRecall,
+    reflection,
     events: history,
     rollups,
     journalDigest: persistentMindJournalDigest(journal, mindId),
@@ -449,6 +574,9 @@ export function updatePersistentMindMemory(memoryId, updates, mindId = PERSISTEN
   return queueMemoryWrite(async () => {
     const existing = await memoryBackend.peekMemory(memoryId);
     if (!existing || existing.sourceAgentId !== mindId) return null;
+    if (isPersistentMindContinuationNote(existing)) {
+      throw new ServerError('The continuation note is written only by the mind', { status: 409, code: 'MIND_CONTINUATION_NOTE_READ_ONLY' });
+    }
     const { protection, ...fields } = updates;
     // Older clients send tags without a protection field. Keep the protection
     // unless the user explicitly selects a different level.
@@ -464,6 +592,9 @@ export function protectPersistentMindMemory(input, mindId = PERSISTENT_MIND_ID) 
     const existing = await memoryBackend.peekMemory(memoryId);
     if (!existing || existing.sourceAgentId !== mindId || existing.status !== 'active') {
       return { ok: false, success: false, error: 'Active mind-owned memory not found' };
+    }
+    if (isPersistentMindContinuationNote(existing)) {
+      return { ok: false, success: false, error: 'The continuation note already has its fixed protection' };
     }
     const level = persistentMindMemoryProtection(existing) === 'core-identity' ? 'core-identity' : protection;
     await memoryBackend.updateMemory(memoryId, { tags: persistentMindMemoryTags(existing.tags, level) });
@@ -530,7 +661,7 @@ async function performPersistentMindPromotion({
     content: content.trim().slice(0, 10_240),
     summary: typeof summary === 'string' ? summary.trim().slice(0, 500) : undefined,
     category,
-    tags: [...new Set(Array.isArray(tags) ? tags.filter((tag) => typeof tag === 'string' && tag) : [])].slice(0, 20),
+    tags: [...new Set(Array.isArray(tags) ? tags.filter((tag) => typeof tag === 'string' && tag && tag !== PERSISTENT_MIND_CONTINUATION_TAG) : [])].slice(0, 20),
     sourceTaskId: turnId,
     sourceAgentId: mindId,
     status: 'active',
@@ -558,4 +689,46 @@ export function promotePersistentMindMemory(input = {}) {
   const run = performPersistentMindPromotion(input).finally(() => promotionRuns.delete(key));
   if (key) promotionRuns.set(key, run);
   return run;
+}
+
+/** Review only the resident mind's own records; caller context is runtime-owned. */
+export function reviewPersistentMindMemory(input, context) {
+  const parsed = validatePersistentMindReview(input);
+  if (![context?.turnId, context?.providerId, context?.model].every(value => typeof value === 'string' && value.length > 0)) {
+    throw new Error('Memory review requires verified turn and provider context');
+  }
+  return queueMemoryWrite(() => memoryBackend.reviewMindMemory(parsed, {
+    mindId: PERSISTENT_MIND_ID, turnId: context.turnId,
+    providerId: context.providerId, model: context.model,
+  }));
+}
+
+/** Inspect-only reflection projection. An unavailable store is never an empty one. */
+export async function readPersistentMindReflection({ enabled = false, mindId = PERSISTENT_MIND_ID } = {}) {
+  if (!enabled) return { state: 'disabled', source: null, inspected: null };
+  return Promise.all([
+    memoryBackend.selectMindMemoryForReview(mindId),
+    (async () => {
+      const latestId = (await readPersistentMindHistory(mindId))
+        .findLast(event => event.data?.memoryReview?.memoryId)?.data.memoryReview.memoryId;
+      return latestId ? memoryBackend.peekMemory(latestId) : null;
+    })(),
+  ]).then(([source, inspected]) => ({
+    state: source ? 'pending' : 'empty',
+    source: projectPersistentMindMemory(source),
+    inspected: inspected?.sourceAgentId === mindId ? projectPersistentMindMemory(inspected) : null,
+  })).catch(() => ({ state: 'unavailable', source: null, inspected: null }));
+}
+
+/** Recheck just before transport; changed/settled/protected sources are no invitation. */
+export async function revalidatePersistentMindReflection(reflection, enabled) {
+  if (!enabled) return 'disabled';
+  const previous = reflection?.source;
+  if (!previous) return reflection?.state || 'empty';
+  return memoryBackend.peekMemory(previous.id).then(source => (
+    source?.sourceAgentId === PERSISTENT_MIND_ID && source.status === 'active'
+      && (source.version ?? 1) === (previous.version ?? 1) && persistentMindMemoryProtection(source) === 'standard'
+      && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)
+      ? 'pending' : 'changed'
+  )).catch(() => 'unavailable');
 }

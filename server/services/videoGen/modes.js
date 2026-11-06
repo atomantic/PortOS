@@ -56,6 +56,9 @@ export function isVideoModeUsable(settings, mode) {
   if (mode === VIDEO_GEN_MODE.RUNWAY) {
     return Boolean((settings?.videoGen?.runway?.apiKey || '').trim() || (process.env.RUNWAYML_API_SECRET || '').trim());
   }
+  // Gemini has no key to check: it renders in the PortOS Browser, whose sign-in only
+  // the render itself can read. A render asks the user to sign in when it needs that.
+  if (mode === VIDEO_GEN_MODE.GEMINI) return true;
   return mode === VIDEO_GEN_MODE.LOCAL;
 }
 

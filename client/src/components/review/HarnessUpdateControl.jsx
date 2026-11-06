@@ -54,7 +54,7 @@ export default function HarnessUpdateControl({ harness, warningDays, onWarningDa
     {valid && <>
       <p>npm reference: {reference.package} {reference.candidateVersion} — {Number.isFinite(published) ? `published ${timeAgo(reference.release.publishedAt)}` : 'publication date unknown'}.</p>
       {reference.checkedAt && <p>Reference last checked {timeAgo(reference.checkedAt)}.</p>}
-      {reference.release?.state === 'incomparable' && <p>The public npm latest differs from the configured registry’s candidate; its age is unverified here.</p>}
+      {reference.release?.state === 'incomparable' && <p>The public npm latest differs from this update’s candidate; its age is unverified here.</p>}
       <AdvisoryList title={`npm reference at observed CLI version ${reference.installedVersion}`} result={reference.installed} fixed={reference.fixed} />
       <AdvisoryList title={`npm candidate ${reference.candidateVersion}`} result={reference.candidate} />
       <p>GitHub results cover reviewed direct-package advisories only. The installed binary’s source and bundled dependencies are not verified; the vendor updater may choose a different release.</p>

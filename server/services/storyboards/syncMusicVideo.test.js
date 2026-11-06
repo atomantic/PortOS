@@ -15,11 +15,13 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 const { default: storyboardRoutes } = await import('../../routes/storyboards.js');
+const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('../musicVideo/projects.js');
 
 const app = express();
 app.use(express.json());
 app.use('/api/storyboards', storyboardRoutes);
+app.use('/api/music-video', musicVideoRoutes);
 app.use(errorMiddleware);
 afterAll(cleanupTempDataRoots);
 
@@ -43,6 +45,42 @@ async function linkedProject(scenes = []) {
 const spans = (scenes) => scenes.map((s) => [s.startSec, s.endSec, s.visualIntent]);
 
 describe('sync a music video\'s shots to its storyboard', () => {
+  // Uniquely catches a successful shot merge being shortened by the panel store's duration cap.
+  it('refuses a merged shot the storyboard cannot hold before changing either record', async () => {
+    const created = await request(app).post('/api/storyboards').send({ name: 'Long example board' });
+    const boardId = created.body.id;
+    await request(app).post(`/api/storyboards/${boardId}/beats/add`).send({ beats: [
+      { title: 'Long sequence', panels: [{ action: 'First photo', seconds: 350 }, { action: 'Second photo', seconds: 350 }] },
+    ] });
+    const project = await projects.createProject({ name: 'Long example song' });
+    await projects.mutateProjectRecord(project.id, (record) => ({
+      project: { ...record, storyboardId: boardId, audioAnalysis: { ...analysis, durationSec: 700, sections: [{ label: 'Verse', startSec: 0, endSec: 700 }] } },
+    }));
+    const board = (await request(app).get(`/api/storyboards/${boardId}`)).body;
+    const synced = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    expect(synced.status).toBe(200);
+    for (const scene of synced.body.project.scenes) await projects.updateScene(project.id, scene.sceneId, { visualLayer: 'still' });
+    const before = await projects.getProject(project.id);
+    const first = before.scenes[0];
+
+    for (const [sceneId, action, input] of [
+      [first.sceneId, 'merge-next', {}],
+      [before.scenes[1].sceneId, 'merge-previous', {}],
+      [first.sceneId, 'end', { endSec: 650 }],
+      [before.scenes[1].sceneId, 'start', { startSec: 650 }],
+    ]) {
+      const edited = await request(app).post(`/api/music-video/${project.id}/scenes/${sceneId}/${action}`).send(input);
+      expect(edited.status).toBe(400);
+      expect(edited.body.code).toBe('STORYBOARD_PANEL_LENGTH');
+      expect((await projects.getProject(project.id)).scenes).toEqual(before.scenes);
+    }
+    const after = (await request(app).get(`/api/storyboards/${boardId}`)).body;
+    expect(after.beats).toEqual(board.beats);
+    // A later board edit must still retain both original spans.
+    await request(app).patch(`/api/storyboards/${boardId}/panels/${board.beats[0].panels[0].id}`).send({ action: 'First photo again' });
+    expect((await projects.getProject(project.id)).scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 350], [350, 700]]);
+  });
+
   it('makes one shot per panel at its own time, then keeps them in sync after each edit', async () => {
     const { project, board } = await linkedProject();
     const res = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
@@ -80,6 +118,64 @@ describe('sync a music video\'s shots to its storyboard', () => {
     await request(app).put(`/api/storyboards/sync-music-video/${project.id}/auto`).send({ on: false });
     await request(app).patch(`/api/storyboards/${board.id}/panels/${board.beats[0].panels[1].id}`).send({ seconds: 4 });
     expect(spans((await projects.getProject(project.id)).scenes)).toEqual(spans(scenes));
+  });
+
+  // Uniquely catches a shot edit that the next board edit would undo: the panels have to take it too.
+  it('writes merges, splits and moved cuts back to the panels so a later board edit keeps them', async () => {
+    const { project, board } = await linkedProject();
+    const synced = await request(app).post(`/api/storyboards/sync-music-video/${project.id}`).send({ boardUpdatedAt: board.updatedAt });
+    const [first, second, third] = synced.body.project.scenes;
+    const panelSeconds = async () => (await request(app).get(`/api/storyboards/${board.id}`)).body.beats.flatMap((beat) => beat.panels.map((panel) => [panel.action, panel.seconds]));
+    const times = async () => (await projects.getProject(project.id)).scenes.map((s) => [s.sceneId, s.startSec, s.endSec]);
+
+    // A longer shot: the next one starts later, its end stays, and what it owns is kept.
+    await projects.updateScene(project.id, second.sceneId, { transitionIn: 'film-burn' });
+    const moved = await projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 7.5 });
+    expect([moved.scene.endSec, moved.next.startSec, moved.next.endSec]).toEqual([7.5, 7.5, 10]);
+    expect(moved.next.transitionIn).toBe('film-burn');
+    expect(await panelSeconds()).toEqual([['She steps off the bus', 7.5], ['The town square', 2.5], ['Crowd lifts her up', 10]]);
+
+    // Too far for the next shot, or too short for this one, is refused. The last shot stops at the song's end.
+    await expect(projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 9.95 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 0.05 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 21 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    // Cuts the board can't hold are refused and change nothing: its first panel starts with the song,
+    // and its last one snaps to the song's end from within a second.
+    const held = await times();
+    await expect(projects.moveProjectSceneStart(project.id, first.sceneId, { startSec: 1 })).rejects.toMatchObject({ code: 'STORYBOARD_FIRST_START' });
+    await expect(projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 19.5 })).rejects.toMatchObject({ code: 'STORYBOARD_LAST_END' });
+    expect(await times()).toEqual(held);
+    // Stopping further before the song's end holds, and so does running back to it.
+    const shorter = await projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 18 });
+    expect(shorter.scene.endSec).toBe(18);
+    expect((await projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 20 })).scene.endSec).toBe(20);
+
+    // A moved start reaches the panels too.
+    await projects.moveProjectSceneStart(project.id, second.sceneId, { startSec: 6 });
+    expect(await panelSeconds()).toEqual([['She steps off the bus', 6], ['The town square', 4], ['Crowd lifts her up', 10]]);
+
+    // A split gives the later piece a panel of its own, right after the first.
+    const split = await projects.splitProjectScene(project.id, second.sceneId, { atSec: 8 });
+    expect(split.scenes.map((s) => [s.startSec, s.endSec])).toEqual([[6, 8], [8, 10]]);
+    expect(split.scenes[1].panelId).not.toBe(split.scenes[0].panelId);
+    expect(await panelSeconds()).toEqual([['She steps off the bus', 6], ['The town square', 2], ['The town square', 2], ['Crowd lifts her up', 10]]);
+
+    // A merge keeps the first shot over both and takes the removed shot's panel away.
+    const merged = await projects.mergeProjectNextScene(project.id, second.sceneId, {});
+    expect(merged.scene).toMatchObject({ sceneId: second.sceneId, startSec: 6, endSec: 10, transitionIn: 'film-burn' });
+    expect(await panelSeconds()).toEqual([['She steps off the bus', 6], ['The town square', 4], ['Crowd lifts her up', 10]]);
+    const afterEdits = await times();
+    expect(afterEdits).toEqual([[first.sceneId, 0, 6], [second.sceneId, 6, 10], [third.sceneId, 10, 20]]);
+
+    // The next board edit leaves all of it in place.
+    await request(app).patch(`/api/storyboards/${board.id}/panels/${board.beats[0].panels[0].id}`).send({ action: 'She steps off the bus again' });
+    expect(await times()).toEqual(afterEdits);
+
+    // With the sync off the board keeps its own lengths.
+    await request(app).put(`/api/storyboards/sync-music-video/${project.id}/auto`).send({ on: false });
+    await projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 5 });
+    expect((await panelSeconds())[0][1]).toBe(6);
   });
 
   it('links existing shots in place on the first sync, keeping their words and media', async () => {

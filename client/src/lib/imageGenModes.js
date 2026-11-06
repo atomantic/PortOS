@@ -181,6 +181,7 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.FAL]: 'fal.ai',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
   [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
+  [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
 });
 
 export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';

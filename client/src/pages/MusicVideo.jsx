@@ -29,6 +29,7 @@ import {
   cutMusicVideoScenesOnLyrics,
   mergeMusicVideoNextScene, mergeMusicVideoPreviousScene,
   moveMusicVideoSceneStart,
+  moveMusicVideoSceneEnd,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
@@ -950,7 +951,7 @@ function ProjectWorkspace({
     if ((next.productionRuns || []).some((r) => r.status === 'running')) return;
     kickoff.run(next);
   };
-  const approveCastAndSets = () => castSets.approve().then(continueAfterCheckin);
+  const approveCastAndSets = (basis) => castSets.approve(basis).then(continueAfterCheckin);
   const skipCastAndSets = () => castSets.skip().then(continueAfterCheckin);
   const openArtifact = (artifactId) => navigate(`/music-video/${encodeURIComponent(selected.id)}/${activeStage}/dev/${encodeURIComponent(artifactId)}`);
   const closeArtifact = () => navigate(`/music-video/${encodeURIComponent(selected?.id || routeProjectId)}/${activeStage}`);
@@ -1093,7 +1094,8 @@ function ProjectWorkspace({
 
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
-    replaceProject({ ...selected, scenes: selected.scenes.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) });
+    // Reads the current project: shot sheet Apply calls this repeatedly from one retained closure.
+    patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
   const saveScene = (sceneId, patch) => {
     return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
@@ -1324,6 +1326,11 @@ function ProjectWorkspace({
   const handleMoveSceneStart = (sceneId, startSec) => moveMusicVideoSceneStart(selected.id, sceneId, startSec, { silent: true })
     .then(({ project }) => replaceProject(project))
     .catch((err) => toast.error(err?.message || 'Failed to move the shot start'));
+
+  // Move the cut after a shot: it ends at `endSec` and the next shot starts there, growing or shrinking.
+  const handleMoveSceneEnd = (sceneId, endSec) => moveMusicVideoSceneEnd(selected.id, sceneId, endSec, { silent: true })
+    .then(({ project }) => replaceProject(project))
+    .catch((err) => toast.error(err?.message || 'Failed to change the shot length'));
 
   const moveScene = (idx, dir) => {
     const scenes = selected.scenes || [];
@@ -1660,6 +1667,7 @@ function ProjectWorkspace({
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
+    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, { castAndSets: { ...selected.castAndSets, catalogCheckin } }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
     // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
     applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({
@@ -1707,6 +1715,7 @@ function ProjectWorkspace({
     onMergeNextScene: handleMergeNextScene,
     onMergePreviousScene: handleMergePreviousScene,
     onMoveSceneStart: handleMoveSceneStart,
+    onMoveSceneEnd: handleMoveSceneEnd,
     onRepairPerformance: revisions.repairPerformance,
     repairBusy: revisions.busy,
     onRenderStyle: (mode) => {
@@ -1742,7 +1751,10 @@ function ProjectWorkspace({
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const reviewStage = selected ? approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active) : null;
+  // Explicit proof links must stay reachable even when no production run needs
+  // proof approval (including an already-approved or stale registered proof).
+  const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
+  const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : 'final' }) : [];
 
   return (
@@ -1762,6 +1774,8 @@ function ProjectWorkspace({
           open
           onClose={() => setPickerTarget(null)}
           onSelect={handleClipPickerSelect}
+          allowUpload
+          uploadToGallery
         />
       )}
       <DevArtifactDrawer

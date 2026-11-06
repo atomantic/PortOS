@@ -1505,6 +1505,17 @@ jobs:
           npm run setup:supercollider -- --yes --verbose | tee "$RUNNER_TEMP/supercollider-first-setup.log"
           cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
 
+      - name: Verify installed Debian security fixes
+        run: |
+          runtime_image=$(node --input-type=module -e "import { readFileSync } from 'node:fs'; console.log(JSON.parse(readFileSync(process.env.PORTOS_DATA_ROOT + '/data/supercollider/runtime-evidence.json', 'utf8')).imageId)")
+          docker run --rm --network none --entrypoint sh "$runtime_image" -euc '
+            apt_version=$(dpkg-query -W -f="\${Version}" apt)
+            ssl_version=$(dpkg-query -W -f="\${Version}" libssl3t64)
+            printf "apt %s; libssl3t64 %s\n" "$apt_version" "$ssl_version"
+            dpkg --compare-versions "$apt_version" ge 3.0.4
+            dpkg --compare-versions "$ssl_version" ge "3.5.7-1~deb13u3"
+          '
+
       - name: Repeat setup and prove it skipped build and probe
         run: |
           npm run setup:supercollider -- --yes | tee "$RUNNER_TEMP/supercollider-second-setup.log"

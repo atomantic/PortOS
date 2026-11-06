@@ -2,16 +2,74 @@
 /** Real runtime acceptance of the bundled starter; no settings/provider/history writes. */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { constants as osConstants } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderBlenderSequence } from '../server/services/codeAnimation/blenderRender.js';
 import { getBlenderStarterPackage } from '../server/services/codeAnimation/blenderStarter.js';
 import { runContainedWorker, runTrustedLocalWorker } from '../server/services/codeAnimation/containedWorker.js';
 import { codeAnimationManifestSchema } from '../server/lib/codeAnimationPackage.js';
+import { ServerError } from '../server/lib/errorHandler.js';
 import { LATEST_BLENDER_VERSION, isSupportedBlenderVersion } from '../server/lib/blenderVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+
+// Only disclose known validation diagnostics. Other ServerErrors, including
+// FFmpeg failures wrapped by the renderer, can contain machine-local paths.
+const SAFE_VALIDATION_MESSAGES = new Set([
+  'Blender scene entrypoint must be a UTF-8 Python file defining build_scene(config)',
+  'Duration must land on the frame grid',
+  'Package uses a reserved driver filename',
+  'Missing or oversized Blender report',
+  'Blender output does not match the requested runtime, cadence or format',
+  'Blender output files do not match the requested sequence',
+  'Blender frame geometry is invalid',
+  'Baked scene artifact is invalid',
+  'ffmpeg is required for the Blender sequence',
+  'Encoded Blender sequence failed frame validation',
+  'Blender finished without a clean process group or report; no render accepted',
+]);
+const SAFE_WORKER_MESSAGES = new Map([
+  ['CODE_ANIMATION_STAGE_PATH', new Set([
+    'Staged worker paths must be portable relative paths',
+    'Staged worker paths collide',
+    'The worker entrypoint is not a staged file',
+  ])],
+  ['CODE_ANIMATION_WORKER_UNSUPPORTED', new Set([
+    'Trusted-local worker process supervision requires macOS or Linux',
+  ])],
+  ['CODE_ANIMATION_CONTAINMENT_UNAVAILABLE', new Set([
+    'Contained execution refused: macOS Seatbelt (/usr/bin/sandbox-exec) is unavailable on this host.',
+    'Contained execution refused: Linux containment unavailable: seccomp requires x64 or arm64.',
+    'Contained execution refused: Linux containment unavailable: install bubblewrap (/usr/bin/bwrap).',
+    'Contained execution refused: Linux containment unavailable: /bin/bash is required for consistent resource-limit units.',
+    'Contained execution refused: Linux containment unavailable: bubblewrap could not create namespaces. Check unprivileged user namespaces and the host AppArmor policy.',
+    'Contained execution refused: Linux containment unavailable: bubblewrap and unrestricted user namespaces are required.',
+  ])],
+]);
+
+function safeValidationMessage(error) {
+  if (!(error instanceof ServerError)) return null;
+  const message = error.message;
+  if (typeof message !== 'string') return null;
+  if (SAFE_WORKER_MESSAGES.get(error.code)?.has(message)) return message;
+  if (error.code === 'CODE_ANIMATION_CONTAINMENT_UNAVAILABLE'
+    && /^Contained execution refused: No enforced worker containment is implemented for (?:aix|android|cygwin|freebsd|netbsd|openbsd|sunos|win32)\. Production code execution is refused; package import\/export and the browser preview sandbox remain available\.$/.test(message)) return message;
+  if (error.code !== 'CODE_ANIMATION_BLENDER_RENDER_FAILED') return null;
+  if (SAFE_VALIDATION_MESSAGES.has(message)
+    || /^(?:Blender was canceled|Blender was stopped by (?:the (?:wall-time|disk|file-count|memory|file-size) limit|its supervisor)|The worker failed before Blender finished)\. No render accepted\.$/.test(message)
+    || /^Blender exited with code -?\d+\. No render accepted\.$/.test(message)) return message;
+  const signal = /^Blender crashed with (SIG[A-Z0-9]+)\. No render accepted\.$/.exec(message)?.[1];
+  return signal && Object.hasOwn(osConstants.signals, signal) ? message : null;
+}
+
+function failureEvidence(error) {
+  const failure = { name: error.name, code: error.code ?? null };
+  const message = safeValidationMessage(error);
+  if (message) failure.message = message;
+  return failure;
+}
 
 export function parseAcceptanceArgs(args) {
   const { values } = parseArgs({ args, options: {
@@ -95,6 +153,7 @@ export async function runAcceptance(options, { render = renderBlenderSequence } 
         afterMs: Date.now() - started, artifactsRetainedAfterCancel: retained.filter(item => item.label === 'cancel').length };
       evidence.accepted = evidence.cancel.aborted && evidence.cancel.abortError && evidence.cancel.artifactsRetainedAfterCancel === 0
         && workerRuns.length === 1 && workerRuns[0].processGroupClear === true && workerRuns[0].reason === 'canceled';
+      if (!evidence.accepted && error) evidence.error = failureEvidence(error);
     } else if (options.repeat) {
       const first = await run('sample-a', { phase: 'style', times: options.times, captureTimes: options.times });
       const second = await run('sample-b', { phase: 'style', times: options.times, captureTimes: options.times });
@@ -113,13 +172,13 @@ export async function runAcceptance(options, { render = renderBlenderSequence } 
       evidence.accepted = options.phase === 'style' ? result.samples.length === options.times.length : Boolean(result.sequence);
     }
   } catch (error) {
-    // Detailed exceptions can contain private paths; retain only bounded failure identity.
-    evidence.error = { name: error.name, code: error.code ?? null };
+    evidence.error = failureEvidence(error);
   }
   evidence.retainedBytes = retained.reduce((sum, item) => sum + item.bytes, 0);
   evidence.finishedAt = new Date().toISOString();
   await writeFile(join(out, 'evidence.json'), JSON.stringify(evidence, null, 2), { flag: 'wx' });
-  console.log(`${evidence.accepted ? '✅' : '❌'} Acceptance ${evidence.accepted ? 'passed' : 'failed'}; evidence.json written`);
+  const log = evidence.accepted ? console.log : console.error;
+  log(`${evidence.accepted ? '✅' : '❌'} Acceptance ${evidence.accepted ? 'passed' : 'failed'}${evidence.error?.message ? `: ${evidence.error.message}` : ''}; evidence.json written`);
   return evidence;
 }
 

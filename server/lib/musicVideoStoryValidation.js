@@ -1,12 +1,14 @@
 import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-import { musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
+import { musicVideoShotSheetSchema, musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
+import { SHOT_SHEET_PROPOSE_BATCH } from './musicVideoShotSheet.js';
 import { STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_LIMITS } from './storyboardVocabulary.js';
 
 const text = (max) => z.string().max(max);
 const id = z.string().min(1).max(120).optional();
 const subject = z.object({ id, kind: z.enum(['character', 'place', 'object']), name: text(120).refine((value) => !!value.trim(), 'Name is required'),
-  description: text(1000).optional(), role: z.enum(['protagonist', 'band', 'supporting']).optional() }).strict();
+  description: text(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX).optional(), role: z.enum(['protagonist', 'band', 'supporting']).optional() }).strict();
 const panel = z.object({ id, action: text(STORYBOARD_LIMITS.panelText).optional(), dialogue: text(STORYBOARD_LIMITS.panelText).optional(),
   framing: z.enum(STORYBOARD_PANEL_FRAMINGS).nullable().optional(), camera: text(STORYBOARD_LIMITS.camera).optional(),
   seconds: z.number().positive().max(STORYBOARD_LIMITS.panelSecondsMax).nullable().optional() }).strict();
@@ -38,3 +40,15 @@ export const artGuideProposeSchema = z.object({
   providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
   instruction: text(4000).optional(), preview: z.boolean().optional(),
 }).strict();
+
+// AI on the shot sheet (services/musicVideo/shotSheetProposals.js): a proposal for a batch of shots, never a save.
+export const shotSheetProposeSchema = z.object({
+  providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
+  direction: z.enum(['from-prompts', 'to-prompts']),
+  sceneIds: z.array(text(64).min(1)).min(1).max(SHOT_SHEET_PROPOSE_BATCH),
+  instruction: text(4000).optional(), preview: z.boolean().optional(),
+}).strict();
+// Only the director ticks Checked, so a proposal can't carry it.
+export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true }).strip() }).strip();
+export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
+  .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');

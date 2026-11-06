@@ -38,7 +38,9 @@ vi.mock('./agyUsageBackfill.js', () => ({
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
-  startHistoricalUsageBackfill
+  startHistoricalUsageBackfill,
+  startCodexUsagePreview,
+  cancelCodexUsagePreview
 } = await import('./usageBackfill.js');
 const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
 const { applyAgyUsageRepair } = await import('./agyUsageBackfill.js');
@@ -54,6 +56,7 @@ class FakeWorker extends EventEmitter {
   }
 
   unref() {}
+  terminate() { this.emit('exit', 1); return Promise.resolve(1); }
 }
 
 beforeEach(() => {
@@ -185,3 +188,82 @@ it('keeps a transcript failure from dropping a Grok repair that already landed',
     grok: { added: 1, images: 1, backedUp: true },
   }));
 });
+
+it('keeps worker claims retryable when applying its accounting batch fails', async () => {
+  const { applyHistoricalUsageCorrections } = await import('./usage.js');
+  const { __resetUsageClaims, snapshotUsageClaims } = await import('./usageReconciler.js');
+  __resetUsageClaims();
+  applyHistoricalUsageCorrections.mockRejectedValueOnce(new Error('synthetic usage write failure'));
+  await startHistoricalUsageBackfill({ home: '/example/home', WorkerClass: FakeWorker, providers: [] });
+  const claimsSnapshot = { claimedMessages: [['/synthetic/transcript', 'message', Date.now()]], codexHighWater: [] };
+  FakeWorker.instances.at(-1).emit('message', { type: 'complete', result: { corrections: [], claimsSnapshot } });
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({ status: 'error', error: 'synthetic usage write failure' }));
+  expect(snapshotUsageClaims().claimedMessages).toEqual([]);
+  await startHistoricalUsageBackfill({ home: '/example/home', WorkerClass: FakeWorker, providers: [] });
+  FakeWorker.instances.at(-1).emit('message', { type: 'complete', result: { corrections: [], claimsSnapshot } });
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus().status).toBe('complete'));
+  expect(snapshotUsageClaims().claimedMessages).toEqual(claimsSnapshot.claimedMessages);
+  __resetUsageClaims();
+});
+
+describe('read-only Codex preview job', () => {
+  it('separates preview completion from every repair callback and guards cancellation by job id', async () => {
+    const { applyHistoricalUsageCorrections } = await import('./usage.js');
+    applyHistoricalUsageCorrections.mockClear();
+    const started = startCodexUsagePreview({ from: '2026-10-01', to: '2026-10-31', home: '/example/home', WorkerClass: FakeWorker });
+    const worker = FakeWorker.instances[0];
+    expect(worker.options.workerData).toEqual({ mode: 'preview', from: '2026-10-01', to: '2026-10-31', home: '/example/home' });
+    expect(await startHistoricalUsageBackfill({ WorkerClass: FakeWorker })).toMatchObject({ id: started.id, mode: 'preview' });
+    expect(startCodexUsagePreview({ WorkerClass: FakeWorker }).id).toBe(started.id);
+    expect((await cancelCodexUsagePreview('stale-id')).status).toBe('running');
+    const result = { coverage: { complete: false }, ledgerOverlap: 'unknown', missingUsage: null };
+    worker.emit('message', { type: 'complete', result });
+    worker.emit('exit', 0);
+    expect(getHistoricalUsageBackfillStatus()).toMatchObject({ status: 'complete', preview: result });
+    expect(applyHistoricalUsageCorrections).not.toHaveBeenCalled();
+    expect(applyGrokUsageRepair).not.toHaveBeenCalled();
+    expect(applyAgyUsageRepair).not.toHaveBeenCalled();
+
+    const next = startCodexUsagePreview({ from: '2026-10-01', to: '2026-10-31', WorkerClass: FakeWorker });
+    expect((await cancelCodexUsagePreview(next.id)).status).toBe('cancelled');
+    FakeWorker.instances[1].emit('message', { type: 'complete', result });
+    worker.emit('error', new Error('private path must not escape'));
+    expect(getHistoricalUsageBackfillStatus().status).toBe('cancelled');
+    const retry = startCodexUsagePreview({ from: '2026-10-01', to: '2026-10-31', WorkerClass: FakeWorker });
+    expect(retry.id).not.toBe(next.id);
+    FakeWorker.instances[2].emit('exit', 1);
+    expect(getHistoricalUsageBackfillStatus().status).toBe('error');
+    expect(getHistoricalUsageBackfillStatus().preview).toBeUndefined();
+  });
+});
+
+
+it('previews synthetic archived sources in the real worker without ledger writes', async () => {
+  const { mkdtemp, mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const home = await mkdtemp(join(tmpdir(), 'portos-preview-example-'));
+  const directory = join(home, '.codex', 'archived_sessions');
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, 'example.jsonl');
+  const source = [
+    { type: 'session_meta', payload: { id: 'example-session', model: 'example-model', cwd: '/private/example-workspace' } },
+    { timestamp: '2026-10-02T10:00:00Z', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 20 } } } },
+    { type: 'response_item', payload: { text: 'private transcript must not escape' } }
+  ].map(line => JSON.stringify(line)).join('\n');
+  await writeFile(path, source);
+  const { atomicWrite } = await import('../lib/fileUtils.js');
+  atomicWrite.mockClear();
+  try {
+    startCodexUsagePreview({ from: '2026-10-01', to: '2026-10-31', home });
+    await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus().status).toBe('complete'), { timeout: 10_000 });
+    const status = getHistoricalUsageBackfillStatus();
+    expect(status.preview).toMatchObject({ coverage: { complete: true, resolvedSessions: 1 }, totals: { tokensOut: 20 }, ledgerOverlap: 'unknown', missingUsage: null });
+    expect(JSON.stringify(status)).not.toMatch(/private|example-session|example.jsonl/);
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe(source);
+  } finally {
+    await cancelCodexUsagePreview(getHistoricalUsageBackfillStatus().id);
+    await rm(home, { recursive: true, force: true });
+  }
+}, 15_000);

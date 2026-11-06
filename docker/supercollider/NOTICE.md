@@ -18,9 +18,9 @@ this directory. PortOS does not publish or redistribute a prebuilt image.
 
 ## Debian packages
 
-The base image is the official `debian:trixie-20260918-slim` image (pinned by
+The base image is the official `debian:trixie-20261104-slim` image (pinned by
 digest), and every package is installed from `snapshot.debian.org` at
-`20260918T000000Z`. Each package's copyright and license file remains at
+`20261104T212339Z`. Each package's copyright and license file remains at
 `/usr/share/doc/<package>/copyright` inside the image; the exact runtime package
 list is recorded in `/usr/local/share/doc/supercollider/runtime-packages.txt`.
 Source for any of them is available from the same snapshot

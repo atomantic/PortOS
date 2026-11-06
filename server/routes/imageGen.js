@@ -260,6 +260,7 @@ const generateSchema = z.object({
   musicVideo: z.object({
     projectId: z.string().min(1).max(200),
     sceneId: z.string().min(1).max(200),
+    catalogBasis: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     // Selective section revision (#9011): see the matching comment on the
     // video route's musicVideo schema (server/routes/videoGen.js).
     revisionId: z.string().min(1).max(200).optional(),
@@ -718,6 +719,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   if (params.musicVideo?.revisionId) {
     const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
     await assertRevisionOpen(params.musicVideo.projectId, params.musicVideo.revisionId, { sceneId: params.musicVideo.sceneId, kind: 'image' });
+  }
+  if (params.musicVideo?.sceneId) {
+    const { assertCatalogRenderParams } = await import('../services/musicVideo/clipCastReferences.js');
+    await assertCatalogRenderParams(params);
   }
   let result = await imageGen.generateImage(params);
   if (params.visualProfile && result?.filename) result = await finishVisualProfileImage({ result, profile: params.visualProfile, signal: new AbortController().signal });

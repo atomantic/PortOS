@@ -121,6 +121,8 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
     }).record };
   }
+  // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).
+  if (backend === VIDEO_GEN_MODE.GEMINI) return asWritten(body, { backend });
   if (backend === VIDEO_GEN_MODE.LOCAL) {
     // The local runner's modules load only for a local preview.
     const [{ defaultVideoModelId, listVideoModels }, { resolveVideoLoras }, { captureSystemCapabilities }] = await Promise.all([

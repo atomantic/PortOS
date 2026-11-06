@@ -97,6 +97,7 @@ function HarnessCard({
   const isNotProbed = !detail && harness.detected === null;
   const version = detail?.version || harness.version || null;
   const latestVersion = detail?.latestVersion || null;
+  const npmAheadVersion = detail?.npmAheadVersion || null;
   const updateAvailable = Boolean(detail?.updateAvailable);
   const updatable = Boolean(detail?.updatable);
   const installable = Boolean(detail?.installable ?? runtime?.installable);
@@ -151,7 +152,8 @@ function HarnessCard({
           {isInstalled && (
             <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-gray-500">
               <span>Installed {version || 'version unknown'}</span>
-              {latestVersion && <span>· Latest {latestVersion}</span>}
+              {latestVersion && <span>· Latest {latestVersion}{detail?.latestVersionSource === 'homebrew' ? ' on Homebrew' : ''}</span>}
+              {npmAheadVersion && <span>· npm has {npmAheadVersion}; Update can install it once Homebrew publishes it</span>}
               {detail?.package && <span className="font-mono">· {detail.package}</span>}
             </div>
           )}

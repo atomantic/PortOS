@@ -2,6 +2,7 @@ import { Plus, Trash2, UserRound } from 'lucide-react';
 import { newFormId, formAgeField, formAgeLabel } from '../../lib/catalogForms';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 import { formatHeight, typicalHeightCm } from '../../../../server/lib/characterHeight.js';
+import { formatCount } from '../../utils/formatters';
 
 const { FORM_LABEL_MAX: LABEL_MAX, FORM_AGE_MAX: AGE_MAX, FORM_DESCRIPTION_MAX: DESCRIPTION_MAX, FORM_HEIGHT_MAX: HEIGHT_MAX, FORMS_PER_ENTRY_MAX: FORMS_MAX } = BIBLE_LIMITS;
 
@@ -17,7 +18,7 @@ const PLACEHOLDERS = {
 // The record's own fields are its canonical present-story form; `payload.forms`
 // holds alternate ages, eras and looks/styles. Edits are part of the profile
 // draft and persist with Save.
-export default function CatalogFormsEditor({ type, payload, onChange }) {
+export default function CatalogFormsEditor({ type, payload, onChange, videoDescriptionLimit = null }) {
   const forms = Array.isArray(payload.forms) ? payload.forms : [];
   const ageField = formAgeField(type);
   const ageLabel = formAgeLabel(type);
@@ -83,9 +84,12 @@ export default function CatalogFormsEditor({ type, payload, onChange }) {
                 )}
                 <div>
                   <label htmlFor={`${base}-description`} className={labelClass}>{type === 'character' ? 'Hair, clothing & appearance' : 'How it looks'}</label>
-                  <textarea id={`${base}-description`} value={form.description || ''} maxLength={DESCRIPTION_MAX} rows={2}
+                  <textarea id={`${base}-description`} aria-describedby={videoDescriptionLimit ? `${base}-video-count` : undefined} value={form.description || ''} maxLength={DESCRIPTION_MAX} rows={2}
                     onChange={(e) => update(form.id, { description: e.target.value })} placeholder={placeholder.description}
                     className={`${inputClass} resize-y`} />
+                  {videoDescriptionLimit && <p id={`${base}-video-count`} className={`text-xs ${(form.description || '').length > videoDescriptionLimit ? 'text-port-error' : 'text-port-text-muted'}`}>
+                    {formatCount((form.description || '').length)} / {formatCount(videoDescriptionLimit)} characters for linked music videos
+                  </p>}
                   {type === 'character' && <p className="mt-1 text-xs text-gray-500">Describe this age’s haircut, clothing and proportions. This replaces the canonical appearance and outfits for its renders; shared facial identity stays consistent.</p>}
                 </div>
               </li>

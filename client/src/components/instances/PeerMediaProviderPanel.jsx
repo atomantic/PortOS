@@ -86,7 +86,7 @@ export default function PeerMediaProviderPanel({ peer, onRefresh }) {
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex items-center gap-1.5 w-full text-left group"
+        className="flex items-center gap-1.5 w-full text-left group py-1.5 pointer-coarse:min-h-11"
         aria-expanded={expanded}
       >
         {expanded ? <ChevronDown size={12} className="text-gray-500" /> : <ChevronRight size={12} className="text-gray-500" />}

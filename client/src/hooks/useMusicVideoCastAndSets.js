@@ -4,6 +4,8 @@ import socket from '../services/socket';
 import { subscribeVisibility } from './useVisibilityEvent';
 import {
   getMusicVideoProject,
+  linkMusicVideoCastAndSetsToCatalog,
+  rebuildMusicVideoCatalogGuide,
   startMusicVideoCastAndSets,
   editMusicVideoCastAndSetsImage,
   selectMusicVideoCastAndSetsImage,
@@ -12,6 +14,9 @@ import {
   regenerateMusicVideoCastAndSets,
   editMusicVideoCastAndSetsDirection,
   applyMusicVideoCastAndSetsFeedback,
+  renderMusicVideoCastAndSetsFeedback,
+  refreshMusicVideoCastAndSetsFeedbackRenderer,
+  removeMusicVideoCastAndSetsImageFeedback,
   removeMusicVideoCastAndSetsFeedback,
   resumeMusicVideoCastAndSets,
   acknowledgeMusicVideoCastAndSetsImage,
@@ -128,10 +133,14 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const refresh = (minRevision) => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh(minRevision) : Promise.resolve(false));
 
   const call = (request, success) => {
+    const revision = snapshotRevision.current;
     setBusy(true);
     return request()
       .then((res) => {
-        if (res?.project) replaceRef.current?.(res.project);
+        if (res?.project && revision === snapshotRevision.current) {
+          snapshotRevision.current += 1;
+          replaceRef.current?.(res.project);
+        }
         if (success) toast.success(success);
         return res;
       })
@@ -139,7 +148,11 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
       .finally(() => setBusy(false));
   };
 
-  const start = () => call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
+  const linkCatalog = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Cast & Sets now follows the catalog');
+  const rebuildCatalogGuide = () => call(() => rebuildMusicVideoCatalogGuide(projectId, { silent: true }), 'Guide rebuilt from the catalog');
+  const remapCatalogReferences = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Shot references moved to their catalog images');
+  const start = () => !project?.castAndSets || project.castAndSets.source === 'catalog'
+    ? linkCatalog() : call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
   const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
   const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
   const useImage = (input) => call(() => selectMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Primary image selected — review the updated check-in');
@@ -147,13 +160,17 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const acceptImageEdit = (input) => call(() => acceptMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }), 'Image edit accepted — review the updated check-in');
   const discardImageEdit = (input) => call(() => discardMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }));
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
-  const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Applying your feedback');
+  const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Preparing your feedback without rendering images');
+  const renderFeedback = (input) => call(() => renderMusicVideoCastAndSetsFeedback(projectId, input, { silent: true }), 'Starting the reviewed feedback plan');
+  const refreshFeedbackRenderer = (input) => call(() => refreshMusicVideoCastAndSetsFeedbackRenderer(projectId, input, { silent: true }), 'Refreshing the image renderer');
   const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
+  const removeImageFeedback = (input) => call(() => removeMusicVideoCastAndSetsImageFeedback(projectId, input, { silent: true }));
   const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
   const reinspectImages = (keys) => call(() => inspectMusicVideoCastAndSetsImages(projectId, keys ? { keys } : {}, { silent: true }), 'Vision re-check finished');
   const acknowledgeImage = (input) => call(() => acknowledgeMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Image review acknowledged');
-  const approve = () => call(() => approveMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets approved');
-  const reconfirm = () => call(() => reconfirmMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets kept approved');
+  const approvalOptions = (basis) => ({ silent: true, ...(project?.castAndSets?.source === 'catalog' ? { catalogBasis: typeof basis === 'string' ? basis : project.castAndSets.catalogCheckin?.basis } : {}) });
+  const approve = (basis) => call(() => approveMusicVideoCastAndSets(projectId, approvalOptions(basis)), 'Cast & Sets approved');
+  const reconfirm = (basis) => call(() => reconfirmMusicVideoCastAndSets(projectId, approvalOptions(basis)), 'Cast & Sets kept approved');
   const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
   const discard = () => call(() => discardMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets cleared — build it again when your story and guides are ready');
   // A sheet in review must be cleared before a fresh build; any other idle sheet rebuilds in place.
@@ -169,9 +186,15 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     const reached = new Promise((resolve) => { waiter.current = { projectId: target.id, resolve }; });
     // A stage already underway just needs watching; otherwise start one.
     if (status) return reached;
-    return startMusicVideoCastAndSets(target.id, {}, { silent: true })
+    return linkMusicVideoCastAndSetsToCatalog(target.id, { silent: true })
       .then((res) => {
-        if (res?.project) replaceRef.current?.(res.project);
+        if (res?.project) {
+          replaceRef.current?.(res.project);
+          if (reachedCheckpoint(res.project.castAndSets) && waiter.current?.projectId === target.id) {
+            waiter.current.resolve(res.project);
+            waiter.current = null;
+          }
+        }
         return reached;
       })
       .catch((err) => {
@@ -189,5 +212,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, linkCatalog, rebuildCatalogGuide, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

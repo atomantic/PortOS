@@ -293,6 +293,7 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSp
     : null;
   const installed = typeof probed === 'string';
   const { parseHarnessVersion } = await import('../lib/harnessOutput.js');
+  const { homebrewPackageFor } = await import('../lib/homebrewPackage.js');
   const version = parseHarnessVersion(probed);
 
   // Windows-only gap: the script-installed vendors publish a PowerShell
@@ -319,6 +320,9 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSp
     // NOT "0.0.0". Every version comparison bails on it rather than reporting a
     // perfectly current harness as out of date.
     version,
+    // Who supplies this copy, when Homebrew does: its self-updater can only reach
+    // what Homebrew has published. Kind and name only, never the resolved path.
+    installChannel: homebrewPackageFor(resolved),
     method: kind,
     installable,
     blockedReason,

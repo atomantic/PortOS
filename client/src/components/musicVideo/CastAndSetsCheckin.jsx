@@ -27,6 +27,8 @@ function progress(stage) {
 
 function statusLine(stage) {
   if (stage.interrupted) return 'Interrupted by a restart — resume to continue.';
+  if (stage.feedbackRenderPlan?.phase === 'planning' && stage.status !== 'failed') return 'Preparing the feedback plan — no images are being rendered.';
+  if (stage.status === 'review' && stage.feedbackRenderPlan) return 'Feedback planned — images are waiting for your decision.';
   switch (stage.status) {
     case 'directing': return 'Reading the song and writing the creative direction…';
     case 'imaging': return `Rendering the cast and sets: ${progress(stage)}…`;
@@ -101,7 +103,7 @@ function CastingChangesNotice({ changes, plan, busy, rebuildOffered, onUpdate, o
  * is idle, and Start over clears a check-in that has not been approved.
  * A sheet in review (or approved) takes plain-text feedback below the actions.
  */
-export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onAcknowledgeImage, onReinspectImages, onRegenerate, onRegenerateImages, onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh, onApplyFeedback, onRemoveFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
+export default function CastAndSetsCheckin({ id, project, stale = null, storyStale = null, castingChanges = null, castingChangesError = false, onRetryCastingChanges, busy, onOpenSheet, onOpenPreview, onApprove, onAcknowledgeImage, onReinspectImages, onRegenerate, onRegenerateImages, onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh, onApplyFeedback, onRenderFeedback, onRefreshFeedbackRenderer, onRemoveFeedback, onRemoveImageFeedback, onRegenerateWithNotes, onResume, onRebuild, onReconfirm, onRevert, onSkip, onDiscard, onRebuildFromStory }) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [greyboxesOpen, setGreyboxesOpen] = useState(() => (project.castAndSets?.direction?.sets || []).some((set) => set.setReference?.greyboxShotId));
   const greyboxPlaces = useMusicVideoGreyboxPlaces(project);
@@ -110,6 +112,8 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
   const formSubjects = (project.concept?.subjects || []).filter((s) => s?.kind === 'character' && s.ingredientId && !String(s.id || '').startsWith('cs-'));
   if (!stage) return null;
   const working = WORKING.has(stage.status) && !stage.interrupted;
+  const feedbackPending = !!stage.feedbackRenderPlan;
+  const queuedImages = stage.queuedImagesToCheck ?? Object.values(stage.images || {}).filter((image) => image.status === 'queued' && image.jobId).length;
   const sets = stage.direction?.sets || [];
   const needsLegacyCaptures = stage.greyboxPending && (!Array.isArray(stage.greyboxPendingSetIds) || stage.greyboxLegacyPendingSetIds?.length);
   const liveCaptures = needsLegacyCaptures
@@ -121,12 +125,13 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
   const openNotes = (sheet?.notes || []).filter((n) => !n.resolvedAt).length;
   const staleText = stage.status === 'approved' ? staleApprovalText(stale) : null;
   // Images vision never answered for (provider down, incomplete reply) can be checked again (#14794).
-  const canRetryVision = !!onReinspectImages && !working && ['review', 'approved'].includes(stage.status);
+  const canRetryVision = !!onReinspectImages && !working && !feedbackPending && ['review', 'approved'].includes(stage.status);
   const uncheckedKeys = canRetryVision ? Object.keys(stage.plan || {}).filter((key) => castSetsInspectionInputs(stage, key)
     && !['pass', 'mismatch'].includes(currentCastSetsInspection(stage, key)?.verdict)) : [];
   const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
     <div id={id} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
+      <p className="text-xs text-port-text-muted">Generated check-in evidence records what this production run rendered. These saved images and their submitted inputs do not follow later catalog edits. Use Catalog-linked look above for the current cast, environments and objects.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>
@@ -135,6 +140,10 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         <LlmRouteNote route={project.automation?.routes?.castAndSets} prefix="Direction ran on" />
       </div>
       <p className={`text-xs ${stage.status === 'review' ? 'text-port-warning' : 'text-port-text-muted'}`} role="status">{statusLine(stage)}</p>
+      {(stage.interrupted || stage.status === 'failed') && <p className="text-xs text-port-text-muted">{feedbackPending
+        ? 'Resume retries feedback planning without rendering images. Whole-sheet planning may call the direction provider and incur a charge.'
+        : queuedImages ? 'Checking jobs also resumes planning. It may call the direction AI provider (price unavailable); no new images start before the plan is reviewed.'
+          : 'Resume prepares remaining images for review. Direction planning may call an AI provider and incur a charge.'}</p>}
       {staleText && <p className="text-xs text-port-warning">{staleText}</p>}
       {staleText && (
         <StaleApprovalActions revertible={stale?.revertible} busy={busy} onKeep={onReconfirm} onRevert={onRevert}
@@ -142,7 +151,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           alternative={onRebuild && !working ? { label: 'Rebuild', hint: 'Redo the direction from the current inputs and re-render what changes. Faces can drift.', onClick: onRebuild, title: REBUILD_TITLE } : null}
           keepTitle="Keep this sheet approved on the current concept, style, subjects and song" />
       )}
-      {storyStale && !working && (
+      {storyStale && !working && !feedbackPending && (
         <div className="flex flex-wrap items-center gap-2 rounded border border-port-warning/60 p-2">
           <p className="min-w-0 flex-1 text-xs text-port-warning">Built before your latest {changedFieldsText(storyStale.changedFields)}. Rebuild to cast and set it from them.</p>
           <button type="button" disabled={busy} onClick={onRebuildFromStory} className={`${buttonClass} border border-port-border`}>
@@ -150,7 +159,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           </button>
         </div>
       )}
-      {castingChanges && !working && (
+      {castingChanges && !working && !feedbackPending && (
         <CastingChangesNotice changes={castingChanges} plan={stage.plan} busy={busy} rebuildOffered={!!storyStale}
           onUpdate={onRegenerateImages} onAddCast={onRegenerateWithNotes} />
       )}
@@ -162,7 +171,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           </button>
         </div>
       )}
-      {['review', 'approved'].includes(stage.status) && onEditDirection && sets.length > 0 && hasGreyboxChoices && (
+      {!feedbackPending && ['review', 'approved'].includes(stage.status) && onEditDirection && sets.length > 0 && hasGreyboxChoices && (
         <details open={greyboxesOpen} onToggle={(e) => setGreyboxesOpen(e.currentTarget.open)} className="rounded border border-port-border p-2">
           <summary className="min-h-[44px] cursor-pointer text-xs font-medium">Greybox references (optional)</summary>
           <p className="mb-2 text-xs text-port-text-muted">Choose a saved camera only if you want it to guide a set plate.</p>
@@ -186,18 +195,18 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         </div>
       )}
       {greyboxPending && <p role="status" className="text-xs text-port-warning">Greybox selection saved. Regenerate to render the set plates with it.</p>}
-      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={onAcknowledgeImage}
+      <CastAndSetsReferenceProgress stage={stage} onOpenPreview={onOpenPreview} onAcknowledgeImage={feedbackPending ? null : onAcknowledgeImage}
         onReinspectImage={canRetryVision ? (key) => onReinspectImages([key]) : null} busy={busy}
         subjects={project.concept?.subjects || []} olderLookKeys={(castingChanges?.images || []).map((i) => i.key)}
-        actions={!working && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
+        actions={!working && !feedbackPending && stage.direction && stage.status !== 'skipped' && onRegenerateImages && onEditDirection
           ? { projectId: project.id, busy, formSubjects, onRegenerate: onRegenerateImages, onEdit: onEditDirection, onUseImage, onEditImage, onAcceptImageEdit, onDiscardImageEdit, onRefresh } : null} />
       <div className="flex flex-wrap gap-2">
         {sheet && (
           <button type="button" onClick={() => onOpenSheet(sheet.id)} className={`${buttonClass} border border-port-border`}>
-            <Eye size={14} aria-hidden="true" /> Open sheet{openNotes ? ` (${openNotes} note${openNotes === 1 ? '' : 's'})` : ''}
+            <Eye size={14} aria-hidden="true" /> Open sheet{feedbackPending ? ' (previous revision)' : ''}{openNotes ? ` (${openNotes} note${openNotes === 1 ? '' : 's'})` : ''}
           </button>
         )}
-        {stage.status === 'review' && (
+        {stage.status === 'review' && !feedbackPending && (
           <>
             <button type="button" disabled={busy} onClick={onRegenerate} title={openNotes ? 'Re-render what your notes touch' : 'Re-render every image — or add a note on the sheet to change just one'}
               className={`${buttonClass} border border-port-border`}>
@@ -213,7 +222,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
         )}
         {(stage.interrupted || stage.status === 'failed') && (
           <button type="button" disabled={busy} onClick={onResume} className={`${buttonClass} border border-port-border`}>
-            <Play size={14} aria-hidden="true" /> Resume
+            <Play size={14} aria-hidden="true" /> {queuedImages ? 'Check jobs & prepare plan' : 'Resume'}
           </button>
         )}
         {/* A stale approval offers Rebuild beside Keep approved, under the stale note. */}
@@ -224,7 +233,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
           </button>
         )}
         {onDiscard && !working && stage.status !== 'approved' && (confirmDiscard ? (
-          <ConfirmButtonPair prompt="Clear every cast and set image from this check-in?" confirmText="Start over" busy={busy} responsiveTouchTargets
+          <ConfirmButtonPair prompt={feedbackPending ? 'Clear this check-in and its saved feedback? Images stay in the gallery.' : 'Clear every cast and set image from this check-in?'} confirmText="Start over" busy={busy} responsiveTouchTargets
             ariaLabel="Start Cast & Sets over" confirmAriaLabel="Start Cast & Sets over" onConfirm={async () => { if (await onDiscard()) setConfirmDiscard(false); }} onCancel={() => setConfirmDiscard(false)} />
         ) : (
           <button type="button" disabled={busy} onClick={() => setConfirmDiscard(true)}
@@ -233,14 +242,15 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
             <Trash2 size={14} aria-hidden="true" /> Start over
           </button>
         ))}
-        {!working && !['approved', 'skipped'].includes(stage.status) && (
+        {!working && !feedbackPending && !['approved', 'skipped'].includes(stage.status) && (
           <button type="button" disabled={busy} onClick={onSkip} className={`${buttonClass} text-port-text-muted`}>
             <SkipForward size={14} aria-hidden="true" /> Skip check-in
           </button>
         )}
       </div>
-      {onApplyFeedback && stage.direction && !working && ['review', 'approved'].includes(stage.status) && (
-        <CastAndSetsFeedback stage={stage} busy={busy} onApply={onApplyFeedback} onRemove={onRemoveFeedback} />
+      {stage.direction && !working && (['review', 'approved'].includes(stage.status) || stage.feedback?.length || Object.values(stage.keyNotes || {}).some((notes) => notes.length) || feedbackPending) && (
+        <CastAndSetsFeedback stage={stage} busy={busy} onApply={onApplyFeedback} onRender={onRenderFeedback} onRefreshRenderer={onRefreshFeedbackRenderer} onRemove={onRemoveFeedback}
+          onRemoveImage={onRemoveImageFeedback} allowApply={!!onApplyFeedback && ['review', 'approved'].includes(stage.status)} />
       )}
     </div>
   );

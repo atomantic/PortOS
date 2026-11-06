@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
+import { musicVideoLinkedReferenceId } from '../../../../server/lib/musicVideoConditioning.js';
 
 const project = { visualSpec: { references: [
   { id: 'r1', imageId: 'lead.png', role: 'character', label: 'Lead — character sheet, black sweater', condition: true },
@@ -9,6 +10,51 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1' };
 
 describe('a shot\'s References row', () => {
+  // Uniquely catches a linked character whose face and character sheets never reach the picker.
+  it('offers every approved catalog asset of a linked character, and saves the pick', () => {
+    const onSave = vi.fn();
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const castMedia = { 'cat-chr-kit': [
+      { kind: 'portrait', mediaKey: 'kit.png' },
+      { kind: 'reference', role: 'sheet:face', mediaKey: 'kit-face.png' },
+      { kind: 'reference', role: 'sheet:standard', mediaKey: 'kit-sheet.png' },
+      { kind: 'reference', role: 'design:1', mediaKey: 'kit-candidate.png' },
+    ] };
+    render(<SceneFrameReferences project={linked} scene={scene} castMedia={castMedia} onEditLocal={vi.fn()} onSave={onSave} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const picker = screen.getByRole('list', { name: 'References to add' });
+    expect(picker.textContent).toContain('Kit · Portrait');
+    expect(picker.textContent).toContain('Kit · Character sheet');
+    expect(picker.textContent).not.toContain('candidate');
+    fireEvent.click(screen.getByRole('button', { name: 'Kit · Face sheet' }));
+    expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r1', musicVideoLinkedReferenceId('kit-face.png')] });
+    expect(screen.queryByRole('list', { name: 'References to add' })).toBeNull();
+  });
+
+  it('holds a saved catalog pick and the row until its cast media loads', () => {
+    const onSave = vi.fn();
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', frameReferenceIds: ['r1', musicVideoLinkedReferenceId('kit-face.png')] }} castMedia={{}} onEditLocal={vi.fn()} onSave={onSave} />);
+    expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(true);
+  });
+
+  it('warns when a saved catalog pick cannot resolve after its media failed to load', () => {
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', frameReferenceIds: ['r1', musicVideoLinkedReferenceId('kit-face.png')] }} castMedia={{ 'cat-chr-kit': null }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/picked cast reference is unavailable/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Back to auto' }).disabled).toBe(false);
+  });
+
+  // Uniquely catches a shot's picked sheet leaving renders with nothing on the shot to say so.
+  it('warns when the catalog check-in does not offer a saved pick, and stays quiet once the shot is on Auto', () => {
+    const catalog = { visualSpec: { references: [{ id: 'mvr-cs-character', imageId: 'old-sheet.png', role: 'character', label: 'Lead sheet' }] },
+      castAndSets: { source: 'catalog', catalogCheckin: { problems: [], items: [{ subjectId: 'kit', kind: 'character', name: 'Kit', images: ['kit.png'] }] } } };
+    const { rerender } = render(<SceneFrameReferences project={catalog} scene={{ sceneId: 's1', frameReferenceIds: ['mvr-cs-character'] }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/does not offer Lead sheet/)).toBeTruthy();
+    rerender(<SceneFrameReferences project={catalog} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/does not offer/)).toBeNull();
+  });
+
   // Uniquely catches a truncated reference chip with no way to see its sheet and full name, or a long-press that also adds it.
   it('previews a reference large on mouse hover, and on a long-press without adding it', () => {
     vi.useFakeTimers();
@@ -101,6 +147,7 @@ describe('a shot whose Casting guides failed to load', () => {
     const picked = references.slice(0, 15).map((ref) => ref.id);
     render(<SceneFrameReferences project={{ visualSpec: { references } }} scene={{ sceneId: 's1', frameReferenceIds: [...picked, 'mvr-guide-missing.png'] }} castMedia={{}} onEditLocal={vi.fn()} onSave={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(true);
+    expect(screen.getByText(/A picked cast reference is unavailable/)).toHaveTextContent('Back to auto');
   });
 
   it('keeps all saved picks visible and editable when a greybox is also selected', () => {

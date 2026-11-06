@@ -12,7 +12,6 @@ import { render, screen, waitFor, fireEvent, within, act } from '@testing-librar
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
-import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { createTestPhaseDiagnostics } from '../../../server/test/testPhaseDiagnostics.js';
 
 
@@ -78,6 +77,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   planMusicVideoProject: vi.fn(),
   addMusicVideoScene: vi.fn(),
   updateMusicVideoScene: vi.fn(),
+  proposeMusicVideoShotSheet: vi.fn(),
   deleteMusicVideoScene: vi.fn(),
   reorderMusicVideoScenes: vi.fn(),
   splitMusicVideoScene: vi.fn(),
@@ -169,7 +169,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
   generateMusicVideoCode: vi.fn(),
   regenerateMusicVideoCodeSection: vi.fn(),
-  startMusicVideoCastAndSets: vi.fn(),
+  linkMusicVideoCastAndSetsToCatalog: vi.fn(),
   regenerateMusicVideoCastAndSets: vi.fn(),
   resumeMusicVideoCastAndSets: vi.fn(),
   approveMusicVideoCastAndSets: vi.fn(),
@@ -233,9 +233,10 @@ vi.mock('../services/apiSystem.js', () => ({
 vi.mock('../services/apiMoodBoard.js', () => ({
   listMoodBoardNames: vi.fn(async () => []),
 }));
+const providerModelsState = vi.hoisted(() => ({ selectedProviderId: '' }));
 vi.mock('../hooks/useProviderModels', () => ({
   default: () => ({
-    providers: [], selectedProviderId: '', selectedModel: '', availableModels: [],
+    providers: [], selectedProviderId: providerModelsState.selectedProviderId, selectedModel: '', availableModels: [],
     setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(), loading: false,
   }),
 }));
@@ -312,13 +313,13 @@ import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, listMusicVideoProjectSummaries, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
   deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender, analyzeMusicVideoProject, prepareMusicVideoSong,
-  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, splitMusicVideoScene, moveMusicVideoSceneStart,
+  importMusicVideoLyrics, importMusicVideoTrackLyrics, separateMusicVideoVocals, alignMusicVideoLyrics, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart,
   selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff,
   addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoFestivalPacket,
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
-  startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
+  linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
@@ -1920,6 +1921,29 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
   });
 });
 
+describe('MusicVideo shot sheet AI help', () => {
+  afterEach(() => { providerModelsState.selectedProviderId = ''; });
+
+  // Catches the page's scene edit rebuilding from a captured project, so each applied shot undoes the one before it.
+  it('shows every applied shot after Apply saves several in one pass', async () => {
+    providerModelsState.selectedProviderId = 'p1';
+    const scenes = ['s1', 's2'].map((sceneId, order) => ({ sceneId, order, label: `Shot ${order + 1}`, prompt: 'Old motion', framePrompt: 'Old frame', shotSheet: { checked: true } }));
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 's1', prompt: 'New A' }, { sceneId: 's2', prompt: 'New B' }] });
+    updateMusicVideoScene.mockResolvedValue({});
+    await openProject({ ...PROJECT_WITH_CLIP, scenes }, 'produce');
+    fireEvent.click(screen.getByText('Shot sheet'));
+    fireEvent.click(screen.getByLabelText('Show prompts'));
+    fireEvent.click(screen.getByRole('button', { name: 'AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: /Propose prompts from sheet \(2 checked\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply 2 selected' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply 2 selected' })).toBeNull());
+    expect(updateMusicVideoScene).toHaveBeenCalledTimes(2);
+    const motion = (name) => within(screen.getAllByRole('button', { name }).map((button) => button.closest('tr')).find(Boolean)).getByText('Motion:').parentElement.textContent;
+    expect(motion('Open Shot 1')).toContain('New A');
+    expect(motion('Open Shot 2')).toContain('New B');
+  });
+});
+
 describe('MusicVideo typography composition (#8984)', () => {
   it('seeds text cues from the timed lyrics, switches to a composed render, and saves an edited cue whole', async () => {
     const lyricCues = [
@@ -2431,19 +2455,19 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     await openProject(project);
     await openSettings('Autopilot');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     // The server directs it procedurally (no image backend for a code-only brief); the run still gates on it.
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     expect(planMusicVideoProject).not.toHaveBeenCalled();
   });
 
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const sheet = { id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'pending', version: 1, mimeType: 'text/html', versions: [{ version: 1, mimeType: 'text/html', createdAt: '2026-01-01T00:00:00Z' }], notes: [] };
     const reviewing = { ...project, devArtifacts: [sheet], castAndSets: { status: 'review', revision: 1, artifactId: 'mvd-1', plan: {}, images: {} } };
     const approved = { ...reviewing, castAndSets: { ...reviewing.castAndSets, status: 'approved' }, devArtifacts: [{ ...sheet, status: 'approved' }] };
@@ -2453,7 +2477,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
     closeSettings();
     // Existing Cast & Sets controls still apply references; Production review separately authorizes work.
@@ -2470,14 +2494,14 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   it('autopilot continues straight to the plan when the check-in auto-approves', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'auto' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const approved = { ...project, castAndSets: { status: 'approved', revision: 1, plan: {}, images: {} } };
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
     await openProject(project);
     await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalled());
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalled());
     // Progress pushes don't release the gate; only a checkpoint does.
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: { ...directing, castAndSets: { ...directing.castAndSets, status: 'imaging' } } });
     expect(planMusicVideoProject).not.toHaveBeenCalled();
@@ -2707,7 +2731,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(refs.getByRole('button', { name: "Don't send Lead" }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: [] }, expect.anything());
     fireEvent.click(refs.getByRole('button', { name: 'Add' }));
-    fireEvent.click(refs.getByRole('button', { name: /Pier/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Pier/ }));
     expect(updateMusicVideoScene).toHaveBeenLastCalledWith('mv-spec', 's1', { frameReferenceIds: ['r2'] }, expect.anything());
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
@@ -3624,6 +3648,25 @@ describe('MusicVideo main page project cards', () => {
 
 
 describe('direct production review navigation', () => {
+  it.each([true, false])('opens replacement controls for a registered proof (approved: %s) and restores navigation', async (approved) => {
+    const project = { ...PROJECT_ANALYZED,
+      productionReview: { proof: { excerptId: 'proof-1', basis: 'old' }, approvals: approved ? { proof: { excerptId: 'proof-1' } } : {} },
+      excerpts: [{ id: 'proof-1', status: 'complete', filename: 'proof.mp4', startSec: 0, endSec: 12, dependencyState: { status: 'stale' } }],
+    };
+    listMusicVideoProjects.mockResolvedValue([project]);
+    render(<MemoryRouter initialEntries={['/music-video/mv-3/review']}><LocationProbe /><NavTo to={-1} /><NavTo to={1} />{MV_ROUTES}</MemoryRouter>);
+    const link = await screen.findByRole('link', { name: 'Open proof controls' });
+    expect(link).toHaveAttribute('href', '/music-video/mv-3/produce#mv-review-render');
+    fireEvent.click(link);
+    expect(await screen.findByRole('button', { name: 'Render a new proof' })).toBeEnabled();
+    await waitFor(() => expect(document.getElementById('mv-review-render')).toHaveFocus());
+    expect(screen.getByTestId('loc')).toHaveTextContent('/produce#mv-review-render');
+    fireEvent.click(screen.getByRole('button', { name: 'go--1' }));
+    expect(await screen.findByRole('link', { name: 'Open proof controls' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'go-1' }));
+    expect(await screen.findByRole('button', { name: 'Render a new proof' })).toBeEnabled();
+  });
+
   it('focuses the exact step on repeated clicks and restores its deep link with Back/Forward without approval', async () => {
     const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: { status: 'skipped' }, composition: { mode: 'document' },
       productionReview: { draft: { storyboardSource: 'document', storyboard: [{ id: 'shot-1' }, { id: 'shot-2' }] } },
@@ -3755,14 +3798,14 @@ describe('stage checklist and project options', () => {
     const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: undefined, devArtifacts: [],
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: ['Cast guide needs editable direction.'] },
         storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project, stage: null });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project, stage: null });
     await openProject(project, 'cast-sets');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
-    expect(checklist).toHaveTextContent('Build the cast & sets to draft it from your creative direction, song style and mood board.');
-    expect(checklist).toHaveTextContent('Comes with the cast & sets sheet, or use a file of your own.');
+    expect(checklist).toHaveTextContent('Link the cast & sets from the catalog, then write the art direction separately.');
+    expect(checklist).toHaveTextContent('Pick a file below with Use as visual guide, or import one.');
     expect(checklist).not.toHaveTextContent('needs editable direction');
-    fireEvent.click(within(checklist).getByRole('button', { name: 'Build cast & sets' }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    fireEvent.click(within(checklist).getByRole('button', { name: 'Link cast & sets' }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     fireEvent.click(within(checklist).getByRole('button', { name: 'Write it yourself' }));
     await waitFor(() => expect(screen.getByLabelText('Cast guide')).toHaveFocus());
   });
@@ -3945,76 +3988,60 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
   });
 });
 
-describe('linked object look references', () => {
+describe('queued look reference saves', () => {
   const project = () => ({
     ...PROJECT_NO_CLIP,
     id: 'mv-object', name: 'Object references',
-    concept: { subjects: [{ id: 'bike', kind: 'object', name: 'Bike', ingredientId: 'cat-bike' }] },
-    visualSpec: { references: [{ id: 'existing', imageId: 'existing.png', label: 'Existing', role: 'prop', condition: false }] },
+    concept: { subjects: [] },
+    visualSpec: { references: [
+      { id: 'first', imageId: 'first.png', label: 'First', role: 'prop', condition: false },
+      { id: 'second', imageId: 'second.png', label: 'Second', role: 'prop', condition: false },
+    ] },
   });
-  const media = [
-    { kind: 'reference', mediaKey: 'one.png', caption: 'First bike' },
-    { kind: 'reference', mediaKey: 'two.png', caption: 'Second bike' },
-  ];
+  const openLook = async () => {
+    await openProject(project(), 'cast-sets');
+    fireEvent.click(await screen.findByText('Mood board & other asset links'));
+    return within(screen.getByRole('region', { name: 'Look references' }));
+  };
 
-  it('keeps later reference edits when an earlier object save resolves', async () => {
-    listCatalogIngredientMedia.mockResolvedValue(media);
+  it('keeps a later reference edit when an earlier save resolves', async () => {
     const saves = [];
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockImplementation((id, patch) => new Promise((resolve) => {
       saves.push(() => resolve({ id, visualSpec: patch.visualSpec }));
     }));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    fireEvent.load(screen.getByAltText('Bike reference 2'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    const look = await openLook();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[0]);
     await waitFor(() => expect(saves).toHaveLength(1));
-    fireEvent.click(screen.getByText('Visual guidance'));
-    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
-    const condition = guidance.getAllByLabelText('Condition frames')[0];
-    fireEvent.click(condition);
-    expect(condition).toBeChecked();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[1]);
     await act(async () => saves[0]());
     await waitFor(() => expect(saves).toHaveLength(2));
-    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Bike image 2 to look references' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 2 to look references' }));
+    expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([true, true]);
     await act(async () => saves[1]());
-    await waitFor(() => expect(saves).toHaveLength(3));
-    const last = updateMusicVideoProject.mock.calls[2][1].visualSpec.references;
-    expect(last.map((ref) => ref.imageId)).toEqual(['existing.png', 'one.png', 'two.png']);
-    expect(last[0].condition).toBe(true);
-    await act(async () => saves[2]());
+    expect(updateMusicVideoProject.mock.calls[1][1].visualSpec.references.map((ref) => ref.condition)).toEqual([true, true]);
   });
 
-  it('rolls back a failed addition so the image can be retried', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
+  it('rolls back a failed edit so it can be retried', async () => {
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockRejectedValueOnce(new Error('Save failed'));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })));
-    expect(await screen.findByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
+    const look = await openLook();
+    await act(async () => fireEvent.click(look.getAllByLabelText('Condition frames')[0]));
+    await waitFor(() => expect(look.getAllByLabelText('Condition frames')[0]).not.toBeChecked());
     expect(toast.error).toHaveBeenCalledWith('Save failed');
   });
 
   it('restores the last saved references when two queued edits both fail', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
     const failures = [];
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockImplementation(() => new Promise((_, reject) => failures.push(() => reject(new Error('Save failed')))));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    const look = await openLook();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[0]);
     await waitFor(() => expect(failures).toHaveLength(1));
-    fireEvent.click(screen.getByText('Visual guidance'));
-    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
-    fireEvent.click(guidance.getAllByLabelText('Condition frames')[0]);
+    fireEvent.click(look.getAllByLabelText('Condition frames')[1]);
     await act(async () => failures[0]());
     await waitFor(() => expect(failures).toHaveLength(2));
-    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
+    expect(look.getAllByLabelText('Condition frames')[1]).toBeChecked();
     await act(async () => failures[1]());
-    expect(guidance.getByLabelText('Condition frames')).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
+    expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([false, false]);
   });
 });

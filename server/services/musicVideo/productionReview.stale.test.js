@@ -138,3 +138,13 @@ describe('storyboard camera (#10589)', () => {
     expect(undefinedCamera.basis.storyboard).toBe(before.basis.storyboard);
   });
 });
+
+it('requires current resolved catalog approval instead of trusting a historical approved status', () => {
+  const project = { concept: { subjects: [] }, castAndSets: { source: 'catalog', status: 'approved', approvedAt: '2026-01-01T00:00:00.000Z' } };
+  expect(productionReadiness(project).castAndSets.approved).toBe(false);
+  expect(productionReadiness(project).castAndSets.stale.changedFields).toEqual(['catalog links or images']);
+  project.castAndSets.catalogCheckin = { approved: true, problems: [] };
+  expect(productionReadiness(project).castAndSets).toMatchObject({ approved: true, stale: null, problems: [] });
+  project.castAndSets.catalogCheckin = { approved: false, problems: [{ code: 'CATALOG_IMAGES_REQUIRED', message: 'Add a catalog image.' }] };
+  expect(productionReadiness(project).castAndSets.approved).toBe(false);
+});

@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -62,6 +63,7 @@ const DIRECTION = {
 };
 
 let jobs;
+let queueSnapshots;
 const queueJob = async ({ params }) => {
   const id = `job-${jobs.length + 1}`;
   jobs.push({ id, params });
@@ -185,6 +187,7 @@ beforeEach(() => {
   rmSync(join(ROOT(), 'music-video'), { recursive: true, force: true });
   mkdirSync(IMAGES(), { recursive: true });
   jobs = [];
+  queueSnapshots = new Map();
   imageParamsOverrides = {};
   vi.clearAllMocks();
   enqueue.mockReset().mockImplementation(queueJob);
@@ -199,6 +202,7 @@ const testDeps = (overrides = {}) => ({
   runPrompt,
   getSettings: async () => ({}),
   enqueue,
+  queueSnapshot: async (id, { key } = {}) => queueSnapshots.get(id || `unlinked:${key}`) || { trusted: true, pending: false, job: null, matches: [] },
   imageParams: async (_settings, route, common) => ({ mode: route.mode, ...common, ...imageParamsOverrides }),
   resolveRoute: async () => ({ mode: 'codex', model: null }),
   loadBoard: async () => board,
@@ -595,11 +599,12 @@ describe('Cast & Sets check-in', () => {
     expect(after.castAndSets.images['set:lab'].inspection).toEqual(originalStage.images['set:lab'].inspection);
   });
 
-  it('applies sheet feedback by rewriting the direction and look, re-renders what changed, and keeps honoring it on a rebuild', async () => {
+  it('holds sheet feedback until the displayed image plan is explicitly rendered, and keeps honoring it on a rebuild', async () => {
     const project = await seed();
     await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
     await runTo(project.id, 'review');
     const before = jobs.length;
+    const priorImages = (await current(project.id)).castAndSets.images;
     const look = '1980s 35mm analog film, sparse practical light, heavy grain';
     const revised = { ...DIRECTION, look, sets: DIRECTION.sets.map((set) => (set.id === 'harbor' ? { ...set, lighting: 'one dim sodium streetlamp' } : set)) };
     runPrompt.mockResolvedValueOnce({ text: JSON.stringify(revised) });
@@ -607,6 +612,22 @@ describe('Cast & Sets check-in', () => {
 
     const applied = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: note });
     expect(applied.status).toBe(202);
+    await runTo(project.id, 'review');
+    const planned = (await current(project.id)).castAndSets;
+    expect(jobs).toHaveLength(before);
+    expect(new Set(planned.feedbackRenderPlan.keys)).toEqual(new Set(Object.keys(planned.plan)));
+    expect(planned.images.character.imageId).toBe(priorImages.character.imageId);
+    expect(planned.images.character).toMatchObject({ jobId: priorImages.character.jobId, submittedPrompt: priorImages.character.submittedPrompt,
+      submittedReferences: priorImages.character.submittedReferences, submittedRevision: priorImages.character.submittedRevision,
+      inspection: priorImages.character.inspection });
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/regenerate`).send({})).status).toBe(409);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(409);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/skip`).send({})).status).toBe(409);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).set('x-test-auth-method', 'peer').send({ revision: planned.revision, count: planned.feedbackRenderPlan.keys.length })).status).toBe(403);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: planned.revision, count: planned.feedbackRenderPlan.keys.length + 1 })).status).toBe(409);
+    expect(jobs).toHaveLength(before);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: planned.revision, count: planned.feedbackRenderPlan.keys.length })).status).toBe(202);
     await runTo(project.id, 'review');
     const revisionPrompt = runPrompt.mock.calls[1][0].prompt;
     expect(revisionPrompt).toContain('DIRECTOR FEEDBACK ON EARLIER SHEETS');
@@ -621,7 +642,7 @@ describe('Cast & Sets check-in', () => {
       expect(job.params.prompt).toContain(`Look: ${look}`);
       expect(job.params.prompt).not.toContain('raw flash, green light');
     }
-    expect(after.castAndSets.changeSummary).toMatchObject({ revision: 2, rerendered: rerendered.length });
+    expect(after.castAndSets.changeSummary).toMatchObject({ revision: 2, planned: rerendered.length });
     expect(after.castAndSets.changeSummary.changes).toEqual(['Look rewritten for every image', 'Lighting: Harbor']);
     expect(after.castAndSets.feedback).toEqual([expect.objectContaining({ text: note, revision: 2 })]);
 
@@ -651,12 +672,306 @@ describe('Cast & Sets check-in', () => {
     expect(applied.status).toBe(202);
     await runTo(project.id, 'review');
     expect(runPrompt).toHaveBeenCalledTimes(1);
+    const planned = (await current(project.id)).castAndSets;
+    expect(jobs).toHaveLength(before);
+    expect(planned.feedbackRenderPlan.keys.sort()).toEqual(['set:harbor', 'test:2']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: planned.revision, count: 2 })).status).toBe(202);
+    await runTo(project.id, 'review');
     expect(jobs.slice(before).map(keyOf).sort()).toEqual(['set:harbor', 'test:2']);
     expect(jobs.find((j) => keyOf(j) === 'set:harbor' && !jobs.slice(0, before).includes(j)).params.prompt).toMatch(/Revision: One lamp only/);
     expect((await current(project.id)).castAndSets.feedback || []).toEqual([]);
 
     const unknown = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Brighter', target: 'set:nowhere' });
     expect([unknown.status, unknown.body.code]).toEqual([422, 'CAST_SETS_UNKNOWN_IMAGE']);
+  });
+
+  it('keeps earlier unrendered feedback across edits and refuses an old plan after a restart', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    const firstJob = jobs[0];
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp', target: 'set:harbor' });
+    await runTo(project.id, 'review');
+    const first = (await current(project.id)).castAndSets;
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Quiet walls', target: 'set:lab' });
+    await runTo(project.id, 'review');
+    const second = (await current(project.id)).castAndSets;
+    expect(second.feedbackRenderPlan.keys.sort()).toEqual(['set:harbor', 'set:lab', 'test:1', 'test:2']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: first.revision, count: first.feedbackRenderPlan.keys.length })).status).toBe(409);
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets,
+      status: 'imaging', processId: 'old-process', feedbackRenderPlan: { ...record.castAndSets.feedbackRenderPlan, phase: 'planning', kind: 'image', forceKeys: ['set:lab'] } } } }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(jobs).toHaveLength(before);
+    expect((await current(project.id)).castAndSets.feedbackRenderPlan.keys.sort()).toEqual(second.feedbackRenderPlan.keys);
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets, processId: 'old-process' } } }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(409);
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: keyOf(firstJob), revision: 1, jobId: firstJob.id, filename: 'old.png' })).toBe(false);
+    expect(jobs).toHaveLength(before);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: second.revision, count: 4 })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(new Set(jobs.slice(before).map(keyOf))).toEqual(new Set(['set:harbor', 'set:lab', 'test:1', 'test:2']));
+  });
+
+  it('refreshes an unavailable renderer without resubmitting feedback or calling a model', async () => {
+    let enabled = true;
+    service.__setCastAndSetsDepsForTests(testDeps({ resolveRoute: async () => enabled ? { mode: 'codex', model: null } : null }));
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    enabled = false;
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp', target: 'set:harbor' });
+    await runTo(project.id, 'review');
+    const first = (await current(project.id)).castAndSets;
+    expect(first.route).toBeNull();
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: first.revision, count: 2 })).status).toBe(409);
+    enabled = true;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/refresh-renderer`).send({ revision: first.revision })).status).toBe(202);
+    await runTo(project.id, 'review');
+    const refreshed = (await current(project.id)).castAndSets;
+    expect(refreshed).toMatchObject({ revision: first.revision + 1, route: { mode: 'codex' }, keyNotes: { 'set:harbor': ['One lamp'] } });
+    expect(refreshed.feedbackRenderPlan.keys.sort()).toEqual(['set:harbor', 'test:2']);
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs).toHaveLength(before);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: first.revision, count: 2 })).status).toBe(409);
+  });
+
+  it('removes failed whole-sheet feedback before resume without sending it to the direction model again', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    runPrompt.mockRejectedValueOnce(new Error('Example provider unavailable'));
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Use unusual indigo lamps' });
+    await service.__settleCastAndSetsForTests();
+    const failed = (await current(project.id)).castAndSets;
+    expect(failed.status).toBe('failed');
+    await request(app).delete(`/api/music-video/${project.id}/cast-and-sets/feedback/${failed.feedback[0].id}`);
+    expect((await current(project.id)).castAndSets.notesApplied).toEqual([]);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(runPrompt).toHaveBeenCalledTimes(2);
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('removes a failed image note before resume without rendering or retaining it in the plan', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    service.__setCastAndSetsDepsForTests(testDeps({ getSettings: async () => { throw new Error('Example settings unavailable'); } }));
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Use one lamp', target: 'set:harbor' });
+    await service.__settleCastAndSetsForTests();
+    expect((await current(project.id)).castAndSets.status).toBe('failed');
+    service.__setCastAndSetsDepsForTests(testDeps());
+    const remove = `/api/music-video/${project.id}/cast-and-sets/feedback/remove-image-note`;
+    expect((await request(app).post(remove).send({ key: 'set:harbor', index: 0, text: 'stale text' })).status).toBe(409);
+    expect((await request(app).post(remove).send({ key: 'set:harbor', index: 0, text: 'Use one lamp' })).status).toBe(200);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    await runTo(project.id, 'review');
+    const ready = (await current(project.id)).castAndSets;
+    expect(ready.keyNotes['set:harbor']).toEqual([]);
+    expect(ready.plan['set:harbor'].prompt).not.toContain('Use one lamp');
+    expect(ready.feedbackRenderPlan.keys).toEqual([]);
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('holds a legacy failed revision on resume and waits for earlier queued jobs before rendering', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    await projects.mutateProjectRecord(project.id, (record) => {
+      const stage = record.castAndSets;
+      return { project: { ...record, castAndSets: { ...stage, revision: 2, status: 'failed', processId: 'old-process',
+        feedback: [{ id: 'fb-old', text: 'Example feedback', revision: 2 }],
+        notesApplied: [{ target: 'sheet', text: 'Example feedback' }], changeSummary: { revision: 2, changes: [] },
+        images: { ...stage.images, 'set:harbor': { ...stage.images['set:harbor'], status: 'failed', error: 'Canceled' },
+          'test:2': { ...stage.images['test:2'], status: 'pending' }, 'set:lab': { ...stage.images['set:lab'], status: 'queued', jobId: 'legacy-job' } } } } };
+    });
+    const resume = `/api/music-video/${project.id}/cast-and-sets/resume`;
+    queueSnapshots.set('legacy-job', { trusted: true, pending: true, job: { status: 'running' } });
+    expect((await request(app).post(resume).send({})).status).toBe(409);
+    expect(jobs).toHaveLength(before);
+    const render = `/api/music-video/${project.id}/cast-and-sets/feedback/render`;
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'set:lab', revision: 2, jobId: 'legacy-job', error: 'Canceled' })).toBe(true);
+    expect((await request(app).post(resume).send({})).status).toBe(202);
+    const held = (await current(project.id)).castAndSets;
+    expect(held).toMatchObject({ status: 'review', feedbackRenderPlan: { phase: 'ready' } });
+    expect(held.feedbackRenderPlan.keys.sort()).toEqual(['set:harbor', 'set:lab', 'test:2']);
+    expect(jobs).toHaveLength(before);
+    expect((await request(app).post(render).send({ revision: 2, count: 2 })).status).toBe(409);
+    expect((await request(app).post(render).send({ revision: 2, count: 3 })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(new Set(jobs.slice(before).map(keyOf))).toEqual(new Set(['set:harbor', 'set:lab', 'test:2']));
+  });
+
+  it('reconciles restart-failed, completed, and missing queued jobs into a held legacy plan', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    onDisk('recovered.png');
+    await projects.mutateProjectRecord(project.id, (record) => {
+      const stage = record.castAndSets;
+      return { project: { ...record, productionRuns: [], castAndSets: { ...stage, revision: 2, status: 'failed', processId: 'old-process', productionRunId: 'pruned-run',
+        changeSummary: { revision: 2, changes: [] }, images: { ...stage.images,
+          'set:lab': { ...stage.images['set:lab'], status: 'queued', jobId: 'failed-job' },
+          'set:harbor': { ...stage.images['set:harbor'], status: 'queued', jobId: 'done-job' },
+          'test:2': { ...stage.images['test:2'], status: 'queued', jobId: 'missing-job' } } } } };
+    });
+    queueSnapshots.set('failed-job', { trusted: false, pending: true, job: null });
+    const resume = `/api/music-video/${project.id}/cast-and-sets/resume`;
+    expect((await request(app).post(resume).send({})).status).toBe(409);
+    expect((await current(project.id)).castAndSets.images['set:lab'].status).toBe('queued');
+    const tag = (key) => ({ musicVideo: { projectId: project.id, productionRunId: 'pruned-run', productionStepKey: 'old-step', castAndSets: { key, revision: 2 } } });
+    queueSnapshots.set('failed-job', { trusted: true, pending: false, job: { status: 'failed', error: 'Interrupted by restart', params: tag('set:lab') } });
+    queueSnapshots.set('done-job', { trusted: true, pending: false, job: { status: 'completed', result: { filename: 'recovered.png' }, params: tag('set:harbor') } });
+    expect((await request(app).post(resume).send({})).status).toBe(202);
+    const held = (await current(project.id)).castAndSets;
+    expect(held.feedbackRenderPlan.keys.sort()).toEqual(['set:lab', 'test:2']);
+    expect(held.images['set:harbor']).toMatchObject({ status: 'done', imageId: 'recovered.png' });
+    expect(held.images['set:lab'].error).toContain('Interrupted by restart');
+    expect(held.images['test:2'].error).toContain('no longer in the queue history');
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('does not revise a held plan while an earlier job is still queued', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp', target: 'set:harbor' });
+    await runTo(project.id, 'review');
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets, route: null,
+      images: { ...record.castAndSets.images, 'set:lab': { ...record.castAndSets.images['set:lab'], status: 'queued', jobId: 'old-job' } } } } }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Brighter', target: 'set:lab' })).status).toBe(409);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/refresh-renderer`).send({ revision: 2 })).status).toBe(409);
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'set:lab', revision: 2, jobId: 'old-job', error: 'Canceled' })).toBe(true);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/refresh-renderer`).send({ revision: 2 })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(jobs).toHaveLength(before);
+    expect((await current(project.id)).castAndSets.feedbackRenderPlan.keys).toContain('set:lab');
+  });
+
+  it('finds an unlinked job after restart before offering a replacement render', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets,
+      revision: 2, status: 'failed', processId: 'old-process', changeSummary: { revision: 2, changes: [] },
+      images: { ...record.castAndSets.images, 'set:lab': { ...record.castAndSets.images['set:lab'], status: 'queued', jobId: null } } } } }));
+    const tag = { musicVideo: { projectId: project.id, castAndSets: { key: 'set:lab', revision: 2 } } };
+    queueSnapshots.set('unlinked:set:lab', { trusted: true, pending: true, matches: [{ id: 'unlinked-job', status: 'running', params: tag }] });
+    const resume = `/api/music-video/${project.id}/cast-and-sets/resume`;
+    expect((await request(app).post(resume).send({})).status).toBe(409);
+    expect((await current(project.id)).castAndSets.images['set:lab'].status).toBe('queued');
+    onDisk('recovered-unlinked.png');
+    queueSnapshots.set('unlinked:set:lab', { trusted: true, pending: false,
+      matches: [{ id: 'unlinked-job', status: 'completed', params: tag, result: { filename: 'recovered-unlinked.png' } }] });
+    expect((await request(app).post(resume).send({})).status).toBe(202);
+    const held = (await current(project.id)).castAndSets;
+    expect(held.images['set:lab']).toMatchObject({ status: 'done', imageId: 'recovered-unlinked.png' });
+    expect(held.feedbackRenderPlan.keys).toEqual([]);
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('holds a failed image after a recovered direction revision without calling the direction model again', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    runPrompt.mockRejectedValueOnce(new Error('Example provider unavailable'));
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'Use sparse lights' });
+    await service.__settleCastAndSetsForTests();
+    runPrompt.mockResolvedValueOnce({ text: JSON.stringify({ ...DIRECTION, look: 'Sparse light and grain' }) });
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({});
+    await runTo(project.id, 'review');
+    await projects.mutateProjectRecord(project.id, (record) => {
+      const stage = record.castAndSets;
+      const images = Object.fromEntries(Object.entries(stage.images).map(([key, image]) => [key, { ...image, status: 'done' }]));
+      images['set:harbor'] = { ...images['set:harbor'], status: 'queued', jobId: 'failed-again', failures: 1 };
+      return { project: { ...record, castAndSets: { ...stage, status: 'imaging', feedbackRenderPlan: null, failedFromStatus: 'directing', images } } };
+    });
+    expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'set:harbor', revision: 2, jobId: 'failed-again', error: 'Example failure' })).toBe(true);
+    expect((await current(project.id)).castAndSets.failedFromStatus).toBe('imaging');
+    const calls = runPrompt.mock.calls.length;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    expect((await current(project.id)).castAndSets.feedbackRenderPlan.keys).toContain('set:harbor');
+    expect(runPrompt).toHaveBeenCalledTimes(calls);
+  });
+
+  it('retries a legacy failed rebuild as direction planning without starting images', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    const before = jobs.length;
+    runPrompt.mockRejectedValueOnce(new Error('Example provider unavailable'));
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await service.__settleCastAndSetsForTests();
+    await projects.mutateProjectRecord(project.id, (record) => {
+      const { failedFromStatus: _legacy, ...stage } = record.castAndSets;
+      return { project: { ...record, castAndSets: stage } };
+    });
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(runPrompt).toHaveBeenCalledTimes(3);
+    expect((await current(project.id)).castAndSets.feedbackRenderPlan.phase).toBe('ready');
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('maps a legacy image-note alias without calling the direction model on resume', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets,
+      revision: 2, status: 'failed', stopReason: 'The feedback failed', changeSummary: null,
+      notesApplied: [{ target: 'wardrobe', text: 'Wear a wool coat' }], keyNotes: { looks: ['Wear a wool coat'] } } } }));
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    await runTo(project.id, 'review');
+    const planned = (await current(project.id)).castAndSets;
+    expect(planned.plan.looks.prompt).toContain('Wear a wool coat');
+    expect(planned.feedbackRenderPlan.keys).toContain('looks');
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs).toHaveLength(before);
+  });
+
+  it('does not replay removed feedback from a failed legacy direction revision', async () => {
+    const project = await seed();
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
+    await runTo(project.id, 'review');
+    const before = jobs.length;
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record, castAndSets: { ...record.castAndSets,
+      revision: 2, status: 'failed', stopReason: 'The creative direction call failed', changeSummary: null,
+      feedback: [{ id: 'fb-old', text: 'Use indigo lamps', revision: 2 }], notesApplied: [{ id: null, target: 'sheet', text: 'Use indigo lamps' }] } } }));
+    expect((await request(app).delete(`/api/music-video/${project.id}/cast-and-sets/feedback/fb-old`)).status).toBe(200);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+    expect((await current(project.id)).castAndSets).toMatchObject({ status: 'review', notesApplied: [], feedbackRenderPlan: { phase: 'ready' } });
+    expect(runPrompt).toHaveBeenCalledTimes(1);
+    expect(jobs).toHaveLength(before);
+  });
+
+  it.each(['completed', 'canceled', 'missing'])('renders new feedback manually after an earlier production run is %s', async (status) => {
+    const { project, run } = await productionCheckin({ maxGenerations: 20, maxReviewAttempts: 10 });
+    await runTo(project.id, 'review');
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({});
+    await projects.mutateProjectRecord(project.id, (record) => ({ project: { ...record,
+      productionRuns: status === 'missing' ? [] : record.productionRuns.map((entry) => entry.id === run.id ? { ...entry, status } : entry) } }));
+    const before = jobs.length;
+    const usage = (await current(project.id)).productionRuns[0]?.usage;
+    await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback`).send({ text: 'One lamp', target: 'set:harbor' });
+    await runTo(project.id, 'review');
+    const planned = (await current(project.id)).castAndSets;
+    expect(planned.productionRunId).toBeNull();
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: planned.revision, count: planned.feedbackRenderPlan.keys.length })).status).toBe(202);
+    await runTo(project.id, 'review');
+    expect(jobs.length).toBeGreaterThan(before);
+    expect(jobs.slice(before).every((job) => !job.params.musicVideo.productionRunId)).toBe(true);
+    expect((await current(project.id)).productionRuns[0]?.usage).toEqual(usage);
   });
 
   it('gives each supporting cast member a photographic sheet, shows it on the sheet, and publishes it as a reference on approval', async () => {
@@ -1348,6 +1663,10 @@ it.each([
 
   service.__setCastAndSetsDepsForTests(testDeps());
   expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/resume`).send({})).status).toBe(202);
+  const held = (await current(project.id)).castAndSets;
+  expect(jobs).toHaveLength(previousJobs);
+  expect(held.feedbackRenderPlan.keys).toEqual(['expressions']);
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/feedback/render`).send({ revision: held.revision, count: 1 })).status).toBe(202);
   await runTo(project.id, 'review');
   expect(jobs.slice(previousJobs).map(keyOf)).toEqual(['expressions']);
   expect(jobs.at(-1).params.referenceImagePaths).toHaveLength(2);
@@ -2503,4 +2822,330 @@ describe('Autonomous Cast & Sets rendering-defect retake (#14641)', () => {
     release();
     await runTo(project.id, 'approved');
   });
+});
+
+it('converts legacy check-in to catalog links without recasting, copying media, or rewriting shot history', async () => {
+  onDisk('catalog-example.png');
+  const project = await seed({ concept: { subjects: [{ id: 's-example', kind: 'character', name: 'Example', ingredientId: 'chr-example' }] } });
+  const historical = { status: 'approved', revision: 2, direction: DIRECTION, images: { character: { status: 'done', imageId: 'old-example.png', submittedReferences: ['original-example.png'] } }, approvedInputs: { subjects: 'old-hash' } };
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: historical } }));
+  const db = { getIngredient: async () => ({ id: 'chr-example', type: 'character', name: 'Example', payload: { physicalDescription: 'Catalog description' } }),
+    listMediaForIngredient: async () => [{ kind: 'portrait', mediaKey: 'catalog-example.png' }] };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+  const catalogDB = await import('../catalogDB.js');
+  const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
+  const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
+  onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
+  const events = [];
+  const capture = event => { if (event.projectId === project.id) events.push(event); };
+  musicVideoEvents.on('cast-and-sets', capture);
+  onTestFinished(() => musicVideoEvents.off('cast-and-sets', capture));
+  const switched = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({});
+  expect(switched.status).toBe(200);
+  expect(switched.body.stage).toMatchObject({ source: 'catalog', status: 'review', images: historical.images, approvedInputs: historical.approvedInputs });
+  expect(switched.body.catalogCheckin.items[0].images).toEqual(['catalog-example.png']);
+  const stale = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: 'a'.repeat(64) });
+  expect(stale.status).toBe(409);
+  const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: switched.body.catalogCheckin.basis });
+  expect(approved.status).toBe(200);
+  expect(approved.body.catalogCheckin.approved).toBe(true);
+  expect(approved.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+  expect(events.at(-1).project.castAndSets.catalogCheckin.approved).toBe(true);
+  const edited = await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, name: 'Example renamed' } }));
+  expect(edited.project.castAndSets.catalogCheckin.approved).toBe(true);
+  expect((await projects.updateProject(project.id, { name: 'Example revised' })).castAndSets.catalogCheckin.approved).toBe(true);
+  expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+  expect(approved.body.project.concept.subjects).toEqual(project.concept.subjects);
+  expect(approved.body.project.visualSpec.references).toEqual(project.visualSpec.references);
+  expect(approved.body.stage.images).toEqual(historical.images);
+  expect(runPrompt).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
+  for (const endpoint of ['', '/regenerate', '/resume', '/skip', '/use-image']) {
+    const body = endpoint === '/use-image' ? { key: 'character', imageId: 'catalog-example.png' } : {};
+    const response = await request(app).post(`/api/music-video/${project.id}/cast-and-sets${endpoint}`).send(body);
+    expect(response.status).toBe(409);
+    expect(response.body.code || response.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
+  }
+  expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', filename: 'late.png', revision: 2 })).toBe(false);
+});
+
+describe('rebuilding a catalog stage guide (#15086)', () => {
+  const RECORDS = {
+    'chr-lead': { id: 'chr-lead', type: 'character', name: 'Example Lead', payload: { physicalDescription: 'Lead in a red coat' } },
+    'chr-alt-a': { id: 'chr-alt-a', type: 'character', name: 'Example Alt A', payload: { physicalDescription: 'First reading' } },
+    'chr-alt-b': { id: 'chr-alt-b', type: 'character', name: 'Example Alt B', payload: { physicalDescription: 'Second reading' } },
+    'plc-harbor': { id: 'plc-harbor', type: 'place', name: 'Example Harbor', payload: { description: 'Sodium lamps on wet stone' } },
+    'obj-lantern': { id: 'obj-lantern', type: 'object', name: 'Example Lantern', payload: { description: 'A dented brass lantern' } },
+  };
+  const SUBJECTS = [
+    { id: 's-lead', kind: 'character', role: 'protagonist', name: 'Example Lead', ingredientId: 'chr-lead' },
+    { id: 's-alt-a', kind: 'character', role: 'protagonist', name: 'Shared Name', ingredientId: 'chr-alt-a', active: false },
+    { id: 's-alt-b', kind: 'character', role: 'protagonist', name: 'Shared Name', ingredientId: 'chr-alt-b', active: true },
+    { id: 's-harbor', kind: 'place', name: 'Example Harbor', ingredientId: 'plc-harbor' },
+    { id: 's-lantern', kind: 'object', name: 'Example Lantern', ingredientId: 'obj-lantern' },
+  ];
+  const useCatalog = async (records = RECORDS) => {
+    Object.keys(records).forEach((id) => onDisk(`${id}.png`));
+    const db = {
+      getIngredient: async (id) => records[id] ?? null,
+      listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }],
+    };
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+    // Project reads hydrate the check-in from the live catalog module, not the injected one.
+    const catalogDB = await import('../catalogDB.js');
+    const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
+    const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
+    onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
+  };
+  const catalogProject = async (stage = {}, extra = {}) => {
+    const project = await seed({ concept: { subjects: SUBJECTS } });
+    return (await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      scenes: [
+        { sceneId: 'shot-1', startSec: 12, endSec: 20, setReference: { subjectId: 's-harbor' } },
+        { sceneId: 'shot-2', startSec: 20, endSec: 31, setReference: { subjectId: 's-harbor' } },
+      ],
+      castAndSets: { source: 'catalog', status: 'review', revision: 1, ...stage },
+      ...extra } }))).project;
+  };
+  const rebuild = (id) => request(app).post(`/api/music-video/${id}/cast-and-sets/catalog/guide`).send({});
+  const guideHtml = async (id, artifactId) => (await request(app).get(`/api/music-video/${id}/dev-artifacts/${artifactId}/file`)).text;
+
+  // Uniquely catches a guide versioning without current catalog text, or a rebuild disturbing the check-in approval.
+  it('saves each rebuild as a new version of the guide with current catalog text, leaving the approval alone', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const first = await rebuild(project.id);
+    expect(first.status).toBe(200);
+    expect(first.body.artifact).toMatchObject({ kind: 'cast-sets', version: 1, mimeType: 'text/html' });
+    expect(first.body.stage).toMatchObject({ artifactId: first.body.artifact.id, artifactVersion: 1, status: 'review' });
+    expect(first.body.project.productionReview.draft.guideArtifactId).toBe(first.body.artifact.id);
+
+    const html = await guideHtml(project.id, first.body.artifact.id);
+    expect(html).toContain('Example Lead');
+    expect(html).toContain('Alternate for Shared Name · Not selected');
+    expect(html).toContain('Alternate for Shared Name · Selected');
+    expect(html).toContain('2 protagonists · 1 alternate not selected');
+    expect(html).not.toContain('Supporting cast');
+    expect(html).toContain('A dented brass lantern');
+    expect(html).toContain('2 shots · 0:12–0:31');
+    expect(html).toMatch(/src="data:image\//);
+
+    const basis = first.body.catalogCheckin.basis;
+    const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis });
+    expect(approved.status).toBe(200);
+    const unchanged = await rebuild(project.id);
+    expect(unchanged.body.artifact.version).toBe(2);
+    expect(unchanged.body.stage).toMatchObject({ status: 'approved', catalogApprovedBasis: basis });
+    expect(unchanged.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+
+    await useCatalog({ ...RECORDS, 'plc-harbor': { ...RECORDS['plc-harbor'], name: 'Renamed Harbor' } });
+    const renamed = await rebuild(project.id);
+    expect(renamed.body.artifact).toMatchObject({ id: first.body.artifact.id, version: 3 });
+    const current = await guideHtml(project.id, first.body.artifact.id);
+    expect(current).toContain('Renamed Harbor');
+    expect(current).not.toContain('Example Harbor');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches an unreadable catalog publishing a guide with its cast missing over the current version.
+  it('refuses an unresolved check-in and a legacy stage without saving a version', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const { artifact } = (await rebuild(project.id)).body;
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: { getIngredient: async () => { throw new Error('Example outage'); }, listMediaForIngredient: async () => [] } }));
+    const refused = await rebuild(project.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_UNRESOLVED');
+    const after = (await request(app).get(`/api/music-video/${project.id}/dev-artifacts/${artifact.id}`)).body;
+    expect(after.version).toBe(1);
+
+    const legacy = await seed();
+    await projects.mutateProjectRecord(legacy.id, (current) => ({ project: { ...current, castAndSets: { status: 'review', revision: 1, images: {} } } }));
+    const refusedLegacy = await rebuild(legacy.id);
+    expect(refusedLegacy.status).toBe(409);
+    expect(refusedLegacy.body.code || refusedLegacy.body.error?.code).toBe('CAST_SETS_PLAN_STALE');
+  });
+
+  // Uniquely catches a catalog edit made during image encoding publishing an already-stale guide as current.
+  it('refuses to save a guide when the catalog changed while it was being built', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const records = { ...RECORDS };
+    service.__setCastAndSetsDepsForTests(testDeps({
+      catalog: { getIngredient: async (id) => records[id] ?? null, listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }] },
+      sheetImage: async () => { records['plc-harbor'] = { ...RECORDS['plc-harbor'], name: 'Renamed Harbor' }; return { mime: 'image/jpeg', bytes: Buffer.from('x') }; },
+    }));
+    const refused = await rebuild(project.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_STALE');
+    expect((await projects.getStoredProject(project.id)).devArtifacts || []).toEqual([]);
+  });
+
+  // Uniquely catches shots or a guide selection changed during encoding being overwritten by the snapshot taken before it.
+  it('builds from the shots and guide selection current when encoding ends', async () => {
+    await useCatalog();
+    const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+    const project = await catalogProject();
+    const { artifact: before } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Before', html: '<html></html>' });
+    const { artifact: after } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'After', html: '<html></html>' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, productionReview: { draft: { guideArtifactId: before.id } } } }));
+    let edited = false;
+    service.__setCastAndSetsDepsForTests(testDeps({
+      catalog: { getIngredient: async (id) => RECORDS[id] ?? null, listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }] },
+      sheetImage: async () => {
+        if (!edited) {
+          edited = true;
+          await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+            scenes: [{ sceneId: 'shot-9', startSec: 40, endSec: 52, setReference: { subjectId: 's-harbor' } }],
+            productionReview: { draft: { guideArtifactId: after.id } } } }));
+        }
+        return { mime: 'image/jpeg', bytes: Buffer.from('x') };
+      },
+    }));
+    const rebuilt = await rebuild(project.id);
+    expect(rebuilt.status).toBe(200);
+    expect(rebuilt.body.artifact.id).toBe(after.id);
+    const html = await guideHtml(project.id, after.id);
+    expect(html).toContain('1 shot · 0:40–0:52');
+    expect(html).not.toContain('0:12–');
+  });
+
+  // Uniquely catches a rebuild versioning a stale stage sheet while Art keeps opening a different guide, or replacing a director's own guide.
+  it('versions the Cast & Sets guide Art opens and keeps a different guide the director selected', async () => {
+    await useCatalog();
+    const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+    const project = await catalogProject();
+    const { artifact: stale } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Old sheet', html: '<html></html>' });
+    const { artifact: selected } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Selected sheet', html: '<html></html>' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, artifactId: stale.id },
+      productionReview: { draft: { guideArtifactId: selected.id } } } }));
+    const rebuilt = await rebuild(project.id);
+    expect(rebuilt.body.artifact).toMatchObject({ id: selected.id, version: 2, title: 'Selected sheet' });
+
+    const own = await catalogProject();
+    const { artifact: treatment } = await saveGeneratedDevArtifact(own.id, { kind: 'treatment', title: 'My treatment', html: '<html></html>' });
+    await projects.mutateProjectRecord(own.id, (current) => ({ project: { ...current, productionReview: { draft: { guideArtifactId: treatment.id } } } }));
+    const fresh = await rebuild(own.id);
+    expect(fresh.body.artifact.id).not.toBe(treatment.id);
+    expect(fresh.body.artifact.kind).toBe('cast-sets');
+    expect(fresh.body.project.productionReview.draft.guideArtifactId).toBe(treatment.id);
+  });
+
+  // Uniquely catches approving the guide file running the catalog approval, which has no basis and always refuses.
+  it('approves the guide as an ordinary artifact without touching the catalog check-in', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const { artifact } = (await rebuild(project.id)).body;
+    const reviewed = await request(app).post(`/api/music-video/${project.id}/dev-artifacts/${artifact.id}/review`).send({ status: 'approved' });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.artifact.status).toBe('approved');
+    expect(reviewed.body.project.castAndSets.status).toBe('review');
+  });
+});
+
+describe('saved shot references across the switch to catalog links', () => {
+  const guide = { guide: true };
+  const MEDIA = {
+    'chr-lead': [{ kind: 'reference', role: 'sheet:standard', mediaKey: 'lead-sheet.png', library: guide }, { kind: 'reference', role: 'sheet:face', mediaKey: 'lead-face.png', library: guide }],
+    'chr-alt': [{ kind: 'portrait', mediaKey: 'alt-sheet.png' }],
+    // A sheet flagged out of the guides on a record with other guides is not offered.
+    'chr-guest': [{ kind: 'portrait', mediaKey: 'guest-portrait.png', library: guide }, { kind: 'reference', role: 'sheet:standard', mediaKey: 'guest-sheet.png', library: { guide: false } }],
+    'plc-street': [{ kind: 'portrait', mediaKey: 'street-plate.png' }],
+  };
+  const SUBJECTS = [
+    { id: 's-lead', kind: 'character', name: 'Lead', role: 'protagonist', ingredientId: 'chr-lead', active: true },
+    { id: 's-alt', kind: 'character', name: 'Lead', ingredientId: 'chr-alt', active: false },
+    { id: 's-guest', kind: 'character', name: 'Guest', ingredientId: 'chr-guest' },
+    { id: 's-street', kind: 'place', name: 'Street', ingredientId: 'plc-street' },
+  ];
+  const REFERENCES = [
+    { id: 'mvr-cs-character', imageId: 'lead-sheet.png', role: 'character', label: 'Lead sheet' },
+    { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character', label: 'Lead face sheet' },
+    { id: 'mvr-cs-set-street', imageId: 'street-plate.png', role: 'set', label: 'Street plate' },
+    { id: 'mvr-cs-cast-s-alt', imageId: 'alt-sheet.png', role: 'character', label: 'Alternate sheet' },
+    { id: 'mvr-cs-cast-s-guest', imageId: 'guest-sheet.png', role: 'character', label: 'Guest sheet' },
+  ];
+  const SCENES = [
+    { sceneId: 'shot-a', frameReferenceIds: ['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-set-street'], clipReferenceIds: ['mvr-cs-character'] },
+    { sceneId: 'shot-b', frameReferenceIds: ['mvr-cs-character', 'mvr-cs-cast-s-alt'] },
+    { sceneId: 'shot-c', label: 'Guest arrives', frameReferenceIds: ['mvr-cs-cast-s-guest', 'mvr-cs-character'] },
+    { sceneId: 'shot-d' },
+  ];
+  const STAGE = { status: 'approved', revision: 2, direction: { ...DIRECTION, cast: [{ id: 's-alt', name: 'Lead' }, { id: 's-guest', name: 'Guest' }] }, images: {} };
+  const sentFiles = (project, sceneId) => musicVideoConditioningReferences(project, project.scenes.find(scene => scene.sceneId === sceneId)).map(ref => ref.imageId);
+
+  async function legacyVideo(stage = STAGE) {
+    onDisk(...Object.values(MEDIA).flat().map(row => row.mediaKey));
+    const project = await seed({ concept: { subjects: SUBJECTS } });
+    await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, scenes: SCENES,
+      visualSpec: { ...current.visualSpec, references: REFERENCES }, castAndSets: stage } }));
+    const db = { getIngredient: async id => ({ id, type: id.startsWith('plc-') ? 'place' : 'character', name: id, payload: {} }), listMediaForIngredient: async id => MEDIA[id] || [] };
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+    const catalogDB = await import('../catalogDB.js');
+    const spies = [vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient), vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient)];
+    onTestFinished(() => spies.forEach(spy => spy.mockRestore()));
+    return project;
+  }
+  const switchToCatalog = id => request(app).post(`/api/music-video/${id}/cast-and-sets/catalog`).send({});
+
+  it('sends the same images after the switch, keeps alternates out, and names the shot the catalog cannot serve', async () => {
+    const project = await legacyVideo();
+    const switched = await switchToCatalog(project.id);
+    expect(switched.status).toBe(200);
+    const after = switched.body.project;
+    expect(sentFiles(after, 'shot-a')).toEqual(['lead-sheet.png', 'lead-face.png', 'street-plate.png']);
+    const [shotA, shotB, shotC, shotD] = after.scenes;
+    expect(shotA.clipReferenceIds[0]).toBe(shotA.frameReferenceIds[0]);
+    expect(shotA.frameReferenceIds.every(id => id.startsWith('mvr-catalog-'))).toBe(true);
+    // The inactive alternate's sheet stays out, exactly as it did before the switch, and is no problem.
+    expect(shotB.frameReferenceIds[1]).toMatch(/^mvr-catalog-/);
+    expect(sentFiles(after, 'shot-b')).toEqual(['lead-sheet.png']);
+    // The pick with no equivalent stays saved so offering the image later can still move it.
+    expect(shotC.frameReferenceIds[0]).toBe('mvr-cs-cast-s-guest');
+    expect(shotC.frameReferenceIds[1]).toBe(shotA.frameReferenceIds[0]);
+    expect(shotD.frameReferenceIds).toBeUndefined();
+    const { shotReferenceProblems, movableShotReferences, problems, basis } = switched.body.catalogCheckin;
+    expect(problems).toEqual([]);
+    expect(movableShotReferences).toBe(0);
+    expect(shotReferenceProblems).toHaveLength(1);
+    expect(shotReferenceProblems[0]).toMatchObject({ sceneId: 'shot-c', shot: 3, references: ['Guest sheet'] });
+    expect(shotReferenceProblems[0].message).toContain('Shot 3 · Guest arrives');
+    // One shot's gap blocks neither approval nor the other shots' catalog choices.
+    expect(sentFiles(after, 'shot-c')).toEqual(['lead-sheet.png']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis })).status).toBe(200);
+    expect(after.visualSpec.references).toEqual(REFERENCES);
+    expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+  });
+
+  it('recovers a video switched before picks moved, without touching its approval', async () => {
+    const project = await legacyVideo({ ...STAGE, source: 'catalog' });
+    const before = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+    expect(before.body.catalogCheckin.movableShotReferences).toBe(7);
+    expect(before.body.catalogCheckin.shotReferenceProblems.map(problem => problem.sceneId)).toEqual(['shot-c']);
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: before.body.catalogCheckin.basis })).status).toBe(200);
+    const moved = await switchToCatalog(project.id);
+    expect(moved.status).toBe(200);
+    expect(moved.body.catalogCheckin).toMatchObject({ approved: true, basis: before.body.catalogCheckin.basis, movableShotReferences: 0 });
+    expect(moved.body.stage.revision).toBe(STAGE.revision);
+    expect(sentFiles(moved.body.project, 'shot-a')).toEqual(['lead-sheet.png', 'lead-face.png', 'street-plate.png']);
+  });
+});
+
+it('blocks catalog approval until every subject is linked and refuses conversion while old jobs are active', async () => {
+  const project = await seed();
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'directing', processId: service.__castAndSetsProcessId(), images: {} } } }));
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({})).status).toBe(409);
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'imaging', images: { character: { status: 'queued' } } } } }));
+  const busy = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({});
+  expect(busy.status).toBe(409);
+  await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'directing', processId: 'previous-process', images: {} } } }));
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/catalog`).send({})).status).toBe(200);
+  const read = await request(app).get(`/api/music-video/${project.id}/cast-and-sets`);
+  expect(read.body.catalogCheckin.problems[0].code).toBe('CATALOG_LINK_REQUIRED');
+  expect(read.body.catalogCheckin.items[0].subjectId).toBe('s-band');
+  expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({})).status).toBe(409);
+  expect(runPrompt).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
 });

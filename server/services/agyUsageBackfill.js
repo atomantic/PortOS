@@ -17,7 +17,7 @@ import {
   planAgyUsageRepair,
   summarizeAgyRepairAdditions,
 } from './agyUsageRepair.js';
-import { addDatedUsage, flushUsageLedger, getUsage, loadUsage } from './usage.js';
+import { addDatedUsageBatch, getUsage, loadUsage } from './usage.js';
 
 const faultLabel = (err) => {
   if (err?.code) return String(err.code);
@@ -133,11 +133,6 @@ export async function applyAgyUsageRepair({
     return { ...summarizeAgyRepairAdditions([]), backedUp: false, note, backupDir: null };
   }
   const backupDir = await backupLedger(dataDir);
-  const written = [];
-  for (const item of plan.additions) {
-    const wrote = await addDatedUsage(item.day, item.record, { repairId: item.repairId, flush: false });
-    if (wrote) written.push(item);
-  }
-  if (written.length > 0) await flushUsageLedger();
+  const written = await addDatedUsageBatch(plan.additions);
   return { ...summarizeAgyRepairAdditions(written), backedUp: true, note, backupDir };
 }

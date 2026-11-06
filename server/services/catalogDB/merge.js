@@ -85,9 +85,11 @@ export async function mergeIngredients(input) {
   return withTransaction(async client => {
     const ids = [sourceId, survivorId].sort();
     await lockState(client, ids, !dryRun);
-    const active = await client.query(`SELECT id FROM catalog_ingredient_merges
+    const active = await client.query(`SELECT id, source_id, survivor_id FROM catalog_ingredient_merges
       WHERE restored_at IS NULL AND (source_id = ANY($1) OR survivor_id = ANY($1))`, [ids]);
-    if (active.rowCount) fail('Recover the existing merge before merging either identity again');
+    if (active.rows.some(row => row.source_id === sourceId || row.source_id === survivorId || row.survivor_id === sourceId)) {
+      fail('Recover the existing merge before reusing a merged source or creating an alias chain');
+    }
     const shared = await client.query(`SELECT id FROM catalog_identity_operations
       WHERE state IN ('proposed', 'prepared', 'committed', 'recovery_prepared')
         AND (source_id = ANY($1) OR survivor_id = ANY($1))`, [ids]);
@@ -174,7 +176,7 @@ export async function mergeIngredients(input) {
     const id = randomUUID();
     await client.query(`INSERT INTO catalog_ingredient_merges
       (id, source_id, survivor_id, before_state, after_fingerprint) VALUES ($1, $2, $3, $4::jsonb, $5)`,
-    [id, sourceId, survivorId, toPgJson({ ...before, decision: { scope: 'local', fieldChoices, proposed } }), fingerprint(after)]);
+    [id, sourceId, survivorId, toPgJson({ ...before, decision: { scope: 'local', fieldChoices, proposed, priorMergeIds: active.rows.map(row => row.id) } }), fingerprint(after)]);
     return { id, sourceId, survivorId, merged: true, scope: 'local' };
   });
 }
@@ -210,10 +212,31 @@ export async function recoverIngredientMerge(id) {
     const { rows: [receipt] } = await client.query('SELECT * FROM catalog_ingredient_merges WHERE id = $1 FOR UPDATE', [id]);
     if (!receipt) throw new ServerError('Merge receipt not found', { status: 404 });
     if (receipt.restored_at) return { id, restored: true };
+    const later = await client.query(`SELECT id FROM catalog_ingredient_merges
+      WHERE restored_at IS NULL AND before_state->'decision'->'priorMergeIds' ? $1`, [id]);
+    if (later.rowCount) fail('Recover later merges into this ingredient first');
     const ids = [receipt.source_id, receipt.survivor_id].sort();
     const current = await snapshot(client, ids);
     assertOwnedUnlocked(current.ingredients, instanceId);
     if (fingerprint(current) !== receipt.after_fingerprint) fail('Merged state changed; recovery would overwrite later work', 'CATALOG_MERGE_STALE');
+    // Reconstruct each predecessor's exact state before this merge. Only a byte-exact
+    // match can advance its recovery checkpoint past our own audit/tombstone writes;
+    // edits to another source or between merges must remain stale.
+    const { rows: predecessors } = await client.query(`SELECT * FROM catalog_ingredient_merges
+      WHERE restored_at IS NULL AND id = ANY($1::text[])`, [receipt.before_state.decision?.priorMergeIds || []]);
+    const resumable = [];
+    const touches = (key, row, selected) => key === 'ingredients' ? selected.includes(row.id)
+      : key === 'relations' ? selected.includes(row.from_id) || selected.includes(row.to_id)
+        : selected.includes(row.ingredient_id);
+    for (const predecessor of predecessors) {
+      const previousIds = [predecessor.source_id, predecessor.survivor_id];
+      const previous = await snapshot(client, previousIds);
+      const reconstructed = Object.fromEntries(Object.keys(TABLES).map(key => [key, [
+        ...previous[key].filter(row => !touches(key, row, ids)),
+        ...receipt.before_state[key].filter(row => touches(key, row, previousIds)),
+      ].sort((a, b) => canonicalStringify(a).localeCompare(canonicalStringify(b)))]));
+      if (fingerprint(reconstructed) === predecessor.after_fingerprint) resumable.push(predecessor);
+    }
     await client.query('UPDATE catalog_ingredient_merges SET restored_at = NOW() WHERE id = $1', [id]);
     // Source rows never moved. Restore only the two records and associations
     // captured by this operation; unrelated ingredients and assets are untouched.
@@ -241,6 +264,11 @@ export async function recoverIngredientMerge(id) {
       await client.query(`INSERT INTO catalog_ingredient_revisions (id, ingredient_id, name, payload, tags, source, actor)
         VALUES ($1, $2, $3, $4::jsonb, $5, 'user', 'catalog-merge-recovery')`,
       [`cat-rev-${randomUUID()}`, row.id, row.name, toPgJson(row.payload), row.tags]);
+    }
+    for (const predecessor of resumable) {
+      const restored = await snapshot(client, [predecessor.source_id, predecessor.survivor_id]);
+      await client.query('UPDATE catalog_ingredient_merges SET after_fingerprint = $2 WHERE id = $1',
+        [predecessor.id, fingerprint(restored)]);
     }
     return { id, restored: true };
   });

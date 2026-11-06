@@ -4,11 +4,12 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 vi.mock('./usage.js', () => ({
+  getRecentCodexUsageClaims: vi.fn().mockResolvedValue([]),
   markUsageRunReconciled: vi.fn().mockResolvedValue(undefined),
   recordRunUsage: vi.fn().mockResolvedValue(undefined)
 }));
 
-const { markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
+const { getRecentCodexUsageClaims, markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
 const {
   transcriptFamily,
   isOpencodeRun,
@@ -506,6 +507,53 @@ describe('reconcileRunUsage', () => {
 });
 
 describe('recordCompletedRunUsage', () => {
+  it('restores the exact observed Codex boundary after restart, not growth before commit', async () => {
+    const first = {
+      providerId: 'codex-tui', model: 'gpt-5.3-codex', workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z'
+    };
+    const next = { ...first, startTime: '2026-07-01T10:10:20.000Z', endTime: '2026-07-01T10:10:50.000Z' };
+    const old = codexRollout({ timestamp: '2026-07-01T10:09:50.000Z', input: 10000, cached: 9000, output: 100 });
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-example.jsonl', old);
+    await recordCompletedRunUsage(first, '', { home, providers: [] });
+    const claims = recordRunUsage.mock.calls.at(-1)[1].codexHighWater;
+    expect(claims).toHaveLength(1);
+    expect(claims[0][1]).toMatchObject({ tokensOut: 100 });
+    __resetUsageClaims();
+    getRecentCodexUsageClaims.mockResolvedValueOnce(claims);
+    await recordCompletedRunUsage(next, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toMatchObject({ tokensIn: 0, tokensOut: 0 });
+
+    // New growth may arrive while the first completion scans siblings/saves,
+    // BEFORE its ledger timestamp. Its exact saved counters must not grow too.
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-example.jsonl', old + '\n' + codexRollout({
+      timestamp: '2026-07-01T10:10:03.000Z', input: 12000, cached: 10500, output: 150
+    }));
+    await readMeasuredUsage({ ...next, family: 'codex', home });
+    expect(claims[0][1].tokensOut).toBe(100);
+    __resetUsageClaims();
+    getRecentCodexUsageClaims.mockResolvedValueOnce(claims);
+    await recordCompletedRunUsage(next, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({
+      model: 'gpt-5.3-codex', tokensIn: 500, cacheReadTokens: 1500, tokensOut: 50, source: 'measured'
+    })]);
+  });
+
+  it('does not claim a transcript that was unavailable to an estimate-only completion', async () => {
+    const run = {
+      providerId: 'codex-tui', workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z'
+    };
+    await recordCompletedRunUsage(run, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[1].codexHighWater).toEqual([]);
+    __resetUsageClaims();
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-recovered.jsonl', codexRollout({
+      timestamp: '2026-07-01T10:09:50.000Z', input: 100, cached: 20, output: 10
+    }));
+    await recordCompletedRunUsage({ ...run, startTime: '2026-07-01T10:10:20.000Z', endTime: '2026-07-01T10:11:00.000Z' }, '', { home, providers: [] });
+    expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({ source: 'measured', tokensOut: 10 })]);
+  });
+
   it('persists measured counts for a run with a transcript', async () => {
     await writeClaudeSession('a.jsonl', [
       claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
@@ -545,8 +593,8 @@ describe('recordCompletedRunUsage', () => {
     });
 
     // The marker travels with the counts, so both commit in one usage.json write.
-    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-live', siblings: false });
-    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-scanned', siblings: true });
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-live', siblings: false, codexHighWater: [] });
+    expect(recordRunUsage).toHaveBeenCalledWith(expect.anything(), { reconciledRunId: 'run-example-scanned', siblings: true, codexHighWater: [] });
     expect(markUsageRunReconciled).not.toHaveBeenCalled();
   });
 
@@ -1653,5 +1701,67 @@ describe('nested sibling-family attribution', () => {
     // The parent keeps its estimate; the nested grok review gets its own row.
     expect(records.find((record) => record.providerId === 'ollama-local').source).toBe('estimate');
     expect(records.find((record) => record.providerId === 'grok-cli').tokensOut).toBe(1_800);
+  });
+});
+
+describe('Codex source inventory accounting', () => {
+  it('bills duplicate raw/archive/compressed copies once and preserves claims after move/reload', async () => {
+    const { zstdCompressSync } = await import('node:zlib');
+    const { rename } = await import('node:fs/promises');
+    const { mergeUsageClaims } = await import('./usageReconciler.js');
+    const text = codexRollout({ timestamp: '2026-07-01T10:01:00Z', input: 100, cached: 20, output: 50 });
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-1.jsonl', text);
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    await writeFile(join(archive, 'copy.jsonl.zst'), zstdCompressSync(text));
+    const args = { home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' };
+    const results = await Promise.all([readMeasuredUsage(args), readMeasuredUsage(args)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.find(Boolean)).toMatchObject({ tokensIn: 80, cacheReadTokens: 20, tokensOut: 50, sessions: 1 });
+    const saved = snapshotUsageClaims();
+    expect(saved.codexHighWater[0][0]).toMatch(/^codex-session:v1:/);
+    await rename(join(home, '.codex', 'sessions', '2026', '07', '01', 'rollout-1.jsonl'), join(archive, 'moved.jsonl'));
+    __resetUsageClaims();
+    mergeUsageClaims(saved);
+    expect(await readMeasuredUsage(args)).toBeNull();
+  });
+
+  it('adopts a legacy path claim after an identified rollout moves into an archive', async () => {
+    const { mergeUsageClaims } = await import('./usageReconciler.js');
+    const id = '12345678-1234-1234-1234-123456789abc';
+    const text = codexRollout({ timestamp: '2026-07-01T10:01:00Z', input: 100, cached: 20, output: 50 }).replace('rollout-1', id);
+    await writeCodexRollout(['archive'], 'moved.jsonl', text);
+    mergeUsageClaims({ codexHighWater: [[`/old/sessions/rollout-2026-07-01-${id}.jsonl`, { tokensIn: 80, cacheReadTokens: 20, tokensOut: 50 }]] });
+    expect(await readMeasuredUsage({ home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' })).toBeNull();
+  });
+
+  it('invalidates compressed metadata on growth and refuses conflicting or partial copies without advancing claims', async () => {
+    const { zstdCompressSync, createZstdDecompress } = await import('node:zlib');
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    const path = join(archive, 'copy.jsonl.zst');
+    const text = codexRollout({ timestamp: '2026-07-01T10:01:00Z', input: 100, cached: 20, output: 50 });
+    await writeFile(path, zstdCompressSync(text));
+    const decompress = vi.fn(() => createZstdDecompress());
+    const first = await readCodexAccountingSources({ home, decompress });
+    const second = await readCodexAccountingSources({ home, decompress });
+    expect(first.coverage.complete).toBe(true);
+    expect(second.revision).toBe(first.revision);
+    expect(decompress).toHaveBeenCalledTimes(1);
+    await writeFile(path, zstdCompressSync(text.replace('"output_tokens":50', '"output_tokens":60')));
+    const changed = await readCodexAccountingSources({ home, decompress });
+    expect(changed.revision).not.toBe(first.revision);
+    expect(decompress).toHaveBeenCalledTimes(2);
+    await writeFile(join(archive, 'old.jsonl'), text);
+    const args = { home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' };
+    await expect(readMeasuredUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE' });
+    expect(snapshotUsageClaims().codexHighWater).toEqual([]);
+    await rm(join(archive, 'old.jsonl'));
+    await writeFile(path, Buffer.from('truncated compression'));
+    await expect(readMeasuredUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE' });
+    expect(snapshotUsageClaims().codexHighWater).toEqual([]);
+    await writeFile(path, zstdCompressSync(text));
+    expect(await readMeasuredUsage(args)).toMatchObject({ tokensOut: 50 });
   });
 });

@@ -50,6 +50,7 @@ import { remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { anchorShotsToSungLyrics, carryStoryboardApproval, dropStaleStoryboardRows } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
+import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
 import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
 import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
 
@@ -645,6 +646,8 @@ function carryOver(prior, fresh) {
     referenceImageId: prior.referenceImageId ?? null,
     videoHistoryId: prior.videoHistoryId ?? null,
     ...(prior.setReference ? { setReference: prior.setReference } : {}),
+    // The director's own plan: a planner never sees it, so it can't recreate it.
+    ...(prior.shotSheet ? { shotSheet: prior.shotSheet } : {}),
     ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
     ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
     ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
@@ -765,7 +768,7 @@ export function applyStoryboardShotSync(project, plan) {
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
-  'cameoId', 'cameoVariantId', 'cameoLabel'];
+  'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**
  * A shot linked to another roster cameo (or variant) trades the still it
@@ -793,7 +796,8 @@ function linkSceneCameo(project, before, after) {
 export function applySceneUpdate(project, sceneId, patch) {
   const parsed = parseSceneOrThrow(musicVideoSceneUpdateSchema, patch);
   // A shot's own look is stored complete; null returns it to the video's look.
-  const looked = 'filmLook' in parsed ? { ...parsed, filmLook: parsed.filmLook ? normalizeFilmLook(parsed.filmLook) : null } : parsed;
+  const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(parsed.shotSheet) } : parsed;
+  const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
   const data = 'preMusic' in looked ? { ...looked, preMusic: normalizePreMusic(looked.preMusic) } : looked;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);

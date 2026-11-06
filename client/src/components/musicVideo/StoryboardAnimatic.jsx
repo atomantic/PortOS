@@ -16,6 +16,7 @@ import { endingParts } from '../../../../server/lib/musicVideoEnding.js';
 import EndingCanvas from './EndingCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
+import { sceneShotName } from '../../lib/musicVideoStages.js';
 import PreviewFilmLook, { usePreviewFilmLook } from './PreviewFilmLook.jsx';
 import { capturePreviewFrame, lyricFrameCaptureBridge } from '../../lib/musicVideoFrameCapture.js';
 import PreviewVideo from './PreviewVideo.jsx';
@@ -696,7 +697,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     if (!unchanged()) throw new Error('Preview changed during capture');
     const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages });
     if (!unchanged()) throw new Error('Preview changed during capture');
-    const shotLabel = basis.outro ? 'Ending' : `Shot ${timedShots(scenes).indexOf(selected) + 1}`;
+    const selectedIndex = selected ? timedShots(scenes).indexOf(selected) : -1;
+    const shotLabel = basis.outro ? 'Ending' : selected ? sceneShotName(selected, selectedIndex >= 0 ? { number: selectedIndex + 1 } : {}) : null;
     return { blob, time: at, fps: ANIMATIC_FPS, label: [project.name, shotLabel].filter(Boolean).join(' · ') };
   };
   // Cut effects (beat toggles, dissolves, fades through black), on the frames the final
@@ -831,7 +833,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           maxSec={Number(project.audioAnalysis?.durationSec) || null}
           onSeek={stepFrame}
           capture={captureFrame}
-          label={[project.name, `Shot ${index + 1}`].filter(Boolean).join(' · ')}
+          label={[project.name, shot ? sceneShotName(shot, { number: index + 1 }) : null].filter(Boolean).join(' · ')}
           keys
         />
       )}

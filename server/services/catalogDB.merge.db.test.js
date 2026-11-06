@@ -111,6 +111,65 @@ describe.skipIf(!ready)('recoverable local catalog merge', () => {
     await expect(mergeIngredients({ ...another, sourceId: input.survivorId })).rejects.toThrow('existing merge');
   });
 
+  it('merges additional sources into a survivor and recovers the chain newest first without losing originals', async () => {
+    const firstInput = await pair();
+    const secondInput = { ...await pair(), survivorId: firstInput.survivorId };
+    const thirdInput = { ...await pair(), survivorId: firstInput.survivorId };
+    await attachMedia(firstInput.sourceId, 'first-original.png', 'reference');
+    await attachMedia(secondInput.sourceId, 'second-original.png', 'reference');
+    await attachMedia(thirdInput.sourceId, 'third-original.png', 'reference');
+    const first = await apply(firstInput);
+    // Receipts created before chained merges shipped carry no dependency metadata.
+    await query("UPDATE catalog_ingredient_merges SET before_state = before_state #- '{decision,priorMergeIds}' WHERE id = $1", [first.id]);
+    const originalReceipt = await getIngredientMergeReceipt(first.id);
+    const stalePreview = await mergeIngredients(thirdInput);
+    const second = await apply(secondInput);
+    await expect(mergeIngredients({ ...thirdInput, dryRun: false, previewToken: stalePreview.previewToken }))
+      .rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
+    const third = await apply(thirdInput);
+    for (const input of [firstInput, secondInput, thirdInput]) {
+      expect((await getIngredient(input.sourceId)).id).toBe(firstInput.survivorId);
+    }
+    expect((await listMediaForIngredient(firstInput.survivorId)).map(row => row.mediaKey))
+      .toEqual(expect.arrayContaining(['first-original.png', 'second-original.png', 'third-original.png']));
+    await expect(recoverIngredientMerge(first.id)).rejects.toThrow('Recover later merges');
+    await expect(recoverIngredientMerge(second.id)).rejects.toThrow('Recover later merges');
+    await recoverIngredientMerge(third.id);
+    await recoverIngredientMerge(second.id);
+    expect((await listMediaForIngredient(firstInput.survivorId)).map(row => row.mediaKey)).toContain('first-original.png');
+    expect((await getIngredientMergeReceipt(first.id)).beforeState).toEqual(originalReceipt.beforeState);
+    await recoverIngredientMerge(first.id);
+    for (const input of [firstInput, secondInput, thirdInput]) {
+      expect((await getIngredient(input.sourceId)).id).toBe(input.sourceId);
+    }
+    expect((await getIngredient(firstInput.survivorId)).payload.description).toBe('Performance notes');
+    expect(await listMediaForIngredient(firstInput.survivorId)).toEqual([]);
+    expect((await listIngredientRevisions(firstInput.survivorId)).items.filter(row => row.actor === 'catalog-merge')).toHaveLength(3);
+  });
+
+  it('does not bless intervening edits when recovering a later merge', async () => {
+    const input = await pair();
+    const first = await apply(input);
+    await attachMedia(input.survivorId, 'intervening-edit.png', 'reference');
+    const second = await apply({ ...await pair(), survivorId: input.survivorId });
+    await recoverIngredientMerge(second.id);
+    await expect(recoverIngredientMerge(first.id)).rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
+    expect((await listMediaForIngredient(input.survivorId)).map(row => row.mediaKey)).toContain('intervening-edit.png');
+  });
+
+  it('keeps earlier recovery stale when an earlier source receives later association writes', async () => {
+    const input = await pair();
+    const first = await apply(input);
+    const second = await apply({ ...await pair(), survivorId: input.survivorId });
+    // Raw synchronized/source associations can change without going through alias resolution.
+    await query(`INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
+      VALUES ($1, 'music-video', 'example-later-source-ref', 'cast')`, [input.sourceId]);
+    await recoverIngredientMerge(second.id);
+    await expect(recoverIngredientMerge(first.id)).rejects.toMatchObject({ code: 'CATALOG_MERGE_STALE' });
+    expect((await query('SELECT ref_id FROM catalog_ingredient_refs WHERE ingredient_id = $1 AND deleted = false', [input.sourceId]))
+      .rows.map(row => row.ref_id)).toContain('example-later-source-ref');
+  });
+
   it('recovers an untouched merge without dropping audit history and leaves synchronized link tombstones', async () => {
     const input = await pair();
     await attachMedia(input.sourceId, 'recover-sheet.png', 'reference', { caption: 'Original caption' });

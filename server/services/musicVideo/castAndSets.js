@@ -20,6 +20,7 @@
  *       inspection?, inspectionAcknowledgement? } },
  *     artifactId, artifactVersion, notesApplied,
  *     feedback,             // [{ id, text, at, revision }]: standing sheet feedback every direction call honors
+ *     feedbackRenderPlan,   // paused feedback revision and image keys awaiting explicit render
  *     changeSummary,        // { revision, changes: [string], rerendered, at }: what the last revision changed
  *     createdAt, updatedAt, approvedAt,
  *     approvedInputs,       // labeled input hashes the approval rests on (productionReview.js); absent on legacy approvals
@@ -59,18 +60,20 @@ const stageError = (status, code, message) => new ServerError(message, { status,
 export const castAndSetsCheckinMode = (project) => (project?.automation?.checkins?.castAndSets === 'auto' ? 'auto' : 'review');
 
 /** The direction a code-authoring request may reuse: only an APPROVED stage's. */
-export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' ? (project.castAndSets.direction || null) : null);
+export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' && project.castAndSets.source !== 'catalog' ? (project.castAndSets.direction || null) : null);
 
 export const castAndSetsSettled = (stage) => CAST_SETS_SETTLED.includes(stage?.status);
 
 /** The stage as the director sees it: `interrupted` when a restart unpinned a working stage. */
 export const presentCastAndSets = (stage, processId) => (stage
-  ? { ...stage, interrupted: CAST_SETS_WORKING.includes(stage.status) && stage.processId !== processId }
+  ? { ...stage, interrupted: CAST_SETS_WORKING.includes(stage.status) && stage.processId !== processId,
+    queuedImagesToCheck: Object.values(stage.images || {}).filter((img) => img.status === 'queued' && (img.jobId || stage.processId === processId)).length }
   : null);
 
 function requireStage(project) {
   const stage = project?.castAndSets;
   if (!stage) throw stageError(404, 'NOT_FOUND', 'This project has no Cast & Sets check-in yet');
+  if (stage.source === 'catalog') throw stageError(409, 'CAST_SETS_CATALOG_ONLY', 'Edit catalog-linked check-in items in the catalog.');
   return stage;
 }
 
@@ -86,6 +89,8 @@ function write(project, stage, now) {
  */
 export function startCastAndSetsOnProject(project, { processId, productionRunId = null }, now = new Date().toISOString()) {
   const current = project?.castAndSets || null;
+  if (current?.source === 'catalog') throw stageError(409, 'CAST_SETS_CATALOG_ONLY', 'Edit catalog-linked check-in items in the catalog.');
+  if (current?.feedbackRenderPlan) throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Finish or discard the feedback plan before rebuilding the check-in');
   if (current && CAST_SETS_WORKING.includes(current.status) && current.processId === processId) {
     throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The Cast & Sets check-in is already being prepared');
   }
@@ -97,6 +102,7 @@ export function startCastAndSetsOnProject(project, { processId, productionRunId 
     status: 'directing',
     stopReason: null,
     error: null,
+    failedFromStatus: null,
     processId,
     productionRunId,
     route: current?.route || null,
@@ -119,8 +125,9 @@ export function startCastAndSetsOnProject(project, { processId, productionRunId 
  * goes back to `directing` when the direction itself must change, else
  * straight to `imaging`. Returns `{ project, stage }`.
  */
-export function reviseCastAndSetsOnProject(project, { processId, notesApplied = [], redirect }, now = new Date().toISOString()) {
+export function reviseCastAndSetsOnProject(project, { processId, notesApplied = [], redirect, feedbackRevision = false }, now = new Date().toISOString()) {
   const stage = requireStage(project);
+  if (stage.feedbackRenderPlan && !feedbackRevision) throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Finish or discard the feedback plan before revising the check-in');
   if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === processId) {
     throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The Cast & Sets check-in is already being prepared');
   }
@@ -131,9 +138,11 @@ export function reviseCastAndSetsOnProject(project, { processId, notesApplied = 
     status: redirect ? 'directing' : 'imaging',
     stopReason: null,
     error: null,
+    failedFromStatus: null,
     processId,
     manualImageEditReview: false,
     notesApplied: notesApplied.map((n) => ({ id: n.id || null, target: n.target || null, text: trimTo(n.text, 2000) })),
+    legacyFeedbackRemoved: false,
     approvedAt: null,
     approvedInputs: null,
     approvedValues: null,
@@ -156,17 +165,76 @@ export function addCastAndSetsFeedback(project, { id, text }, now = new Date().t
 /** Stop honoring one piece of standing feedback. Nothing re-renders. Returns `{ project, stage }`. */
 export function removeCastAndSetsFeedback(project, feedbackId, now = new Date().toISOString()) {
   const stage = requireStage(project);
-  if (!(stage.feedback || []).some((f) => f.id === feedbackId)) throw stageError(404, 'NOT_FOUND', 'That feedback is not on this check-in');
-  return write(project, { ...stage, feedback: stage.feedback.filter((f) => f.id !== feedbackId) }, now);
+  const removed = (stage.feedback || []).find((f) => f.id === feedbackId);
+  if (!removed) throw stageError(404, 'NOT_FOUND', 'That feedback is not on this check-in');
+  const pending = stage.feedbackRenderPlan?.phase === 'planning'
+    || (!stage.feedbackRenderPlan && stage.status === 'failed' && stage.changeSummary?.revision !== stage.revision);
+  const notesApplied = pending ? (stage.notesApplied || []).filter((note) => note.id !== feedbackId
+    && !(note.id == null && note.target === 'sheet' && note.text === removed.text && removed.revision === stage.revision)) : stage.notesApplied;
+  const legacyFeedbackRemoved = !stage.feedbackRenderPlan && pending && notesApplied.length < (stage.notesApplied || []).length;
+  return write(project, { ...stage, feedback: stage.feedback.filter((f) => f.id !== feedbackId), notesApplied,
+    ...(legacyFeedbackRemoved ? { legacyFeedbackRemoved: true } : {}) }, now);
+}
+
+/** Remove an exact per-image note without changing a previously prepared plan. */
+export function removeCastAndSetsImageNote(project, { key, index, text, processId }, now = new Date().toISOString()) {
+  const stage = requireStage(project);
+  if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === processId) throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'Wait for feedback planning to stop');
+  const notes = stage.keyNotes?.[key] || [];
+  if (notes[index] !== text) throw stageError(409, 'CAST_SETS_NOTE_STALE', 'This image note changed. Review it again.');
+  const keyNotes = { ...stage.keyNotes, [key]: notes.filter((_, i) => i !== index) };
+  const heldPending = stage.feedbackRenderPlan?.phase === 'planning' && stage.feedbackRenderPlan.kind === 'image'
+    && stage.feedbackRenderPlan.forceKeys?.includes(key);
+  const legacyPending = !stage.feedbackRenderPlan && stage.status === 'failed' && !stage.plan?.[key]?.prompt?.includes(text);
+  const pending = (heldPending || legacyPending) && index === notes.length - 1 && (stage.notesApplied || []).some((note) => note.text === text);
+  const feedbackRenderPlan = pending && heldPending ? { ...stage.feedbackRenderPlan, forceKeys: stage.feedbackRenderPlan.forceKeys.filter((item) => item !== key) } : stage.feedbackRenderPlan;
+  const notesApplied = pending ? (stage.notesApplied || []).filter((note) => note.text !== text) : stage.notesApplied;
+  return write(project, { ...stage, keyNotes, feedbackRenderPlan, notesApplied,
+    ...(pending && legacyPending ? { legacyFeedbackRemoved: true } : {}) }, now);
 }
 
 /** Re-pin an interrupted working stage to this process. Returns `{ project, stage }`. */
-export function resumeCastAndSetsOnProject(project, { processId }, now = new Date().toISOString()) {
+export function resumeCastAndSetsOnProject(project, { processId, resolveNoteKeys = (target, plan) => plan[target] ? [target] : null }, now = new Date().toISOString()) {
   const stage = requireStage(project);
+  const queued = Object.values(stage.images || {}).some((img) => img.status === 'queued' && (img.jobId || stage.processId === processId));
+  if (queued) throw stageError(409, 'CAST_SETS_JOBS_IN_FLIGHT', 'Wait for previously queued images to finish before resuming the check-in');
+  if (stage.feedbackRenderPlan) {
+    if (stage.feedbackRenderPlan.phase !== 'planning' || (!CAST_SETS_WORKING.includes(stage.status) && stage.status !== 'failed')) {
+      throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Review the feedback plan before rendering its images');
+    }
+    if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === processId) throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The feedback plan is already being prepared');
+    const status = ['direction', 'legacy-direction'].includes(stage.feedbackRenderPlan.kind) ? 'directing' : 'imaging';
+    return write(project, { ...stage, status, processId, stopReason: null, error: null, failedFromStatus: null }, now);
+  }
   if (!CAST_SETS_WORKING.includes(stage.status) && stage.status !== 'failed') {
     throw stageError(409, 'CAST_SETS_NOT_RESUMABLE', `The Cast & Sets check-in is ${stage.status}`);
   }
-  // A failed stage resumes where it stopped: failed keys get another try.
+  if (CAST_SETS_WORKING.includes(stage.status) && stage.processId === processId) throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The Cast & Sets check-in is already being prepared');
+  // Older interrupted or failed revisions predate feedback holds. Gather their
+  // remaining images for review instead of silently restarting a batch.
+  if (stage.status !== 'assembling') {
+    const pending = [];
+    const images = Object.fromEntries(Object.entries(stage.images || {}).map(([key, img]) => {
+      const orphaned = img.status === 'queued' && !img.jobId && stage.processId !== processId;
+      if (img.status === 'pending' || img.status === 'failed' || orphaned) {
+        if (stage.plan?.[key]) pending.push(key);
+        return [key, { ...img, status: 'pending', jobId: orphaned ? null : (img.jobId || null), failures: 0 }];
+      }
+      return [key, img];
+    }));
+    const pendingDirection = !(stage.legacyFeedbackRemoved && stage.direction && !(stage.notesApplied || []).length) && (stage.status === 'directing' || !stage.direction || (stage.status === 'failed'
+      && (stage.failedFromStatus === 'directing' || /creative direction/i.test(`${stage.stopReason || ''} ${stage.error || ''}`))) || (stage.status === 'failed'
+      && stage.changeSummary?.revision !== stage.revision
+      && (stage.notesApplied || []).some((note) => !resolveNoteKeys(note.target, stage.plan || {}))));
+    const unplanned = stage.status === 'failed' ? (stage.notesApplied || [])
+      .flatMap((note) => (resolveNoteKeys(note.target, stage.plan || {}) || [])
+        .filter((key) => !stage.plan[key].prompt?.includes(note.text))) : [];
+    const kind = pendingDirection ? 'legacy-direction' : unplanned.length ? 'image' : 'resume';
+    const feedbackRenderPlan = { phase: pendingDirection || unplanned.length ? 'planning' : 'ready', kind, keys: pending, forceKeys: unplanned };
+    return write(project, { ...stage, status: pendingDirection ? 'directing' : unplanned.length ? 'imaging' : 'review', feedbackRenderPlan,
+      images, processId, stopReason: null, error: null }, now);
+  }
+  // An interrupted assembly has no image jobs to restart.
   const images = Object.fromEntries(Object.entries(stage.images || {}).map(([key, img]) => [key,
     img.status === 'failed' || (img.status === 'queued' && !img.jobId) ? { ...img, status: 'pending', failures: 0, error: null } : img]));
   const status = stage.status === 'failed' ? (stage.direction ? 'imaging' : 'directing') : stage.status;
@@ -187,12 +255,13 @@ export function setCastAndSetsDirection(project, { direction, plan, route, rende
   for (const key of Object.keys(plan)) {
     const prev = stage.images?.[key];
     images[key] = !prev || rerender.has(key)
-      ? { status: 'pending', jobId: null, imageId: prev?.imageId || null, history: prev?.history || [], failures: 0, error: null, updatedAt: now }
+      ? { ...(stage.feedbackRenderPlan && prev ? prev : {}), status: 'pending', jobId: stage.feedbackRenderPlan ? (prev?.jobId || null) : null, imageId: prev?.imageId || null, history: prev?.history || [], failures: 0, error: null, updatedAt: now }
       : prev;
   }
   return write(project, {
     ...stage,
     status: 'imaging',
+    failedFromStatus: null,
     direction,
     plan,
     route: route ?? stage.route ?? null,
@@ -224,6 +293,7 @@ export const allCastAndSetsImagesDone = (stage) => {
  */
 export function reserveCastAndSetsImage(project, key, { processId }, now = new Date().toISOString()) {
   const stage = requireStage(project);
+  if (stage.feedbackRenderPlan) throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Review the feedback plan before rendering its images');
   if (stage.status !== 'imaging' || stage.processId !== processId) throw stageError(409, 'CAST_SETS_NOT_RUNNING', 'The Cast & Sets check-in is not generating images in this process');
   const img = stage.images?.[key];
   if (!img || img.status !== 'pending') throw stageError(409, 'CAST_SETS_IMAGE_BUSY', `The ${key} image is not waiting to render`);
@@ -263,7 +333,7 @@ export function settleCastAndSetsImage(project, key, { jobId = null, filename = 
     ...write(project, {
       ...stage,
       images: { ...stage.images, [key]: next },
-      ...(failed ? { status: 'failed', stopReason: `The ${stage.plan?.[key]?.label || key} image ${retryable ? 'failed twice' : 'could not be queued'}: ${reason}` } : {}),
+      ...(failed ? { status: 'failed', failedFromStatus: 'imaging', stopReason: `The ${stage.plan?.[key]?.label || key} image ${retryable ? 'failed twice' : 'could not be queued'}: ${reason}` } : {}),
     }, now),
     changed: true,
   };
@@ -297,6 +367,7 @@ export function reconfirmCastAndSetsOnProject(project, approvedInputs, approvedV
 /** Refuse an approval that has nothing to approve. */
 export function assertCastAndSetsApprovable(project) {
   const stage = requireStage(project);
+  if (stage.feedbackRenderPlan) throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Finish the feedback plan before approving the check-in');
   if (stage.status !== 'review') throw stageError(409, 'CAST_SETS_NOT_IN_REVIEW', `The Cast & Sets check-in is ${stage.status}, not waiting for review`);
   if (castSetsInspectionBlockers(stage).length) throw stageError(409, 'CAST_SETS_INSPECTION_REQUIRED', 'Retry vision, regenerate, or accept each flagged or unchecked image before approving.');
   return stage;

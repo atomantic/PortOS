@@ -660,3 +660,6 @@ export const savePeerCatalogReview = (data, options) => request('/peer-administr
 export const approveTailcatDevice = (data, options) => request('/instances/peers/tailcat/devices', { ...options, method: 'POST', body: JSON.stringify(data) });
 export const revokeTailcatDevice = (id, options) => request(`/instances/peers/tailcat/devices/${id}`, { ...options, method: 'DELETE' });
 export const setTailcatDeviceEnforcement = (enabled, options) => request('/instances/peers/tailcat/devices/enforcement', { ...options, method: 'PATCH', body: JSON.stringify({ enabled }) });
+
+export const previewCodexUsage = (range, options = {}) => request('/usage/backfill/preview', { method: 'POST', body: JSON.stringify(range), ...options });
+export const cancelCodexUsagePreview = (jobId, options = {}) => request('/usage/backfill/preview/cancel', { method: 'POST', body: JSON.stringify({ jobId }), ...options });

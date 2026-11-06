@@ -40,6 +40,30 @@ describe('computeRecordIntegrity', () => {
     expect(result[0]).toMatchObject({ id: 'r1', status: INTEGRITY_STATUS.DIVERGED });
   });
 
+  it.each([
+    ['2026-05-23T00:00:00Z', '2026-05-22T20:00:00.000-04:00'],
+    ['1970-01-01T00:00:00Z', '1970-01-01T00:00:00.000Z'],
+  ])('keeps the legacy warning but marks equivalent clocks unverified (%s, %s)', (localTime, peerTime) => {
+    const result = computeRecordIntegrity([makeRow({ updatedAt: localTime })], [makeRow({ updatedAt: peerTime })]);
+    expect(result[0]).toMatchObject({ status: INTEGRITY_STATUS.DIVERGED, assessment: 'unknown', reason: 'timestamp-tie' });
+  });
+
+  it('does not make different or invalid clocks unverified', () => {
+    for (const peerTime of ['2026-05-23T00:00:00.500Z', 'not-a-date']) {
+      const [result] = computeRecordIntegrity([makeRow({ updatedAt: '2026-05-23T00:00:00Z' })], [makeRow({ updatedAt: peerTime })]);
+      expect(result.status).toBe(INTEGRITY_STATUS.DIVERGED);
+      expect(result).not.toHaveProperty('assessment');
+    }
+  });
+
+  it('keeps a known asset or metadata mismatch when equivalent clocks use different formats', () => {
+    const local = makeRow({ updatedAt: '2026-05-23T00:00:00Z', assetHashes: ['a'] });
+    const peer = makeRow({ updatedAt: '2026-05-23T00:00:00.000Z', assetHashes: ['b'] });
+    expect(computeRecordIntegrity([local], [peer])[0].status).toBe(INTEGRITY_STATUS.ASSETS_MISSING);
+    expect(computeRecordIntegrity([local], [{ ...peer, assetHashes: ['a'], metadataMissing: true }])[0].status)
+      .toBe(INTEGRITY_STATUS.METADATA_MISSING);
+  });
+
   it('returns ASSETS_MISSING when updatedAt is the same but hashes differ', () => {
     const ts = '2026-05-23T00:00:00.000Z';
     const local = makeRow({ updatedAt: ts, assetHashes: ['aaaa'] });

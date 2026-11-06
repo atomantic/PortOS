@@ -2889,3 +2889,9 @@ CREATE OR REPLACE VIEW catalog_identity_read_revisions AS
 
     ) SELECT DISTINCT ON ((r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
       FROM candidates ORDER BY (r).id, priority;
+
+-- Machine-local latest mind review; does not change source content/version.
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15;
