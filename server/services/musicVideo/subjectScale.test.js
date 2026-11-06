@@ -6,7 +6,7 @@ import { loadMusicVideoSubjectSizes } from './subjectScale.js';
 describe('loadMusicVideoSubjectSizes', () => {
   const records = {
     'cat-kid': { type: 'character', payload: { age: '30', stats: [{ label: 'Height', value: '5 ft 6 in tall' }], forms: [{ id: 'form-aaaaaaaa', label: 'Age 7', age: '7' }] } },
-    'cat-adult': { type: 'character', payload: { stats: [{ label: 'Height', value: '6 ft 1 in' }] } },
+    'cat-adult': { type: 'character', payload: { stats: [{ label: 'Height', value: '6 ft 1 in' }], forms: [{ id: 'form-bbbbbbbb', label: 'Winter coat' }] } },
     'cat-bike': { type: 'object', payload: { size: 'handlebars 3 ft 4 in tall' } },
     'cat-gone': { type: 'object', deleted: true, payload: { size: '1 ft' } },
   };
@@ -21,6 +21,7 @@ describe('loadMusicVideoSubjectSizes', () => {
         { id: 'k7', kind: 'character', name: 'Example Kid', ingredientId: 'cat-kid', castForm: { id: 'form-aaaaaaaa', label: 'Age 7', age: 7 } },
         { id: 'k30', kind: 'character', name: 'Example Kid grown', ingredientId: 'cat-kid' },
         { id: 'ad', kind: 'character', name: 'Example Dad', ingredientId: 'cat-adult' },
+        { id: 'adw', kind: 'character', name: 'Example Dad in winter', ingredientId: 'cat-adult', castForm: { id: 'form-bbbbbbbb', label: 'Winter coat' } },
         { id: 'bk', kind: 'object', name: 'Example bike', ingredientId: 'cat-bike' },
         { id: 'gn', kind: 'object', name: 'Example gone', ingredientId: 'cat-gone' },
         { id: 'fl', kind: 'object', name: 'Example offline', ingredientId: 'cat-fail' },
@@ -33,6 +34,7 @@ describe('loadMusicVideoSubjectSizes', () => {
       k7: 'about 4 ft (122 cm)',
       k30: '5 ft 6 in',
       ad: '6 ft 1 in',
+      adw: '6 ft 1 in',
       bk: 'handlebars 3 ft 4 in tall',
       cs: '5 ft 2 in',
     });

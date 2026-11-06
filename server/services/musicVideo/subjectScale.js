@@ -13,7 +13,9 @@ const withoutTall = (text) => String(text || '').trim().replace(/\s+tall\.?$/i, 
 
 function characterSize(payload, castFormId) {
   const form = castFormId && Array.isArray(payload.forms) ? payload.forms.find((f) => f?.id === castFormId) : null;
-  const height = form ? resolveHeight(form.height, form.age) : resolveHeight(characterHeightStat(payload), payload.age);
+  // A look, or an adult age, with no height of its own keeps the record's (as its sheet does).
+  const fromForm = form ? resolveHeight(form.height, form.age) : null;
+  const height = fromForm?.text ? fromForm : resolveHeight(characterHeightStat(payload), payload.age);
   return height?.text || '';
 }
 
