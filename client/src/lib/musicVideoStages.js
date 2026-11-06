@@ -21,7 +21,8 @@ import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.j
 
 /**
  * The steps of a music video, in the order the director decides them: the
- * story is planned shot by shot before the Look is cast. The
+ * story comes before the song, and is planned shot by shot before the Look
+ * is cast. The
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard (once
  * Plan) is `board`, Shots (once Make) is `produce` — each shot's still,
@@ -29,8 +30,8 @@ import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.j
  * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
-  { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
+  { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when the shots and composition are ready.' },
@@ -1066,7 +1067,7 @@ function castSetsChecklist({ project, readiness }) {
   const waiting = !approve.done && !approve.stale && (missing.length > 0 || !guide);
   return [
     { id: 'direction', label: 'Art direction written', done: missing.length === 0, ...direction },
-    { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide, ...guideRow },
+    { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}${guide.version ? ` v${guide.version}` : ''}` : 'Visual guide chosen', done: !!guide, ...guideRow },
     feedbackItem(project, 'art', readiness),
     waiting ? { ...approve, detail: 'Opens once the art direction is written and a guide is chosen.', action: null } : approve,
   ].filter(Boolean);
@@ -1218,7 +1219,8 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   ].filter(Boolean).join(' · ');
   const draft = project.productionReview?.draft || {};
   const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted);
-  const look = guide ? 'Visual guide chosen' : project.castAndSets?.source === 'catalog' ? 'Catalog cast and sets linked' : project.castAndSets ? 'Cast and sets built' : '';
+  // The guide's version names the one the director settled on (e.g. "Visual guide v35").
+  const look = guide ? (guide.version ? `Visual guide v${guide.version}` : 'Visual guide chosen') : project.castAndSets?.source === 'catalog' ? 'Catalog cast and sets linked' : project.castAndSets ? 'Cast and sets built' : '';
   const board = scenes.length ? `${formatCount(scenes.length)} ${scenes.length === 1 ? 'shot' : 'shots'}` : '';
   const mode = project.composition?.mode || 'concat';
   let make = '';

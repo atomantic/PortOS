@@ -22,8 +22,8 @@ describe('music-video step navigation', () => {
     expect(stepNavs()).toHaveLength(2);
     const steps = within(rail()).getAllByRole('button').filter((button) => button.getAttribute('aria-expanded') === null);
     expect(steps.map((step) => step.textContent)).toEqual([
+      '1Story' + 'Not started',
       'Song' + 'Done' + '4:40 · 70 lyric lines',
-      '2Story' + 'Not started',
       '3Storyboard' + 'Needs you' + '26 shots',
       'Look' + 'Done',
       '5Shots' + 'Not started',
@@ -32,7 +32,7 @@ describe('music-video step navigation', () => {
       'Assets', 'Cleanup',
     ]);
     expect(steps[2]).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(steps[1]);
+    fireEvent.click(steps[0]);
     expect(onStageChange).toHaveBeenCalledWith('story');
     fireEvent.click(steps[4]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
@@ -40,7 +40,7 @@ describe('music-video step navigation', () => {
     expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Song, Done', 'Story, Not started', 'Storyboard, Needs you', 'Look, Done', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
+      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();
