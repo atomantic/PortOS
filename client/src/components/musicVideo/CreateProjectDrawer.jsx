@@ -1,6 +1,7 @@
 import MediaModePicker from './MediaModePicker.jsx';
 import CharacterStyleSelect from './CharacterStyleSelect.jsx';
 import { Bot, Clapperboard, Plus, Music, Sparkles, FileText, CheckCircle2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import ListLoadError from '../ui/ListLoadError';
 import Drawer from '../Drawer.jsx';
 import YoutubeImportControls from './YoutubeImportControls.jsx';
@@ -9,6 +10,8 @@ import MoodBoardReferenceStrip from '../moodBoard/MoodBoardReferenceStrip.jsx';
 import { trackSourceLabel } from '../../lib/trackProvenance.js';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
+import { universeStyleRefusal } from '../../../../server/lib/universeVisualStyle.js';
+import { getUniverse } from '../../services/apiUniverseBuilder.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const MODES = [
@@ -38,6 +41,20 @@ export default function CreateProjectDrawer({
 }) {
   const autopilot = form.mode === 'autonomous';
   const availableUniverses = universes ?? universeResource?.items ?? [];
+  const [selectedUniverse, setSelectedUniverse] = useState(null);
+
+  useEffect(() => {
+    if (!form.universeId) { setSelectedUniverse(null); return undefined; }
+    let active = true;
+    getUniverse(form.universeId, { silent: true })
+      .then((u) => { if (active) setSelectedUniverse(u); })
+      .catch(() => { if (active) setSelectedUniverse(null); });
+    return () => { active = false; };
+  }, [form.universeId]);
+
+  const universeRefusal = selectedUniverse && selectedUniverse.id === form.universeId
+    ? universeStyleRefusal(selectedUniverse)
+    : null;
   const optionLabels = trackOptionLabels(tracks || []);
   const selectedTrack = (tracks || []).find((t) => t.id === form.trackId) || null;
   const sourceLabel = trackSourceLabel(selectedTrack);
@@ -193,6 +210,11 @@ export default function CreateProjectDrawer({
               <option value="">{universeResource?.state === 'loading' || (universes === null && !universeResource) ? 'Loading…' : 'No universe'}</option>
               {availableUniverses.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
+            {universeRefusal && (
+              <p className="text-xs text-port-error mt-1" role="alert">
+                {universeRefusal.message}
+              </p>
+            )}
             {universeResource?.state === 'error' && (
               <ListLoadError
                 what="universes"
@@ -223,7 +245,7 @@ export default function CreateProjectDrawer({
         {/* 6. Submit Button */}
         <button
           type="submit"
-          disabled={youtube.createJob.active || submitting || !form.name.trim()}
+          disabled={youtube.createJob.active || submitting || !form.name.trim() || !!universeRefusal}
           className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
         >
           <Plus size={16} /> {submitting ? 'Creating…' : (autopilot ? 'Create autopilot project' : 'Create')}

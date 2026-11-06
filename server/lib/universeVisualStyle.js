@@ -36,6 +36,51 @@ const normalize = (token) => token.toLowerCase().replace(/\s+/g, ' ').trim();
 export const splitPromptTokens = (text) => (typeof text === 'string' ? text : '')
   .split(',').map((token) => token.trim()).filter(Boolean);
 
+export const STYLE_SNAPSHOT_MAX = 4000;
+
+/**
+ * Assembled raw style text for a universe (name, styleNotes, embrace, avoid).
+ */
+export function assembleUniverseStyleText(universe) {
+  if (!universe) return '';
+  const { embrace, avoid } = universeVisualStyleTokens(universe);
+  return [
+    universe.name,
+    universe.styleNotes,
+    embrace.length ? `Embrace: ${embrace.join(', ')}` : '',
+    avoid.length ? `Avoid: ${avoid.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * Validates whether a universe style snapshot exceeds the concept limit.
+ * Returns null if the snapshot fits or if photography direction is absent,
+ * or a refusal diagnostic object naming where to shorten it.
+ */
+export function universeStyleRefusal(universe) {
+  if (!universe || !universe.visualProfile) return null;
+  const text = assembleUniverseStyleText(universe);
+  if (text.length <= STYLE_SNAPSHOT_MAX) return null;
+  const { embrace, avoid } = universeVisualStyleTokens(universe);
+  const styleNotesLength = (universe.styleNotes || '').trim().length;
+  const influencesLength = (embrace.length ? `Embrace: ${embrace.join(', ')}`.length : 0)
+    + (avoid.length ? `Avoid: ${avoid.join(', ')}`.length : 0);
+  const suggestion = styleNotesLength && influencesLength
+    ? (styleNotesLength >= influencesLength
+      ? `Shorten style notes (${styleNotesLength} characters) or influences (${influencesLength} characters)`
+      : `Shorten influences (${influencesLength} characters) or style notes (${styleNotesLength} characters)`)
+    : (styleNotesLength
+      ? `Shorten style notes (${styleNotesLength} characters)`
+      : `Shorten influences (${influencesLength} characters)`);
+  return {
+    length: text.length,
+    limit: STYLE_SNAPSHOT_MAX,
+    styleNotesLength,
+    influencesLength,
+    message: `Universe style has ${text.length} characters; the video concept limit is ${STYLE_SNAPSHOT_MAX}. ${suggestion} before linking it.`,
+  };
+}
+
 /** Curated visual token lists for a universe (`[]` for a missing universe). */
 export function universeVisualStyleTokens(universe) {
   const profile = normalizeUniverseVisualProfile(universe?.visualProfile);

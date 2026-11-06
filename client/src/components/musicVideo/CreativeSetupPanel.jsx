@@ -2,6 +2,7 @@ import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideoCastS
 import { useEffect, useState } from 'react';
 import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
+import { universeStyleRefusal } from '../../../../server/lib/universeVisualStyle.js';
 import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';
 import { listUniverseNames, getUniverse } from '../../services/apiUniverseBuilder.js';
@@ -50,6 +51,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   const [catalogKind, setCatalogKind] = useState(null);
   const universeId = draft?.universeId ?? project.concept?.universeId ?? '';
   const universeReady = !universeId || (!loading && universe?.id === universeId);
+  const refusal = universeReady && universe ? universeStyleRefusal(universe) : null;
   const subjects = editing ? (draft?.subjects || []) : (project.concept?.subjects || []);
   const activeSubjects = activeMusicVideoSubjects({ subjects });
   const overlongSubjects = subjects.filter((subject) => (subject.description || '').length > SUBJECT_DESCRIPTION_MAX);
@@ -110,6 +112,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
   };
   const save = async () => {
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
+    if (refusal) { setError(refusal.message); return; }
     if (overlongSubjects.length) { setError('Shorten the highlighted descriptions before saving.'); return; }
     setSaving(true);
     setError('');
@@ -147,6 +150,11 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
             {universeId && !lists.universes.some((u) => u.id === universeId) && <option value={universeId}>Selected universe</option>}
             {lists.universes.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
+          {refusal && (
+            <p className="text-xs text-port-error mt-1" role="alert">
+              {refusal.message}
+            </p>
+          )}
           {universeId && <Link className="text-xs text-port-accent" target="_blank" to={`/universes/${encodeURIComponent(universeId)}`}>Edit universe canon</Link>}
         </div>
       </div>
@@ -204,7 +212,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
       </p>
       <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= 24 || newDescription.length > SUBJECT_DESCRIPTION_MAX} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
       {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
-      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!newName.trim() || !!newDescription.trim() || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!refusal || !!newName.trim() || !!newDescription.trim() || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
     {!editing && subjects.length > 0 && <VideoCastLinksDisclosure
       summary={`Catalog links (${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked)`}
