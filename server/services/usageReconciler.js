@@ -1,3 +1,4 @@
+import { readCodexAccountingSources, codexSessionClaimKey, codexIdentityHash } from './codexUsageSources.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
@@ -122,7 +123,7 @@ const removeClaim = (fileKey, messageKey) => {
 };
 
 // The ABSOLUTE cumulative position of each Codex rollout that has already been
-// billed, keyed by file path. Codex reports cumulative totals, so a rollout that
+// billed, keyed by versioned logical session identity (legacy paths are adopted). Codex reports cumulative totals, so a rollout that
 // grows between two runs would otherwise re-include the earlier run's tokens.
 // Stored in absolute rollout units (not "tokens we billed") so the delta is a
 // plain subtraction: a windowed parse already nets out the earlier snapshot, so
@@ -350,36 +351,6 @@ export const listSubdirs = async (dir) => {
 };
 
 /**
- * Every date directory (`YYYY/MM/DD`) a run could have written a Codex rollout
- * into. A run spanning midnight (or a UTC/local boundary) touches two days, so
- * the window's start and end days are both included.
- */
-function codexDateDirs(root, fromMs, toMs) {
-  const days = new Set();
-  const start = Number.isFinite(fromMs) ? fromMs : Date.now();
-  const end = Number.isFinite(toMs) ? toMs : start;
-  // Step a day at a time from start to end, plus a day either side for
-  // timezone skew between the CLI's clock and ours.
-  for (let ms = start - 86_400_000; ms <= end + 86_400_000; ms += 86_400_000) {
-    const d = new Date(ms);
-    days.add(join(
-      root,
-      String(d.getUTCFullYear()),
-      String(d.getUTCMonth() + 1).padStart(2, '0'),
-      String(d.getUTCDate()).padStart(2, '0')
-    ));
-    // The CLI files rollouts by LOCAL date; add that path too.
-    days.add(join(
-      root,
-      String(d.getFullYear()),
-      String(d.getMonth() + 1).padStart(2, '0'),
-      String(d.getDate()).padStart(2, '0')
-    ));
-  }
-  return [...days];
-}
-
-/**
  * Token buckets for a `parseAgyTranscript` result. When the transcript carries
  * measured token counts (`input_tokens`, `output_tokens`), those counts are
  * preserved with source `measured`. Otherwise figures fall back to chars/4
@@ -565,58 +536,63 @@ async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFr
 }
 
 async function readCodexSessions({ home, workspacePath, from, to, fold, codexReserved }) {
-  const sessionsRoot = join(home, '.codex', 'sessions');
-  for (const dir of codexDateDirs(sessionsRoot, from ?? Date.now(), to ?? from ?? Date.now())) {
-    for (const file of await listDir(dir)) {
-      if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
-      const path = join(dir, file);
-      const text = await tryReadFile(path);
-      if (!text) continue;
-      // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
-      // not enough: a rollout that GROWS between two overlapping runs presents
-      // a later snapshot under a different key, and its delta (measured from a
-      // baseline before both runs) re-includes what the first run already
-      // billed. Track the highest cumulative boundary billed per file and
-      // re-parse from there, so each run charges only the genuinely new part.
-      // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
-      // absolute (no lower bound) so the watermark arithmetic below is a plain
-      // subtraction, but capped at `to` so a run only ever bills through its
-      // own end. Both halves are load-bearing:
-      //   - Absolute (no `from`): a windowed parse already nets out the earlier
-      //     snapshot as its baseline, so subtracting the watermark from it would
-      //     double-subtract (measured: a later run billed 50, not 150). It also
-      //     keeps the math immune to several snapshots sharing one epoch ms,
-      //     which is why the timestamp boundary this replaced was unsound.
-      //   - Capped at `to`: without it, an EARLY run reading the file after it
-      //     grew would bill growth generated after its own window and advance
-      //     the watermark past it, leaving the run that actually produced those
-      //     tokens with nothing (measured: early run billed 250, late run 0).
-      const absolute = parseCodexRollout(text, { to });
-      if (!cwdMatches(absolute.cwd, workspacePath)) continue;
-      // Require the run's own window to overlap this rollout at all, so a
-      // rollout from an unrelated period isn't attributed to this run.
-      if (totalTranscriptTokens(parseCodexRollout(text, { from, to })) === 0) continue;
+  const inventory = await readCodexAccountingSources({ home });
+  // Unknown/conflicting copies can overlap otherwise valid sessions. Never
+  // reserve or replace trustworthy counts from an incomplete inventory.
+  if (!inventory.coverage.complete) throw Object.assign(new Error('Codex source inventory is incomplete'), { code: 'CODEX_SOURCES_INCOMPLETE' });
+  for (const session of inventory.sessions) {
+    // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
+    // not enough: a rollout that GROWS between two overlapping runs presents
+    // a later snapshot under a different key, and its delta (measured from a
+    // baseline before both runs) re-includes what the first run already
+    // billed. Track the highest cumulative boundary billed per file and
+    // re-parse from there, so each run charges only the genuinely new part.
+    // Read the rollout's cumulative position AS OF THIS RUN'S WINDOW END —
+    // absolute (no lower bound) so the watermark arithmetic below is a plain
+    // subtraction, but capped at `to` so a run only ever bills through its
+    // own end. Both halves are load-bearing:
+    //   - Absolute (no `from`): a windowed parse already nets out the earlier
+    //     snapshot as its baseline, so subtracting the watermark from it would
+    //     double-subtract (measured: a later run billed 50, not 150). It also
+    //     keeps the math immune to several snapshots sharing one epoch ms,
+    //     which is why the timestamp boundary this replaced was unsound.
+    //   - Capped at `to`: without it, an EARLY run reading the file after it
+    //     grew would bill growth generated after its own window and advance
+    //     the watermark past it, leaving the run that actually produced those
+    //     tokens with nothing (measured: early run billed 250, late run 0).
+    const absolute = parseCodexRollout(session.records, { to });
+    if (!cwdMatches(session.cwd, workspacePath)) continue;
+    // Require the run's own window to overlap this rollout at all, so a
+    // rollout from an unrelated period isn't attributed to this run.
+    if (totalTranscriptTokens(parseCodexRollout(session.records, { from, to })) === 0) continue;
 
-      const billed = codexHighWater.get(path);
-      const net = { ...absolute, ...subtractBuckets(absolute, billed) };
-      if (totalTranscriptTokens(net) === 0) continue;
-
-      // Advance the mark to the absolute position just read, before the next
-      // `await` — for the same reason the Claude claim reserves per file: two
-      // overlapping runs must not both act on the pre-update value. `Math.max`
-      // guards a rollout that was truncated/rewritten smaller, so the mark
-      // never moves backwards and re-bills what it already charged.
-      const boundary = maxBuckets(billed, absolute);
-      codexHighWater.set(path, boundary);
-      codexReserved.push([path, billed, boundary]);
-      // Mirror the net into `byModel` — callers bill from the per-model records,
-      // so leaving them at absolute totals would re-charge the billed portion.
-      // Codex reports one model per rollout, so the whole net is that model's.
-      const modelKey = Object.keys(absolute.byModel || {})[0];
-      fold(modelKey
-        ? { ...net, byModel: { [modelKey]: addBuckets({}, net) } }
-        : net);
+    const path = codexSessionClaimKey(session.id);
+    const previous = codexHighWater.get(path);
+    // Old snapshots used a raw source path. Adopt an extant alias or the
+    // standard rollout filename identity even after it moved/compressed.
+    let billed = previous;
+    for (const [key, counts] of codexHighWater) {
+      const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
+      if (session.paths.includes(key) || legacyId && codexIdentityHash(legacyId) === session.id) billed = maxBuckets(billed, counts);
     }
+    const net = { ...absolute, ...subtractBuckets(absolute, billed) };
+    if (totalTranscriptTokens(net) === 0) continue;
+
+    // Advance the mark to the absolute position just read, before the next
+    // `await` — for the same reason the Claude claim reserves per file: two
+    // overlapping runs must not both act on the pre-update value. `Math.max`
+    // guards a rollout that was truncated/rewritten smaller, so the mark
+    // never moves backwards and re-bills what it already charged.
+    const boundary = maxBuckets(billed, absolute);
+    codexHighWater.set(path, boundary);
+    codexReserved.push([path, previous, boundary]);
+    // Mirror the net into `byModel` — callers bill from the per-model records,
+    // so leaving them at absolute totals would re-charge the billed portion.
+    // Codex reports one model per rollout, so the whole net is that model's.
+    const modelKey = Object.keys(absolute.byModel || {})[0];
+    fold(modelKey
+      ? { ...net, byModel: { [modelKey]: addBuckets({}, net) } }
+      : net);
   }
 }
 

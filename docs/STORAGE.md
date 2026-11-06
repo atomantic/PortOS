@@ -1458,3 +1458,19 @@ The existing journal backup/restore protection applies. POSIX recovery requires
 owner and process-group absence; Windows additionally requires operation-bound
 terminal evidence. Unknown liveness remains held, never aged out. See
 [Self-Update](SELF_UPDATE.md) for the offline recovery command.
+
+### Codex accounting source inventory
+
+The shared source reader keeps a disposable, process-local inventory of projected
+accounting records, keyed by source path and device/inode/size/mtime/ctime. It
+retains no transcript prose. Source changes invalidate the entry; incomplete
+reads are never cached. There is no new durable store or automatic historical
+rewrite, and restarting a worker safely rebuilds this inventory.
+
+Accounting claims use `codex-session:v1:<SHA-256 session ID>` in the existing
+`codexHighWater` snapshot. Readers accept older path-keyed claims through current
+source aliases and the standard rollout filename's session UUID, preserving
+claims when a source moves to an archive or becomes compressed. This is additive
+key compatibility, not a rewrite or migration of historical usage totals.
+Interactive scans still atomically commit their watermark with their counts;
+incomplete source coverage leaves that watermark unchanged.

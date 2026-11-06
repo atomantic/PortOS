@@ -1,6 +1,7 @@
+import { readCodexAccountingSources } from './codexUsageSources.js';
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
-import { basename, join } from 'path';
+import { join } from 'path';
 import { PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import {
@@ -157,10 +158,9 @@ async function listSessions(family, home, from) {
     const root = join(cliHome(home, 'CLAUDE_CONFIG_DIR', '.claude'), 'projects');
     for (const path of await listJsonl(root)) await add(null, path);
   } else if (family === 'codex') {
-    const root = join(cliHome(home, 'CODEX_HOME', '.codex'), 'sessions');
-    for (const path of await listJsonl(root)) {
-      if (basename(path).startsWith('rollout-')) await add(null, path);
-    }
+    const inventory = await readCodexAccountingSources({ home });
+    if (!inventory.coverage.complete) throw Object.assign(new Error('Codex source inventory is incomplete'), { code: 'CODEX_SOURCES_INCOMPLETE' });
+    for (const session of inventory.sessions) sessions.push({ cwd: session.cwd, entries: session.records });
   } else if (family === 'grok') {
     const root = join(home, '.grok', 'sessions');
     for (const dirName of await listSubdirs(root)) {
@@ -227,17 +227,17 @@ function parseSlice(family, entries, slice, seen) {
 
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
 async function parseSession(family, session, from, to, byCwd, seen, regionsOf = (lo, hi, cwd) => subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
-  const text = await tryReadFile(session.path);
-  if (!text) return [];
+  const text = session.entries ? null : await tryReadFile(session.path);
+  if (!session.entries && !text) return [];
   // Parsed once and windowed per day slice: re-splitting a multi-MB file per
   // slice would cost ~35 parses of it on a first scan.
-  const entries = parseJsonLines(text);
+  const entries = session.entries ?? parseJsonLines(text);
   const cwd = session.cwd ?? cwdFromEntries(family, entries);
   // A file cannot hold anything before it existed or after it was last written.
   // A birth time AFTER the last write means the file was copied or restored, so
   // it says nothing about when its content began — read from the window start.
-  const lo = session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
-  const hi = Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
+  const lo = !session.entries && session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
+  const hi = session.entries ? to : Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
   const results = [];
   for (const [a, b] of regionsOf(lo, hi, cwd)) {
     for (const slice of splitByUtcDay(a, b)) {
