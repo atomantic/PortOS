@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import StageSection from './StageSection.jsx';
 import ShotSheetAi from './ShotSheetAi.jsx';
 import ScenePoster from './ScenePoster.jsx';
+import ShotStillText from './ShotStillText.jsx';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
@@ -10,7 +11,7 @@ import { uuidv4 } from '../../lib/uuid.js';
 import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
 import { SHOT_SHEET_ANCHOR } from '../../lib/musicVideoStages.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetDrivesPrompt, shotSheetStillText, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -160,7 +161,7 @@ function CameraList({ project, disabled, onChange }) {
 }
 
 /** One shot's row. Each column is the director's own plan; the prompts it sits beside are shown on request. */
-function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen }) {
+function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onEditScene, onOpen }) {
   const { scene, sheet, lyric, camera, frameOutdated, problems, output } = row;
   const setField = (field, value) => onEdit(scene.sceneId, { ...sheet, [field]: value });
   const label = scene.label || 'Shot';
@@ -230,7 +231,20 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
       </td>
       {showPrompts && (
         <td className="min-w-[24rem] p-1.5 text-xs text-port-text-muted">
-          <p><span className="font-medium text-port-text">Frame: </span>{scene.framePrompt || 'None'}</p>
+          <label className="mb-1 flex min-h-[44px] items-center gap-1 sm:min-h-0">
+            <input type="checkbox" aria-label={`${label} build still from details`} checked={shotSheetDrivesPrompt(scene)} disabled={disabled}
+              onChange={(event) => setField('promptFromSheet', event.target.checked)} /> Build still from details
+          </label>
+          {shotSheetDrivesPrompt(scene) ? (
+            <div className="space-y-1">
+              <span className="block font-medium text-port-text">General prompt</span>
+              <SheetText label={`${label} general prompt`} value={scene.framePrompt || ''} maxLength={8000} disabled={disabled}
+                onCommit={(value) => onEditScene(scene.sceneId, { framePrompt: value || null })} />
+              <ShotStillText text={shotSheetStillText(project, scene)} />
+            </div>
+          ) : (
+            <p><span className="font-medium text-port-text">Frame: </span>{scene.framePrompt || 'None'}</p>
+          )}
           <p className="mt-1"><span className="font-medium text-port-text">Motion: </span>{scene.prompt || 'None'}</p>
         </td>
       )}
@@ -241,8 +255,9 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
 /**
  * The shot sheet on Shots: the whole video on one screen, to read the story
  * through and plan each shot without rendering a frame. Filled columns save
- * as you leave them. The sheet doesn't change what's sent to a model: the frame
- * and motion prompts stay the shot's inputs, shown here with Show prompts.
+ * as you leave them. A shot set to build its still from its details sends its
+ * columns plus its general prompt (shown, with the assembled text, under Show
+ * prompts); any other shot still sends its own frame and motion prompts.
  */
 export default function ShotSheetPanel({ board }) {
   const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot, treatment } = board;
@@ -277,6 +292,7 @@ export default function ShotSheetPanel({ board }) {
     editSceneLocal(sceneId, { shotSheet });
     saveScene(sceneId, { shotSheet });
   };
+  const editScene = (sceneId, patch) => { editSceneLocal(sceneId, patch); saveScene(sceneId, patch); };
   const saveSheets = (edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); });
   // Filtered, it marks only the shots listed, so a filter never ticks shots out of sight.
   const markDoneEdits = shotSheetMarkDoneEdits(listed);
@@ -356,7 +372,7 @@ export default function ShotSheetPanel({ board }) {
           </thead>
           <tbody className="divide-y divide-port-border">
             {listed.map((row) => (
-              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked || aiApplying} onEdit={editSheet} onOpen={onEditShot} />
+              <SheetRow key={row.scene.sceneId} project={project} row={row} cast={cast} showPrompts={showPrompts} disabled={locked || aiApplying} onEdit={editSheet} onEditScene={editScene} onOpen={onEditShot} />
             ))}
           </tbody>
         </table>

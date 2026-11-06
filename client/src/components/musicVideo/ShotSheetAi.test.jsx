@@ -28,6 +28,21 @@ describe('ShotSheetAi', () => {
     await waitFor(() => expect(onApply).toHaveBeenCalledWith('a', { shotSheet: { emotion: 'My emotion', location: 'Street', cameraId: 'vhs' } }));
   });
 
+  // Catches a split saving before review, overwriting the director's columns, losing their edit, or not switching the still to the sheet.
+  it('splits a frame prompt into empty columns and an edited general prompt on Apply', async () => {
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', sheet: { emotion: 'AI emotion', location: 'Curb' }, generalPrompt: 'AI leftover' }] });
+    const onApply = vi.fn(async () => true);
+    const rows = [row('a', 'Shot 1', { emotion: 'My emotion' }), row('b', 'Shot 2', { promptFromSheet: true })];
+    render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
+    fireEvent.click(screen.getByRole('button', { name: /Split frame prompts into details \(1\)/ }));
+    const general = await screen.findByLabelText('Shot 1 General prompt proposed');
+    expect(proposeMusicVideoShotSheet.mock.calls[0][1]).toMatchObject({ direction: 'split', sceneIds: ['a'] });
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.change(general, { target: { value: 'My leftover' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 selected' }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith('a', { shotSheet: { emotion: 'My emotion', location: 'Curb', promptFromSheet: true }, framePrompt: 'My leftover' }));
+  });
+
   // Catches the director's edit to a proposal being lost, or a deselected shot being saved.
   it('applies the director’s edit of a proposed prompt and skips deselected shots', async () => {
     proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'AI motion' }, { sceneId: 'b', framePrompt: 'AI frame' }] });

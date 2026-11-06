@@ -35,6 +35,13 @@ describe('proposeShotSheet', () => {
     const again = await proposeShotSheet('p', { ...base, direction: 'from-prompts' });
     expect(again.shots).toEqual([{ sceneId: 'a', sheet: { location: 'Street', cameraId: 'vhs' } }]);
   });
+  // Catches a split dropping its general prompt, smuggling in the build-from-sheet switch, or keeping an invented camera.
+  it('returns a split as sheet columns plus the general prompt left over', async () => {
+    run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', sheet: { cameraId: 'drone', promptFromSheet: true, location: 'Curb' }, generalPrompt: 'Faded tee' }] }) });
+    const { shots, sentPrompt } = await proposeShotSheet('p', { ...base, direction: 'split' });
+    expect(shots).toEqual([{ sceneId: 'a', sheet: { location: 'Curb' }, generalPrompt: 'Faded tee' }]);
+    expect(sentPrompt).toContain('Option lists');
+  });
   // Catches a prompt proposal losing a field, and a shot with no prompts counting as a proposal.
   it('returns prompt proposals and leaves out empty ones', async () => {
     run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', prompt: 'New motion' }, { sceneId: 'a' }] }) });

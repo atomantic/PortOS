@@ -44,11 +44,13 @@ export const artGuideProposeSchema = z.object({
 // AI on the shot sheet (services/musicVideo/shotSheetProposals.js): a proposal for a batch of shots, never a save.
 export const shotSheetProposeSchema = z.object({
   providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
-  direction: z.enum(['from-prompts', 'to-prompts']),
+  direction: z.enum(['from-prompts', 'to-prompts', 'split']),
   sceneIds: z.array(text(64).min(1)).min(1).max(SHOT_SHEET_PROPOSE_BATCH),
   instruction: text(4000).optional(), preview: z.boolean().optional(),
 }).strict();
 // Only the director ticks Done (stored as `checked`), so a proposal can't carry it.
-export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true }).strip() }).strip();
+export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip() }).strip();
+// A split: the frame prompt's details as sheet columns, and the rest as the shot's general prompt.
+export const shotSheetSplitSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip(), generalPrompt: z.string().max(8000) }).strip();
 export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
   .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');
