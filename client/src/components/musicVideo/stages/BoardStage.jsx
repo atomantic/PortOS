@@ -10,6 +10,7 @@ import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../.
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
+import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
 import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
@@ -31,12 +32,13 @@ const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTA
 /** Corner chips on a Board thumbnail: what the shot's selected media is, plus an end-frame mark. */
 function SceneMediaBadges({ scene, layered }) {
   const kind = sceneMediaKind(scene, { layered });
-  if (!kind && !scene.endImageId) return null;
+  const endFrame = sceneActiveEndImageId(scene);
+  if (!kind && !endFrame) return null;
   const Icon = MEDIA_ICONS[kind];
   return (
     <span id={`scene-media-${scene.sceneId}`} className="absolute right-1 top-1 flex gap-1">
       {kind && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><Icon size={11} aria-hidden="true" />{SCENE_MEDIA_LABELS[kind]}</span>}
-      {scene.endImageId && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><FlagTriangleRight size={11} aria-hidden="true" />End frame</span>}
+      {endFrame && <span className="port-media-overlay-strong inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium leading-none"><FlagTriangleRight size={11} aria-hidden="true" />End frame</span>}
     </span>
   );
 }
@@ -231,7 +233,7 @@ export default function BoardStage({ board }) {
             ref={element => { if (element) thumbnailsRef.current.set(scene.sceneId, element); else thumbnailsRef.current.delete(scene.sceneId); }}
             onClick={() => { board.seekToScene?.(scene); onToggleSceneExpand?.(scene.sceneId, true); }}
             aria-label={`Open ${shotName(scene)}`}
-            aria-describedby={[(sceneMediaKind(scene, { layered }) || scene.endImageId) && `scene-media-${scene.sceneId}`,
+            aria-describedby={[(sceneMediaKind(scene, { layered }) || sceneActiveEndImageId(scene)) && `scene-media-${scene.sceneId}`,
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">

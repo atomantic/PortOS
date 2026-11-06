@@ -60,12 +60,17 @@ const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End fr
  * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
  * The References row above them picks the character and set references every frame render sends;
  * Research and seed above it imports real photos of the shot's subject that lead those references.
+ * With `endFrameToggle` (footage), Use end frame switches the end frame off (`scene.endFrameOff`):
+ * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onApplyCameos = null,
 }) {
+  const endFrameOff = endFrameToggle && scene.endFrameOff === true;
+  const endFrames = endFramesAllowed && !endFrameOff;
+  const setEndFrameOn = (on) => { const patch = { endFrameOff: on ? null : true }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
   const greyboxBlocked = greyboxSaving || referenceSaving || Boolean(greybox?.error);
@@ -208,7 +213,16 @@ export default function SceneFrames({
 
   return (
     <section aria-label="Still" className="@container min-w-0 space-y-2">
-      <h4 className="text-xs font-medium">{endFrames ? 'Frames' : 'Still'}</h4>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-medium">{endFrames ? 'Frames' : 'Still'}</h4>
+        {endFramesAllowed && endFrameToggle && (
+          <label htmlFor={id('use-end-frame')} className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] sm:min-h-0"
+            title="Off hides the end frame and clips start from the start frame only; its takes and prompt stay">
+            <input id={id('use-end-frame')} type="checkbox" checked={!endFrameOff} onChange={(e) => setEndFrameOn(e.target.checked)} />
+            Use end frame
+          </label>
+        )}
+      </div>
       <SceneGreyboxReference project={project} scene={scene} places={greyboxPlaces} onSaving={(saving) => { setReferenceSaving(saving); onGreyboxSaving?.(saving); }}
         onChange={async (setReference) => { const saved = await onSave(scene.sceneId, { setReference }); if (saved !== false) onEditLocal(scene.sceneId, { setReference }); return saved; }} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />

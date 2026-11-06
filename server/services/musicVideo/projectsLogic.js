@@ -650,6 +650,7 @@ function carryOver(prior, fresh) {
     ...(prior.shotSheet ? { shotSheet: prior.shotSheet } : {}),
     ...(prior.endImageId ? { endImageId: prior.endImageId } : {}),
     ...(prior.endFramePrompt ? { endFramePrompt: prior.endFramePrompt } : {}),
+    ...(prior.endFrameOff ? { endFrameOff: true } : {}),
     ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
     ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
     ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
@@ -766,7 +767,7 @@ export function applyStoryboardShotSync(project, plan) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 

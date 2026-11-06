@@ -31,7 +31,7 @@ import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
+import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
@@ -171,7 +171,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   };
   // A local model ends on the end frame only when its runtime anchors the last
   // frame (#11258), so the plan needs the model this route actually renders on.
-  const localRuntime = route.mode === 'local' && scene.endImageId
+  const localRuntime = route.mode === 'local' && sceneActiveEndImageId(scene)
     ? (await (await import('../videoGen/modelSelection.js')).resolveVideoModelSelection(route.model || undefined)).model?.runtime ?? null
     : null;
   const { submitVideoGenJob } = await import('../videoGen/submitJob.js');

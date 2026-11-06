@@ -10,6 +10,7 @@ import {
 import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js';
+import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 
@@ -245,7 +246,7 @@ export default function SceneRenderTarget({
           title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
           className={`${SELECT} flex-1`}>
           {value.startsWith('runway:') && !runwayCatalog.videoModels.some((m) => `runway:${m.id}` === value) && <option value={value}>{value} (unavailable)</option>}
-          {renderTargetOptions({ performance, saved, endFrame: Boolean(scene?.endImageId), scene, runwayModels: runwayCatalog.videoModels }).map((option) => (
+          {renderTargetOptions({ performance, saved, endFrame: Boolean(sceneActiveEndImageId(scene)), scene, runwayModels: runwayCatalog.videoModels }).map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
           ))}
         </select>
