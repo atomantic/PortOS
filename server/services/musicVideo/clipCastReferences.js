@@ -13,16 +13,18 @@ import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, MUSIC_VIDEO_MAX_REFERENCE_CHOICE
 import { ServerError } from '../../lib/errorHandler.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 
-/** Re-resolve at dispatch: a client snapshot or a previously hydrated project is not approval evidence. */
+/**
+ * Re-resolve at dispatch so a render uses the catalog's current images. Only
+ * links a render cannot resolve (a missing record, look or image) refuse it;
+ * an unapproved or changed check-in is review state, never a render gate.
+ */
 export async function requireCatalogRenderReady(project) {
   if (project?.castAndSets?.source !== 'catalog') return project;
   const { withCatalogCheckin, assertCatalogCheckinReady } = await import('./catalogCheckin.js');
   const current = await withCatalogCheckin(project);
-  assertCatalogCheckinReady(current.castAndSets.catalogCheckin);
-  if (!current.castAndSets.catalogCheckin.approved) {
-    throw new ServerError('The catalog check-in changed. Review and approve its current catalog items before rendering.',
-      { status: 409, code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
-  }
+  const { catalogCheckin } = current.castAndSets;
+  // A shot with no catalog subjects still renders from its own prompt and references.
+  assertCatalogCheckinReady({ ...catalogCheckin, problems: catalogCheckin.problems.filter(p => p.code !== 'CATALOG_SUBJECTS_REQUIRED') });
   return current;
 }
 

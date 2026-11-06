@@ -20,26 +20,24 @@ function changed(project) {
 export const getProductionReview = async id => present(await requireProject(id));
 
 /**
- * A director's shot still or clip needs the approved art direction, not a
- * separate shot or storyboard lock. Production runs still wait for the
- * reviewed storyboard. A production run's bulk work also waits for the animated proof, except the
+ * A director's own shot still or clip is never gated on an approval: the owner
+ * edits prompts and renders shots whenever they choose. Review state (art
+ * direction, a flagged rendering defect) stays advice shown in Production
+ * review and on the take. Production runs still wait for the reviewed
+ * storyboard, and their bulk work also waits for the animated proof, except the
  * stills of a run that stops before clips: the proof is made from clips.
  */
 export async function assertMusicVideoSceneReview(tag, kind = null) {
-  if (!tag?.projectId || !tag.sceneId) return;
+  if (!tag?.projectId || !tag.sceneId || !tag.productionRunId) return;
   const project = await requireProject(tag.projectId);
   const scene = project.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const take = scene && selectedPlateTake(scene);
   if (kind === 'video' && currentPlateEvidence(scene, take)?.checks.some((check) => check.id === 'render-quality' && check.status === 'fail')
     && !renderQualityAcknowledged(scene, take)) throw new ServerError('Rendering defect: regenerate this still or explicitly acknowledge its defect before animation.', { status: 409, code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
-  const boardShot = !tag.productionRunId && (project.scenes || []).some(scene => scene.sceneId === tag.sceneId);
-  if (boardShot) assertProductionApproval(project, 'art');
-  else assertProductionApproval(project, 'storyboard');
-  if (tag.productionRunId) {
-    const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
-    const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
-    if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
-  }
+  assertProductionApproval(project, 'storyboard');
+  const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
+  const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';
+  if (!stillsOnly && !run?.pilot?.scenes?.some(scene => scene.sceneId === tag.sceneId)) assertProductionApproval(project, 'proof');
 }
 
 /** Preserve the original handoff verbatim in an immutable artifact, never its approvals. */

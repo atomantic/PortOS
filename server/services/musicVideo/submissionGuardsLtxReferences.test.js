@@ -69,8 +69,8 @@ it('rechecks catalog readiness at final video dispatch and rejects old files wit
   m.project.castAndSets = { source: 'catalog', status: 'approved', images: { character: { imageId: 'legacy-sheet.png' } },
     catalogCheckin: { approved: true, problems: [], items: [] } };
   m.hydrate.mockImplementation(async project => ({ ...project, castAndSets: { ...project.castAndSets,
-    catalogCheckin: { approved: false, problems: [], items: [] } } }));
-  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
+    catalogCheckin: { approved: false, problems: [{ code: 'CATALOG_RECORD_MISSING', message: 'Restore or relink the catalog record for Lead.' }], items: [] } } }));
+  await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
   m.hydrate.mockImplementation(async project => project);
   await expect(applyMusicVideoSubmissionGuards(input)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
   input.params.castReferences = [];

@@ -124,8 +124,8 @@ export function isLegacyCatalogReference(project, ref) {
   const stage = project?.castAndSets;
   if (stage?.source !== 'catalog') return false;
   if (String(ref?.id || '').startsWith('mvr-cs-')) return true;
-  // A historical generated file may since have become an approved catalog asset.
-  if (stage.catalogCheckin?.approved && stage.catalogCheckin.items?.some(item => item.images?.includes(ref?.imageId))) return false;
+  // A historical generated file may since have become a current catalog asset.
+  if (stage.catalogCheckin?.items?.some(item => item.images?.includes(ref?.imageId))) return false;
   return Object.values(stage.images || {}).some((image) => image?.imageId === ref?.imageId || image?.history?.includes(ref?.imageId))
     || (project?.visualSpec?.references || []).some((saved) => String(saved?.id || '').startsWith('mvr-cs-') && saved.imageId === ref?.imageId)
     || (stage.overflowFaceReferences || []).some((saved) => saved.imageId && saved.imageId === ref?.imageId);
@@ -145,11 +145,15 @@ const catalogReferenceId = (subjectId, filename) => `mvr-catalog-${fnv1a64(JSON.
 /** A linked catalog asset's id, from its whole filename: long names can share any prefix. */
 export const musicVideoLinkedReferenceId = (mediaKey) => `mvr-linked-${fnv1a64(mediaKey)}`;
 
-/** Virtual choices resolved from the catalog on read, never published copies of catalog images. */
+/**
+ * Virtual choices resolved from the catalog on read, never published copies of
+ * catalog images. The current catalog serves renders whether or not its check-in
+ * was approved: approval is review state, not a render gate.
+ */
 function musicVideoCatalogReferences(project) {
   const stage = project?.castAndSets;
   const checkin = stage?.catalogCheckin;
-  if (stage?.source !== 'catalog' || !checkin?.approved || !Array.isArray(checkin.problems)
+  if (stage?.source !== 'catalog' || !checkin || !Array.isArray(checkin.problems)
     || checkin.problems.length || !Array.isArray(checkin.items)) return [];
   return checkin.items.flatMap((item) => (item.images || [])
     .filter((filename) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))

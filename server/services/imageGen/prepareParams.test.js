@@ -529,7 +529,7 @@ it('leaves FableLoom authored intent for its compiler instead of composing photo
 });
 
 
-it('gates catalog-linked frame preparation on fresh approval and refuses explicitly supplied historical sheets', async () => {
+it('prepares catalog-linked frames from the live catalog without approval and refuses explicitly supplied historical sheets', async () => {
   const { PATHS } = await import('../../lib/paths.js');
   const { resolveCatalogCheckin } = await import('../musicVideo/catalogCheckin.js');
   mkdirSync(PATHS.images, { recursive: true });
@@ -552,7 +552,8 @@ it('gates catalog-linked frame preparation on fresh approval and refuses explici
   await expect(run({ ...request(), initImageFile: 'legacy-sheet.png' }))
     .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
   greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'catalog-updated.png' }]);
-  await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
+  // A catalog edit un-approves the check-in; the owner's render still prepares.
+  await expect(run(request())).resolves.toBeTruthy();
   greyboxCatalog.getIngredient.mockResolvedValue(null);
   await expect(run(request())).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });
 });
