@@ -257,9 +257,10 @@ export default function SceneCard({
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
   const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: useLtxReferences ? { ...renderInputs, songAudio: false, endFrame: false } : renderInputs, plan: timing.plan });
-  // Runway cannot mix keyframes with references, so an end frame sends none.
-  const endFrameBlocksReferences = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on' && !!referenceModel?.referenceImages;
-  const referenceCapacity = useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
+  const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
+  const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
@@ -708,7 +709,7 @@ export default function SceneCard({
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (

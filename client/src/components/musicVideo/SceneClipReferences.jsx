@@ -26,9 +26,10 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model);
   const unknownModel = !backend || (['local', 'fal', 'runway'].includes(backend) && !model);
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
-  // Runway pins the start frame unless references go with it: its keyframe and reference modes cannot mix.
+  // Most Runway models pin the start frame unless references go with it: their keyframe and reference modes cannot mix.
+  const runwayUnpinsStart = backend === 'runway' && capacity > 0 && !!model?.referenceImages && !model.referenceImages.keepsFrames;
   const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
-    || (backend === 'runway' && capacity > 0 && chosen.length > 0)
+    || (runwayUnpinsStart && chosen.length > 0)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni');
   // The server renders these without the song window (submitJob.js) rather than refusing.
   const songUnheard = backend === 'local' && model && !localModelTakesSongAudio(model)
@@ -68,7 +69,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
         </p>
       )}
       {backend === 'fal' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Reference inputs may add to the provider charge.</p>}
-      {backend === 'runway' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Remove every reference to pin the opening frame.</p>}
+      {runwayUnpinsStart && <p className="text-[11px] text-port-text-muted">Remove every reference to pin the opening frame.</p>}
       <ul className="flex flex-wrap gap-1">
         {chosen.map((ref, index) => (
           <li key={ref.id} className={`${BUTTON} pr-0.5`}>

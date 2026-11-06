@@ -80,9 +80,10 @@ export function shotCardRenderRequest({
     else endFrame = { state: 'unavailable', note: null };
   }
 
-  // Runway cannot mix keyframes with references, so an end frame sends none.
-  const runwayReferences = runwayModel?.referenceImages && scene?.referenceImageId && endFrame?.state !== 'on'
-    ? musicVideoClipConditioningReferences(project, scene, castMedia, { limit: musicVideoClipReferenceCapacity('runway', runwayModel) }) : [];
+  // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
+  const runwayReferenceLimit = musicVideoClipReferenceCapacity('runway', runwayModel, { endFrame: endFrame?.state === 'on' });
+  const runwayReferences = runwayModel?.referenceImages && scene?.referenceImageId && runwayReferenceLimit > 0
+    ? musicVideoClipConditioningReferences(project, scene, castMedia, { limit: runwayReferenceLimit }) : [];
   const runwayAddition = runwayReferences.length ? falClipReferenceAddition(runwayModel, runwayReferences, { hasImage: true, prompt: composedPrompt }) : null;
   const prompt = runwayAddition ? [falPrompt, runwayAddition.text].filter(Boolean).join('\n') : falPrompt;
   const promptAdditions = runwayAddition ? [...falAdditions, runwayAddition] : falAdditions;

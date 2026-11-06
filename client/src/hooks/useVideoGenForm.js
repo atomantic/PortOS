@@ -876,7 +876,9 @@ export function useVideoGenForm({
   ));
   // Extra reference rows for a reference-to-video model. The model's
   // `maxReferenceImages` counts the first-frame input, so rows cap one lower.
-  const maxExtraReferenceImages = Math.max(0, (Number(currentModel?.maxReferenceImages) || 0) - 1);
+  const maxExtraReferenceImages = Math.max(0, (Number(isRunway
+    ? getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.referenceImages?.max
+    : currentModel?.maxReferenceImages) || 0) - 1);
   const addReferenceImage = () => setReferenceImageFiles((prev) => (
     prev.length >= maxExtraReferenceImages ? prev : [...prev, '']
   ));

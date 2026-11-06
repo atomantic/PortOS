@@ -84,11 +84,13 @@ not the Runway API key. Local owned inputs are cleaned on success/failure/cancel
 Runway's remote uploads expire automatically. Reloaded forms require video files to
 be selected again before a new submission.
 
-Music Video clips on Seedance 2.0, 2.0 Fast, 2.0 Mini and 2.5 send the shot's clip
-references as unpositioned `promptImage` entries with the start frame first. Runway
-cannot mix those with `first`/`last` keyframes, so with references the start frame
-guides the clip rather than pinning its opening, and an end frame sends no references.
-A shot with no references still pins its start frame.
+Reference images come from a Music Video shot's clip references or the Video Gen form's
+picker. Seedance, MiniMax H3 and WAN 3.0 send them as unpositioned `promptImage` entries
+with the start frame first. Runway cannot mix those with `first`/`last` keyframes, so
+with references the start frame guides the clip rather than pinning its opening, and an
+end frame cannot be used. A render with no references still pins its start frame. Kling
+O3 and Kling 4.0 take a separate `references` field, so their frames stay pinned and
+count toward the model's image limit.
 
 Specialized models stay out of text/image-only Music Video and Creative Director
 selectors. Other models' advanced video-reference controls, multiple timed Aleph

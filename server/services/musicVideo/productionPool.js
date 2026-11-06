@@ -31,6 +31,7 @@ import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationMode
 import { musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
 import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
@@ -110,6 +111,13 @@ export function stepPriceUsd({ route, project, scene, stepKind }) {
       : Boolean(scene.characterVariant || musicVideoClipConditioningReferences(project, scene).length);
     if (take.modelId === 'minimax/h3-max/reference-to-video' && maySendReferences) return null;
     return take.costUsd;
+  }
+  // A per-image charge with references the pool cannot count yet cannot bound a dollar cap.
+  if (route?.kind === 'video' && route.mode === 'runway' && scene && stepKind !== 'frame') {
+    const model = getRunwayVideoModel(runwaySceneTake({ scene: null, videoSettings: runwayRouteVideoSettings(project, route) }).modelId);
+    const maySendReferences = Array.isArray(scene.clipReferenceIds) ? scene.clipReferenceIds.length > 0
+      : Boolean(scene.characterVariant || musicVideoClipConditioningReferences(project, scene).length);
+    if (model?.referenceImages && model.pricing.perInputImage && maySendReferences) return null;
   }
   return routePriceUsd(route, project);
 }
