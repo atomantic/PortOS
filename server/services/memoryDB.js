@@ -8,7 +8,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistentMindMemory.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview } from '../lib/persistentMindMemory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { UUID_RE } from '../lib/fileCore.js';
@@ -29,6 +29,7 @@ function rowToMemory(row) {
     id: row.id,
     version: row.version,
     archiveReason: row.archive_reason,
+    lastReview: row.last_review ?? null,
     type: row.type,
     content: row.content,
     summary: row.summary,
@@ -151,6 +152,41 @@ export async function createMemory(data, embedding = null) {
   console.log(`🧠 Memory created: ${memory.type} - ${memory.summary.substring(0, 50)}...`);
   cosEvents.emit('memory:created', { id: memory.id, type: memory.type, summary: memory.summary });
   return memory;
+}
+
+/** Source, lesson, provenance link and review outcome commit together. */
+export async function reviewMindMemory(input, provenance) {
+  const result = await withTransaction(async client => {
+    const locked = await client.query('SELECT * FROM memories WHERE id = $1 FOR UPDATE', [input.memoryId]);
+    const source = locked.rows[0] ? rowToMemory(locked.rows[0]) : null;
+    const previous = existingPersistentMindReview(source, input, provenance.mindId);
+    if (previous) return { ok: true, duplicate: true, memoryId: source.id, review: previous };
+    let lesson = null;
+    if (input.verdict === 'learn') {
+      lesson = await insertMemory(client, {
+        type: 'learning', content: input.lesson, category: source.category,
+        sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId,
+        confidence: source.confidence, importance: source.importance,
+      }, null);
+      await client.query(
+        "INSERT INTO memory_links (source_id, target_id, link_type, note, created_by) VALUES ($1, $2, 'derived-from', $3, $4)",
+        [lesson.id, source.id, input.rationale ?? null, provenance.mindId]
+      );
+    }
+    const review = createPersistentMindReview(input, provenance, lesson?.id ?? null);
+    await client.query(
+      `UPDATE memories SET last_review = $2::jsonb,
+       status = CASE WHEN $3 THEN 'archived' ELSE status END,
+       archive_reason = CASE WHEN $3 THEN $4 ELSE archive_reason END WHERE id = $1`,
+      [source.id, toPgJson(mergePersistentMindReview(source, review)), input.verdict === 'archive', input.rationale ?? null]
+    );
+    return { ok: true, duplicate: false, memoryId: source.id, review, lastReview: mergePersistentMindReview(source, review) };
+  });
+  if (!result.duplicate) {
+    if (result.review.lessonId) cosEvents.emit('memory:created', { id: result.review.lessonId, type: 'learning' });
+    cosEvents.emit('memory:updated', { id: result.memoryId, updates: { lastReview: result.lastReview, ...(input.verdict === 'archive' ? { status: 'archived' } : {}) } });
+  }
+  return result;
 }
 
 /**

@@ -1337,3 +1337,60 @@ describe.skipIf(!runDb)('durable brain memory identity (#11007)', () => {
 
   afterAll(async () => { await query('DELETE FROM brain_memory_links'); });
 });
+
+describe.skipIf(!runDb)('mind memory review transactions', () => {
+  const provenance = { mindId: 'cos-persistent-mind', turnId: 'synthetic-turn', providerId: 'synthetic-provider', model: 'synthetic-model' };
+  const seed = (fields = {}) => memoryDB.createMemory({ type: 'observation', content: 'Synthetic observation.', sourceAgentId: provenance.mindId, ...fields });
+  const review = (source, verdict, extra = {}) => memoryDB.reviewMindMemory({ memoryId: source.id, expectedVersion: source.version, verdict, ...extra }, provenance);
+  beforeEach(async () => { await query('DELETE FROM memories'); });
+
+  it('atomically learns once, exposes provenance and preserves the source until an explicit archive', async () => {
+    const source = await seed();
+    await review(source, 'defer', { rationale: 'Uncertain; do not archive yet.' });
+    expect(await memoryDB.peekMemory(source.id)).toMatchObject({ status: 'active', content: source.content, importance: source.importance, accessCount: 0, updatedAt: source.updatedAt });
+    const [a, b] = await Promise.all([review(source, 'learn', { lesson: 'Synthetic lesson' }), review(source, 'learn', { lesson: 'Synthetic lesson' })]);
+    expect(a.review.lessonId).toBe(b.review.lessonId);
+    expect([a.duplicate, b.duplicate].sort()).toEqual([false, true]);
+    expect(a.review).toMatchObject({ ...provenance, expectedVersion: source.version });
+    const links = await query("SELECT * FROM memory_links WHERE source_id = $1 AND target_id = $2 AND link_type = 'derived-from'", [a.review.lessonId, source.id]);
+    expect(links.rows).toHaveLength(1);
+    expect(await memoryDB.peekMemory(a.review.lessonId)).toMatchObject({ type: 'learning', sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId });
+    expect(await memoryDB.peekMemory(source.id)).toMatchObject({ content: source.content, status: 'active', version: source.version, lastReview: { outcomes: { learn: a.review } } });
+    await review(source, 'archive', { rationale: 'Details retired explicitly.' });
+    expect(await review(source, 'archive', { rationale: 'Details retired explicitly.' })).toMatchObject({ duplicate: true });
+    expect((await memoryDB.peekMemory(source.id)).status).toBe('archived');
+    expect((await memoryDB.getMemories({ sourceAgentId: provenance.mindId })).total).toBe(1);
+    expect((await query('SELECT COUNT(*)::int AS count FROM memories')).rows[0].count).toBe(2);
+  });
+
+  it('rejects a correction/protection committed while the review waits on the source lock', async () => {
+    const source = await seed();
+    let pending;
+    await withTransaction(async client => {
+      await client.query('SELECT id FROM memories WHERE id = $1 FOR UPDATE', [source.id]);
+      pending = review(source, 'learn', { lesson: 'Must not be persisted' });
+      // Attach a handler before releasing the transaction so rejection is owned.
+      pending.catch(() => {});
+      await client.query("UPDATE memories SET content = 'Corrected synthetic observation', tags = ARRAY['mind:important'] WHERE id = $1", [source.id]);
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    const corrected = await memoryDB.peekMemory(source.id);
+    await expect(review(corrected, 'archive')).rejects.toMatchObject({ code: 'MEMORY_PROTECTED' });
+    const foreign = await seed({ sourceAgentId: 'another-agent' });
+    await expect(review(foreign, 'keep')).rejects.toMatchObject({ status: 404 });
+    expect((await memoryDB.getMemories()).total).toBe(2);
+    expect((await memoryDB.getMemoryVersion(source.id, source.version)).content).toBe(source.content);
+  });
+
+  it('rolls back a lesson and review if the provenance link fails', async () => {
+    const source = await seed();
+    await query("ALTER TABLE memory_links ADD CONSTRAINT test_review_link_failure CHECK (note IS DISTINCT FROM 'synthetic-forced-link-failure') NOT VALID");
+    try {
+      await expect(review(source, 'learn', { lesson: 'Rolled back lesson', rationale: 'synthetic-forced-link-failure' })).rejects.toThrow();
+      expect((await memoryDB.getMemories()).total).toBe(1);
+      expect(await memoryDB.peekMemory(source.id)).toMatchObject({ status: 'active', lastReview: null, content: source.content });
+    } finally {
+      await query('ALTER TABLE memory_links DROP CONSTRAINT test_review_link_failure');
+    }
+  });
+});

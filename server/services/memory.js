@@ -11,8 +11,9 @@
  * import sites (and `memoryBackend.js`'s dynamic import) keep working.
  */
 
+import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { persistentMindMemoryProtection } from '../lib/persistentMindMemory.js';
+import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview } from '../lib/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -57,6 +58,8 @@ export async function createMemory(data, embedding = null) {
 
     const memory = {
       id,
+      version: 1,
+      lastReview: null,
       type: data.type,
       content: data.content,
       summary: data.summary || generateSummary(data.content),
@@ -168,6 +171,11 @@ export async function updateMemory(id, updates) {
     const memory = await loadMemory(id);
     if (!memory) return null;
 
+    if (updates.expectedVersion !== undefined && updates.expectedVersion !== (memory.version ?? 1)) {
+      throw new ServerError('Memory changed since it was loaded. Reload before saving.', { status: 409, code: 'MEMORY_VERSION_CONFLICT' });
+    }
+    const versionFields = ['content', 'summary', 'type', 'category', 'tags'];
+    const beforeContent = JSON.stringify(versionFields.map(key => memory[key]));
     // Apply updates
     const updatableFields = ['content', 'summary', 'type', 'category', 'tags', 'confidence', 'importance', 'relatedMemories', 'status', 'expiresAt', 'sourceAppId'];
     for (const field of updatableFields) {
@@ -185,6 +193,7 @@ export async function updateMemory(id, updates) {
       memory.summary = generateSummary(updates.content);
     }
 
+    memory.version = (memory.version ?? 1) + Number(beforeContent !== JSON.stringify(versionFields.map(key => memory[key])));
     memory.updatedAt = new Date().toISOString();
     await saveMemory(memory);
 
@@ -944,4 +953,52 @@ export async function getStats() {
  */
 export async function flushBM25Index() {
   return memoryBM25.flush();
+}
+
+/** Dev/test adapter: serialize with every memory writer and roll back failed writes. */
+export function reviewMindMemory(input, provenance) {
+  return withMemoryLock(async () => {
+    const source = await loadMemory(input.memoryId);
+    const previous = existingPersistentMindReview(source, input, provenance.mindId);
+    if (previous) return { ok: true, duplicate: true, memoryId: source.id, review: previous };
+    const originalIndex = structuredClone(await loadIndex());
+    const index = structuredClone(originalIndex);
+    const now = new Date().toISOString();
+    const lesson = input.verdict === 'learn' ? {
+      id: uuidv4(), version: 1, lastReview: null, type: 'learning', content: input.lesson,
+      summary: generateSummary(input.lesson), category: source.category, tags: [], relatedMemories: [],
+      sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId, sourceAppId: null,
+      confidence: source.confidence, importance: source.importance,
+      embedding: null, embeddingModel: null, accessCount: 0, lastAccessed: null,
+      createdAt: now, updatedAt: now, expiresAt: null, status: 'active',
+      typedLinks: [{ id: uuidv4(), targetId: source.id, linkType: 'derived-from',
+        note: input.rationale ?? null, createdBy: provenance.mindId, createdAt: now }],
+    } : null;
+    const review = createPersistentMindReview(input, provenance, lesson?.id ?? null);
+    const updated = { ...source, lastReview: mergePersistentMindReview(source, review),
+      ...(input.verdict === 'archive' ? { status: 'archived', archiveReason: input.rationale ?? null, updatedAt: now } : {}) };
+    const persist = async () => {
+      if (lesson) {
+        await saveMemory(lesson);
+        index.memories.push(projectIndexMeta(lesson));
+      }
+      index.memories = index.memories.map(meta => meta.id === source.id ? projectIndexMeta(updated) : meta);
+      index.count = index.memories.length;
+      await saveIndex(index);
+      await saveMemory(updated);
+    };
+    await persist().catch(async error => {
+      await saveMemory(source);
+      await saveIndex(originalIndex);
+      if (lesson) await deleteMemoryFiles(lesson.id);
+      throw error;
+    });
+    if (lesson) {
+      await memoryBM25.indexMemory({ id: lesson.id, content: lesson.content, type: lesson.type, tags: lesson.tags, source: lesson.sourceAppId })
+        .catch(error => console.error(`⚠️ BM25 index error: ${error.message}`));
+      cosEvents.emit('memory:created', { id: lesson.id, type: 'learning', summary: lesson.summary });
+    }
+    cosEvents.emit('memory:updated', { id: source.id, updates: { lastReview: updated.lastReview, ...(input.verdict === 'archive' ? { status: 'archived' } : {}) } });
+    return { ok: true, duplicate: false, memoryId: source.id, review, lastReview: updated.lastReview };
+  });
 }

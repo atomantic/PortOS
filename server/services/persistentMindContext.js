@@ -44,6 +44,7 @@ import {
   persistentMindMemoryProtection,
   persistentMindMemoryTags,
   persistentMindProtectMemorySchema,
+  validatePersistentMindReview,
   projectPersistentMindMemory,
 } from '../lib/persistentMindMemory.js';
 
@@ -558,4 +559,16 @@ export function promotePersistentMindMemory(input = {}) {
   const run = performPersistentMindPromotion(input).finally(() => promotionRuns.delete(key));
   if (key) promotionRuns.set(key, run);
   return run;
+}
+
+/** Review only the resident mind's own records; caller context is runtime-owned. */
+export function reviewPersistentMindMemory(input, context) {
+  const parsed = validatePersistentMindReview(input);
+  if (![context?.turnId, context?.providerId, context?.model].every(value => typeof value === 'string' && value.length > 0)) {
+    throw new Error('Memory review requires verified turn and provider context');
+  }
+  return queueMemoryWrite(() => memoryBackend.reviewMindMemory(parsed, {
+    mindId: PERSISTENT_MIND_ID, turnId: context.turnId,
+    providerId: context.providerId, model: context.model,
+  }));
 }

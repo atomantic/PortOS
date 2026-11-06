@@ -49,9 +49,29 @@ export const memoryCreateSchema = z.object({
   sourceAppId: z.string().nullable().optional()
 });
 
+// Machine-local review metadata, exposed by memory reads but never writable
+// through the general memory create/update schemas.
+export const memoryReviewOutcomeSchema = z.object({
+  expectedVersion: z.number().int().min(1),
+  verdict: z.enum(['keep', 'learn', 'archive', 'defer']),
+  rationale: z.string().nullable(), lesson: z.string().nullable(), lessonId: memoryIdSchema.nullable(),
+  mindId: z.string(), turnId: z.string(), providerId: z.string(), model: z.string(),
+  reviewedAt: z.string().datetime(),
+});
+export const memoryLastReviewSchema = z.object({
+  expectedVersion: z.number().int().min(1),
+  latestVerdict: z.enum(['keep', 'learn', 'archive', 'defer']),
+  outcomes: z.object({
+    keep: memoryReviewOutcomeSchema.optional(), learn: memoryReviewOutcomeSchema.optional(),
+    archive: memoryReviewOutcomeSchema.optional(), defer: memoryReviewOutcomeSchema.optional(),
+  }).strict(),
+});
+
 // Full memory schema (includes system-generated fields)
 export const memorySchema = memoryCreateSchema.extend({
   id: z.string().guid(),
+  version: z.number().int().min(1).optional(),
+  lastReview: memoryLastReviewSchema.nullable().optional(),
   embedding: z.array(z.number()).optional(),
   embeddingModel: z.string().optional(),
   accessCount: z.number().int().min(0).default(0),

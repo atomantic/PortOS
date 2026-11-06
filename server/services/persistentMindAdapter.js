@@ -194,7 +194,7 @@ const failedToolResult = (message) => ({
   error: String(message || 'Tool execution failed').slice(0, 500),
 });
 
-const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities, recordCapabilityEvent, taskBudget, toolBudget }) => {
+const executeMindToolCalls = async ({ calls, providerId, model, turnId, wake, signal, capabilities, recordCapabilityEvent, taskBudget, toolBudget }) => {
   const results = [];
   for (const candidate of calls) {
     if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
@@ -216,7 +216,7 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
       : await executeCosToolCall({
         call: { ...candidate, requestId },
         authority: { scope: 'mind', capabilities },
-        context: { turnId, wake, signal, recordCapabilityEvent, toolBudget },
+        context: { turnId, providerId, model, wake, signal, recordCapabilityEvent, toolBudget },
       }).catch((error) => failedToolResult(error?.message));
     await recordCapabilityEvent?.({
       kind: 'result',
@@ -228,6 +228,9 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
           : `${candidate.name} ${result.state}`,
         tool: candidate.name,
         success: result.state === 'completed',
+        ...(['mind.review-memory', 'mind_review_memory'].includes(candidate.name) && result.state === 'completed'
+          ? { memoryReview: { memoryId: result.result?.memoryId, version: result.result?.review?.expectedVersion,
+            verdict: result.result?.review?.verdict, lessonId: result.result?.review?.lessonId } } : {}),
         // Typed continuation receipt for an outbound visit (or its retirement) so
         // a later wake can resume without the in-turn result (#9791).
         ...buildVisitReceiptEventData({ toolName: candidate.name, args: candidate.arguments, state: result.state, result: result.result }),
@@ -783,6 +786,8 @@ export function createPersistentMindTurnAdapter() {
         }
         const toolResults = await executeMindToolCalls({
           calls,
+          providerId: provider.id,
+          model,
           turnId,
           wake,
           signal,

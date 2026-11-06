@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ServerError } from './errorHandler.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from './persistentMindChosenName.js';
 import { memoryIdSchema } from './memoryValidation.js';
 
@@ -40,3 +41,67 @@ export function comparePersistentMindMemories(a, b) {
 export const projectPersistentMindMemory = (memory) => memory
   ? { ...memory, protection: persistentMindMemoryProtection(memory) }
   : null;
+
+// At most one outcome per verdict/content version. Authorship is supplied separately
+// by the executing mind runtime, never accepted in model arguments.
+export const persistentMindReviewMemorySchema = z.object({
+  memoryId: memoryIdSchema.max(128),
+  expectedVersion: z.number().int().min(1),
+  verdict: z.enum(['keep', 'learn', 'archive', 'defer']),
+  rationale: z.string().max(4000).optional(),
+  lesson: z.string().min(1).max(10240).optional(),
+}).strict();
+
+export function validatePersistentMindReview(input) {
+  const parsed = persistentMindReviewMemorySchema.parse(input);
+  if ((parsed.verdict === 'learn' && !parsed.lesson?.trim())
+      || (parsed.verdict !== 'learn' && parsed.lesson !== undefined)) {
+    throw new ServerError('Only learn requires a nonempty lesson; other verdicts cannot include one', { status: 400 });
+  }
+  return parsed;
+}
+
+export function existingPersistentMindReview(memory, input, mindId) {
+  if (!memory || memory.sourceAgentId !== mindId) {
+    throw new ServerError('Mind-owned memory not found', { status: 404 });
+  }
+  if ((memory.version ?? 1) !== input.expectedVersion) {
+    throw new ServerError('Memory changed since it was loaded. Reload before reviewing.', { status: 409, code: 'MEMORY_VERSION_CONFLICT' });
+  }
+  if (input.verdict === 'archive' && persistentMindMemoryProtection(memory) !== 'standard') {
+    throw new ServerError('Protected memories cannot be archived', { status: 409, code: 'MEMORY_PROTECTED' });
+  }
+  const outcomes = memory.lastReview?.expectedVersion === input.expectedVersion ? memory.lastReview.outcomes : null;
+  const previous = outcomes?.[input.verdict];
+  if (previous) {
+    if (previous.rationale !== (input.rationale ?? null)
+        || previous.lesson !== (input.lesson ?? null)) {
+      throw new ServerError('This verdict already has a different review for this memory version', { status: 409, code: 'MEMORY_REVIEW_CONFLICT' });
+    }
+    const expectedStatus = outcomes.archive ? 'archived' : 'active';
+    if (memory.status !== expectedStatus) throw new ServerError('Memory status changed since review', { status: 409 });
+    return previous;
+  }
+  if (memory.status !== 'active') throw new ServerError('Only active memories can be reviewed', { status: 409 });
+  return null;
+}
+
+export function createPersistentMindReview(input, provenance, lessonId = null) {
+  return {
+    expectedVersion: input.expectedVersion, verdict: input.verdict,
+    rationale: input.rationale ?? null, lesson: input.lesson ?? null, lessonId,
+    mindId: provenance.mindId, turnId: provenance.turnId,
+    providerId: provenance.providerId, model: provenance.model,
+    reviewedAt: new Date().toISOString(),
+  };
+}
+
+export function mergePersistentMindReview(memory, review) {
+  return {
+    expectedVersion: review.expectedVersion, latestVerdict: review.verdict,
+    outcomes: {
+      ...(memory.lastReview?.expectedVersion === review.expectedVersion ? memory.lastReview.outcomes : {}),
+      [review.verdict]: review,
+    },
+  };
+}
