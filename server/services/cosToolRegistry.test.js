@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
   protectMemory: vi.fn(),
+  reviewMemory: vi.fn(),
+  liveMindCapabilities: null,
   chooseName: vi.fn(),
   worldStatus: vi.fn(),
   worldProject: vi.fn(),
@@ -61,7 +63,7 @@ vi.mock('./persistentMindMaintenanceContext.js', () => ({
 }));
 vi.mock('./mindToolRecipeRuntime.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  currentMindAuthority: async (authority) => authority,
+  currentMindAuthority: async (authority) => mocks.liveMindCapabilities ? { ...authority, capabilities: mocks.liveMindCapabilities } : authority,
   executeRecipeManagement: (...args) => mocks.adapter.recipeManagement(...args),
   executeRecipe: (...args) => mocks.adapter.executeRecipe(...args),
   resolveRecipeInvocation: (...args) => mocks.adapter.resolveRecipeInvocation(...args),
@@ -116,7 +118,7 @@ vi.mock('./persistentMindIssueCapability.js', () => ({
   filePersistentMindIssue: (...args) => mocks.fileIssue(...args),
   listPersistentMindIssues: (...args) => mocks.listIssues(...args),
 }));
-vi.mock('./persistentMindContext.js', () => ({ choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
+vi.mock('./persistentMindContext.js', () => ({ reviewPersistentMindMemory: (...args) => mocks.reviewMemory(...args), choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
@@ -180,6 +182,7 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.liveMindCapabilities = null;
   __testing.toolCalls.clear();
   __testing.toolCallFingerprints.clear();
   mocks.root = { persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } } };
@@ -481,6 +484,7 @@ describe('cosToolRegistry', () => {
       'issues.file',
       'mind.cleanup',
       'mind.protect-memory',
+      'mind.review-memory',
       'mind.choose-name',
       'user-actions.query',
       'maintenance.refresh',
@@ -1105,5 +1109,25 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
         logSpy.mockRestore();
       }
     });
+  });
+});
+
+describe('mind memory review authority', () => {
+  it('refreshes grants even on retry, rejects forged authorship and passes only runtime provenance', async () => {
+    const authority = { scope: 'mind', capabilities: { manageMind: true } };
+    const call = { requestId: 'review-1', name: 'mind.review-memory', arguments: { memoryId: 'example', expectedVersion: 1, verdict: 'defer' } };
+    const context = { turnId: 'turn-1', providerId: 'provider-a', model: 'model-a' };
+    mocks.reviewMemory.mockResolvedValue({ ok: true, memoryId: 'example', review: { verdict: 'defer' } });
+    await expect(executeCosToolCall({ call, authority: { ...authority, scope: 'agent' }, context })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+    await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, mindId: 'other' } }, authority, context })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+    await expect(executeCosToolCall({ call, authority, context })).resolves.toMatchObject({ state: 'completed' });
+    expect(mocks.reviewMemory).toHaveBeenCalledWith(call.arguments, { ...context, requestId: call.requestId });
+    expect(mocks.root.persistentMind.toolActivation.leases.mind).toBeDefined();
+    await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, verdict: 'archive' } }, authority, context })).rejects.toMatchObject({ code: 'TOOL_IDEMPOTENCY_CONFLICT' });
+    mocks.reviewMemory.mockRejectedValueOnce(new Error('Memory changed since review'));
+    await expect(executeCosToolCall({ call, authority, context })).resolves.toMatchObject({ state: 'failed', error: 'Memory changed since review' });
+    mocks.liveMindCapabilities = { manageMind: false };
+    await expect(executeCosToolCall({ call, authority, context })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.reviewMemory).toHaveBeenCalledTimes(2);
   });
 });
