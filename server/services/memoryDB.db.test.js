@@ -476,6 +476,31 @@ describe.skipIf(!runDb)('stored memory search lexemes', () => {
     expect((await memoryDB.hybridSearchMemories('aurora', null)).memories.map(row => row.id)).toEqual([strongest.id]);
     expect((await memoryDB.hybridSearchMemories('coast', null)).memories).toEqual([]);
   });
+
+  it('scopes to the owner before the cap and matches conversational text by term coverage', async () => {
+    await resetMemories();
+    for (let i = 0; i < 12; i += 1) {
+      await memoryDB.createMemory({ type: 'fact', content: 'Zebra zebra migration migration.', sourceAgentId: 'other-agent' });
+    }
+    const owner = 'example-mind';
+    const covering = await memoryDB.createMemory({ type: 'fact', content: 'A long note where the zebra migration window is decided among many other unrelated words.', sourceAgentId: owner });
+    const repeated = await memoryDB.createMemory({ type: 'fact', content: 'Migration migration migration migration.', sourceAgentId: owner });
+    await memoryDB.createMemory({ type: 'fact', content: 'Zebra migration window, archived.', sourceAgentId: owner, status: 'archived' });
+
+    const message = 'What about the zebra migration window?';
+    // Default websearch semantics require every term, so they stay unchanged for other callers.
+    const allTerms = await memoryDB.hybridSearchMemories('zebra migration window', null, { sourceAgentId: owner });
+    expect(allTerms.memories.map(row => row.id)).toEqual([covering.id]);
+    expect(allTerms.memories[0].sourceAgentId).toBe(owner);
+
+    const anyTerm = await memoryDB.hybridSearchMemories(message, null, { sourceAgentId: owner, lexicalMatch: 'any', limit: 1 });
+    expect(anyTerm.memories.map(row => row.id)).toEqual([covering.id]);
+    const uncapped = await memoryDB.hybridSearchMemories(message, null, { sourceAgentId: owner, lexicalMatch: 'any' });
+    expect(uncapped.memories.map(row => row.id)).toEqual([covering.id, repeated.id]);
+
+    expect((await memoryDB.hybridSearchMemories('the and of', null, { sourceAgentId: owner, lexicalMatch: 'any' })).memories).toEqual([]);
+    expect((await memoryDB.hybridSearchMemories('zebra', null, { sourceAgentId: 'nobody', lexicalMatch: 'any' })).memories).toEqual([]);
+  });
 });
 
 describe.skipIf(!runDb)('memoryDB search (#3447)', () => {

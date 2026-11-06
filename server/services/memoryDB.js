@@ -632,7 +632,7 @@ export async function searchMemories(queryEmbedding, options = {}) {
  * Uses Reciprocal Rank Fusion (RRF) to merge rankings
  */
 export async function hybridSearchMemories(queryText, queryEmbedding, options = {}) {
-  const { limit = 20, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6 } = options;
+  const { limit = 20, minRelevance = 0.5, ftsWeight = options.bm25Weight ?? 0.4, vectorWeight = 0.6, lexicalMatch = 'all' } = options;
   const RRF_K = 60;
 
   const filterConditions = ["status = 'active'"];
@@ -657,6 +657,10 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
     filterConditions.push(`source_app_id = $${paramIdx++}`);
     filterParams.push(options.appId);
   }
+  if (options.sourceAgentId) {
+    filterConditions.push(`source_agent_id = $${paramIdx++}`);
+    filterParams.push(options.sourceAgentId);
+  }
 
   const filterWhere = filterConditions.join(' AND ');
   const fetchLimit = limit * 2;
@@ -664,12 +668,17 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
   // Get full-text search results (replaces BM25)
   let ftsResults = [];
   if (queryText) {
+    // websearch syntax ANDs every term, so conversational text rarely matches.
+    // 'any' ORs the same lexemes; ts_rank already favors covering more of them.
+    const tsQuery = lexicalMatch === 'any'
+      ? `replace(plainto_tsquery('english', $${paramIdx})::text, ' & ', ' | ')::tsquery`
+      : `websearch_to_tsquery('english', $${paramIdx})`;
     const ftsResult = await query(
-      `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
-              ts_rank(search_tsv, websearch_to_tsquery('english', $${paramIdx})) AS fts_score
+      `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
+              ts_rank(search_tsv, ${tsQuery}) AS fts_score
        FROM memories
        WHERE ${filterWhere}
-         AND search_tsv @@ websearch_to_tsquery('english', $${paramIdx})
+         AND search_tsv @@ ${tsQuery}
        ORDER BY fts_score DESC
        LIMIT $${paramIdx + 1}`,
       [...filterParams, queryText, fetchLimit]
@@ -682,7 +691,7 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
   if (queryEmbedding) {
     const vecParamStart = filterParams.length + 1;
     const vectorResult = await query(
-      `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id,
+      `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               1 - (embedding <=> $${vecParamStart}) AS similarity
        FROM memories
        WHERE embedding IS NOT NULL AND ${filterWhere}

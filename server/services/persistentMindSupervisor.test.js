@@ -24,6 +24,7 @@ const mock = vi.hoisted(() => ({
   localEndpointOfProvider: vi.fn(() => null),
   appendMindEvent: vi.fn(async (event) => ({ appended: true, event })),
   prepareContext: vi.fn(async () => ({ text: 'bounded context', chars: 15, summaryState: 'not-needed' })),
+  recordRecallAccess: vi.fn(async () => {}),
   updateInProgress: false,
   daemonRunning: true,
   profile: {
@@ -82,6 +83,7 @@ vi.mock('./agentRunEventLog.js', () => ({
 vi.mock('./persistentMindContext.js', () => ({
   readPersistentMindReflection: vi.fn(async () => ({ state: 'empty', source: null })),
   preparePersistentMindContext: (...args) => mock.prepareContext(...args),
+  recordPersistentMindRecallAccess: (...args) => mock.recordRecallAccess(...args),
 }));
 
 vi.mock('./persistentMindProfile.js', async (importOriginal) => ({
@@ -181,6 +183,7 @@ describe('persistent mind supervisor', () => {
     mock.acquireSlot.mockResolvedValue({ ok: true, release: vi.fn() });
     mock.appendMindEvent.mockClear();
     mock.prepareContext.mockClear();
+    mock.recordRecallAccess.mockClear();
     __resetCosAdmissionReservations();
     supervisor.__resetPersistentMindSupervisorForTests();
   });
@@ -357,6 +360,34 @@ describe('persistent mind supervisor', () => {
     expect(run).not.toHaveBeenCalled();
     expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
     expect(mock.root.persistentMind.queuedMessages).toHaveLength(1);
+  });
+
+  it('feeds recall from the admitted wake into context and counts access only after the turn ran', async () => {
+    const memoryRecall = { state: 'matched', memories: [{ id: 'recalled-1', content: 'Zebra migration notes.' }] };
+    const prepare = vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high', memoryRecall }));
+    const pending = deferred();
+    const run = vi.fn(() => pending.promise);
+    mock.prepareContext.mockResolvedValueOnce({
+      text: 'bounded context', chars: 15, summaryState: 'not-needed',
+      memoryRecall: { state: 'included', includedIds: ['recalled-1'], omittedIds: [] },
+    });
+    await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'recall-message', text: 'What about the zebra migration?' });
+
+    const drain = supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(prepare.mock.calls[0][0].wake).toMatchObject({ kind: 'message', message: { text: 'What about the zebra migration?' } });
+    expect(mock.prepareContext.mock.calls.at(-1)[0].memoryRecall).toBe(memoryRecall);
+    expect(mock.appendMindEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'mind.model.request',
+      data: expect.objectContaining({ memoryRecallState: 'included', memoryRecallIds: ['recalled-1'], memoryRecallOmittedIds: [] }),
+    }));
+    expect(mock.recordRecallAccess).not.toHaveBeenCalled();
+    pending.resolve({});
+    await drain;
+    expect(mock.recordRecallAccess).toHaveBeenCalledWith(['recalled-1']);
   });
 
   it('accepts a message durably, deduplicates retries, and runs only one turn', async () => {

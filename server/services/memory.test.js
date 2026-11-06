@@ -984,6 +984,23 @@ describe('memory service', () => {
       expect(ids).toContain('m2');
     });
 
+    it('should scope to the owner before capping, so foreign top hits cannot crowd out the only owned match', async () => {
+      const foreign = Array.from({ length: 50 }, (_, i) => ({
+        id: `foreign-${i}`, type: 'fact', status: 'active', tags: [], category: 'other', sourceAppId: 'brain', sourceAgentId: 'other-agent'
+      }));
+      const owned = { id: 'owned', type: 'fact', status: 'active', tags: [], category: 'other', sourceAppId: null, sourceAgentId: 'example-mind' };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 51, memories: [...foreign, owned] });
+        return Promise.resolve(def);
+      });
+      memoryBM25.searchBM25.mockImplementation(async (_query, { limit }) =>
+        [...foreign, owned].map((m, i) => ({ id: m.id, score: 100 - i })).slice(0, limit));
+
+      const result = await hybridSearchMemories('zebra', null, { limit: 3, sourceAgentId: 'example-mind' });
+
+      expect(result.memories.map(m => m.id)).toEqual(['owned']);
+    });
+
     it('should mark searchMethod correctly', async () => {
       const mockIndex = {
         version: 1, lastUpdated: '', count: 1,

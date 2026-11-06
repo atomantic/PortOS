@@ -443,6 +443,7 @@ export * from './persistentMindJournal.js';
 export * from './persistentMindTrajectory.js';
 export * from './persistentMindProfile.js';
 export * from './persistentMindMemory.js';
+export * from './persistentMindRecall.js';
 export * from './persistentMindPrompt.js';
 export * from './persistentMindPlaybook.js';
 export * from './persistentMindPlaybookPhase.js';

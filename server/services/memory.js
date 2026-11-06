@@ -442,16 +442,20 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
   const embeddings = await loadEmbeddings()
   const indexMap = new Map(index.memories.map(m => [m.id, m]))
 
-  // Get BM25 results
+  // Filter before capping and ranking: scoped results must not lose their only
+  // match to a global top-N of records the caller can never receive.
+  const eligible = ({ id }) => passesHybridMetaFilters(indexMap.get(id), options)
+
+  // Get BM25 results (any-term by construction, so options.lexicalMatch needs no branch)
   const bm25Results = query
-    ? await memoryBM25.searchBM25(query, { limit: limit * 2, threshold: 0.05 })
+    ? (await memoryBM25.searchBM25(query, { limit: Infinity, threshold: 0.05 })).filter(eligible).slice(0, limit * 2)
     : []
 
   // Get vector results
   let vectorResults = []
   if (queryEmbedding && Object.keys(embeddings.vectors).length > 0) {
     const similar = findAboveThreshold(queryEmbedding, embeddings.vectors, minRelevance * 0.5)
-    vectorResults = similar.slice(0, limit * 2).map(r => ({
+    vectorResults = similar.filter(eligible).slice(0, limit * 2).map(r => ({
       id: r.id,
       score: r.similarity
     }))
@@ -463,11 +467,8 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
   // Filter and sort by RRF score
   let results = Array.from(rrfScores.entries())
     .map(([id, data]) => {
-      const meta = indexMap.get(id)
-      if (!passesHybridMetaFilters(meta, options)) return null
-
       return {
-        ...meta,
+        ...indexMap.get(id),
         rrfScore: data.rrfScore,
         bm25Rank: data.bm25Rank,
         vectorRank: data.vectorRank,
@@ -475,7 +476,6 @@ export async function hybridSearchMemories(query, queryEmbedding, options = {}) 
                      data.bm25Rank ? 'bm25' : 'vector'
       }
     })
-    .filter(Boolean)
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, limit)
 

@@ -9,6 +9,8 @@ const mock = vi.hoisted(() => ({
   memoryApi: {
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
+    getMemory: vi.fn(),
+    hybridSearchMemories: vi.fn(),
     selectMindMemoryForReview: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
     archiveMemory: vi.fn(async (id) => ({ success: true, id })),
@@ -43,6 +45,8 @@ const {
   createPersistentMindMemory,
   choosePersistentMindName,
   readPersistentMindMemories,
+  readPersistentMindRecall,
+  recordPersistentMindRecallAccess,
   updatePersistentMindMemory,
   protectPersistentMindMemory,
   preparePersistentMindContext,
@@ -82,6 +86,151 @@ beforeEach(() => {
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
+
+describe('current-message memory recall', () => {
+  const mindId = 'cos-persistent-mind';
+  const wake = (text) => ({ kind: 'message', message: { id: 'message-1', text } });
+  const owned = (id, content, extra = {}) => ({
+    id, content, type: 'fact', category: 'other', tags: [], importance: 0.5, status: 'active', sourceAgentId: mindId, ...extra,
+  });
+  const identity = owned('identity', 'Enduring synthetic identity.', { tags: ['mind:core-identity'], importance: 0.1 });
+  const relevant = owned('relevant', 'The zebra migration ships behind a blue green switch.', { importance: 0.01 });
+
+  // The store's contract: importance-ordered pages, and a lexical search over
+  // the caller's owner scope. Real scoping is pinned in memory.test.js and
+  // memoryDB.db.test.js; this suite owns what reaches the outbound context.
+  const seedStore = (records) => {
+    const byId = new Map(records.map((memory) => [memory.id, memory]));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => byId.get(id));
+    mock.memoryApi.getMemories.mockImplementation(async ({ tags, limit = 100 }) => ({
+      memories: records
+        .filter((memory) => !tags || memory.tags.some((tag) => tags.includes(tag)))
+        .sort((a, b) => b.importance - a.importance)
+        .slice(0, limit),
+    }));
+    mock.memoryApi.hybridSearchMemories.mockImplementation(async (text, _embedding, { sourceAgentId }) => ({
+      memories: records.filter((memory) => memory.sourceAgentId === sourceAgentId && /zebra/i.test(text) && /zebra/i.test(memory.content)),
+    }));
+  };
+  const outbound = async (message, options = {}) => preparePersistentMindContext({
+    memories: await readPersistentMindMemories(),
+    memoryRecall: await readPersistentMindRecall(wake(message)),
+    ...options,
+  });
+  const irrelevant = Array.from({ length: 120 }, (_, index) => owned(`noise-${index}`, `Unrelated durable synthetic note number ${index}.`, { importance: 0.9 }));
+
+  beforeEach(() => {
+    mock.memoryApi.peekMemory.mockReset();
+    mock.memoryApi.getMemory.mockReset();
+    mock.memoryApi.getMemories.mockReset();
+    mock.memoryApi.hybridSearchMemories.mockReset();
+  });
+
+  it('puts a low-importance owned match in the outbound context past 100 better-ranked records', async () => {
+    seedStore([identity, relevant, ...irrelevant]);
+    const baseline = await readPersistentMindMemories();
+    expect(baseline.map((memory) => memory.id)).not.toContain('relevant');
+
+    const context = await outbound('What did we decide about the zebra migration?');
+
+    expect(mock.memoryApi.hybridSearchMemories).toHaveBeenCalledWith('What did we decide about the zebra migration?', null, expect.objectContaining({ sourceAgentId: mindId, lexicalMatch: 'any' }));
+    expect(context.text).toContain(`id=relevant; recalled=current-message] ${relevant.content}`);
+    expect(context.text).toContain(identity.content);
+    expect(context.memoryRecall).toEqual({ state: 'included', includedIds: ['relevant'], omittedIds: [] });
+    expect(mock.memoryApi.getMemory).not.toHaveBeenCalled();
+  });
+
+  it('never admits a foreign hit, even from a backend that ignored the scope', async () => {
+    seedStore([identity, relevant]);
+    const foreign = owned('foreign', 'The zebra migration belongs to another agent.', { sourceAgentId: 'other-agent' });
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [foreign, relevant] });
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => ({ foreign, relevant, identity })[id]);
+
+    const context = await outbound('zebra migration status');
+
+    expect(context.text).not.toContain(foreign.content);
+    expect(context.memoryRecall.includedIds).toEqual(['relevant']);
+  });
+
+  it('leaves the continuation note to its own section rather than recalling it', async () => {
+    const note = owned('note', 'Zebra migration is the current thread.', { tags: ['mind:continuation-note'] });
+    seedStore([identity, relevant, note]);
+    expect((await readPersistentMindRecall(wake('zebra migration'))).memories.map((memory) => memory.id)).toEqual(['relevant']);
+  });
+
+  it('forces no context for acknowledgements, unrelated prompts or self-wakes', async () => {
+    seedStore([identity, relevant]);
+    expect(await readPersistentMindRecall(wake('Thanks, sounds great!'))).toEqual({ state: 'none', memories: [] });
+    expect(await readPersistentMindRecall({ kind: 'self', reason: 'zebra migration reflection' })).toEqual({ state: 'none', memories: [] });
+    expect(mock.memoryApi.hybridSearchMemories).not.toHaveBeenCalled();
+
+    // A ranked backend always returns a "best" row; the gate still refuses it.
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [relevant] });
+    expect(await readPersistentMindRecall(wake('Is the zebra exhibit open at the city park today?')))
+      .toEqual({ state: 'no-match', memories: [] });
+  });
+
+  it('renders a record once when it is in both the baseline and the recall', async () => {
+    seedStore([identity, relevant]);
+    const context = await outbound('zebra migration');
+    expect(context.text.match(/id=relevant/g)).toHaveLength(1);
+    expect(context.memoryCount).toBe(2);
+
+    const protectedHit = owned('protected-hit', 'Zebra migration is a foundational commitment.', { tags: ['mind:important'] });
+    seedStore([protectedHit]);
+    const protectedContext = await outbound('zebra migration');
+    expect(protectedContext.text.match(/id=protected-hit/g)).toHaveLength(1);
+    expect(protectedContext.memoryRecall).toEqual({ state: 'already-in-baseline', includedIds: [], omittedIds: [] });
+  });
+
+  it('holds the memory cap by cutting ordinary context, and omits an oversized match whole', async () => {
+    const large = Array.from({ length: 40 }, (_, index) => owned(`large-${index}`, `Bulky synthetic note ${index}. ${'x'.repeat(500)}`, { importance: 0.9 }));
+    const oversized = owned('oversized', `Zebra migration appendix. ${'y'.repeat(3_000)}`);
+    seedStore([identity, relevant, oversized, ...large]);
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [oversized, relevant] });
+
+    const context = await outbound('zebra migration');
+
+    expect(context.text).toContain(relevant.content);
+    expect(context.text).toContain(identity.content);
+    expect(context.text).not.toContain('y'.repeat(50));
+    expect(context.memoryRecall).toEqual({ state: 'included', includedIds: ['relevant'], omittedIds: ['oversized'] });
+    expect(context.text).toContain('Bulky synthetic note 0');
+    expect(context.text).not.toContain('Bulky synthetic note 39');
+    expect(context.chars).toBeLessThanOrEqual(32_000);
+
+    // A record that fits no reservation is reported, never cut.
+    mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [oversized] });
+    const tight = await outbound('zebra migration', { maxChars: 1_000 });
+    expect(tight.memoryRecall.state).toBe('omitted-budget');
+    expect(tight.text).not.toContain('recalled=current-message');
+    expect(tight.text).toContain(identity.content);
+  });
+
+  it('keeps thinking on the normal context when retrieval fails, and reports it', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    seedStore([identity]);
+    mock.memoryApi.hybridSearchMemories.mockRejectedValue(new Error('synthetic backend outage'));
+
+    const context = await outbound('zebra migration');
+
+    expect(context.memoryRecall).toEqual({ state: 'unavailable', includedIds: [], omittedIds: [] });
+    expect(context.text).toContain(identity.content);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('synthetic backend outage'));
+    stderr.mockRestore();
+  });
+
+  it('records access only through the explicit sent-context step, surviving one failure', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mock.memoryApi.getMemory.mockResolvedValueOnce(relevant).mockRejectedValueOnce(new Error('synthetic write failure'));
+
+    await expect(recordPersistentMindRecallAccess(['relevant', 'missing'])).resolves.toBeUndefined();
+
+    expect(mock.memoryApi.getMemory.mock.calls).toEqual([['relevant'], ['missing']]);
+    expect(stderr).toHaveBeenCalledOnce();
+    stderr.mockRestore();
+  });
+});
 
 describe('chosen identity continuity', () => {
   it('selects and later renames one protected record across reload, cleanup and provider changes', async () => {
