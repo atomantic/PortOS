@@ -1,6 +1,6 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
 import {
-  ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
+  ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
 } from './musicVideoRouteMapLimits.js';
 import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_CAMERA_OUTPUTS, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
@@ -290,6 +290,18 @@ export const musicVideoRouteMapSchema = z.object({
     id: z.string().min(1).max(64),
     subjectId: z.string().min(1).max(64),
     note: z.string().trim().max(ROUTE_MAP_NOTE_MAX).optional(),
+    // Side streets and landmarks beside this stretch, on the travellers' left, right or ahead.
+    features: z.array(z.object({
+      id: z.string().min(1).max(64),
+      kind: z.enum(ROUTE_MAP_FEATURE_KINDS),
+      label: z.string().trim().max(ROUTE_MAP_FEATURE_LABEL_MAX).optional(),
+      side: z.enum(ROUTE_MAP_FEATURE_SIDES),
+    }).strict()).max(ROUTE_MAP_FEATURES_MAX).optional(),
+    // The place's greybox cameras that look ahead along the route and back the way they came.
+    views: z.object({
+      forward: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+      back: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+    }).strict().optional(),
   }).strict()).max(ROUTE_MAP_STOPS_MAX),
 }).strict();
 export const musicVideoShotSheetSchema = z.object({

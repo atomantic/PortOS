@@ -31,6 +31,20 @@ describe('route maps in shot prompts', () => {
     expect(clip.prompt).toContain('This is where the route starts.');
   });
 
+  // Uniquely catches a look-back shot keeping the travellers' sides, which mirrors the street against its forward neighbours.
+  it('places a stretch\'s side streets and landmarks in frame for the cameras looking ahead and back', () => {
+    const stops = route.stops.map((stop) => (stop.id === 'b' ? { ...stop, views: { forward: 'cam-ahead', back: 'cam-back' }, features: [
+      { id: 'f1', kind: 'side-street', label: 'Elm Street', side: 'left' },
+      { id: 'f2', kind: 'landmark', label: 'a derelict house', side: 'right' },
+    ] } : stop));
+    const mapped = { ...project, routeMaps: [{ ...route, stops }] };
+    const text = (greyboxShotId) => musicVideoFrameModelInput(mapped, { ...scenes[2], setReference: { subjectId: 'p-brick', ...(greyboxShotId ? { greyboxShotId } : {}) } })
+      .promptAdditions.find((item) => item.id === 'route-map').text;
+    expect(text('cam-ahead')).toContain('The camera looks ahead along the route, toward Corner stop. Along this stretch: a side street (Elm Street) on the left of frame; a derelict house on the right of frame.');
+    expect(text('cam-back')).toContain('The camera looks back the way they came, toward Curving street, so what is on the travellers\' left is on the right of frame. Along this stretch: a side street (Elm Street) on the right of frame; a derelict house on the left of frame.');
+    expect(text(null)).toContain('Along this stretch: a side street (Elm Street) on their left; a derelict house on their right.');
+  });
+
   it('adds nothing to a shot set in no place on a route', () => {
     expect(musicVideoFrameModelInput(project, scenes[3]).promptAdditions.map((item) => item.id)).not.toContain('route-map');
     const noRoute = { ...project, routeMaps: [] };
@@ -61,5 +75,8 @@ describe('route map stops', () => {
   it('accepts a route map on a project update and rejects an unknown heading', () => {
     expect(musicVideoProjectUpdateSchema.safeParse({ routeMaps: [route] }).success).toBe(true);
     expect(musicVideoProjectUpdateSchema.safeParse({ routeMaps: [{ ...route, heading: 'up' }] }).success).toBe(false);
+    const withFeature = (feature) => ({ routeMaps: [{ ...route, stops: [{ id: 'a', subjectId: 'p-curve', features: [feature], views: { back: 'cam-back' } }] }] });
+    expect(musicVideoProjectUpdateSchema.safeParse(withFeature({ id: 'f', kind: 'landmark', label: 'derelict house', side: 'right' })).success).toBe(true);
+    expect(musicVideoProjectUpdateSchema.safeParse(withFeature({ id: 'f', kind: 'landmark', side: 'behind' })).success).toBe(false);
   });
 });

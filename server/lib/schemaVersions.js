@@ -871,7 +871,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Optional, no backfill: legacy duplicates deterministically choose the first.
   // v45 = route maps joining the video's places (`routeMaps`), which a v44 strict
   // project schema rejects with a 400. Optional, no backfill: absent = no route.
-  musicVideoProjects: 45,
+  // v46 = route stops' side streets, landmarks and forward/back greybox cameras
+  // (`stops[].features`/`views`), which a v45 strict stop schema rejects. Optional, no backfill.
+  musicVideoProjects: 46,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
