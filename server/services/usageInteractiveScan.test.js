@@ -32,7 +32,12 @@ vi.mock('./cosAgentLifecycle.js', () => {
     readAgentRecordOrUnreadable: async (id) => (owners.unreadable ? AGENT_RECORD_UNREADABLE : owners.agents[id] ?? null)
   };
 });
-vi.mock('./runner.js', () => ({ isRunActive: async (id) => owners.activeRuns.has(id) }));
+// Only live registry observations are synthetic; boot recovery uses the real
+// metadata configuration and finalizer below to release deferred usage.
+vi.mock('./runner.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isRunActive: async (id) => owners.activeRuns.has(id)
+}));
 vi.mock('./usage.js', () => ({
   applyHistoricalUsageCorrections: vi.fn(async (corrections, { interactiveScan = null } = {}) => {
     if (ledger.failApply) throw new Error('simulated correction write failure');
