@@ -20,9 +20,10 @@ const PICKER_HINT = 'Each render sends the shot\'s references in order, up to it
  * end and both refines), shown as chips. Until the director changes them it is
  * the automatic set (the main character, the section's set and anyone the
  * prompt names); a change is kept on the shot (`frameReferenceIds`), and Auto
- * puts the automatic set back. A shot naming a Casting cast member
- * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`,
- * and Add also offers the approved assets of every character linked from the catalog.
+ * puts the automatic set back. Add offers the approved assets (sheets per age
+ * or look, portraits, guides) of every character linked from the catalog. An
+ * older shot that saved a Casting cast member (`characterVariant`, #12763) still
+ * leads with that member's guides, from `castMedia`; no picker sets it any more.
  */
 export default function SceneFrameReferences({ project, scene, castMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
