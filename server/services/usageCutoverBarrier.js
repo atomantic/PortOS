@@ -456,6 +456,8 @@ export async function activateUsageCutover({ migrationEpoch }) {
   const before = await requireEpoch(migrationEpoch);
   if (before.state === 'activated') return getUsageCutoverStatus();
   if (before.state !== 'fenced') throw refusal(`Barrier is ${before.state}; only a fenced instance can activate`, 'USAGE_CUTOVER_NOT_FENCED');
+  // A release that began replaying has already written retained old accounting.
+  if (before.replayStarted) throw refusal('A release is in progress; finish it', 'USAGE_CUTOVER_BUSY');
   const verified = await verifyUsageCutover({ migrationEpoch });
   if (verified.holdReasons.length) throw refusal('Activation held', 'USAGE_CUTOVER_HELD', verified.holdReasons);
   await withBarrierLock(async () => {

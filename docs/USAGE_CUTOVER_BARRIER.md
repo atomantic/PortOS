@@ -82,7 +82,7 @@ These are deliberately not fenced:
 | Path | Gate |
 |---|---|
 | Periodic, `peer:online` and manual pulls (`syncOrchestrator.js`), direct or forwarded | `admitInboundUsage` inside the peer-digest lock in `applyUsageRemote` |
-| `POST /api/sync/usage/apply` | The same gate |
+| `POST /api/sync/:category/apply` for `usage` | The same gate |
 | `GET /api/sync/usage/{checksum,manifest,snapshot}` | `describeOutboundUsage` in `peerUsage.js` |
 | Forwarded digests held in `peer-usage.json` | Filtered by epoch on the one read path, `entriesWithSelf`, for reports and the wire alike |
 | Queued or delayed payloads | Judged against current state inside the lock, never a captured one |
@@ -225,7 +225,7 @@ discarded by the restore; their native sources remain for the next backfill.
 
 `GET /api/usage/cutover` is read-only and contacts no peer. It reports `state`,
 `migrationEpoch`, `participants` with each last acknowledgment, `holdReasons`,
-`verifiedAt`, the transition times, `rollback`, `fingerprints`, `retiredEpochs` and
+`verifiedAt`, the transition times, `rollback`, `fingerprints`, `retiredEpochs`, `writersHeld` and
 `outstanding`: in-flight work per writer, retained write count and interval, and deferred
 retirements. It never exposes retained records. A damaged record reports `unreadable`
 with the hold reason `barrier-unreadable`, stays fenced, and refuses every action until

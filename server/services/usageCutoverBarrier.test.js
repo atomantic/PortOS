@@ -207,6 +207,9 @@ describe('usage writers during a fence', () => {
     await expect(a.call.barrier.releaseUsageCutover({ migrationEpoch: EPOCH })).rejects.toThrow();
     expect(a.ledgerTokens()).toBe(110);
     expect((await a.call.barrier.getUsageCutoverStatus()).state).toBe('fenced');
+    // The ledger already took retained old accounting, so this cannot become a new epoch.
+    a.run(() => a.barrier.registerUsageCutoverRuntime(EPOCH));
+    expect(await code(a.call.barrier.activateUsageCutover({ migrationEpoch: EPOCH }))).toBe('USAGE_CUTOVER_BUSY');
 
     const repaired = JSON.parse(readFileSync(path, 'utf8'));
     repaired.spool[1] = valid;
