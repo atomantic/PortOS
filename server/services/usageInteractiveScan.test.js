@@ -14,6 +14,16 @@ vi.mock('./agentRunEventLog.js', () => ({
 }));
 // Stand-in for usage.json's `interactiveScan`: a commit lands only when the mocked save succeeds.
 const ledger = vi.hoisted(() => ({ scan: null, failStateSave: false, failApply: false }));
+const owners = vi.hoisted(() => ({ agents: {}, unreadable: false, activeRuns: new Set() }));
+vi.mock('./cosAgentLifecycle.js', () => {
+  const AGENT_RECORD_UNREADABLE = Symbol('unreadable');
+  return {
+    AGENT_RECORD_UNREADABLE,
+    isLiveAgentRecord: (record) => Boolean(record) && record.status !== 'completed',
+    readAgentRecordOrUnreadable: async (id) => (owners.unreadable ? AGENT_RECORD_UNREADABLE : owners.agents[id] ?? null)
+  };
+});
+vi.mock('./runner.js', () => ({ isRunActive: async (id) => owners.activeRuns.has(id) }));
 vi.mock('./usage.js', () => ({
   applyHistoricalUsageCorrections: vi.fn(async (corrections, { interactiveScan = null } = {}) => {
     if (ledger.failApply) throw new Error('simulated correction write failure');
@@ -66,6 +76,9 @@ describe('refreshInteractiveUsage', () => {
   beforeEach(async () => {
     applied.length = 0;
     lifecycle.projections = [];
+    owners.agents = {};
+    owners.unreadable = false;
+    owners.activeRuns = new Set();
     ledger.scan = null;
     ledger.failStateSave = false;
     ledger.failApply = false;
@@ -180,6 +193,68 @@ describe('refreshInteractiveUsage', () => {
     expect(summary.unresolved).toEqual([]);
     expect(summary.families.grok.tokens).toBe(800 + 200 + 900 + 400);
     expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toEqual(metadata);
+  });
+
+  describe('an open run with no ledger verdict', () => {
+    const AFTER_P1 = new Date(P1 + 60_000).toISOString();
+    const LATER = new Date(P2 + 60_000).toISOString();
+    const writeOpenRun = async () => {
+      const runDir = join(runsDir, 'open-run');
+      await mkdir(runDir, { recursive: true });
+      const metadata = { id: 'open-run', agentId: 'agent-a', workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null };
+      await writeFile(join(runDir, 'metadata.json'), JSON.stringify(metadata));
+      return { runDir, metadata };
+    };
+    const ownAgent = (fields) => ({ id: 'agent-a', metadata: { runId: 'open-run' }, ...fields });
+    // A resume appends run.resumed, which folds to `running`, then completes the agent without closing the run.
+    const resumedLedger = [{ id: 'open-run', status: 'running' }];
+
+    it.each([
+      ['a resumed agent, at its pause', resumedLedger, ownAgent({ status: 'completed', pausedAt: AFTER_P1, completedAt: LATER })],
+      ['a completed agent', resumedLedger, ownAgent({ status: 'completed', completedAt: AFTER_P1 })],
+      ['a paused agent', [{ id: 'open-run', status: 'paused', lastEventAt: AFTER_P1 }], ownAgent({ status: 'paused', pausedAt: AFTER_P1 })],
+      ['a ledger pause with its agent record gone', [{ id: 'open-run', status: 'paused', lastEventAt: AFTER_P1 }], null],
+      ['an agent that never recorded its run id', resumedLedger, { id: 'agent-a', metadata: {}, status: 'completed', completedAt: AFTER_P1 }]
+    ])('is bounded by %s, leaving its record untouched', async (_name, projections, agent) => {
+      const { runDir, metadata } = await writeOpenRun();
+      lifecycle.projections = projections;
+      if (agent) owners.agents['agent-a'] = agent;
+      const summary = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(summary.unresolved).toEqual([]);
+      // p1 is inside the bounded window; p2 and p3 are the standalone usage it used to hide.
+      expect(summary.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+      expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toEqual(metadata);
+    });
+
+    it.each([
+      ['an agent still running', () => { owners.agents['agent-a'] = ownAgent({ status: 'running' }); }, 'running'],
+      ['a live in-memory run with no agent', () => { owners.activeRuns.add('open-run'); }, 'running'],
+      ['no record anywhere', () => {}, 'unknown'],
+      ['an unreadable agent store', () => { owners.unreadable = true; }, 'unknown'],
+      ['a completed agent that names another run', () => { owners.agents['agent-a'] = { ...ownAgent({ status: 'completed', completedAt: AFTER_P1 }), metadata: { runId: 'other-run' } }; }, 'unknown'],
+      ['an agent end before the run began', () => { owners.agents['agent-a'] = ownAgent({ status: 'completed', completedAt: new Date(P1 - 120_000).toISOString() }); }, 'unknown']
+    ])('stays held and recoverable with %s', async (_name, arrange, expected) => {
+      await writeOpenRun();
+      arrange();
+      const summary = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(applied).toEqual([]);
+      expect(summary.unresolved).toMatchObject([{ runId: 'open-run', lifecycle: expected }]);
+      expect(ledger.scan.unresolved).toMatchObject([{ runId: 'open-run', lifecycle: expected }]);
+      expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    });
+
+    it('replays what it held once the agent record proves the end, exactly once', async () => {
+      await writeOpenRun();
+      await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(applied).toEqual([]);
+      owners.agents['agent-a'] = ownAgent({ status: 'completed', completedAt: AFTER_P1 });
+      const recovered = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 60_000 });
+      expect(recovered.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+      expect(ledger.scan.deferred.grok).toEqual([]);
+      applied.length = 0;
+      await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 120_000 });
+      expect(applied).toEqual([]);
+    });
   });
 
   it('retains active and unknown coverage, then retries only the unbilled suffix after lifecycle resolution', async () => {
