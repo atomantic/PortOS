@@ -39,6 +39,15 @@ describe('ShotSheetPanel', () => {
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
   });
 
+  // Catches the frame preview not opening the shot editor, the phone path to a shot.
+  it('opens the shot editor from the frame preview', () => {
+    const board = boardFor();
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Shot 1 from preview' }));
+    expect(board.onEditShot).toHaveBeenCalledWith('a');
+  });
+
   // Catches a sheet edit dropping sibling fields, or saving when nothing changed.
   it('saves a changed field with the rest of the sheet, and nothing when unchanged', () => {
     const board = boardFor();

@@ -184,7 +184,9 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
         </label>
       </td>
       <td className="w-28 p-1.5">
-        <ScenePoster scene={scene} src={scenePosterSrc(scene) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
+        <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label} from preview`} className="block min-h-[44px] min-w-[44px] rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent">
+          <ScenePoster scene={scene} src={scenePosterSrc(scene) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
+        </button>
         {frameOutdated && <span className="mt-0.5 block text-xs text-port-warning">Prompt changed since this frame</span>}
       </td>
       <td className="w-32 p-1.5 text-xs italic">{lyric || <span className="not-italic text-port-text-muted">Instrumental</span>}</td>
