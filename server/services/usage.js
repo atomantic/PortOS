@@ -1,4 +1,4 @@
-import { join } from 'path';
+import { basename, join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
@@ -1466,6 +1466,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     },
     // Local diagnostics only; the federated digest is built separately.
     codexCoverage: usageData.interactiveScan?.codexCoverage ?? null,
+    heldRunCoverage: summarizeHeldRuns(usageData.interactiveScan?.unresolved),
     lastUpdated: usageData.lastUpdated
   };
   if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
@@ -1473,6 +1474,31 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   }
   summaryCache.set(cacheKey, summary);
   return summary;
+}
+
+const HELD_WORKSPACE_LIMIT = 10;
+
+/**
+ * Which workspaces have standalone usage held behind a run with no provable end.
+ * A run known to be running is the ordinary case and stays out of the notice;
+ * entries from before `lifecycle` existed are unknown until the next scan.
+ */
+function summarizeHeldRuns(unresolved) {
+  const held = (Array.isArray(unresolved) ? unresolved : [])
+    .filter((run) => run?.lifecycle !== 'running' && typeof run?.workspacePath === 'string' && Number.isFinite(run.from));
+  if (!held.length) return null;
+  const byWorkspace = new Map();
+  for (const { workspacePath, from } of held) {
+    const entry = byWorkspace.get(workspacePath);
+    byWorkspace.set(workspacePath, { workspace: basename(workspacePath), runs: (entry?.runs ?? 0) + 1, from: Math.min(from, entry?.from ?? from) });
+  }
+  const workspaces = [...byWorkspace.values()].sort((a, b) => a.from - b.from);
+  return {
+    runs: held.length,
+    since: new Date(workspaces[0].from).toISOString(),
+    workspaces: workspaces.slice(0, HELD_WORKSPACE_LIMIT).map(({ workspace, runs, from }) => ({ workspace, runs, since: new Date(from).toISOString() })),
+    moreWorkspaces: Math.max(0, workspaces.length - HELD_WORKSPACE_LIMIT)
+  };
 }
 
 /**

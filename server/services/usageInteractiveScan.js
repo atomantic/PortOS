@@ -113,8 +113,37 @@ function splitByUtcDay(from, to) {
   return out;
 }
 
+/**
+ * What PortOS durably recorded about a run whose `metadata.json` never closed.
+ * Three sources can prove the process is over, none of them a clock or a guess:
+ * a ledger verdict; a ledger pause (pause stops the process); the run's own agent
+ * record, because resuming or retiring an agent completes it without closing the
+ * run, and the ledger then reads `running` for good.
+ *
+ * `running` only labels the hold for the UI. Both answers stay excluded and
+ * deferred. Absence from an in-memory registry after restart does not establish
+ * when a run ended, so `isRunActive` may confirm a live run but never ends one.
+ */
+async function observeOpenRun(metadata, runId, start, projection) {
+  const { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
+  const read = metadata.agentId ? await readAgentRecordOrUnreadable(metadata.agentId) : null;
+  // An agent with no run id recorded is the crash between run creation and the
+  // agent update; the run still names it. A different run id is a different life.
+  const agent = read && read !== AGENT_RECORD_UNREADABLE && read.id === metadata.agentId && (read.metadata?.runId ?? runId) === runId ? read : null;
+  const diff = diffRunRecord(projection, metadata);
+  const end = [
+    diff?.finding === 'record-open' ? diff.detail.ledgerEndedAt : null,
+    projection?.status === 'paused' ? projection.lastEventAt : null,
+    ['paused', 'completed'].includes(agent?.status) ? agent.pausedAt ?? agent.completedAt : null
+  ].map((at) => Date.parse(at || '')).find((at) => at >= start);
+  if (end !== undefined) return { end };
+  if (agent) return { running: isLiveAgentRecord(agent) };
+  const { isRunActive } = await import('./runner.js');
+  return { running: await isRunActive(runId).catch(() => false) };
+}
+
 /** Every PortOS run's `[start, end]` (slack applied) by workspace, for runs touching `[from, now]`. */
-async function loadRunWindows(runsDir, from, now, pick = () => true, projections = new Map(), unresolved = [], observed = new Set()) {
+async function loadRunWindows(runsDir, from, now, pick = () => true, projections = null, unresolved = [], observed = new Set()) {
   const byCwd = new Map();
   for (const name of await listSubdirs(runsDir)) {
     const dir = join(runsDir, name);
@@ -126,14 +155,12 @@ async function loadRunWindows(runsDir, from, now, pick = () => true, projections
     const start = Date.parse(metadata?.startTime || '');
     if (!metadata?.workspacePath || Number.isNaN(start) || !pick(metadata)) continue;
     observed.add(metadata.id || name);
-    // Only a lifecycle observation can bound a missing endTime. Absence from
-    // an in-memory registry after restart does not establish when a run ended.
     let end = Date.parse(metadata.endTime || '');
-    if (Number.isNaN(end)) {
-      const diff = diffRunRecord(projections.get(metadata.id || name), metadata);
-      const observedEnd = Date.parse(diff?.finding === 'record-open' ? diff.detail.ledgerEndedAt : '');
-      if (Number.isFinite(observedEnd) && observedEnd >= start) end = observedEnd;
-      else unresolved.push({ runId: metadata.id || name, workspacePath: metadata.workspacePath, from: start - WINDOW_SLACK_MS, to: now });
+    if (Number.isNaN(end) && projections) {
+      const runId = metadata.id || name;
+      const open = await observeOpenRun(metadata, runId, start, projections.get(runId));
+      if (open.end !== undefined) end = open.end;
+      else unresolved.push({ runId, workspacePath: metadata.workspacePath, from: start - WINDOW_SLACK_MS, to: now, lifecycle: open.running ? 'running' : 'unknown' });
     }
     if (Number.isFinite(end) && end + WINDOW_SLACK_MS < from) continue;
     const window = [start - WINDOW_SLACK_MS, (Number.isNaN(end) ? now : end) + WINDOW_SLACK_MS];
@@ -397,7 +424,7 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       if (observed.has(old.runId)) continue;
       const key = JSON.stringify([old.runId, old.workspacePath]);
       const previous = missing.get(key);
-      missing.set(key, { ...old, from: Math.min(old.from, previous?.from ?? old.from), to: now });
+      missing.set(key, { ...old, from: Math.min(old.from, previous?.from ?? old.from), to: now, lifecycle: 'unknown' });
     }
     for (const window of missing.values()) {
       unresolved.push(window);

@@ -51,6 +51,28 @@ beforeEach(() => {
   api.updateUsageFleetBilling.mockResolvedValue({});
 });
 
+describe('UsagePage held standalone usage', () => {
+  it('names the workspaces held behind runs with no provable end, and stays quiet otherwise', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, heldRunCoverage: {
+      runs: 3, since: '2026-07-01T00:00:00.000Z', moreWorkspaces: 2,
+      workspaces: [{ workspace: 'example-app', runs: 2, since: '2026-07-01T00:00:00.000Z' }, { workspace: 'other-app', runs: 1, since: '2026-07-02T00:00:00.000Z' }],
+    } });
+    const view = render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    const notice = await screen.findByRole('note', { name: 'Standalone usage on hold' });
+    expect(notice).toHaveTextContent('3 PortOS runs');
+    expect(within(notice).getByText(/example-app/)).toHaveTextContent('2 runs');
+    expect(within(notice).getByText(/other-app/)).toHaveTextContent('1 run');
+    expect(notice).toHaveTextContent('and 2 more workspaces');
+    expect(within(notice).getByRole('link', { name: 'Review runs' })).toHaveAttribute('href', '/cos/runs');
+    view.unmount();
+
+    api.getUsage.mockResolvedValue({ ...usage, heldRunCoverage: null });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    await screen.findByText('Reconcile historical usage');
+    expect(screen.queryByRole('note', { name: 'Standalone usage on hold' })).toBeNull();
+  });
+});
+
 describe('UsagePage quota billing selection', () => {
   const local = { family: 'grok', label: 'Grok', supported: true, fetchedAt: '2026-01-01T00:00:00.000Z',
     limits: [{ key: 'week', label: 'Weekly', percentUsed: 20, percentRemaining: 80 }], origin: { self: true } };
