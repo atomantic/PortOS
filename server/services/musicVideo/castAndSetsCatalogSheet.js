@@ -77,7 +77,8 @@ function subjectCard(item, { images, placeholder, mark = null }) {
 
 /**
  * Render the guide. `checkin` is `resolveCatalogCheckin`'s result, `images` maps
- * a filename to its `data:` URI (missing = a placeholder).
+ * a filename to its `data:` URI (missing = a placeholder). The saved page states no
+ * approval: approval follows the live catalog and this file would soon contradict it.
  */
 export function renderCatalogCastAndSetsSheet({ title = 'Music Video', project = null, checkin, images = {}, durationSec = null, bpm = null, revision = 1 }) {
   const items = checkin?.items || [];
@@ -158,7 +159,6 @@ ${castSections}
 ${places.length ? `<section><h2><small>Sets</small>${plural(places.length, 'set')}</h2><p class="sub">Each set's images and text come from its catalog record.</p><div class="sets">${places.map((item) => subjectCard(item, { images, placeholder, mark: setUse(item) })).join('')}</div></section>` : ''}
 ${objects.length ? `<section><h2><small>Objects</small>${plural(objects.length, 'object')}</h2><p class="sub">Shots that show one of these use its catalog images.</p><div class="sets">${objects.map((item) => subjectCard(item, { images, placeholder })).join('')}</div></section>` : ''}
 <section><h2><small>Song map</small>Where each set lives in the track</h2>${songMap}</section>
-<div class="ask">${checkin?.approved ? '<b>Approved.</b> These catalog links condition the storyboard frames.' : '<b>Awaiting approval.</b> Review the catalog links in PortOS and approve to continue.'}</div>
 </div></body></html>
 `;
 }

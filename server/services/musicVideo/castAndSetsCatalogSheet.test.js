@@ -78,6 +78,12 @@ describe('catalog guide sheet', () => {
     expect(render({ images: { 'a.png': PNG } })).toContain(`<img src="${PNG}"`);
   });
 
+  // Uniquely catches a saved file asserting an approval that a later catalog change or approval would contradict.
+  it('states no approval in the saved page', () => {
+    expect(render({ checkin: { items, approved: true } })).not.toMatch(/approved|approval/i);
+    expect(render({ checkin: { items, approved: false } })).not.toMatch(/approved|approval/i);
+  });
+
   // Uniquely catches a code-only guide promising a raster image the media policy forbids, which would also fail its upload scan.
   it('keeps a code-only guide free of embedded images', () => {
     const html = render({ project: { mediaMode: 'code-only', concept: { subjects }, scenes: [] }, checkin: { items: items.map((i) => ({ ...i, images: [] })) } });

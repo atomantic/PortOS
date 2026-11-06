@@ -1418,25 +1418,26 @@ export async function useCatalogCheckin(projectId) {
  * check-in's own approval is untouched: it binds to the catalog, not this file.
  */
 export async function rebuildCatalogGuide(projectId) {
-  const project = await requireProject(projectId);
-  if (!isCatalogCheckin(project)) throw new ServerError('The check-in changed. Reload it before rebuilding the guide.', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
-  const checkin = await resolveCatalogCheckin(project, { catalog: deps.catalog });
+  const started = await requireProject(projectId);
+  if (!isCatalogCheckin(started)) throw new ServerError('The check-in changed. Reload it before rebuilding the guide.', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
+  const checkin = await resolveCatalogCheckin(started, { catalog: deps.catalog });
   assertCatalogCheckinReady(checkin);
   const images = {};
   for (const filename of catalogSheetImageFiles(checkin.items)) {
     const uri = await embedSheetImage(resolveGalleryImage(filename) || resolveImageRef(filename));
     if (uri) images[filename] = uri;
   }
+  // Encoding takes seconds, so everything else is read after it: the shots and guide
+  // selection stay current, and a catalog edited meanwhile would invalidate the images.
+  const project = await requireProject(projectId);
+  if (!isCatalogCheckin(project) || (await resolveCatalogCheckin(project, { catalog: deps.catalog })).basis !== checkin.basis) {
+    throw new ServerError('The catalog changed while the guide was being built. Rebuild it again.', { status: 409, code: 'CAST_SETS_CATALOG_STALE' });
+  }
   const html = renderCatalogCastAndSetsSheet({
     title: project.name, project, checkin, images,
     durationSec: project.audioAnalysis?.durationSec ?? null, bpm: project.audioAnalysis?.bpm ?? null,
     revision: project.castAndSets.revision,
   });
-  // Encoding takes seconds; a guide built from a catalog edited meanwhile would read as current.
-  const latest = await requireProject(projectId);
-  if (!isCatalogCheckin(latest) || (await resolveCatalogCheckin(latest, { catalog: deps.catalog })).basis !== checkin.basis) {
-    throw new ServerError('The catalog changed while the guide was being built. Rebuild it again.', { status: 409, code: 'CAST_SETS_CATALOG_STALE' });
-  }
   // The selected guide first: a guide the stage no longer names is still what Art opens.
   const existing = [project.productionReview?.draft?.guideArtifactId, project.castAndSets.artifactId]
     .find((id) => (project.devArtifacts || []).some((a) => a.id === id && !a.deleted && a.kind === 'cast-sets')) || null;

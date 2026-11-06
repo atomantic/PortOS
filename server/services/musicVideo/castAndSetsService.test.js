@@ -2981,6 +2981,35 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     expect((await projects.getStoredProject(project.id)).devArtifacts || []).toEqual([]);
   });
 
+  // Uniquely catches shots or a guide selection changed during encoding being overwritten by the snapshot taken before it.
+  it('builds from the shots and guide selection current when encoding ends', async () => {
+    await useCatalog();
+    const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+    const project = await catalogProject();
+    const { artifact: before } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Before', html: '<html></html>' });
+    const { artifact: after } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'After', html: '<html></html>' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, productionReview: { draft: { guideArtifactId: before.id } } } }));
+    let edited = false;
+    service.__setCastAndSetsDepsForTests(testDeps({
+      catalog: { getIngredient: async (id) => RECORDS[id] ?? null, listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }] },
+      sheetImage: async () => {
+        if (!edited) {
+          edited = true;
+          await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+            scenes: [{ sceneId: 'shot-9', startSec: 40, endSec: 52, setReference: { subjectId: 's-harbor' } }],
+            productionReview: { draft: { guideArtifactId: after.id } } } }));
+        }
+        return { mime: 'image/jpeg', bytes: Buffer.from('x') };
+      },
+    }));
+    const rebuilt = await rebuild(project.id);
+    expect(rebuilt.status).toBe(200);
+    expect(rebuilt.body.artifact.id).toBe(after.id);
+    const html = await guideHtml(project.id, after.id);
+    expect(html).toContain('1 shot · 0:40–0:52');
+    expect(html).not.toContain('0:12–');
+  });
+
   // Uniquely catches a rebuild versioning a stale stage sheet while Art keeps opening a different guide, or replacing a director's own guide.
   it('versions the Cast & Sets guide Art opens and keeps a different guide the director selected', async () => {
     await useCatalog();
