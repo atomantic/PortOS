@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { buildNativeUsageReport, NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY } from '../lib/nativeUsageContract.js';
 import { getInstanceId } from './instanceIdentity.js';
 import { getNativeTranscriptCoverage } from './nativeTranscriptCoverage.js';
+import { getNativeGrokUsageCoverage } from './nativeGrokUsageCoverage.js';
 import { getSettingsWithStatus } from './settings.js';
 
 // A capture runs in its own CLI process and must cover the whole retained history,
@@ -20,7 +21,8 @@ export async function captureNativeUsageReport({ home = homedir(), limits = NATI
   const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
   const codexEvidence = await getCodexAccountUsageEvidence();
   const transcripts = {};
-  for (const family of ['agy', 'claude', 'grok']) transcripts[family] = await getNativeTranscriptCoverage(family, { home, limits, includeRecords: true });
+  for (const family of ['agy', 'claude']) transcripts[family] = await getNativeTranscriptCoverage(family, { home, limits, includeRecords: true });
+  transcripts.grok = await getNativeGrokUsageCoverage({ home, limits });
   return buildNativeUsageReport({
     instanceId: await getInstanceId(), capturedAt, codexEvidence, transcripts, scanLimits: limits,
   });

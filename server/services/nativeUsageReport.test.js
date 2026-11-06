@@ -68,7 +68,11 @@ describe('versioned provider validators', () => {
     if (family === 'codex') getCodexAccountUsageEvidence.mockResolvedValue(codexEvidence(scenario));
     else await materialize(scenario.files);
     const report = await capture();
-    expect(entry(report, family)).toMatchObject(scenario.expect);
+    if (family === 'grok') {
+      // v1 raw update fixtures are deliberately not a persisted usage source.
+      expect(entry(report, family)).toMatchObject({ status: 'unavailable', totals: null, source: 'grok:persisted-session-usage', coverage: { measuredRecords: 0 } });
+      expect(entry(report, family).findings).toContain('native-usage-files-missing');
+    } else expect(entry(report, family)).toMatchObject(scenario.expect);
     expect(nativeUsageReportSchema.safeParse(report).success).toBe(true);
   });
 });
@@ -128,7 +132,7 @@ describe('reproducible staged input', () => {
     const matrix = buildNativeUsageMatrix({ reports: [first, copied], selections: [{
       family: 'claude', accountLabel: 'acct-a', historyScope: 'operator-confirmed-retained-history', members: [first.participantKey, copied.participantKey],
     }] });
-    expect(first.contractVersion).toBe(2);
+    expect(first.contractVersion).toBe(3);
     expect(matrix.families.find(({ family }) => family === 'claude')).toMatchObject({
       merge: { status: 'partial', completeness: 'unknown', totals: { totalTokens: 41 } },
       accounts: [{ coverage: { uniqueRecords: 2, measuredRecords: 2, duplicateRecords: 2 }, records: expect.any(Array) }],

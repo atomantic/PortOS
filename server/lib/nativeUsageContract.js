@@ -19,8 +19,9 @@ import { z } from 'zod';
 import { CODEX_ERROR_CODES } from './codexAccount.js';
 import { canonicalStringify } from './objects.js';
 import { nativeUsageRecordProjectionSchema, unionNativeClaudeRecords } from './nativeUsageRecords.js';
+import { nativeGrokUsageProjectionSchema, unionNativeGrokRecords } from './nativeGrokUsageRecords.js';
 
-export const NATIVE_USAGE_CONTRACT_VERSION = 2;
+export const NATIVE_USAGE_CONTRACT_VERSION = 3;
 export const NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY = 'usageNativeAccountSelections';
 
 const FAMILIES = ['agy', 'claude', 'codex', 'grok'];
@@ -139,9 +140,27 @@ const reportSchemaV1 = z.strictObject({
 
 const providerEntrySchemaV2 = providerEntrySchema.extend({ recordProjection: nativeUsageRecordProjectionSchema.nullable() })
   .refine(({ family, recordProjection }) => family === 'claude' || recordProjection === null, 'unsupported record projection');
+const providerEntrySchemaV3 = providerEntrySchema.extend({
+  source: z.enum([...Object.values(PROVIDER_CONTRACTS).map(({ source }) => source), 'grok:persisted-session-usage']),
+  validator: z.enum([...Object.values(PROVIDER_CONTRACTS).map(({ validator }) => validator), 'grok-persisted-turns/1']),
+  recordProjection: z.union([nativeUsageRecordProjectionSchema, nativeGrokUsageProjectionSchema]).nullable(),
+  nativeUsageCoverage: z.strictObject({ validSnapshots: count, invalidSnapshots: count, sessionsWithoutUsage: count }).nullable(),
+  cost: z.strictObject({
+    estimatedApiEquivalentUsd: z.null(), actualSpendUsd: z.null(),
+    nativeCostSignal: z.union([providerEntrySchema.shape.cost.shape.nativeCostSignal.unwrap(), z.strictObject({
+      kind: z.literal('grok-cost-usd-ticks'), status: z.literal('unverified-scope'),
+      knownCostUsdTicks: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+      measuredRecords: count, missingRecords: count, conflictingRecords: count,
+    })]).nullable(),
+  }),
+}).refine(({ family, recordProjection, source, validator }) => !recordProjection || (
+  family === 'claude' && recordProjection.identityScheme === 'sha256-native-record/1'
+) || (family === 'grok' && source === 'grok:persisted-session-usage' && validator === 'grok-persisted-turns/1'
+  && recordProjection.identityScheme === 'sha256-grok-session-turn/1'), 'unsupported record projection');
 export const nativeUsageReportSchema = z.discriminatedUnion('contractVersion', [
   reportSchemaV1,
   reportSchemaV1.extend({ contractVersion: z.literal(2), providers: z.array(providerEntrySchemaV2).length(FAMILIES.length) }),
+  reportSchemaV1.extend({ contractVersion: z.literal(3), providers: z.array(providerEntrySchemaV3).length(FAMILIES.length) }),
 ]).refine(({ providers }) => FAMILIES.every((family) => providers.filter((entry) => entry.family === family).length === 1), 'provider family must be unique');
 
 const accountSelection = {
@@ -149,11 +168,12 @@ const accountSelection = {
   members: z.array(participantKey).min(1).max(64),
 };
 /** A selection asserts account membership; equal counters never establish identity.
- * Claude selections apply to retained history, not merely the currently signed-in account.
+ * Retained-provider selections apply to retained history, not merely the currently signed-in account.
  */
 export const nativeUsageAccountSelectionsSchema = z.array(z.discriminatedUnion('family', [
   z.strictObject({ family: z.literal('codex'), ...accountSelection, authoritativeParticipant: participantKey }),
   z.strictObject({ family: z.literal('claude'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
+  z.strictObject({ family: z.literal('grok'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
 ])).max(64).superRefine((selections, ctx) => {
   const claimed = new Set();
   const labels = new Set();
@@ -189,7 +209,7 @@ const baseEntry = (family) => {
     scanCaps: null, reproducibility: 'deterministic', duplicates: null, coverage: null, steps: null, cacheOverlap: null,
     tokenFields, totals: null,
     cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: null },
-    attribution: 'excluded', findings: [], recordProjection: null,
+    attribution: 'excluded', findings: [], recordProjection: null, nativeUsageCoverage: null,
   };
 };
 
@@ -252,7 +272,7 @@ function projectCodexEvidence(evidence, capturedAt) {
   return { ...entry, status: degraded ? 'partial' : 'available', findings };
 }
 
-function transcriptFindings(family, coverage) {
+function transcriptFindings(family, coverage, persisted = false) {
   const flags = {
     'scan-capped': coverage.capped, 'scan-stopped-early': coverage.stoppedEarly, 'oversized-lines': coverage.oversizedLines,
     'source-missing': coverage.missingSource, 'conflicting-duplicates': coverage.conflictingRecords,
@@ -261,7 +281,7 @@ function transcriptFindings(family, coverage) {
     'skipped-links': coverage.skippedLinks, 'unfinalized-messages': coverage.unfinalizedRecords,
     'field-inconsistency': coverage.fieldInconsistentRecords, 'missing-steps': coverage.steps?.missingStepIndexes,
     'partially-measured-conversations': coverage.steps?.conversationsPartiallyMeasured,
-    'input-cache-overlap-unverified': family === 'agy', 'turn-semantics-unverified': family === 'grok',
+    'input-cache-overlap-unverified': family === 'agy', 'turn-semantics-unverified': family === 'grok' && !persisted,
     'cost-tick-scope-unverified': coverage.costTickRecords,
   };
   return Object.keys(flags).filter((code) => flags[code]);
@@ -273,6 +293,9 @@ function projectTranscriptCoverage(family, scan, scanLimits) {
   const pick = (source, keys) => Object.fromEntries(keys.map((key) => [key, source[key]]));
   return {
     ...baseEntry(family),
+    ...(scan.source === 'grok:persisted-session-usage' ? { source: scan.source, validator: scan.validator,
+      tokenFields: { totalTokens: MEASURED, tokensIn: MEASURED, tokensOut: MEASURED, cacheReadTokens: MEASURED, cacheWriteTokens: MEASURED } } : {}),
+    nativeUsageCoverage: scan.nativeUsageCoverage ?? null,
     status: scan.status,
     runtime: coverage.runtimeVersions.length ? { status: 'observed', versions: coverage.runtimeVersions } : { status: 'unknown', versions: [] },
     freshness: { earliestObserved: coverage.firstObservedAt, latestObserved: coverage.lastObservedAt },
@@ -284,11 +307,13 @@ function projectTranscriptCoverage(family, scan, scanLimits) {
     cacheOverlap: coverage.cacheOverlap,
     totals: scan.summary,
     recordProjection: scan.recordProjection ?? null,
-    cost: {
+    cost: scan.nativeUsageCoverage ? scan.cost : {
       estimatedApiEquivalentUsd: null, actualSpendUsd: null,
       nativeCostSignal: coverage.costTickRecords ? { kind: 'grok-cost-usd-ticks', status: 'unverified-scope', records: coverage.costTickRecords } : null,
     },
-    findings: transcriptFindings(family, coverage),
+    findings: [...new Set([...transcriptFindings(family, coverage, Boolean(scan.nativeUsageCoverage)), ...(scan.findings ?? []),
+      ...(scan.nativeUsageCoverage?.invalidSnapshots ? ['invalid-native-snapshots'] : []),
+      ...(scan.nativeUsageCoverage?.sessionsWithoutUsage ? ['native-usage-files-missing'] : [])])],
   };
 }
 
@@ -400,13 +425,13 @@ function buildMachineFamily(family, latest) {
   };
 }
 
-function buildClaudeFamily(latest, selections, refusals, refuse) {
-  const sources = buildMachineFamily('claude', latest).sources;
-  if (!selections.length) return buildMachineFamily('claude', latest);
-  const entryFor = (key) => latest.get(key)?.providers.find(({ family }) => family === 'claude');
+function buildRetainedFamily(family, latest, selections, refusals, refuse) {
+  const sources = buildMachineFamily(family, latest).sources;
+  if (!selections.length) return buildMachineFamily(family, latest);
+  const entryFor = (key) => latest.get(key)?.providers.find(({ family: entryFamily }) => entryFamily === family);
   const selected = new Set(selections.flatMap(({ members }) => members));
   const unresolved = [...latest.keys()].filter((key) => !selected.has(key) && !entryFor(key).coverage?.missingSource).sort();
-  for (const key of unresolved) refuse('participant-account-unresolved', 'claude', key);
+  for (const key of unresolved) refuse('participant-account-unresolved', family, key);
   const recordAccounts = new Map();
   const accounts = selections.map(({ accountLabel, members, historyScope }) => {
     const projections = [];
@@ -416,42 +441,42 @@ function buildClaudeFamily(latest, selections, refusals, refuse) {
       const entry = entryFor(member);
       if (!entry) {
         missing.push(member);
-        refuse('member-report-missing', 'claude', member);
+        refuse('member-report-missing', family, member);
       } else if (!entry.recordProjection || entry.recordProjection.truncated) {
-        refuse(entry.recordProjection ? 'record-projection-truncated' : 'record-projection-unavailable', 'claude', member);
+        refuse(entry.recordProjection ? 'record-projection-truncated' : 'record-projection-unavailable', family, member);
       } else {
         projections.push(entry.recordProjection);
         for (const finding of entry.findings) findings.add(finding);
         for (const { recordKey } of entry.recordProjection.records) {
           const owner = recordAccounts.get(recordKey);
-          if (owner && owner !== accountLabel) refuse('record-in-multiple-accounts', 'claude');
+          if (owner && owner !== accountLabel) refuse('record-in-multiple-accounts', family);
           recordAccounts.set(recordKey, accountLabel);
         }
       }
     }
-    const union = unionNativeClaudeRecords(projections);
-    if (union.findings.includes('counter-overflow')) refuse('counter-overflow', 'claude');
+    const union = (family === 'grok' ? unionNativeGrokRecords : unionNativeClaudeRecords)(projections);
+    if (union.findings.includes('counter-overflow')) refuse('counter-overflow', family);
     for (const finding of union.findings) findings.add(finding);
     return {
       accountLabel, identityBasis: 'operator-selection', historyScope,
       members: [...members].sort(), membersWithoutReport: missing.sort(),
       status: 'partial', completeness: 'unknown', retention: 'unknown',
       ...union, findings: [...findings].sort(),
-      cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null }, attribution: 'excluded',
+      cost: union.cost ?? { estimatedApiEquivalentUsd: null, actualSpendUsd: null }, attribution: 'excluded',
     };
   }).sort((a, b) => a.accountLabel.localeCompare(b.accountLabel));
-  const reasons = [...new Set(refusals.filter(({ family }) => !family || family === 'claude').map(({ code }) => code))].sort();
-  const fields = ['totalTokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+  const reasons = [...new Set(refusals.filter(({ family: refusedFamily }) => !refusedFamily || refusedFamily === family).map(({ code }) => code))].sort();
+  const fields = ['totalTokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens', ...(family === 'grok' ? ['reasoningTokens', 'modelCalls'] : [])];
   const totals = Object.fromEntries(fields.map((field) => [field, accounts.reduce((sum, account) => sum + (account.totals?.[field] ?? 0), 0)]));
   if (!Object.values(totals).every(Number.isSafeInteger)) reasons.push('counter-overflow');
   if (!accounts.some(({ totals: value }) => value)) reasons.push('no-verified-retained-records');
   if (reasons.length) {
     // Keep diagnostic counts, but do not publish any account partition as usable
     // when its requested input set or grouping cannot be established.
-    for (const account of accounts) { account.status = 'refused'; account.totals = null; account.records = []; }
+    for (const account of accounts) { account.status = 'refused'; account.totals = null; account.records = []; account.cost = { estimatedApiEquivalentUsd: null, actualSpendUsd: null }; }
   }
   return {
-    family: 'claude', scope: 'selected-account-retained-records', sources, accounts, unresolvedParticipants: unresolved,
+    family, scope: 'selected-account-retained-records', sources, accounts, unresolvedParticipants: unresolved,
     merge: { status: reasons.length ? 'refused' : 'partial', reasons, accountCount: accounts.length, completeness: 'unknown', totals: reasons.length ? null : totals },
   };
 }
@@ -475,7 +500,7 @@ export function buildNativeUsageMatrix({ reports, selections }) {
   const byParticipant = loadParticipants(reports, refuse);
   const latest = new Map([...byParticipant].map(([key, list]) => [key, list.at(-1)]));
   const codex = buildCodexFamily(latest, usableSelections.filter(({ family }) => family === 'codex'), refusals, refuse);
-  const claude = buildClaudeFamily(latest, usableSelections.filter(({ family }) => family === 'claude'), refusals, refuse);
+  const retained = ['claude', 'grok'].map(family => buildRetainedFamily(family, latest, usableSelections.filter(selection => selection.family === family), refusals, refuse));
   const unique = [...new Map(refusals.map((refusal) => [canonicalStringify(refusal), refusal])).entries()]
     .sort(([a], [b]) => a.localeCompare(b)).map(([, refusal]) => refusal);
   return withContentHash({
@@ -486,7 +511,7 @@ export function buildNativeUsageMatrix({ reports, selections }) {
       participantKey: key, capturedAt: latest.get(key).capturedAt, reportHash: latest.get(key).contentHash,
       evidenceHash: latest.get(key).evidenceHash, comparedReports: byParticipant.get(key).length, providers: latest.get(key).providers,
     })),
-    families: [...['agy', 'grok'].map((family) => buildMachineFamily(family, latest)), claude, codex].sort((a, b) => a.family.localeCompare(b.family)),
+    families: [buildMachineFamily('agy', latest), ...retained, codex].sort((a, b) => a.family.localeCompare(b.family)),
     refusals: unique,
   });
 }

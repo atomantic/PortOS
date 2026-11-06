@@ -92,6 +92,51 @@ that went backwards, or restated history across two reports of one participant
 refuses until the operator reselects and drops the older report. Those checks detect
 a change. They do not prove the account stayed the same.
 
+## Grok persisted usage capture (report version 3)
+
+The staged capture now reads only
+`~/.grok/sessions/<encoded-cwd>/<session-directory>/usage.json` for Grok.
+It does not call `grok usage` or mix in `updates.jsonl`: several raw events can
+collapse into a single persisted native turn. The existing dashboard's raw-event
+coverage remains diagnostic until the separate cutover work is validated.
+
+The supported shape was observed with Grok 1.0.77's persisted-usage reader. There
+is no native format version or finalization flag in the observed file, and the
+current CLI version does not identify the version that wrote historical records.
+A snapshot contains `sessionId`, `updatedAt`, `session`, and `turns`; each turn has
+`turnNumber`, `endedAt`, seven native token/call counters, `turnCount`, and nullable
+`costUsdTicks`. Model labels and detailed model usage are not exported. Session
+counters must equal the sum of the native turn counters, with unique positive
+turn numbers and `turnCount` agreement. Bad snapshots exclude their identified
+turns rather than publishing arbitrary winners.
+
+Records are hashed by the native session ID plus turn number, independent of
+machine and directory. Explicit `totalTokens` is used: cache and reasoning are
+breakdowns and never added again. Input/output/total consistency and the observed
+cached-read/input and reasoning/output subset relations are validated; no
+cache-creation inclusion rule is assumed. Copies with conflicting token fields
+or timestamps are excluded. A conflicting copy cannot be hidden by a clean peer.
+
+Grok account selections require `historyScope: operator-confirmed-retained-history`,
+like Claude. Shared current sign-ins alone cannot establish historical membership.
+Version 3 captures carry Grok projections; version 1 and 2 reports remain readable,
+but cannot supply a Grok retained union without the new projection. Missing
+members, ungrouped sources, cross-account copied identities, truncated projections
+and unsafe token totals refuse a combined result. At most 100,000 unique records
+are exported per participant. Scan limits and missing/invalid snapshots remain
+visible; even an exhaustive scan yields only partial retained history, never a
+complete account history or proof of zero usage. Custom roots and WSL installations
+are not discovered by this reader.
+
+Native costs are separate from tokens. Known `costUsdTicks` are reported in their
+native integer unit with measured, missing and conflicting-record counts. Missing
+costs can be filled by an otherwise identical copy; contradictory costs stay
+unknown without discarding valid tokens. The conversion to dollars and scope
+(subscription allowance, API equivalence or actual billing) are unverified, so
+actual spend and estimated API-equivalent USD remain null. No inference, ledger
+write, settings change, migration, peer sync, restart or deployment is part of this
+increment. Reports remain private because opaque record keys are linkable.
+
 ## Remaining provider work
 
 Validated against fixtures and a read-only scan of one install's retained files, with

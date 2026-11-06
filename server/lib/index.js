@@ -1083,3 +1083,5 @@ export * from './photorealLook.js';
 export * from './imageInputProvenance.js';
 
 export * from './nativeUsageRecords.js';
+
+export * from './nativeGrokUsageRecords.js';
