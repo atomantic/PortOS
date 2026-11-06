@@ -22,6 +22,8 @@ vi.mock('../../../services/api', () => ({
   forceCosEvaluate: vi.fn(),
   triggerCosOnDemandTask: vi.fn(),
 }));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
+vi.mock('../../ui/Toast', () => ({ default: toast }));
 vi.mock('./RepositorySourcePanel', () => ({
   default: ({ appId, refreshKey }) => (
     <div data-testid="repository-source-panel" data-refresh-key={refreshKey}>{appId}</div>
@@ -301,6 +303,36 @@ describe('GitTab merged branches checked out in worktrees', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' }));
 
     await waitFor(() => expect(api.getBranches.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('deletes one merged branch and its worktree from its row through the scoped cleanup', async () => {
+    api.cleanupMergedBranches.mockResolvedValue({
+      deleted: [{ name: 'claim/issue-1', local: 'deleted', remote: null, worktree: 'removed' }],
+      skipped: []
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    // Only merged, non-current branches offer the row delete.
+    expect(screen.queryByRole('button', { name: /^Delete main/ })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete claim/issue-1 and its worktree' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete branch + worktree' }));
+
+    await waitFor(() => expect(api.cleanupMergedBranches).toHaveBeenCalledWith('/repo', expect.objectContaining({ branches: ['claim/issue-1'] })));
+    await waitFor(() => expect(api.getBranches.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('names why a row delete was refused when the worktree is held', async () => {
+    api.cleanupMergedBranches.mockResolvedValue({
+      deleted: [],
+      skipped: ['claim/issue-2 (local: uncommitted changes)']
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete claim/issue-2 and its worktree' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete branch + worktree' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Not deleted — claim/issue-2 (local: uncommitted changes)'));
+    expect(screen.getByText('claim/issue-2')).toBeInTheDocument();
   });
 
   it('labels worktree-checked-out branches with a worktree badge', async () => {
