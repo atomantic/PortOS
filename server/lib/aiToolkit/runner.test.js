@@ -69,6 +69,26 @@ describe('AI Toolkit runner service', () => {
     });
   });
 
+  it('preserves malformed metadata during ownership recording before provider dispatch', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const metadataPath = join(dataDir, 'runs', 'malformed', 'metadata.json');
+    await mkdir(join(dataDir, 'runs', 'malformed'), { recursive: true });
+    await writeFile(metadataPath, 'unreadable legacy record');
+    let beforeDispatch;
+    const ensureProviderReady = vi.fn(async () => {
+      beforeDispatch = await readFile(metadataPath, 'utf8');
+      return { success: true };
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+      body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+    })));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady } });
+    await runner.executeApiRun({ runId: 'malformed', provider: runReady(), prompt: 'Example' });
+    expect(ensureProviderReady).toHaveBeenCalledOnce();
+    expect(beforeDispatch).toBe('unreadable legacy record');
+  });
+
   it('passes request capability requirements to proactive fallback selection', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
