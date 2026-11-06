@@ -7,16 +7,30 @@
 import { RUNWAY_CATALOG_SNAPSHOT } from './runwayCatalogSnapshot.js';
 
 /** Date the schemas and prices below were last verified against Runway's docs. */
-export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-10-19';
+export const RUNWAY_VIDEO_PRICING_VERIFIED_AT = '2026-11-06';
 
 /** Runway's own Gen-4.5: the default when a request names no model. */
 export const RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL = 'gen4.5';
 
+// USD per second at $0.01 per credit, by size where the rate varies. PortOS sends
+// `audio: false`, so a model that charges for audio is listed at its silent rate.
+// Seedance's per-generation minimums equal its shortest clip at its lowest rate,
+// so a quote never falls below them.
 const PRICES = {
-  'gen4.5': 0.12, gen4_turbo: 0.05, 'kling3.0_standard': 0.09, 'kling3.0_pro': 0.12,
-  'kling2.5_turbo_pro': 0.12, h3_max: { '480p': 0.05, '768p': 0.08 },
-  wan3: { '480p': 0.05, '720p': 0.10, '1080p': 0.20 },
+  'gen4.5': 0.12, gen4_turbo: 0.05, 'veo3.1': 0.20, 'veo3.1_fast': 0.10,
+  'kling3.0_standard': 0.09, 'kling3.0_pro': 0.12, 'kling3.0_4k': 0.43,
+  klingO3_standard: 0.13, klingO3_pro: 0.17, klingO3_4k: 0.43, 'kling2.5_turbo_pro': 0.12,
+  h3_max: { '480p': 0.05, '768p': 0.08 }, hailuo3: { '768p': 0.10, '2k': 0.15 },
+  happyhorse_1_0: { '720p': 0.15, '1080p': 0.30 },
+  wan3: { '480p': 0.05, '720p': 0.10, '1080p': 0.20 }, wan3_prime: { '480p': 0.068, '720p': 0.14, '1080p': 0.28 },
+  seedance2: { '480p': 0.14, '720p': 0.30, '1080p': 0.40, '4k': 1.50 },
+  seedance2_fast: { '480p': 0.11, '720p': 0.24 }, seedance2_mini: { '480p': 0.07, '720p': 0.15 },
+  seedance2_5: { '480p': 0.20, '720p': 0.30, '1080p': 0.68 },
+  gemini_omni_flash: 0.10, 'gemini_omni_flash_1.1': { '360p': 0.034, '720p': 0.10, '1080p': 0.15, '4k': 0.30 },
+  grok_imagine_1_5: { '480p': 0.10, '720p': 0.16, '1080p': 0.29 }, grok_imagine_1_5_lite: { '480p': 0.02, '720p': 0.03, '1080p': 0.14 },
 };
+// USD per input image, the start frame included, on the models that charge for them.
+const PER_INPUT_IMAGE = { hailuo3: 0.02, gemini_omni_flash: 0.01, 'gemini_omni_flash_1.1': 0.01, grok_imagine_1_5: 0.01, grok_imagine_1_5_lite: 0.01 };
 const LABELS = {
   'gen4.5': 'Runway Gen-4.5', gen4_turbo: 'Runway Gen-4 Turbo',
   'veo3.1': 'Veo 3.1', 'veo3.1_fast': 'Veo 3.1 Fast',
@@ -58,7 +72,7 @@ export const RUNWAY_VIDEO_MODELS = Object.freeze(RUNWAY_CATALOG_SNAPSHOT.image_t
     prompt: row.promptRequired ? 'required' : 'optional', promptMinChars: row.promptMin, promptMaxChars: row.promptMax,
     endImage: row.endImage, duration, size: sizeRule(row, false), audio: row.audio, seed: row.seed, negativePrompt: row.negativePromptMax > 0, negativePromptMaxChars: row.negativePromptMax,
     ...(text ? { textToVideo: { ratios: text.ratios.filter((r) => /^\d+:\d+$/.test(r)), size: sizeRule(text, true), promptRequired: text.promptRequired } } : {}),
-    pricing: { perSecond: PRICES[row.id] ?? null },
+    pricing: { perSecond: PRICES[row.id] ?? null, perInputImage: PER_INPUT_IMAGE[row.id] ?? 0 },
     ...(REFERENCE_IMAGE_MAX[row.id] ? { referenceImages: { max: REFERENCE_IMAGE_MAX[row.id], promptName: '@Image1' } } : {}),
   });
 }));
@@ -132,10 +146,11 @@ const round4 = (n) => Math.round(n * 1e4) / 1e4;
 /**
  * What one Runway render costs and why, or null for an uncurated model:
  * `{ modelId, label, requestedSec, billedSec, minBilledSec, resolution, perSec,
- * costUsd }`. `billedSec` is the length Runway renders and bills, coerced
- * exactly as the request body will be.
+ * inputImageUsd, costUsd }`. `billedSec` is the length Runway renders and bills, coerced
+ * exactly as the request body will be. `inputImages` counts the images sent, and a
+ * caller that does not know yet is quoted for one start frame.
  */
-export function runwayVideoClipQuote({ modelId, seconds, resolution } = {}) {
+export function runwayVideoClipQuote({ modelId, seconds, resolution, inputImages = 1 } = {}) {
   const model = getRunwayVideoModel(modelId);
   if (!model) return null;
   const billedSec = coerceRunwayVideoSeconds(model, seconds);
@@ -144,6 +159,7 @@ export function runwayVideoClipQuote({ modelId, seconds, resolution } = {}) {
   if (perSec == null) return null;
   const requested = Number(seconds);
   const rule = model.duration;
+  const inputImageUsd = model.pricing.perInputImage * inputImages;
   return {
     modelId: model.id,
     label: model.label,
@@ -152,7 +168,8 @@ export function runwayVideoClipQuote({ modelId, seconds, resolution } = {}) {
     minBilledSec: rule.kind === 'enum' ? rule.values[0] : rule.min,
     resolution: res,
     perSec: round4(perSec),
-    costUsd: round4(perSec * billedSec),
+    inputImageUsd: round4(inputImageUsd),
+    costUsd: round4(perSec * billedSec + inputImageUsd),
   };
 }
 
@@ -168,7 +185,8 @@ export function describeRunwayVideoRate(modelId, resolution) {
   if (perSec == null) return null;
   const multiRate = typeof model.pricing.perSecond !== 'number';
   const rule = model.duration;
-  return `$${perSec}/s${multiRate && res ? ` at ${res}` : ''} · bills ${rule.kind === 'enum' ? rule.values[0] : rule.min}s min`;
+  const perImage = model.pricing.perInputImage ? ` + $${model.pricing.perInputImage}/image` : '';
+  return `$${perSec}/s${multiRate && res ? ` at ${res}` : ''}${perImage} · bills ${rule.kind === 'enum' ? rule.values[0] : rule.min}s min`;
 }
 
 /**
@@ -246,6 +264,7 @@ export function buildRunwayVideoRequest({
     model,
     seconds: coercedSec,
     resolution: res,
-    estimatedCostUsd: estimateRunwayVideoCostUsd({ modelId: model.id, seconds: coercedSec, resolution: res }),
+    estimatedCostUsd: estimateRunwayVideoCostUsd({ modelId: model.id, seconds: coercedSec, resolution: res,
+      inputImages: [imageUri, endImageUri, ...referenceImageUris].filter(Boolean).length }),
   };
 }
