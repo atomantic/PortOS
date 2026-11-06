@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import SentPromptPanel from '../media/SentPromptPanel.jsx';
+import InfoTooltip from '../ui/InfoTooltip';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import socket from '../../services/socket';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
 const COUNTS = [1, 2, 3, 4];
+const OPEN_HINT = 'Opens a short form first (subject, photo count, agent); nothing runs until you press Find photos there.';
 
 /**
  * Research and seed (#14822), shared by a shot and a roster cameo: the subject,
@@ -62,10 +64,15 @@ export default function ResearchSeedForm({ projectId, match, start, onSaved, roo
   return (
     <div className="space-y-1">
       {!open && (
-        <button type="button" onClick={() => { setSubject((s) => s || defaultSubject); setOpen(true); }} disabled={disabled}
-          className="inline-flex min-h-[44px] items-center gap-1 text-[11px] underline sm:min-h-0">
-          <Search size={12} aria-hidden="true" /> Research and seed
-        </button>
+        <span className="inline-flex items-center">
+          <button type="button" onClick={() => { setSubject((s) => s || defaultSubject); setOpen(true); }} disabled={disabled} title={OPEN_HINT}
+            className="inline-flex min-h-[44px] items-center gap-1 text-[11px] underline sm:min-h-0">
+            <Search size={12} aria-hidden="true" /> Research and seed
+          </button>
+          <InfoTooltip label="About researching photos" placement="below" align="start" width={280}>
+            {OPEN_HINT} An agent with web search then looks for real photos of the subject; {intro}
+          </InfoTooltip>
+        </span>
       )}
       {running && <p role="status" className="text-[11px] text-port-text-muted">Searching for photos…</p>}
       {open && (
