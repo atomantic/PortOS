@@ -161,6 +161,7 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
       }
     }
 
+    if (result.diagnostics?.cli) entry.diagnostics = reviewFailureDiagnostics(result.diagnostics)
     return {
       ...current,
       codeReview: {
@@ -318,7 +319,10 @@ const diffSizeLabel = (diffSizeBytes) => {
 const isTimeoutFailure = (error) => /timed out after\s+\d+\s*ms|did not finish within\s+\d+(?:ms|s)|operation was aborted|request was aborted|abort(?:ed|ing)?/i.test(String(error || ''))
 
 function localCodeReviewTimeoutError({ backend, timeoutMs, diffSizeBytes, phase }) {
-  const description = phase === 'no-response'
+  const description = phase === 'no-output' ? 'reviewer process emitted no output'
+    : phase === 'output-open' ? 'reviewer process emitted output but did not exit'
+    : phase === 'exit-drain' ? 'reviewer process exited but output pipes did not close'
+    : phase === 'no-response'
     ? 'backend never answered'
     : phase === 'response-body'
       ? 'backend was reachable but did not finish'
@@ -1026,11 +1030,11 @@ function reviewerCallRejection(error, message, reviewBudget) {
   return { error: message, code: reviewBudget && Date.now() >= reviewBudget.deadline ? 'REVIEW_BUDGET_EXHAUSTED' : 'REVIEW_BATCH_FAILED' }
 }
 
-const REVIEW_FAILURE_DETAIL_FIELDS = ['stderr', 'text', 'status', 'statusCode', 'stallPhase', 'name', 'code']
+const REVIEW_FAILURE_DETAIL_FIELDS = ['diagnostics', 'stderr', 'text', 'status', 'statusCode', 'stallPhase', 'name', 'code']
 
 function pickReviewFailureDetail(result, fields = REVIEW_FAILURE_DETAIL_FIELDS) {
   const detail = {}
-  for (const field of fields) if (result[field]) detail[field] = result[field]
+  for (const field of fields) if (result[field]) detail[field] = field === 'diagnostics' ? reviewFailureDiagnostics(result[field]) : result[field]
   return detail
 }
 
@@ -1049,6 +1053,7 @@ async function runApiReviewCall({ provider, model, prompt, budgetMs, reviewBudge
 
 async function runCliReviewCall({ provider, model, prompt, transport, workspace, reviewCwd, budgetMs, reviewBudget }) {
   if (!transport.transport) return { outcome: { ok: false, code: transport.code, error: transport.error } }
+  const preparationStartedAt = Date.now()
   const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
   const { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } = await import('../lib/agentExecutionProfiles.js')
   const { mkdtemp, rm } = await import('node:fs/promises')
@@ -1070,10 +1075,14 @@ async function runCliReviewCall({ provider, model, prompt, transport, workspace,
     const bootstrapEnv = await withAbortTimeout(preparationMs, signal => awaitWithAbort(resolveBootstrapEnv(provider, { safetyProfile, signal, timeoutMs: preparationMs }), signal))
     const remainingMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
     if (remainingMs === null) return { error: 'The configured review budget is exhausted.', code: 'REVIEW_BUDGET_EXHAUSTED' }
-    return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
+    const preparationElapsedMs = Date.now() - preparationStartedAt
+    const reply = await runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs: remainingMs, bootstrapEnv, exactPins: true,
       safetyProfile, codeReview: true })
+    return { ...reply, ...(reply.diagnostics?.cli ? { diagnostics: reviewFailureDiagnostics({ cli: { ...reply.diagnostics.cli, preparationMs: preparationElapsedMs } }) } : {}) }
   }).catch(error => reviewerCallRejection(error, 'Reviewer credential setup or execution failed.', reviewBudget))
-    .finally(() => isolatedCwd && rm(isolatedCwd, { recursive: true, force: true }))
+  const teardownStartedAt = Date.now()
+  if (isolatedCwd) await rm(isolatedCwd, { recursive: true, force: true })
+  if (result.diagnostics?.cli) result.diagnostics = reviewFailureDiagnostics({ cli: { ...result.diagnostics.cli, teardownMs: Date.now() - teardownStartedAt } })
   const refusal = headlessCommandPermissionRefusal(result)
   if (refusal) return { outcome: refusal }
   // A capacity refusal outranks the partial-reply answer; the caller classifies it.
@@ -1152,7 +1161,7 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
   const { result } = run
   if (isReviewContextCapacityFailure(result)) return { ...reviewContextCapacityFailure(), backend, model, effort }
   if (result.error || !result.text?.trim()) return reviewReplyFailure(result, run.budgetMs)
-  return { ok: true, backend, model, ...(result.executionOptions ? { executionOptions: result.executionOptions } : {}), effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
+  return { ok: true, backend, model, ...(result.diagnostics ? { diagnostics: reviewFailureDiagnostics(result.diagnostics) } : {}), ...(result.executionOptions ? { executionOptions: result.executionOptions } : {}), effort: effort || provider.effort || null, content: result.text.trim(), finishReason: normalizeReviewFinishReason(result.finishReason), responseLengthChars: result.text.length }
 }
 
 async function runReviewerCompletion({ backend, model: pinnedModel, messages, userMessage, systemPromptFor, effort, timeoutMs, timeoutExplicit = true, baseUrl: requestedBaseUrl = null, cwd, isolateFromCheckout = false, allowUnconfined = false, diffSizeBytes = null, providerSnapshot = null, reviewBudget = null }) {
@@ -1161,7 +1170,7 @@ async function runReviewerCompletion({ backend, model: pinnedModel, messages, us
     if (result.ok || !Number.isFinite(diffSizeBytes) || !isTimeoutFailure(result.error)) return result
     return {
       ...result,
-      error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.stallPhase || 'reviewer-process' }),
+      error: localCodeReviewTimeoutError({ backend, timeoutMs: reviewBudget?.budgetMs ?? result.timeoutMs ?? timeoutMs, diffSizeBytes, phase: result.diagnostics?.cli?.phase || result.stallPhase || 'reviewer-process' }),
     }
   }
   if (!isLocalLlmReviewer(backend)) {
@@ -1383,6 +1392,7 @@ async function runSingleCodeReview({ backend, model, diff, effort = null, timeou
     model: result.model,
     effort: result.effort,
     ...(result.effortUnsupported ? { effortUnsupported: true } : {}),
+    ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}),
     ...verdict,
   }
 }

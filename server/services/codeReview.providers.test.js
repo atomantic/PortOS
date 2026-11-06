@@ -523,6 +523,21 @@ describe('configured provider reviewers', () => {
     } finally { clock.mockRestore(); }
   });
 
+  it('retains safe CLI phase evidence through batching and names the measured timeout', async () => {
+    getProviderById.mockResolvedValue({ ...provider, id: 'example-gpu', type: 'cli', command: 'grok' });
+    runCliProviderPrompt.mockResolvedValue({ error: 'Provider call timed out after 600000ms', code: 'REVIEWER_PROCESS_TIMEOUT',
+      diagnostics: { cli: { phase: 'exit-drain', elapsedMs: 600000, exitMs: 300, stdoutBytes: 42,
+        stderrBytes: 0, secret: '/private/source', firstOutputMs: 'private text' } } });
+    const result = await runLocalCodeReview({ backend, diff: 'synthetic diff', kind: 'claim-review' });
+    expect(result).toMatchObject({ ok: false, code: 'REVIEWER_PROCESS_TIMEOUT', diagnostics: { cli: {
+      phase: 'exit-drain', elapsedMs: 600000, exitMs: 300, stdoutBytes: 42, firstOutputMs: null,
+    } } });
+    expect(result.error).toContain('exited but output pipes did not close');
+    expect(result.verdict).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain('/private/source');
+    expect(JSON.stringify(result)).not.toContain('private text');
+  });
+
   it('names the effective remote budget and the diff size in a timeout failure', async () => {
     getProviderById.mockResolvedValue({ ...provider, timeout: 450_000 });
     callProviderAISimple.mockResolvedValue({ error: 'Provider request failed: This operation was aborted' });

@@ -501,6 +501,21 @@ describe('codeReview helpers', () => {
       expect(markProviderUsageLimit).not.toHaveBeenCalled()
     })
 
+    it('persists measured process timeouts in reviewer health without stream contents', async () => {
+      await reportReviewerFailure('provider:example-cli', { code: 'REVIEWER_PROCESS_TIMEOUT',
+        error: 'Reviewer process emitted output but did not exit', diagnostics: { cli: {
+          phase: 'output-open', elapsedMs: 600000, stdoutBytes: 100, stderrBytes: 0,
+          argv: '/private/prompt', firstOutputMs: 'secret',
+        } } }, 1000)
+      const entry = mockedSettings.current.codeReview.reviewerHealth['provider:example-cli']
+      expect(entry).toMatchObject({ reason: 'provider_error', diagnostics: { cli: {
+        phase: 'output-open', elapsedMs: 600000, stdoutBytes: 100, firstOutputMs: null,
+      } } })
+      expect(codeReviewSettingsSchema.safeParse({ reviewerHealth: { 'provider:example-cli': entry } }).success).toBe(true)
+      expect(JSON.stringify(entry)).not.toContain('/private/prompt')
+      expect(JSON.stringify(entry)).not.toContain('secret')
+    })
+
     it('gives timeouts precedence over quota-like diagnostics without marking provider usage', async () => {
       const failure = {
         error: 'ollama reviewer process did not finish — timed out after 300000ms for a 5 KiB (4290 bytes) diff.',

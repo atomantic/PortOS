@@ -57,11 +57,24 @@ export function normalizeReviewFinishReason(value) {
   return REVIEW_FINISH_REASONS.includes(value) ? value : 'unknown';
 }
 
+// Only these observations may leave the process boundary. Neither stream text,
+// argv, paths, credentials nor vendor-controlled property names are diagnostics.
+export const CLI_REVIEW_PHASES = ['no-output', 'output-open', 'exit-drain', 'closed', 'spawn-failed'];
+export const CLI_REVIEW_METRICS = ['spawnMs', 'firstOutputMs', 'lastOutputMs', 'exitMs', 'closeMs',
+  'elapsedMs', 'parseMs', 'preparationMs', 'teardownMs', 'stdoutBytes', 'stderrBytes'];
+const cliDiagnostics = value => value && CLI_REVIEW_PHASES.includes(value.phase) ? {
+  phase: value.phase,
+  ...Object.fromEntries(CLI_REVIEW_METRICS.map(key => [key,
+    Number.isSafeInteger(value[key]) && value[key] >= 0 ? Math.min(value[key], 2 ** 31 - 1) : null])),
+} : null;
+
 /** Project only bounded scalar evidence, including explicit unknown metrics. */
 export function reviewFailureDiagnostics(value) {
+  const cli = cliDiagnostics(value?.cli);
   const length = value?.responseLengthChars;
   const knownLength = Number.isSafeInteger(length) && length >= 0;
   return {
+    ...(cli ? { cli } : {}),
     reason: MALFORMED_REVIEW_REASONS.includes(value?.reason) ? value.reason : 'unknown',
     finishReason: normalizeReviewFinishReason(value?.finishReason),
     responseLengthChars: knownLength ? Math.min(length, MAX_REVIEW_RESPONSE_LENGTH) : null,

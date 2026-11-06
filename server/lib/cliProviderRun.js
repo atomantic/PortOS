@@ -174,6 +174,15 @@ export function runCliProviderPrompt(args = {}) {
     let stdout = '';
     let stderr = '';
     let settled = false;
+    const startedAt = Date.now();
+    const elapsed = () => Math.max(0, Date.now() - startedAt);
+    const progress = { spawnMs: null, firstOutputMs: null, lastOutputMs: null, exitMs: null,
+      closeMs: null, stdoutBytes: 0, stderrBytes: 0 };
+    const noteOutput = (data, stream) => {
+      progress.firstOutputMs ??= elapsed();
+      progress.lastOutputMs = elapsed();
+      progress[`${stream}Bytes`] += Buffer.byteLength(data);
+    };
 
     // Shared composition (provider.envVars + OpenCode models map + PWD pin +
     // CLAUDECODE strip) — see buildCliChildEnv. No `guard`: this is the
@@ -237,21 +246,27 @@ export function runCliProviderPrompt(args = {}) {
       settled = true;
       clearTimeout(timer);
       cleanupPromptFile();
-      resolve(result);
+      resolve(codeReview ? { ...result, diagnostics: { cli: { ...progress,
+        elapsedMs: elapsed(), parseMs: progress.closeMs === null ? null : elapsed() - progress.closeMs, phase: result.code === 'REVIEWER_PROCESS_TIMEOUT'
+          ? progress.exitMs !== null ? 'exit-drain' : progress.firstOutputMs === null ? 'no-output' : 'output-open'
+          : progress.closeMs !== null ? 'closed' : 'spawn-failed',
+      } } } : result);
     };
 
     const timer = setTimeout(() => {
       if (!child.killed) killProcessTree(child, 'SIGTERM', { processGroup });
-      done({ error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
+      done({ ...(codeReview ? { code: 'REVIEWER_PROCESS_TIMEOUT' } : {}), error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
     }, timeoutMs);
 
     // Register listeners BEFORE writing stdin so an immediate spawn failure or
     // a dead-stdin EPIPE is caught rather than thrown. A child that exits
     // before reading stdin would otherwise emit an unhandled 'error' on the
     // stdin stream — fatal in this non-request context (crashes the process).
+    child.on('spawn', () => { progress.spawnMs = elapsed(); });
+    child.on('exit', () => { progress.exitMs = elapsed(); });
     child.on('error', (err) => done({ error: `Failed to spawn ${spawnCommand}: ${err.message}` }));
-    child.stdout?.on('data', (d) => { const t = d.toString(); stdout += t; onData?.(t, 'stdout'); });
-    child.stderr?.on('data', (d) => { const t = d.toString(); stderr += t; onData?.(t, 'stderr'); });
+    child.stdout?.on('data', (d) => { noteOutput(d, 'stdout'); const t = d.toString(); stdout += t; onData?.(t, 'stdout'); });
+    child.stderr?.on('data', (d) => { noteOutput(d, 'stderr'); const t = d.toString(); stderr += t; onData?.(t, 'stderr'); });
 
     // Swallow EPIPE on stdin (child gone before/while we write) — the close/
     // error handler is the authoritative settle point. See guardChildStdin.
@@ -267,6 +282,8 @@ export function runCliProviderPrompt(args = {}) {
     }
 
     child.on('close', (code) => {
+      if (settled) return;
+      progress.closeMs = elapsed();
       const text = stdout.trim();
       const stderrTail = stderrTailOf(stderr);
       // A non-zero exit with no stdout is a hard failure; surface stderr.
