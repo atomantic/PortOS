@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The npm-prefix probe shells out; PATH adoption is covered by lib/npmGlobalBin.test.js.
@@ -197,6 +200,66 @@ describe('listHarnesses', () => {
     expect(opencode.providers.some((provider) => provider.id === 'claude-code')).toBe(false);
     expect(opencode.providers.find((p) => p.id === 'opencode-zen-cli').usesHarnessCatalog).toBe(true);
     expect(opencode.providers.find((p) => p.id === 'opencode-ollama').usesHarnessCatalog).toBe(false);
+  });
+
+  describe('a Homebrew-managed copy', () => {
+    const brewDeps = (publishedByBrew) => ({
+      findCommand: async (command) => (command === 'codex' ? '/example/Caskroom/codex/0.166.0/bin/codex' : command === 'npm' ? '/example/npm' : null),
+      probeCommand: async () => 'codex-cli 0.166.0',
+      run: async () => '0.167.0',
+      fresh: true,
+      fetchImpl: async () => (publishedByBrew
+        ? new Response(JSON.stringify({ version: publishedByBrew }))
+        : new Response('{}', { status: 404 })),
+    });
+    const codexRow = async (published) => (await listHarnesses(brewDeps(published))).find((row) => row.id === 'codex');
+
+    // The updater runs `brew upgrade`, so an npm release Homebrew lacks is an
+    // update it cannot perform, and alerting on it never clears.
+    it('offers no update until Homebrew publishes one, and names the npm release', async () => {
+      const row = await codexRow('0.166.0');
+
+      expect(row).toMatchObject({ latestVersion: '0.166.0', latestVersionSource: 'homebrew', npmAheadVersion: '0.167.0', updateAvailable: false });
+      expect(row.installChannel).toEqual({ manager: 'homebrew', kind: 'cask', name: 'codex', thirdPartyTap: false });
+      expect(JSON.stringify(row)).not.toContain('/example/');
+    });
+
+    it('offers the update once Homebrew has it', async () => {
+      expect(await codexRow('0.167.0,build1')).toMatchObject({ latestVersion: '0.167.0', npmAheadVersion: null, updateAvailable: true });
+    });
+
+    // The cache is keyed by package name, and homebrew-core can publish a
+    // different formula under a tap formula's name.
+    it('ignores a cached core answer after the same name moves to a third-party tap', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'portos-brew-'));
+      try {
+        const keg = join(root, 'Cellar', 'codex', '0.166.0');
+        const executable = join(keg, 'bin', 'codex');
+        mkdirSync(join(keg, 'bin'), { recursive: true });
+        writeFileSync(executable, '');
+        const installFrom = (tap) => writeFileSync(join(keg, 'INSTALL_RECEIPT.json'), JSON.stringify({ source: { tap } }));
+        const read = async (fresh) => (await listHarnesses({
+          ...brewDeps(null),
+          fresh,
+          findCommand: async (command) => (command === 'codex' ? executable : command === 'npm' ? '/example/npm' : null),
+          fetchImpl: async () => new Response(JSON.stringify({ versions: { stable: '0.166.0' } })),
+        })).find((row) => row.id === 'codex');
+
+        installFrom('homebrew/core');
+        expect(await read(true)).toMatchObject({ latestVersionSource: 'homebrew', updateAvailable: false });
+
+        installFrom('example/tap');
+        // An ordinary read: only the install was re-probed, so the core answer is still cached.
+        __resetRuntimeStatusCache();
+        expect(await read(false)).toMatchObject({ latestVersion: '0.167.0', latestVersionSource: 'npm', updateAvailable: true });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to npm for a package Homebrew cannot describe', async () => {
+      expect(await codexRow(null)).toMatchObject({ latestVersion: '0.167.0', latestVersionSource: 'npm', npmAheadVersion: null, updateAvailable: true });
+    });
   });
 
   it('never publishes a resolved executable path', async () => {

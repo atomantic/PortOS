@@ -40,6 +40,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandOutput } from '../lib/commandExists.js';
+import { homebrewPackageFor } from '../lib/homebrewPackage.js';
 import { adoptNpmGlobalBinDir, inspectNpmGlobalCommand } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
@@ -319,6 +320,9 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand, skipRealSp
     // NOT "0.0.0". Every version comparison bails on it rather than reporting a
     // perfectly current harness as out of date.
     version,
+    // Who supplies this copy, when Homebrew does: its self-updater can only reach
+    // what Homebrew has published. Kind and name only, never the resolved path.
+    installChannel: homebrewPackageFor(resolved),
     method: kind,
     installable,
     blockedReason,

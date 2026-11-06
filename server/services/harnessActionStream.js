@@ -457,7 +457,11 @@ function terminalFrame({ action, code, status, copy, command, before }) {
   if (!status.version || !before) {
     return { type: 'complete', message: `${status.label} updater finished. PortOS could not read a version to compare.` };
   }
+  const channel = status.installChannel;
+  const channelNote = channel
+    ? ` Homebrew manages this copy (${channel.kind} \`${channel.name}\`), so a new release arrives only after Homebrew publishes it, which can lag npm.`
+    : '';
   return status.version === before
-    ? { type: 'complete', message: `${status.label} updater finished; PortOS still observes version ${before}.` }
+    ? { type: 'complete', message: `${status.label} updater finished; PortOS still observes version ${before}.${channelNote}` }
     : { type: 'complete', message: `${status.label} updated: ${before} → ${status.version}.` };
 }

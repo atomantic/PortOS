@@ -46,6 +46,7 @@ describe('provider runtime installer', () => {
       installed: true,
       probeState: 'available',
       version: '1.18.27',
+      installChannel: null,
       method: 'npm',
       installable: true,
       blockedReason: null,

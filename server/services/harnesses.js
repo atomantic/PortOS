@@ -34,6 +34,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { hasCredentialBootstrap, resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { commandOutput } from '../lib/commandExists.js';
+import { fetchHomebrewLatestVersion } from '../lib/homebrewPackage.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
 import { isDerivedPreset } from '../lib/providerGraphRecords.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -103,6 +104,27 @@ export async function getLatestPublishedVersion(packageName, { fresh = false, ru
     if (!version) throw new Error(`npm view ${packageName} returned no version`);
     return version;
   }, fresh ? { wait: 'fresh' } : {}).catch(() => null);
+}
+
+/**
+ * The newest version this copy's own updater can reach. A Homebrew copy compares
+ * against Homebrew, because its self-updater runs `brew upgrade` and an npm
+ * release Homebrew has not published yet is an update nothing here can perform.
+ * npm stays the answer when Homebrew cannot say (a third-party tap, a failed read).
+ */
+async function resolveLatestVersion(runtime, status, { fresh, run, fetchImpl }) {
+  const npm = await getLatestPublishedVersion(runtime.npmPackage, { fresh, run });
+  const channel = status.installChannel;
+  // Decided before the cache: its key is the package name, which a tap's formula
+  // can share with an unrelated homebrew-core one.
+  if (!channel || channel.thirdPartyTap) return { latestVersion: npm, latestVersionSource: 'npm', npmAheadVersion: null };
+  const brew = await latestVersions.read(`homebrew:${channel.kind}:${channel.name}`, async () => {
+    const version = await fetchHomebrewLatestVersion(channel, { fetchImpl });
+    if (!version) throw new Error(`Homebrew has no version for ${channel.name}`);
+    return version;
+  }, fresh ? { wait: 'fresh' } : {}).catch(() => null);
+  if (!brew) return { latestVersion: npm, latestVersionSource: 'npm', npmAheadVersion: null };
+  return { latestVersion: brew, latestVersionSource: 'homebrew', npmAheadVersion: compareHarnessVersions(brew, npm) === -1 ? npm : null };
 }
 
 /** Test-only: drop cached registry answers so the next read re-queries. */
@@ -225,7 +247,7 @@ const providersForHarness = (providers, runtime) => {
  * `GET /api/providers/runtimes`, since a global bin directory embeds the host
  * account name.
  */
-export async function listHarnesses({ fresh = false, run = commandOutput, ...probeDeps } = {}) {
+export async function listHarnesses({ fresh = false, run = commandOutput, fetchImpl, ...probeDeps } = {}) {
   const [statuses, providers] = await Promise.all([
     getProviderRuntimeStatuses({ ...probeDeps, fresh }),
     // `listProviders()`, not `getAllProviders()`: that one resolves an ENVELOPE
@@ -245,9 +267,9 @@ export async function listHarnesses({ fresh = false, run = commandOutput, ...pro
     // cost an `npm view` child plus a registry round trip on each cache-cold
     // page load — and the Kilo and OpenChamber rows, which ship disabled on
     // every existing install, would have made that the common case.
-    const latestVersion = runtime.npmPackage && status.installed
-      ? await getLatestPublishedVersion(runtime.npmPackage, { fresh, run })
-      : null;
+    const { latestVersion, latestVersionSource, npmAheadVersion } = runtime.npmPackage && status.installed
+      ? await resolveLatestVersion(runtime, status, { fresh, run, fetchImpl })
+      : { latestVersion: null, latestVersionSource: null, npmAheadVersion: null };
     return {
       ...status,
       id: runtime.id,
@@ -256,6 +278,8 @@ export async function listHarnesses({ fresh = false, run = commandOutput, ...pro
       vendor: runtime.vendor,
       package: runtime.npmPackage,
       latestVersion,
+      latestVersionSource,
+      npmAheadVersion,
       // Only a DEFINITE "installed < latest" is an update prompt. A missing
       // version on either side leaves this false, and the row still offers the
       // Update button — the user can always ask for one.
