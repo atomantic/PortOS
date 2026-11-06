@@ -1108,4 +1108,6 @@ migration with explicit recognition of the outgoing shipped defaults.
 
 | `nativeUsageRecords.js` | Strict privacy-safe retained-record projections and deterministic Claude message union for selected accounts; preserves conflicts and unknown history. |
 
+| `nativeAgyMetadata.js` | Strict, bounded Antigravity SQLite v1 metadata protobuf projection; returns only identities, timestamps, enums and six native counters. |
+| `nativeAgyUsageRecords.js` | Private Antigravity record schema and conflict-preserving message/response union with separate native token counters and unknown combined total. |
 | `nativeGrokUsageRecords.js` | Strict persisted Grok session/turn projections and deterministic selected-account union; explicit native totals, overlapping cache/reasoning breakdowns, unknown spend and nullable native cost ticks. |

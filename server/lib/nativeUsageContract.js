@@ -19,9 +19,10 @@ import { z } from 'zod';
 import { CODEX_ERROR_CODES } from './codexAccount.js';
 import { canonicalStringify } from './objects.js';
 import { nativeUsageRecordProjectionSchema, unionNativeClaudeRecords } from './nativeUsageRecords.js';
+import { nativeAgyUsageProjectionSchema, unionNativeAgyRecords } from './nativeAgyUsageRecords.js';
 import { nativeGrokUsageProjectionSchema, unionNativeGrokRecords } from './nativeGrokUsageRecords.js';
 
-export const NATIVE_USAGE_CONTRACT_VERSION = 3;
+export const NATIVE_USAGE_CONTRACT_VERSION = 4;
 export const NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY = 'usageNativeAccountSelections';
 
 const FAMILIES = ['agy', 'claude', 'codex', 'grok'];
@@ -157,10 +158,26 @@ const providerEntrySchemaV3 = providerEntrySchema.extend({
   family === 'claude' && recordProjection.identityScheme === 'sha256-native-record/1'
 ) || (family === 'grok' && source === 'grok:persisted-session-usage' && validator === 'grok-persisted-turns/1'
   && recordProjection.identityScheme === 'sha256-grok-session-turn/1'), 'unsupported record projection');
+const providerEntrySchemaV4 = z.strictObject({
+  ...providerEntrySchemaV3.shape,
+  source: z.enum([...providerEntrySchemaV3.shape.source.options, 'agy:cli-sqlite-metadata']),
+  validator: z.enum([...providerEntrySchemaV3.shape.validator.options, 'agy-cli-sqlite-v1/1']),
+  recordProjection: z.union([nativeUsageRecordProjectionSchema, nativeGrokUsageProjectionSchema, nativeAgyUsageProjectionSchema]).nullable(),
+  nativeAgyCoverage: z.strictObject(Object.fromEntries(['validDatabases', 'invalidDatabases', 'unsupportedSchemas', 'unstableDatabases',
+    'rowsWithoutUsage', 'invalidMetadata', 'checkpointRecords', 'unverifiedAppFiles', 'unverifiedIdeFiles', 'legacyOnlySources'].map(field => [field, count]))).nullable(),
+  tokenFields: providerEntrySchema.shape.tokenFields.extend({ thinkingOutputTokens: z.string().max(40).optional(), responseOutputTokens: z.string().max(40).optional() }),
+  totals: z.union([providerEntrySchema.shape.totals.unwrap(), z.strictObject({ totalTokens: z.null(), tokensIn: count, tokensOut: count,
+    cacheReadTokens: count, cacheWriteTokens: count, thinkingOutputTokens: count, responseOutputTokens: count })]).nullable(),
+}).refine(({ family, recordProjection, source, validator, nativeAgyCoverage }) => (!nativeAgyCoverage || family === 'agy') && (!recordProjection || (
+  family === 'claude' && recordProjection.identityScheme === 'sha256-native-record/1'
+) || (family === 'grok' && source === 'grok:persisted-session-usage' && validator === 'grok-persisted-turns/1'
+  && recordProjection.identityScheme === 'sha256-grok-session-turn/1') || (family === 'agy' && source === 'agy:cli-sqlite-metadata'
+  && validator === 'agy-cli-sqlite-v1/1' && recordProjection.identityScheme === 'sha256-agy-message-response/1')), 'unsupported record projection');
 export const nativeUsageReportSchema = z.discriminatedUnion('contractVersion', [
   reportSchemaV1,
   reportSchemaV1.extend({ contractVersion: z.literal(2), providers: z.array(providerEntrySchemaV2).length(FAMILIES.length) }),
   reportSchemaV1.extend({ contractVersion: z.literal(3), providers: z.array(providerEntrySchemaV3).length(FAMILIES.length) }),
+  reportSchemaV1.extend({ contractVersion: z.literal(4), providers: z.array(providerEntrySchemaV4).length(FAMILIES.length) }),
 ]).refine(({ providers }) => FAMILIES.every((family) => providers.filter((entry) => entry.family === family).length === 1), 'provider family must be unique');
 
 const accountSelection = {
@@ -174,6 +191,7 @@ export const nativeUsageAccountSelectionsSchema = z.array(z.discriminatedUnion('
   z.strictObject({ family: z.literal('codex'), ...accountSelection, authoritativeParticipant: participantKey }),
   z.strictObject({ family: z.literal('claude'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
   z.strictObject({ family: z.literal('grok'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
+  z.strictObject({ family: z.literal('agy'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
 ])).max(64).superRefine((selections, ctx) => {
   const claimed = new Set();
   const labels = new Set();
@@ -209,7 +227,7 @@ const baseEntry = (family) => {
     scanCaps: null, reproducibility: 'deterministic', duplicates: null, coverage: null, steps: null, cacheOverlap: null,
     tokenFields, totals: null,
     cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: null },
-    attribution: 'excluded', findings: [], recordProjection: null, nativeUsageCoverage: null,
+    attribution: 'excluded', findings: [], recordProjection: null, nativeUsageCoverage: null, nativeAgyCoverage: null,
   };
 };
 
@@ -295,7 +313,10 @@ function projectTranscriptCoverage(family, scan, scanLimits) {
     ...baseEntry(family),
     ...(scan.source === 'grok:persisted-session-usage' ? { source: scan.source, validator: scan.validator,
       tokenFields: { totalTokens: MEASURED, tokensIn: MEASURED, tokensOut: MEASURED, cacheReadTokens: MEASURED, cacheWriteTokens: MEASURED } } : {}),
-    nativeUsageCoverage: scan.nativeUsageCoverage ?? null,
+    ...(scan.source === 'agy:cli-sqlite-metadata' ? { source: scan.source, validator: scan.validator,
+      tokenFields: { totalTokens: 'unverified-overlap', tokensIn: MEASURED, tokensOut: MEASURED, cacheReadTokens: MEASURED, cacheWriteTokens: MEASURED,
+        thinkingOutputTokens: MEASURED, responseOutputTokens: MEASURED } } : {}),
+    nativeUsageCoverage: scan.nativeUsageCoverage ?? null, nativeAgyCoverage: scan.nativeAgyCoverage ?? null,
     status: scan.status,
     runtime: coverage.runtimeVersions.length ? { status: 'observed', versions: coverage.runtimeVersions } : { status: 'unknown', versions: [] },
     freshness: { earliestObserved: coverage.firstObservedAt, latestObserved: coverage.lastObservedAt },
@@ -447,14 +468,17 @@ function buildRetainedFamily(family, latest, selections, refusals, refuse) {
       } else {
         projections.push(entry.recordProjection);
         for (const finding of entry.findings) findings.add(finding);
-        for (const { recordKey } of entry.recordProjection.records) {
-          const owner = recordAccounts.get(recordKey);
-          if (owner && owner !== accountLabel) refuse('record-in-multiple-accounts', family);
-          recordAccounts.set(recordKey, accountLabel);
+        for (const { recordKey, responseKeys = [] } of entry.recordProjection.records) {
+          for (const identity of [`message:${recordKey}`, ...responseKeys.map(key => `response:${key}`)]) {
+            const owner = recordAccounts.get(identity);
+            if (owner && owner !== accountLabel) refuse('record-in-multiple-accounts', family);
+            recordAccounts.set(identity, accountLabel);
+          }
         }
       }
     }
-    const union = (family === 'grok' ? unionNativeGrokRecords : unionNativeClaudeRecords)(projections);
+    const union = ({ agy: unionNativeAgyRecords, grok: unionNativeGrokRecords, claude: unionNativeClaudeRecords }[family])(projections);
+    delete union.projectedRecords;
     if (union.findings.includes('counter-overflow')) refuse('counter-overflow', family);
     for (const finding of union.findings) findings.add(finding);
     return {
@@ -466,9 +490,10 @@ function buildRetainedFamily(family, latest, selections, refusals, refuse) {
     };
   }).sort((a, b) => a.accountLabel.localeCompare(b.accountLabel));
   const reasons = [...new Set(refusals.filter(({ family: refusedFamily }) => !refusedFamily || refusedFamily === family).map(({ code }) => code))].sort();
-  const fields = ['totalTokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens', ...(family === 'grok' ? ['reasoningTokens', 'modelCalls'] : [])];
+  const fields = ['totalTokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens', ...(family === 'grok' ? ['reasoningTokens', 'modelCalls'] : []), ...(family === 'agy' ? ['thinkingOutputTokens', 'responseOutputTokens'] : [])];
   const totals = Object.fromEntries(fields.map((field) => [field, accounts.reduce((sum, account) => sum + (account.totals?.[field] ?? 0), 0)]));
   if (!Object.values(totals).every(Number.isSafeInteger)) reasons.push('counter-overflow');
+  if (family === 'agy') totals.totalTokens = null;
   if (!accounts.some(({ totals: value }) => value)) reasons.push('no-verified-retained-records');
   if (reasons.length) {
     // Keep diagnostic counts, but do not publish any account partition as usable
@@ -500,7 +525,7 @@ export function buildNativeUsageMatrix({ reports, selections }) {
   const byParticipant = loadParticipants(reports, refuse);
   const latest = new Map([...byParticipant].map(([key, list]) => [key, list.at(-1)]));
   const codex = buildCodexFamily(latest, usableSelections.filter(({ family }) => family === 'codex'), refusals, refuse);
-  const retained = ['claude', 'grok'].map(family => buildRetainedFamily(family, latest, usableSelections.filter(selection => selection.family === family), refusals, refuse));
+  const retained = ['agy', 'claude', 'grok'].map(family => buildRetainedFamily(family, latest, usableSelections.filter(selection => selection.family === family), refusals, refuse));
   const unique = [...new Map(refusals.map((refusal) => [canonicalStringify(refusal), refusal])).entries()]
     .sort(([a], [b]) => a.localeCompare(b)).map(([, refusal]) => refusal);
   return withContentHash({
@@ -511,7 +536,7 @@ export function buildNativeUsageMatrix({ reports, selections }) {
       participantKey: key, capturedAt: latest.get(key).capturedAt, reportHash: latest.get(key).contentHash,
       evidenceHash: latest.get(key).evidenceHash, comparedReports: byParticipant.get(key).length, providers: latest.get(key).providers,
     })),
-    families: [buildMachineFamily('agy', latest), ...retained, codex].sort((a, b) => a.family.localeCompare(b.family)),
+    families: [...retained, codex].sort((a, b) => a.family.localeCompare(b.family)),
     refusals: unique,
   });
 }
@@ -524,7 +549,7 @@ export function formatNativeUsageMatrixSummary(matrix) {
   const short = (key) => key.slice(0, 8);
   const lines = [`Native usage matrix ${matrix.contentHash.slice(0, 16)}: ${matrix.participants.length} participant(s), ${matrix.refusals.length} refusal(s)`];
   for (const family of matrix.families) {
-    const total = family.merge.totals ? family.family === 'codex' ? `${family.merge.totals.lifetimeTokens} lifetime tokens` : `${family.merge.totals.totalTokens} retained tokens (completeness unknown)` : 'no combined total';
+    const total = family.merge.totals ? family.family === 'codex' ? `${family.merge.totals.lifetimeTokens} lifetime tokens` : family.family === 'agy' ? 'separate native counters (combined total unknown)' : `${family.merge.totals.totalTokens} retained tokens (completeness unknown)` : 'no combined total';
     lines.push(`${family.family}: ${family.merge.status}, ${total}${family.merge.reasons.length ? ` (${family.merge.reasons.join(', ')})` : ''}`);
     for (const account of family.accounts ?? []) {
       lines.push(`  ${account.accountLabel}: ${account.status}${account.authoritativeParticipant ? ` from ${short(account.authoritativeParticipant)}` : ''}, ${account.members.length} member(s)`);

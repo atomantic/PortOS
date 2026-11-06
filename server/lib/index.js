@@ -1084,4 +1084,6 @@ export * from './imageInputProvenance.js';
 
 export * from './nativeUsageRecords.js';
 
+export * from './nativeAgyMetadata.js';
+export * from './nativeAgyUsageRecords.js';
 export * from './nativeGrokUsageRecords.js';

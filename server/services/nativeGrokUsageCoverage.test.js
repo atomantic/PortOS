@@ -112,7 +112,10 @@ describe('persisted Grok capture and retained-account union', () => {
     expect(split.accounts.every(account => account.totals === null && account.records.length === 0 && !account.cost.nativeCostSignal)).toBe(true);
     expect(grok(buildNativeUsageMatrix({ reports: [a], selections: [selection(a, b)] })).merge.reasons).toContain('member-report-missing');
     const legacy = structuredClone(b); legacy.contractVersion = 2;
-    legacy.providers.forEach(provider => { delete provider.nativeUsageCoverage; });
+    legacy.providers.forEach(provider => { delete provider.nativeUsageCoverage; delete provider.nativeAgyCoverage; });
+    const oldAgy = legacy.providers.find(row => row.family === 'agy');
+    Object.assign(oldAgy, { source: 'agy:retained-transcripts', validator: 'agy-retained-steps/1', recordProjection: null });
+    delete oldAgy.tokenFields.thinkingOutputTokens; delete oldAgy.tokenFields.responseOutputTokens;
     const old = legacy.providers.find(row => row.family === 'grok');
     Object.assign(old, { source: 'grok:retained-transcripts', validator: 'grok-retained-turns/1', recordProjection: null,
       cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: null } });
