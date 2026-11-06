@@ -7,6 +7,7 @@ import {
   isCodexAuthError,
   isCodexSubscriptionProvider,
   normalizeCodexAccount,
+  normalizeCodexAccountUsage,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
   redactCodexMessage,
@@ -225,5 +226,33 @@ describe('redactCodexMessage', () => {
     expect(redactCodexMessage('')).toBeNull();
     expect(redactCodexMessage(null)).toBeNull();
     expect(redactCodexMessage(42)).toBeNull();
+  });
+});
+
+
+describe('native account history schema', () => {
+  const empty = { summary: { lifetimeTokens: null, peakDailyTokens: null, longestRunningTurnSec: null,
+    currentStreakDays: null, longestStreakDays: null }, dailyUsageBuckets: null };
+  it('preserves unknown versus zero and absent daily history versus fetched empty history', () => {
+    expect(normalizeCodexAccountUsage(empty)).toEqual(empty);
+    const zero = { summary: { ...empty.summary, lifetimeTokens: 0 }, dailyUsageBuckets: [] };
+    expect(normalizeCodexAccountUsage(zero)).toEqual(zero);
+  });
+  it('keeps native date labels without filling gaps or forcing lifetime reconciliation', () => {
+    expect(normalizeCodexAccountUsage({ summary: { ...empty.summary, lifetimeTokens: 100 }, dailyUsageBuckets: [
+      { startDate: '2026-02-03', tokens: 4 }, { startDate: '2026-02-01', tokens: 2 },
+    ] }).dailyUsageBuckets).toEqual([
+      { startDate: '2026-02-01', tokens: 2 }, { startDate: '2026-02-03', tokens: 4 },
+    ]);
+  });
+  it.each([
+    undefined, {}, { ...empty, summary: {} },
+    { ...empty, summary: { ...empty.summary, lifetimeTokens: Number.MAX_SAFE_INTEGER + 1 } },
+    { ...empty, dailyUsageBuckets: [{ startDate: '2026-02-30', tokens: 1 }] },
+    { ...empty, dailyUsageBuckets: [{ startDate: '2026-02-01', tokens: null }] },
+    { ...empty, dailyUsageBuckets: [{ startDate: '2026-02-01', tokens: -1 }] },
+    { ...empty, dailyUsageBuckets: [{ startDate: '2026-02-01', tokens: 1 }, { startDate: '2026-02-01', tokens: 2 }] },
+  ])('refuses malformed or ambiguous history: %j', payload => {
+    expect(() => normalizeCodexAccountUsage(payload)).toThrow('invalid account usage');
   });
 });

@@ -45,6 +45,16 @@ describe('a shot\'s References row', () => {
     expect(screen.getByRole('button', { name: 'Back to auto' }).disabled).toBe(false);
   });
 
+  // Uniquely catches a shot's picked sheet leaving renders with nothing on the shot to say so.
+  it('warns when the catalog check-in does not offer a saved pick, and stays quiet once the shot is on Auto', () => {
+    const catalog = { visualSpec: { references: [{ id: 'mvr-cs-character', imageId: 'old-sheet.png', role: 'character', label: 'Lead sheet' }] },
+      castAndSets: { source: 'catalog', catalogCheckin: { problems: [], items: [{ subjectId: 'kit', kind: 'character', name: 'Kit', images: ['kit.png'] }] } } };
+    const { rerender } = render(<SceneFrameReferences project={catalog} scene={{ sceneId: 's1', frameReferenceIds: ['mvr-cs-character'] }} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/does not offer Lead sheet/)).toBeTruthy();
+    rerender(<SceneFrameReferences project={catalog} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/does not offer/)).toBeNull();
+  });
+
   // Uniquely catches a truncated reference chip with no way to see its sheet and full name, or a long-press that also adds it.
   it('previews a reference large on mouse hover, and on a long-press without adding it', () => {
     vi.useFakeTimers();

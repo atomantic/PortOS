@@ -47,6 +47,7 @@ export const CODEX_RPC = Object.freeze({
   initialized: 'initialized',
   accountRead: 'account/read',
   rateLimitsRead: 'account/rateLimits/read',
+  usageRead: 'account/usage/read',
   loginStart: 'account/login/start',
   loginCancel: 'account/login/cancel',
   logout: 'account/logout',
@@ -335,3 +336,36 @@ export const describeCodexAccountStatus = (status, account = null) => {
     default: return 'Codex account state is unknown';
   }
 };
+
+/** Project the account history response only; never expose thread or credential data.
+ * Missing history is unknown, not zero. Reject imprecise JSON integers rather
+ * than silently rounding an authoritative provider count.
+ */
+export function normalizeCodexAccountUsage(result) {
+  const invalid = () => { throw new Error('Codex returned invalid account usage'); };
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const count = value => {
+    if (value === null) return null;
+    if (!Number.isSafeInteger(value) || value < 0) invalid();
+    return value;
+  };
+  if (!object(result) || !object(result.summary)) invalid();
+  const summary = Object.fromEntries([
+    'lifetimeTokens', 'peakDailyTokens', 'longestRunningTurnSec', 'currentStreakDays', 'longestStreakDays'
+  ].map(key => [key, count(result.summary[key])]));
+  let dailyUsageBuckets = null;
+  if (result.dailyUsageBuckets !== null) {
+    if (!Array.isArray(result.dailyUsageBuckets)) invalid();
+    const dates = new Set();
+    dailyUsageBuckets = result.dailyUsageBuckets.map(bucket => {
+      if (!object(bucket) || typeof bucket.startDate !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}$/.test(bucket.startDate)) invalid();
+      const date = new Date(`${bucket.startDate}T00:00:00Z`);
+      if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== bucket.startDate
+        || dates.has(bucket.startDate) || bucket.tokens === null) invalid();
+      dates.add(bucket.startDate);
+      return { startDate: bucket.startDate, tokens: count(bucket.tokens) };
+    }).sort((a, b) => a.startDate.localeCompare(b.startDate));
+  }
+  return { summary, dailyUsageBuckets };
+}
