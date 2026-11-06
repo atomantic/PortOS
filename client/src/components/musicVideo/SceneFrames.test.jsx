@@ -103,6 +103,9 @@ describe('older Casting look (#14154)', () => {
     const { rerender } = render(<SceneFrames {...props} scene={older} index={0} endFrames />);
     expect(onGenerateFrame).not.toHaveBeenCalled();
     expect(screen.getAllByText(/Older look:/)).toHaveLength(1);
+    // The info icon is what tells a director that only Re-render swaps the selected frame.
+    fireEvent.click(screen.getByRole('button', { name: 'New take vs Re-render' }));
+    expect(screen.getByRole('tooltip').textContent).toMatch(/stays selected[\s\S]*Re-render:.*swaps it in/);
     fireEvent.click(screen.getByRole('button', { name: 'Re-render start frame' }));
     expect(onGenerateFrame).toHaveBeenCalledTimes(1);
     expect(onGenerateFrame.mock.calls[0][1]).toEqual({ referenceImageId: null, replaceSelection: true });
