@@ -356,7 +356,7 @@ export function musicVideoPanelArtReferences(scene) {
 }
 
 /** Match only subjects the shot actually identifies; an unknown or missing selection never means everybody. */
-function sceneCatalogSubjectIds(project, scene) {
+export function sceneCatalogSubjectIds(project, scene) {
   const items = project?.castAndSets?.catalogCheckin?.items || [];
   const sheet = scene?.shotSheet;
   const text = [scene?.description, scene?.framePrompt, scene?.prompt, scene?.visualIntent,

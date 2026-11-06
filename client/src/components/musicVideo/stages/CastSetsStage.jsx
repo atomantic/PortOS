@@ -61,8 +61,12 @@ export default function CastSetsStage({ board }) {
           {catalog.error ? <p role="alert" className="text-xs text-port-error">{catalog.error} <button type="button" className="min-h-11 rounded border border-port-border px-2" onClick={catalog.retry}>Retry catalog check-in</button></p>
             : !catalog.checkin ? <p className="text-xs">Loading current catalog check-in…</p> : null}
           {catalog.checkin?.problems.length > 0 && <ul className="list-disc pl-5 text-xs text-port-warning">{catalog.checkin.problems.map((problem, index) => <li key={`${problem.subjectId}:${problem.code}:${index}`}>{problem.message}</li>)}</ul>}
-          <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !canApproveCatalog}
-            onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !canApproveCatalog}
+              onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
+            <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !catalog.checkin || catalog.checkin.problems.length > 0}
+              onClick={() => castSets.rebuildCatalogGuide().then((res) => { if (res?.artifact) board.openArtifact(res.artifact.id); })}>Rebuild guide</button>
+          </div>
         </div> : castSets.linkCatalog && <div className="space-y-1">
           <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Existing generated sheets and shot references stay in history.</p>
           <button type="button" disabled={catalogBusy} className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" onClick={castSets.linkCatalog}>Use catalog-only check-in</button>

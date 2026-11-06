@@ -2868,6 +2868,138 @@ it('converts legacy check-in to catalog links without recasting, copying media, 
   expect(await service.onCastAndSetsImageSettled({ projectId: project.id, key: 'character', filename: 'late.png', revision: 2 })).toBe(false);
 });
 
+describe('rebuilding a catalog stage guide (#15086)', () => {
+  const RECORDS = {
+    'chr-lead': { id: 'chr-lead', type: 'character', name: 'Example Lead', payload: { physicalDescription: 'Lead in a red coat' } },
+    'chr-alt-a': { id: 'chr-alt-a', type: 'character', name: 'Example Alt A', payload: { physicalDescription: 'First reading' } },
+    'chr-alt-b': { id: 'chr-alt-b', type: 'character', name: 'Example Alt B', payload: { physicalDescription: 'Second reading' } },
+    'plc-harbor': { id: 'plc-harbor', type: 'place', name: 'Example Harbor', payload: { description: 'Sodium lamps on wet stone' } },
+    'obj-lantern': { id: 'obj-lantern', type: 'object', name: 'Example Lantern', payload: { description: 'A dented brass lantern' } },
+  };
+  const SUBJECTS = [
+    { id: 's-lead', kind: 'character', role: 'protagonist', name: 'Example Lead', ingredientId: 'chr-lead' },
+    { id: 's-alt-a', kind: 'character', role: 'protagonist', name: 'Shared Name', ingredientId: 'chr-alt-a', active: false },
+    { id: 's-alt-b', kind: 'character', role: 'protagonist', name: 'Shared Name', ingredientId: 'chr-alt-b', active: true },
+    { id: 's-harbor', kind: 'place', name: 'Example Harbor', ingredientId: 'plc-harbor' },
+    { id: 's-lantern', kind: 'object', name: 'Example Lantern', ingredientId: 'obj-lantern' },
+  ];
+  const useCatalog = async (records = RECORDS) => {
+    Object.keys(records).forEach((id) => onDisk(`${id}.png`));
+    const db = {
+      getIngredient: async (id) => records[id] ?? null,
+      listMediaForIngredient: async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }],
+    };
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+    // Project reads hydrate the check-in from the live catalog module, not the injected one.
+    const catalogDB = await import('../catalogDB.js');
+    const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
+    const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
+    onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
+  };
+  const catalogProject = async (stage = {}, extra = {}) => {
+    const project = await seed({ concept: { subjects: SUBJECTS } });
+    return (await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      scenes: [
+        { sceneId: 'shot-1', startSec: 12, endSec: 20, setReference: { subjectId: 's-harbor' } },
+        { sceneId: 'shot-2', startSec: 20, endSec: 31, setReference: { subjectId: 's-harbor' } },
+      ],
+      castAndSets: { source: 'catalog', status: 'review', revision: 1, ...stage },
+      ...extra } }))).project;
+  };
+  const rebuild = (id) => request(app).post(`/api/music-video/${id}/cast-and-sets/catalog/guide`).send({});
+  const guideHtml = async (id, artifactId) => (await request(app).get(`/api/music-video/${id}/dev-artifacts/${artifactId}/file`)).text;
+
+  // Uniquely catches a guide versioning without current catalog text, or a rebuild disturbing the check-in approval.
+  it('saves each rebuild as a new version of the guide with current catalog text, leaving the approval alone', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const first = await rebuild(project.id);
+    expect(first.status).toBe(200);
+    expect(first.body.artifact).toMatchObject({ kind: 'cast-sets', version: 1, mimeType: 'text/html' });
+    expect(first.body.stage).toMatchObject({ artifactId: first.body.artifact.id, artifactVersion: 1, status: 'review' });
+    expect(first.body.project.productionReview.draft.guideArtifactId).toBe(first.body.artifact.id);
+
+    const html = await guideHtml(project.id, first.body.artifact.id);
+    expect(html).toContain('Example Lead');
+    expect(html).toContain('Alternate for Shared Name · Not selected');
+    expect(html).toContain('Alternate for Shared Name · Selected');
+    expect(html).toContain('2 protagonists · 1 alternate not selected');
+    expect(html).not.toContain('Supporting cast');
+    expect(html).toContain('A dented brass lantern');
+    expect(html).toContain('2 shots · 0:12–0:31');
+    expect(html).toMatch(/src="data:image\//);
+
+    const basis = first.body.catalogCheckin.basis;
+    const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis });
+    expect(approved.status).toBe(200);
+    const unchanged = await rebuild(project.id);
+    expect(unchanged.body.artifact.version).toBe(2);
+    expect(unchanged.body.stage).toMatchObject({ status: 'approved', catalogApprovedBasis: basis });
+    expect(unchanged.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+
+    await useCatalog({ ...RECORDS, 'plc-harbor': { ...RECORDS['plc-harbor'], name: 'Renamed Harbor' } });
+    const renamed = await rebuild(project.id);
+    expect(renamed.body.artifact).toMatchObject({ id: first.body.artifact.id, version: 3 });
+    const current = await guideHtml(project.id, first.body.artifact.id);
+    expect(current).toContain('Renamed Harbor');
+    expect(current).not.toContain('Example Harbor');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches an unreadable catalog publishing a guide with its cast missing over the current version.
+  it('refuses an unresolved check-in and a legacy stage without saving a version', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const { artifact } = (await rebuild(project.id)).body;
+    service.__setCastAndSetsDepsForTests(testDeps({ catalog: { getIngredient: async () => { throw new Error('Example outage'); }, listMediaForIngredient: async () => [] } }));
+    const refused = await rebuild(project.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_CATALOG_UNRESOLVED');
+    const after = (await request(app).get(`/api/music-video/${project.id}/dev-artifacts/${artifact.id}`)).body;
+    expect(after.version).toBe(1);
+
+    const legacy = await seed();
+    await projects.mutateProjectRecord(legacy.id, (current) => ({ project: { ...current, castAndSets: { status: 'review', revision: 1, images: {} } } }));
+    const refusedLegacy = await rebuild(legacy.id);
+    expect(refusedLegacy.status).toBe(409);
+    expect(refusedLegacy.body.code || refusedLegacy.body.error?.code).toBe('CAST_SETS_PLAN_STALE');
+  });
+
+  // Uniquely catches a rebuild versioning a stale stage sheet while Art keeps opening a different guide, or replacing a director's own guide.
+  it('versions the Cast & Sets guide Art opens and keeps a different guide the director selected', async () => {
+    await useCatalog();
+    const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+    const project = await catalogProject();
+    const { artifact: stale } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Old sheet', html: '<html></html>' });
+    const { artifact: selected } = await saveGeneratedDevArtifact(project.id, { kind: 'cast-sets', title: 'Selected sheet', html: '<html></html>' });
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+      castAndSets: { ...current.castAndSets, artifactId: stale.id },
+      productionReview: { draft: { guideArtifactId: selected.id } } } }));
+    const rebuilt = await rebuild(project.id);
+    expect(rebuilt.body.artifact).toMatchObject({ id: selected.id, version: 2, title: 'Selected sheet' });
+
+    const own = await catalogProject();
+    const { artifact: treatment } = await saveGeneratedDevArtifact(own.id, { kind: 'treatment', title: 'My treatment', html: '<html></html>' });
+    await projects.mutateProjectRecord(own.id, (current) => ({ project: { ...current, productionReview: { draft: { guideArtifactId: treatment.id } } } }));
+    const fresh = await rebuild(own.id);
+    expect(fresh.body.artifact.id).not.toBe(treatment.id);
+    expect(fresh.body.artifact.kind).toBe('cast-sets');
+    expect(fresh.body.project.productionReview.draft.guideArtifactId).toBe(treatment.id);
+  });
+
+  // Uniquely catches approving the guide file running the catalog approval, which has no basis and always refuses.
+  it('approves the guide as an ordinary artifact without touching the catalog check-in', async () => {
+    await useCatalog();
+    const project = await catalogProject();
+    const { artifact } = (await rebuild(project.id)).body;
+    const reviewed = await request(app).post(`/api/music-video/${project.id}/dev-artifacts/${artifact.id}/review`).send({ status: 'approved' });
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.artifact.status).toBe('approved');
+    expect(reviewed.body.project.castAndSets.status).toBe('review');
+  });
+});
+
 it('blocks catalog approval until every subject is linked and refuses conversion while old jobs are active', async () => {
   const project = await seed();
   await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, castAndSets: { status: 'directing', processId: service.__castAndSetsProcessId(), images: {} } } }));

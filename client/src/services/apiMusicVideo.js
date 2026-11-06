@@ -630,6 +630,9 @@ export const getMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
 export const linkMusicVideoCastAndSetsToCatalog = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog`, { method: 'POST', body: '{}', ...options });
+// Saves a new version of a catalog stage's visual guide: `{ project, stage, artifact, catalogCheckin }`.
+export const rebuildMusicVideoCatalogGuide = (id, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog/guide`, { method: 'POST', body: '{}', ...options });
 // `{ changes: null | { images: [{ key, label }], cast: [name] } }`: Casting changes since the sheet was built.
 export const getMusicVideoCastAndSetsCastingChanges = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/casting-changes`, options);

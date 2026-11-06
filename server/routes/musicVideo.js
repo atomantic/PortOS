@@ -261,6 +261,7 @@ import {
   getCastAndSetsCastingChanges,
   presentProjectCastAndSets,
   useCatalogCheckin,
+  rebuildCatalogGuide,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
   summarizeMusicVideoProject,
@@ -1657,6 +1658,10 @@ router.delete('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) =>
 // production run the director started) begin work — nothing at boot does.
 router.post('/:id/cast-and-sets/catalog', asyncHandler(async (req, res) => {
   res.json(await useCatalogCheckin(req.params.id));
+}));
+
+router.post('/:id/cast-and-sets/catalog/guide', asyncHandler(async (req, res) => {
+  res.json(await rebuildCatalogGuide(req.params.id));
 }));
 
 router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
