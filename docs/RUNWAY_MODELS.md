@@ -23,8 +23,10 @@ canvas selection that preserves requested aspect ratio, plus their exact documen
 canvas dimensions. Video sizes and lengths depend on both model and operation:
 WAN keyframe requests use auto ratios, text requests use explicit canvases, and
 models such as MiniMax accept a separate resolution field. Optional advanced API
-controls keep provider defaults. Unknown prices are displayed as unknown, not zero;
-consult [Runway pricing](https://docs.dev.runwayml.com/guides/pricing/) before rendering.
+controls keep provider defaults. A quote uses [Runway's list price](https://docs.dev.runwayml.com/guides/pricing/)
+for the output and any per-image charge. PortOS sends `audio: false`, so a model that
+charges more for audio is quoted at its silent rate. A model with no listed price
+shows as unknown, not zero.
 
 ## Veo inclusion decision (2026-10-22)
 
