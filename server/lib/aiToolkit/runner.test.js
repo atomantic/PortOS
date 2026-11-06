@@ -84,7 +84,10 @@ describe('AI Toolkit runner service', () => {
       body: { getReader: () => ({ read: async () => ({ done: true }) }) },
     })));
     const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady } });
-    await runner.executeApiRun({ runId: 'malformed', provider: runReady(), prompt: 'Example' });
+    let settle;
+    const settled = new Promise(resolve => { settle = resolve; });
+    await runner.executeApiRun({ runId: 'malformed', provider: runReady(), prompt: 'Example', onSettled: settle });
+    await settled;
     expect(ensureProviderReady).toHaveBeenCalledOnce();
     expect(beforeDispatch).toBe('unreadable legacy record');
   });
