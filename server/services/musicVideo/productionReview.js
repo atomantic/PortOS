@@ -115,6 +115,14 @@ export function seedArtDraft(project, stage = project.castAndSets) {
   return { ...project, productionReview: { ...project.productionReview, draft, seededDraft } };
 }
 
+/** Point Art at `artifactId` unless a live guide is already selected; the director's own choice stands. */
+export function selectArtGuideIfNone(project, artifactId) {
+  const prior = project.productionReview?.draft || {};
+  if (artifact(project, prior.guideArtifactId) || !artifact(project, artifactId)) return project;
+  return { ...project, productionReview: { ...project.productionReview,
+    draft: { lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [], ...prior, guideArtifactId: artifactId } } };
+}
+
 /**
  * The art-direction guides the director wrote (or accepted from a story
  * draft): cast, environments, visual language. A field still holding the text

@@ -1,7 +1,7 @@
 import { isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
-import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
+import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft, selectArtGuideIfNone } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
  * Music Video — Cast & Sets check-in orchestrator.
@@ -98,6 +98,7 @@ import {
   plannedTests,
 } from './castAndSetsPlan.js';
 import { renderCastAndSetsSheet } from './castAndSetsSheet.js';
+import { catalogSheetImageFiles, renderCatalogCastAndSetsSheet } from './castAndSetsCatalogSheet.js';
 import { loadCastAndSetsCatalogLikeness } from './castAndSetsCatalogLikeness.js';
 import { findDevArtifact, reviewDevArtifact, resolveDevArtifactNotes } from './devArtifacts.js';
 import { PRODUCTION_RESUMABLE_STATUSES, findProductionRun, haltProduction, rebaseProductionAfterCheckin, reserveProductionStep, settleProductionStep } from './production.js';
@@ -770,17 +771,21 @@ async function sheetImage(path) {
   return { mime: 'image/jpeg', bytes };
 }
 
+async function embedSheetImage(path) {
+  if (!path || !MIME[extname(path).toLowerCase()]) return null;
+  const copy = await deps.sheetImage(path).catch(async (err) => {
+    console.log(`⏭️ Music Video Cast & Sets sheet keeps ${basename(path)} at full size: ${err.message}`);
+    const bytes = await readFile(path).catch(() => null);
+    return bytes ? { mime: MIME[extname(path).toLowerCase()], bytes } : null;
+  });
+  return copy ? `data:${copy.mime};base64,${Buffer.from(copy.bytes).toString('base64')}` : null;
+}
+
 async function embeddedImages(stage) {
   const out = {};
   for (const [key, img] of Object.entries(stage.images || {})) {
-    const path = img.imageId ? resolveGalleryImage(img.imageId, { mustExist: false }) : null;
-    if (!path || !MIME[extname(path).toLowerCase()]) continue;
-    const copy = await deps.sheetImage(path).catch(async (err) => {
-      console.log(`⏭️ Music Video Cast & Sets sheet keeps ${basename(path)} at full size: ${err.message}`);
-      const bytes = await readFile(path).catch(() => null);
-      return bytes ? { mime: MIME[extname(path).toLowerCase()], bytes } : null;
-    });
-    if (copy) out[key] = `data:${copy.mime};base64,${Buffer.from(copy.bytes).toString('base64')}`;
+    const uri = await embedSheetImage(img.imageId ? resolveGalleryImage(img.imageId, { mustExist: false }) : null);
+    if (uri) out[key] = uri;
   }
   return out;
 }
@@ -1418,6 +1423,48 @@ export async function useCatalogCheckin(projectId) {
   if (moved) console.log(`🔁 Music Video Cast & Sets ${short(projectId)} moved ${moved} shot references to catalog images`);
   publish(projectId, out.project);
   return { project: out.project, stage: out.project.castAndSets, catalogCheckin: await resolveCatalogCheckin(out.project, { catalog: deps.catalog }) };
+}
+
+/**
+ * Rebuild a catalog stage's guide from the current catalog and shots, as a new
+ * version of the guide Art opens. Refuses an unresolved check-in, so an
+ * unreadable catalog can never publish a guide with its cast missing. The
+ * check-in's own approval is untouched: it binds to the catalog, not this file.
+ */
+export async function rebuildCatalogGuide(projectId) {
+  const started = await requireProject(projectId);
+  if (!isCatalogCheckin(started)) throw new ServerError('The check-in changed. Reload it before rebuilding the guide.', { status: 409, code: 'CAST_SETS_PLAN_STALE' });
+  const checkin = await resolveCatalogCheckin(started, { catalog: deps.catalog });
+  assertCatalogCheckinReady(checkin);
+  const images = {};
+  for (const filename of catalogSheetImageFiles(checkin.items)) {
+    const uri = await embedSheetImage(resolveGalleryImage(filename) || resolveImageRef(filename));
+    if (uri) images[filename] = uri;
+  }
+  // Encoding takes seconds, so everything else is read after it: the shots and guide
+  // selection stay current, and a catalog edited meanwhile would invalidate the images.
+  const project = await requireProject(projectId);
+  if (!isCatalogCheckin(project) || (await resolveCatalogCheckin(project, { catalog: deps.catalog })).basis !== checkin.basis) {
+    throw new ServerError('The catalog changed while the guide was being built. Rebuild it again.', { status: 409, code: 'CAST_SETS_CATALOG_STALE' });
+  }
+  const html = renderCatalogCastAndSetsSheet({
+    title: project.name, project, checkin, images,
+    durationSec: project.audioAnalysis?.durationSec ?? null, bpm: project.audioAnalysis?.bpm ?? null,
+    revision: project.castAndSets.revision,
+  });
+  // The selected guide first: a guide the stage no longer names is still what Art opens.
+  const existing = [project.productionReview?.draft?.guideArtifactId, project.castAndSets.artifactId]
+    .find((id) => (project.devArtifacts || []).some((a) => a.id === id && !a.deleted && a.kind === 'cast-sets')) || null;
+  const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+  const { artifact } = await saveGeneratedDevArtifact(projectId, {
+    artifactId: existing, kind: 'cast-sets', title: existing ? null : `Cast & Sets — ${project.name}`, html, source: 'cast-and-sets',
+  });
+  const out = await mutateProjectRecord(projectId, (current) => (isCatalogCheckin(current)
+    ? { project: selectArtGuideIfNone({ ...current, castAndSets: { ...current.castAndSets, artifactId: artifact.id, artifactVersion: artifact.version, updatedAt: new Date().toISOString() } }, artifact.id) }
+    : { project: current }));
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} catalog guide v${artifact.version} saved`);
+  publish(projectId, out.project);
+  return { project: out.project, stage: out.project.castAndSets, artifact, catalogCheckin: checkin };
 }
 
 async function approveCatalogCheckin(projectId, { catalogBasis } = {}) {

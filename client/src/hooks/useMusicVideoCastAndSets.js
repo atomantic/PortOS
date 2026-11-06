@@ -5,6 +5,7 @@ import { subscribeVisibility } from './useVisibilityEvent';
 import {
   getMusicVideoProject,
   linkMusicVideoCastAndSetsToCatalog,
+  rebuildMusicVideoCatalogGuide,
   startMusicVideoCastAndSets,
   editMusicVideoCastAndSetsImage,
   selectMusicVideoCastAndSetsImage,
@@ -148,6 +149,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   };
 
   const linkCatalog = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Cast & Sets now follows the catalog');
+  const rebuildCatalogGuide = () => call(() => rebuildMusicVideoCatalogGuide(projectId, { silent: true }), 'Guide rebuilt from the catalog');
   const remapCatalogReferences = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Shot references moved to their catalog images');
   const start = () => !project?.castAndSets || project.castAndSets.source === 'catalog'
     ? linkCatalog() : call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
@@ -210,5 +212,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, linkCatalog, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, linkCatalog, rebuildCatalogGuide, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

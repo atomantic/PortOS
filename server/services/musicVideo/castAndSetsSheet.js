@@ -100,6 +100,9 @@ td.tc{font-family:var(--mono);color:var(--muted);white-space:nowrap;width:64px}
 @media (max-width:760px){.grid2,.sets,.overlay{grid-template-columns:1fr}.row{grid-template-columns:repeat(2,1fr)}}
 `;
 
+// The catalog guide (castAndSetsCatalogSheet.js) shares the sheet's look and its image safety.
+export { figure as sheetFigure, fmtTime as formatSheetTime, NEUTRAL as SHEET_NEUTRAL_COLOR, STYLE as CAST_SETS_SHEET_STYLE };
+
 const PROCEDURAL_QUESTIONS = [
   'Is the character construction right: shapes, materials, palette and expressions?',
   'Do the movement, camera and transition rules fit the song?',
