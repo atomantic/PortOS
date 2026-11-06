@@ -544,7 +544,7 @@ describe('motion prompt from the storyboard panel', () => {
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
     );
     const { rerender } = render(card(scene));
-    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
+    const box = screen.getAllByLabelText('Motion prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
     // Blurring the panel's words keeps the shot linked rather than copying them.
@@ -588,7 +588,7 @@ describe('start and end frames', () => {
       onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
     show('Frames');
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
-    expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
+    expect(within(pair).getByLabelText('Start frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
     // Each frame swaps from the unused stills on its own, without tapping it first.
     fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));

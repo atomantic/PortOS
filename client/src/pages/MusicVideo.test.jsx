@@ -3261,7 +3261,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       board: { 'Start the storyboard': (root) => root.queryByText('Start the storyboard') },
       // Shots: the scene board, its timing tools, the footage, then the composition over it.
       produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }),
-        'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),
+        'Motion prompt': (root) => root.queryByLabelText('Motion prompt'),
         Footage: () => document.getElementById('mv-generation'), Typography: (root) => root.queryByText(/^Typography —/) },
       review: { 'Render final': (root) => root.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': (root) => root.queryByRole('button', { name: /Render excerpt/ }) },
     };
