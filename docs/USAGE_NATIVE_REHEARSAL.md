@@ -1,7 +1,8 @@
 # Offline usage barrier-store rehearsal
 
-This increment of #15031 validates an **isolated byte restore of the two stores
-fingerprinted by the usage cutover barrier**. It is not a complete PortOS backup,
+These #15031 tools validate an **isolated byte restore of the two stores
+fingerprinted by the usage cutover barrier** and inspect a supplied standard
+snapshot's integrity. Neither establishes a complete PortOS backup,
 a demonstrated database/runtime restore, a live consistency check, or permission
 to activate. The [native stage](./USAGE_NATIVE_STAGING.md) stays separate from
 legacy accounting. The [barrier](./USAGE_CUTOVER_BARRIER.md) still refuses activation
@@ -120,10 +121,94 @@ are `1`; invalid command syntax is `2`. Even a fully verified byte rehearsal ret
 `fullRecoveryBackup: false`, `activationReady: false` and explicit hold reasons.
 Do not interpret a successful copy or a parseable preflight report as cutover approval.
 
+## Inspect a detached standard snapshot
+
+The next read-only check consumes the existing [standard PortOS backup](./BACKUP.md),
+not another full-backup format. Supply the snapshot directory that contains
+`manifest.json`, `data/` and `portos-db.sql`, alongside the verified stage and its
+matching barrier-store backup:
+
+```bash
+node scripts/native-usage-rehearse.js snapshot-preflight stage.json barrier-backup.json detached-standard-snapshot
+```
+
+This command performs no copy, restore, database connection, code execution or
+runtime discovery. It writes nothing. It verifies:
+
+- The standard manifest's timestamp, file count, confined relative paths and
+  SHA-256 values. Windows separators are normalized, duplicate aliases are
+  refused, and only the exact `../portos-db.sql` entry may leave `data/`. The
+  manifest timestamp must be at or after the bound fence. This checks capture-order
+  coherence only; it does not authenticate the clock or prove current live state.
+- Every manifested data file and the SQL dump against their actual bytes. Missing
+  or extra regular data files refuse the check. Unmanifested OS metadata
+  (`.DS_Store`, `.localized`, `Thumbs.db`, `desktop.ini`, `._*`) is counted separately,
+  matching the standard manifest's exclusions. Manifested metadata is still hashed.
+- A mandatory `instances.json` whose `self.instanceId` hashes to the barrier
+  backup's participant key. Identical empty ledgers from different participants
+  cannot substitute for this identity check. This checks supplied evidence, not
+  capture authenticity; the identity and pairing secrets are never installed.
+- The raw `usage.json` and `peer-usage.json` hashes and byte lengths against the
+  barrier-store backup. If the snapshot also contains `usage-cutover-barrier.json`,
+  its exact bytes must match too. That record remains evidence only; it is never
+  installed or used to replace a live spool or retired epochs.
+- A mandatory, hashed PostgreSQL dump with the existing dump inspector's completion
+  envelope and real top-level definitions for `memories`, `memory_links`,
+  `cos_agents`, `ai_connections`, `ai_harness_bindings`, `ai_route_bindings` and
+  `schema_migrations`. SQL-looking text in stored values is not a table definition.
+- The shape of each preserved current/legacy file-migration ledger. The current
+  `migrations.applied.json` wins over `migrations/.applied.json`, as in the normal
+  migration runner. Missing migration state stays explicitly absent, never `[]`.
+
+Absent manifests or dumps, `.failed`, `.in-progress` or the standard sibling
+in-progress marker refuse. Unlike general-purpose restore, this narrower offline
+check does not support symlinks, including directory links or dangling links.
+It refuses links and special files rather than following them. Reads use pinned
+regular-file descriptors with an original-size-plus-one-byte cap, then recheck
+file identity, size and modification time. A second inventory pass checks for
+changes during hashing. This is an inspection of detached copies, not an atomic
+live snapshot or a lock on another process's writes.
+
+Limits are 100 MiB per manifest/migration/identity JSON file, 100 GiB of total reads,
+100,000 manifest entries and 100,000 walked data entries (including directories),
+with at most 64 directory levels. Inventory checks and streams have a 15-minute
+budget. Every payload is hashed, including potentially large media; a snapshot
+that exceeds a budget refuses with no partial integrity verdict. Nothing is
+silently skipped or truncated. The byte budget includes manifest rereads.
+Keep the snapshots and any saved output private. Output contains fixed inventory
+roles, hashes and counts, never arbitrary file paths, SQL, settings, keys or
+instance identity contents. Re-running rereads the snapshot, rather than trusting
+an earlier report.
+
+The result reports `snapshotIntegrityVerified: true` only for this supplied
+snapshot, with each relevant usage/configuration/attribution group marked
+`present-in-snapshot` or `absent-from-snapshot`. Groups cover the legacy scan
+fallback, Claude history, quotas, image receipts, sync cursors, settings,
+providers, instance configuration, private API keys, run metadata/output,
+current/rotated lifecycle logs and both migration-ledger locations. Present means
+bytes were preserved and checked, not that a runtime schema or historical
+completeness was demonstrated. A zero-byte output log is present, not absent.
+
+**Absence from the snapshot is not evidence of absence from the source.** Backup
+exclusions, omitted files, external native histories and data already lost before
+capture cannot be reconstructed from the manifest. Even an `assetConsistency`
+claim of `global` does not settle those questions. The code commit is explicitly
+labelled as the barrier backup's operator-supplied evidence; no supplied claim
+proves that code ran, that migrations completed or that the database schema
+matches it. Table definitions and a dump trailer do not demonstrate restored
+rows, database migrations, a successful SQL replay or runtime operation.
+
+Consequently even this command's successful inspection exits **3**, retaining
+`fullStoreInventoryVerified: false`, `fullRecoveryBackup: false`,
+`activationReady: false` and explicit holds for source inventory/exclusions,
+matched code/schema/migrations, database and runtime restore, native-source
+preservation and the existing live cutover gates. It does not clear or change the
+fleet byte-rehearsal preflight. Invalid inputs exit 1; invalid syntax exits 2.
+
 ## Remaining recovery gates
 
-#15031 remains open. This deliberately narrow rehearsal does not cover the complete
-store inventory: legacy `usage-interactive-scan.json`, Claude's preserved transcript
+#15031 remains open. The byte rehearsal and snapshot inspection do not prove the complete
+source inventory: legacy `usage-interactive-scan.json`, Claude's preserved transcript
 history store, quota readings, immutable image receipts, sync cursors, settings,
 provider classifications, identity/peer configuration or attribution artifacts.
 These may contain data not reconstructible from the staged native report.
