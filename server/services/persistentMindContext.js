@@ -112,7 +112,7 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
  * page. Attribution comes only from a runtime event matching this exact wording,
  * so an edited or legacy record reads as unattributed rather than mind-authored.
  */
-export async function readPersistentMindContinuationNote(mindId = PERSISTENT_MIND_ID, history = null) {
+async function readPersistentMindContinuationNote(mindId = PERSISTENT_MIND_ID, history = null) {
   const { memories = [] } = await memoryBackend.getMemories({
     status: 'active', sourceAgentId: mindId, tags: [PERSISTENT_MIND_CONTINUATION_TAG],
     sortBy: 'updatedAt', sortOrder: 'desc', limit: 1,
