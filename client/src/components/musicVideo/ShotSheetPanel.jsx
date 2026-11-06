@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import StageSection from './StageSection.jsx';
 import ShotSheetAi from './ShotSheetAi.jsx';
 import ScenePoster from './ScenePoster.jsx';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
@@ -13,12 +14,17 @@ import {
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
-/** A text box that commits on blur, and only when its text changed. */
+/** A text box that grows to fit its text and commits on blur, only when its text changed. */
 function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength }) {
+  const [draft, setDraft] = useState(value);
+  const [saved, setSaved] = useState(value);
+  // A save or an AI fill elsewhere replaces what's shown.
+  if (value !== saved) { setSaved(value); setDraft(value); }
   return (
-    <textarea key={value} aria-label={label} rows={rows} defaultValue={value} disabled={disabled} maxLength={maxLength}
-      onBlur={(event) => { if (event.target.value !== value) onCommit(event.target.value); }}
-      className={`${inputCls} resize-y [field-sizing:content]`} />
+    <AutoSizeTextarea aria-label={label} rows={rows} value={draft} disabled={disabled} maxLength={maxLength}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => { if (draft !== value) onCommit(draft); }}
+      className={inputCls} />
   );
 }
 
@@ -196,7 +202,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
           </select>
         )}
       </td>
-      <td className="w-44 p-1.5"><SheetPick label={`${label} view`} field="view" value={sheet.view} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
+      <td className="w-44 p-1.5"><SheetText label={`${label} view`} value={sheet.view} rows={1} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
       <td className="w-36 space-y-1 p-1.5">
         <SheetPick label={`${label} location`} field="location" value={sheet.location} maxLength={200} disabled={disabled} onCommit={(value) => setField('location', value)} />
         <SheetPick label={`${label} time of day`} field="timeOfDay" value={sheet.timeOfDay} maxLength={100} disabled={disabled} onCommit={(value) => setField('timeOfDay', value)} />
