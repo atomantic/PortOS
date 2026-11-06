@@ -6,7 +6,7 @@ vi.mock('../services/socket', async () => {
   return { default: new EventEmitter() };
 });
 const api = vi.hoisted(() => ({
-  getNativeUsageMatrix: vi.fn(), getNativeUsageCoverage: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
+  getNativeUsageMatrix: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
   getUsageBackfillStatus: vi.fn(), getUsageRollingCost: vi.fn(), getClaudeCodeModelUsage: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
@@ -54,7 +54,6 @@ describe('native usage default view', () => {
     read();
     expect(await screen.findByText('123,456')).toBeInTheDocument();
     expect(api.getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ silent: true });
-    expect(api.getNativeUsageCoverage).not.toHaveBeenCalled();
     expect(metric(card('Claude Code'), 'Measured retained tokens')).toHaveTextContent('1,434');
     expect(metric(card('Grok'), 'Measured retained tokens')).toHaveTextContent('9,876');
     expect(metric(card('Grok'), 'Native cost ticks (unverified scope)')).toHaveTextContent('7,654');
