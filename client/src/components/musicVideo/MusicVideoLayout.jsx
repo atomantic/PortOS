@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import {
-  ArrowRight, BookOpen, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, Pencil, Play, Send, Settings, Users, Trash2,
+  ArrowRight, BookOpen, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, PanelLeftClose, PanelLeftOpen, Pencil, Play, Send, Settings, Users, Trash2,
 } from 'lucide-react';
+import { useLocalStorageBool } from '../../hooks/useLocalStorageBool.js';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import Pill from '../ui/Pill.jsx';
@@ -49,10 +50,30 @@ const MARK_CLASSES = {
   muted: 'bg-port-border text-port-text-muted',
 };
 
-/** The steps as a vertical list (md and up): number or check, name, state word and one fact. */
-function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
+// Remembered per browser: a folded rail stays folded across projects and reloads.
+export const STEP_RAIL_COLLAPSED_KEY = 'portos.musicVideo.stepRailCollapsed';
+
+/**
+ * The steps as a vertical list (md and up): number or check, name, state word and one fact.
+ * Folded, it keeps only the marks (number, check or page icon), naming each step
+ * and its state to screen readers and in a tooltip, so the step gets the width.
+ */
+function StepRail({ stages, stage, onStageChange, needsYouStage, notes, collapsed, onToggle }) {
+  const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  const rowClasses = collapsed ? 'justify-center px-0' : 'px-2';
   return (
     <nav aria-label="Steps" className="hidden md:block">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? 'Show steps' : 'Hide steps'}
+        title={collapsed ? 'Show steps' : 'Hide steps'}
+        className={`mb-1 flex min-h-[36px] w-full items-center gap-2 rounded-lg text-xs text-port-text-muted hover:bg-port-card hover:text-port-text ${rowClasses}`}
+      >
+        <ToggleIcon size={16} aria-hidden="true" className="shrink-0" />
+        {!collapsed && <span>Hide steps</span>}
+      </button>
       <ol className="space-y-1">
         {stages.map((entry, index) => {
           const state = stepState(entry, { needsYouStage });
@@ -63,16 +84,19 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
                 type="button"
                 onClick={() => onStageChange(entry.id)}
                 aria-current={selected ? 'step' : undefined}
-                className={`flex w-full min-h-[44px] items-start gap-2 rounded-lg border px-2 py-2 text-left ${selected ? 'border-port-accent bg-port-accent/10' : 'border-transparent hover:bg-port-card'}`}
+                title={collapsed ? `${entry.label}: ${state.word}` : undefined}
+                className={`flex w-full min-h-[44px] items-start gap-2 rounded-lg border py-2 text-left ${rowClasses} ${selected ? 'border-port-accent bg-port-accent/10' : 'border-transparent hover:bg-port-card'}`}
               >
                 <span aria-hidden="true" className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${MARK_CLASSES[state.tone]}`}>
                   {state.word === 'Done' ? <Check size={13} /> : state.word === 'Changed since approval' ? <History size={13} /> : index + 1}
                 </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-port-text">{entry.label}</span>
-                  <span className={`block text-xs ${WORD_CLASSES[state.tone]}`}>{state.word}</span>
-                  {notes?.[entry.id] && <span className="block truncate text-xs text-port-text-muted">{notes[entry.id]}</span>}
-                </span>
+                {collapsed ? <span className="sr-only">{entry.label}, {state.word}</span> : (
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-port-text">{entry.label}</span>
+                    <span className={`block text-xs ${WORD_CLASSES[state.tone]}`}>{state.word}</span>
+                    {notes?.[entry.id] && <span className="block truncate text-xs text-port-text-muted">{notes[entry.id]}</span>}
+                  </span>
+                )}
               </button>
             </li>
           );
@@ -89,12 +113,13 @@ function StepRail({ stages, stage, onStageChange, needsYouStage, notes }) {
                 type="button"
                 onClick={() => onStageChange(entry.id)}
                 aria-current={selected ? 'page' : undefined}
-                className={`flex w-full min-h-[44px] items-center gap-2 rounded-lg border px-2 py-2 text-left ${selected ? 'border-port-accent bg-port-accent/10' : 'border-transparent hover:bg-port-card'}`}
+                title={collapsed ? entry.label : undefined}
+                className={`flex w-full min-h-[44px] items-center gap-2 rounded-lg border py-2 text-left ${rowClasses} ${selected ? 'border-port-accent bg-port-accent/10' : 'border-transparent hover:bg-port-card'}`}
               >
                 <span aria-hidden="true" className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-port-border text-port-text-muted">
                   <Icon size={13} />
                 </span>
-                <span className="text-sm font-medium text-port-text">{entry.label}</span>
+                <span className={collapsed ? 'sr-only' : 'text-sm font-medium text-port-text'}>{entry.label}</span>
               </button>
             </li>
           );
@@ -137,6 +162,7 @@ export default function MusicVideoLayout({
   attention = null, dock = null, notes = null, autopilot = null, onOpenSettings = null,
   playerFirst = false, previewExpanded = false, lead = null, review = null, onRename = null, renameForm = null, cancelRender = null, children,
 }) {
+  const [railCollapsed, , toggleRail] = useLocalStorageBool(STEP_RAIL_COLLAPSED_KEY, false);
   const headerRef = useRef(null);
   const rootRef = useRef(null);
   const dockRef = useRef(null);
@@ -316,9 +342,9 @@ export default function MusicVideoLayout({
       </header>
 
       {/* One column on a phone, capped at the screen width so a wide control can't push the step off screen. */}
-      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-[13rem_minmax(0,1fr)] ${sideDock && !expandedDock ? 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]' : ''}`}>
+      <div className={`grid grid-cols-[minmax(0,1fr)] items-start gap-4 ${railCollapsed ? 'md:grid-cols-[3rem_minmax(0,1fr)]' : 'md:grid-cols-[13rem_minmax(0,1fr)]'} ${sideDock && !expandedDock ? (railCollapsed ? 'xl:grid-cols-[3rem_minmax(0,1fr)_minmax(20rem,24rem)]' : 'xl:grid-cols-[13rem_minmax(0,1fr)_minmax(20rem,24rem)]') : ''}`}>
         <div className={`hidden md:block md:sticky md:top-[calc(var(--mv-header-h,9rem)-0.75rem)] ${expandedDock ? 'xl:col-start-1 xl:row-start-1 xl:row-span-2' : ''}`}>
-          <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} />
+          <StepRail stages={progress.stages} stage={stage} onStageChange={onStageChange} needsYouStage={needsYouStage} notes={notes} collapsed={railCollapsed} onToggle={toggleRail} />
         </div>
         {/* Labelled by its own heading: from md the phone tab bar is hidden and the step list drives it. */}
         <div
