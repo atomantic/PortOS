@@ -144,6 +144,32 @@ describe('refreshInteractiveUsage', () => {
     expect(applied).toEqual([]);
   });
 
+  it('replays held standalone usage once after boot observes an interrupted in-process run end', async () => {
+    const { setAIToolkit } = await import('./runner.js');
+    const { recoverInterruptedRuns } = await import('./interruptedRunRecovery.js');
+    await rm(runsDir, { recursive: true, force: true });
+    runsDir = join(home, 'runs');
+    const runDir = join(runsDir, 'interrupted');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({
+      id: 'interrupted', workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null,
+      executionOwner: { id: 'previous-server', pid: 123456, startedAt: new Date(P1 - HOUR).toISOString() },
+      executionKind: 'cli', executionChild: { pid: 123457, startedAt: new Date(P1 - 60_000).toISOString() }
+    }));
+    const args = { home, runsDir, providers: [GROK], now: NOW };
+    await refreshInteractiveUsage(args);
+    expect(applied).toEqual([]);
+    expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    setAIToolkit({ services: {} }, { dataDir: home });
+    await recoverInterruptedRuns({ isDead: () => true, now: () => P1 + 60_000 });
+    const result = await refreshInteractiveUsage({ ...args, now: NOW + 60_000 });
+    expect(result.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+    expect(ledger.scan.deferred.grok).toEqual([]);
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + 120_000 });
+    expect(applied).toEqual([]);
+  });
+
   it('bills terminal sessions per UTC day, outside PortOS run windows, exactly once', async () => {
     // A PortOS run covers p3 in this cwd: the run path owns it, so the scan must not.
     const runDir = join(runsDir, 'run-1');

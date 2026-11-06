@@ -99,6 +99,7 @@ export const runPreRouteSequence = async ({
   warmProviders,
   ensureLocalLlmBackend,
   registerRunners,
+  recoverInterruptedRuns,
   initAutoFixer,
   initTaskLearning,
   startSpawner
@@ -116,6 +117,8 @@ export const runPreRouteSequence = async ({
 
   registerRunners(aiToolkit);
   console.log('🔧 Registered PortOS CLI + TUI runners via aiToolkit runner extension points');
+
+  await bestEffort(recoverInterruptedRuns(), logFailure('Interrupted AI run recovery failed'));
 
   initAutoFixer();
   initTaskLearning();

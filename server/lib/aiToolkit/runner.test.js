@@ -63,6 +63,10 @@ describe('AI Toolkit runner service', () => {
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
     expect(reader.releaseLock).toHaveBeenCalledTimes(1);
     expect(failed).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(join(dataDir, 'runs', 'settlement', 'metadata.json'), 'utf8'))).toMatchObject({
+      executionOwner: { pid: process.pid, id: expect.any(String), startedAt: expect.any(String) },
+      executionKind: 'api', executionChild: null,
+    });
   });
 
   it('passes request capability requirements to proactive fallback selection', async () => {
@@ -1552,6 +1556,7 @@ describe('AI Toolkit runner service', () => {
     const completed = new Promise(resolve => { complete = vi.fn(resolve); });
     const pending = runner.executeApiRun({ runId: 'unbounded', provider: runReady(), prompt: 'hi',
       workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: complete });
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
     await vi.advanceTimersByTimeAsync(86_400_000);
     expect(complete).not.toHaveBeenCalled();
     expect(await runner.isRunActive('unbounded')).toBe(true);
@@ -1562,8 +1567,10 @@ describe('AI Toolkit runner service', () => {
 
     let canceled;
     const canceledResult = new Promise(resolve => { canceled = vi.fn(resolve); });
+    finishRead = undefined;
     const second = runner.executeApiRun({ runId: 'unbounded-stop', provider: runReady(), prompt: 'hi',
       workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: canceled });
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
     await vi.advanceTimersByTimeAsync(86_400_000);
     await runner.stopRun('unbounded-stop');
     finishRead({ done: true });
@@ -2037,14 +2044,11 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     let resolveComplete;
     const completed = new Promise((resolve) => { resolveComplete = resolve; });
 
-    setImmediate(() => {
-      child.stdout.emit('data', Buffer.from('output'));
-      child.emit('close', 0);
-    });
-
     await runner.executeCliRun({
       runId: 'builtin-run', provider, prompt: 'test prompt', onComplete: resolveComplete,
     });
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
 
     const [command, , options] = spawn.mock.calls.at(-1);
     expect(options.shell).toBeFalsy();
