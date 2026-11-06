@@ -313,7 +313,7 @@ const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -651,6 +651,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
     reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
     runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
+    geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
   });
 }));
 

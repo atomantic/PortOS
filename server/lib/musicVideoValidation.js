@@ -176,7 +176,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
   // (see generationMode below). 'runway' is Runway's developer API
   // (services/videoGen/runway.js), cutaways only.
-  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
@@ -2037,7 +2037,7 @@ export const musicVideoSceneReorderSchema = z.object({
 // Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();

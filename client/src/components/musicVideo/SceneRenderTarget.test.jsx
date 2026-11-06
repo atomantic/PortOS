@@ -106,3 +106,13 @@ describe('a music-driven shot on fal', () => {
       .toEqual({ backend: 'fal', falMusicModelId: 'bytedance/seedance-2.5/reference-to-video', falMusicResolution: null });
   });
 });
+
+describe('the Gemini Omni pick', () => {
+  const gemini = (performance) => renderTargetOptions({ performance, saved: {} }).find((option) => option.value === 'gemini');
+
+  it('renders cutaways only and asks the server for the Gemini backend', () => {
+    expect(gemini(false).disabled).toBe(false);
+    expect(gemini(true).disabled).toBe(true);
+    expect(renderTargetOverrides('gemini', {})).toEqual({ backend: 'gemini' });
+  });
+});

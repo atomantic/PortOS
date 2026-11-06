@@ -80,7 +80,7 @@ const editableRemixModel = (models, defaultModelId) => {
  *     only to decide whether to show the control at all.
  */
 export function useVideoGenForm({
-  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false,
+  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false, geminiEnabled = false,
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -660,7 +660,7 @@ export function useVideoGenForm({
   // always anchors and the promise has to collapse to the default there.
   // Each hosted lane stays gated on its own *Enabled flag, so a persisted
   // backend that is no longer configured resolves to null (the local lane).
-  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled })[backend]
+  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled, gemini: geminiEnabled })[backend]
     ? backend : null;
   const isGrok = hostedLane === 'grok';
   // fal.ai's queue REST API is usability-gated on a configured API key
@@ -674,6 +674,8 @@ export function useVideoGenForm({
   const isReactor = hostedLane === 'reactor';
   // Runway is usability-gated the same way; text mode is offered for the models that render from a prompt alone.
   const isRunway = hostedLane === 'runway';
+  // Gemini renders in the PortOS Browser, so it has no key and no provider settings.
+  const isGemini = hostedLane === 'gemini';
   // A model that needs a start frame cannot stay picked in Text mode: fall back to the catalog default (which renders from text).
   const runwayTextBlocked = isRunway && mode === 'text' && !runwayModelTakesText(getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
   useEffect(() => {
@@ -1003,7 +1005,7 @@ export function useVideoGenForm({
   const handleBackendChange = (id) => {
     setBackend(id);
     if (id !== 'runway' && RUNWAY_SPECIAL_VIDEO_MODES.includes(mode)) handleModeChange('text');
-    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway') && mode !== 'text' && mode !== 'image') {
+    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway' || id === 'gemini') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1317,6 +1319,9 @@ export function useVideoGenForm({
       setMode(p.videoMode === 'image' ? 'image' : 'text');
       if (p.duration) setFalDuration(p.duration);
       if (p.modelId) setFalModelId(p.modelId);
+    } else if (p.mode === 'gemini') {
+      setBackend('gemini');
+      setMode(p.videoMode === 'image' ? 'image' : 'text');
     } else if (p.mode === 'runway') {
       // Runway job: same discriminator shape as fal above.
       setBackend('runway');
@@ -1433,7 +1438,7 @@ export function useVideoGenForm({
 
   return {
     // Backend + mode
-    backend, hostedLane, isGrok, isFal, isReactor, isRunway, handleBackendChange,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, handleBackendChange,
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,

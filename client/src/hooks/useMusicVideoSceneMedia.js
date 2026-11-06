@@ -447,7 +447,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // resolution.
         : falFields || runwayFields
           ? falFields || runwayFields
-          : settings.backend === 'local'
+          : settings.backend === 'gemini'
+            // Gemini's composer has no length or audio control.
+            ? {}
+            : settings.backend === 'local'
             // A scene card's pick names its model and length; else the saved model at the model's default length.
             ? { modelId: settings.modelId || undefined,
               ...(useLtxReferences ? { numFrames: referenceFrames,

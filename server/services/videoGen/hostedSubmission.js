@@ -15,6 +15,7 @@ import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../.
 import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
 import { videoReferenceImageSlots } from './requestFields.js';
+import { GEMINI_OMNI_WEB_MODEL } from '../../lib/geminiWebVideo.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -34,10 +35,10 @@ const assertAnchoredReference = (backend, params) => {
 // Reactor takes no staged inputs beyond the source frame the caller already owns.
 const NO_STAGED_INPUTS = async () => ({});
 
-// Grok's extra reference images (referenceImage1..3): staged durably in slot
-// order, each paired with its label. The queue owns the copies (uploadedTempPaths)
-// and the Grok worker removes them on every terminal path.
-async function stageGrokReferenceImages({ body, uploads, stageUploadDurable }) {
+// Grok's and Gemini's extra reference images (referenceImage1..3): staged durably in
+// slot order, each paired with its label. The queue owns the copies (uploadedTempPaths)
+// and the worker removes them on every terminal path.
+async function stageCastReferenceImages({ body, uploads, stageUploadDurable }) {
   const castReferences = [];
   for (const { file, label } of videoReferenceImageSlots(uploads, body)) {
     castReferences.push({ path: await stageUploadDurable(file, 'reference'), label });
@@ -160,7 +161,7 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       const grok = settings.imageGen?.grok || {};
       return { usable: grok.enabled, extras: { grok } };
     },
-    stageInputs: stageGrokReferenceImages,
+    stageInputs: stageCastReferenceImages,
     validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GROK, params),
     errorCode: 'GROK_IMAGEGEN_DISABLED',
     errorMessage: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
@@ -222,6 +223,20 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       height: body.height,
       duration: body.runwayDuration,
       ...(body.runwayResolution ? { resolution: body.runwayResolution } : {}),
+    }),
+  },
+  [VIDEO_GEN_MODE.GEMINI]: {
+    prepare: (settings) => ({ usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.GEMINI), extras: {} }),
+    stageInputs: stageCastReferenceImages,
+    validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GEMINI, params),
+    errorCode: 'GEMINI_WEB_UNAVAILABLE',
+    errorMessage: 'Gemini video renders in the PortOS Browser and is not available on this install',
+    buildParams: (body, prepared) => ({
+      modelId: GEMINI_OMNI_WEB_MODEL.id,
+      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
+      width: body.width,
+      height: body.height,
+      ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
     }),
   },
   [VIDEO_GEN_MODE.REACTOR]: {

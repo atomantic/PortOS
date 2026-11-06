@@ -1,4 +1,5 @@
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
+import { GEMINI_OMNI_WEB_MODEL } from '../../../../server/lib/geminiWebVideo.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_IMAGE_VIDEO_MODELS, coerceFalVideoSeconds, describeFalVideoRate, falVideoResolutions, getFalVideoModel,
 } from '../../lib/falVideoModels.js';
@@ -19,7 +20,7 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
  * fal's lip-sync route, so fal is one choice there, a music-driven shot offers
  * each music-driven model (the song slice drives the picture), and Grok (no
  * audio) and Runway (image-to-video only here) render cutaways only.
- * The pick is a value string: '' (saved), 'local', 'grok', 'fal', 'fal:<modelId>'
+ * The pick is a value string: '' (saved), 'local', 'grok', 'gemini', 'fal', 'fal:<modelId>'
  * or 'runway:<modelId>'.
  *
  * A picked lane shows its own options, from the same definitions the Video Gen
@@ -33,7 +34,7 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
  * A card opens on the last pick made on this device (lastRenderTarget), with
  * its local model or fal size; lengths stay sized to each shot.
  */
-const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway' };
+const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
 const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
@@ -60,6 +61,7 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
     { value: '', label: `Project setting · ${savedLabel(saved, performance, scene)}` },
     { value: 'local', label: performance ? 'Local LTX lip-sync (free)' : 'Local LTX (free)' },
     { value: 'grok', label: performance ? 'Grok (cutaways only)' : 'Grok', disabled: performance },
+    { value: 'gemini', label: `${GEMINI_OMNI_WEB_MODEL.label}${performance ? ' (cutaways only)' : ` · ${GEMINI_OMNI_WEB_MODEL.clipSeconds}s · PortOS Browser`}`, disabled: performance },
     ...(performance
       ? [
         { value: 'fal', label: `fal.ai · ${falPerformanceLabel(saved, scene)}` },
@@ -169,6 +171,7 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
   if (value === 'grok') {
     return { backend: 'grok', ...(options.grokDuration || spanSec != null ? { grokDuration: options.grokDuration || grokCoverage(spanSec).requestSec } : {}) };
   }
+  if (value === 'gemini') return { backend: 'gemini' };
   if (value.startsWith('runway')) {
     const runwayModelId = value.slice(7) || null;
     if (!runwayModelId) return { backend: 'runway' };

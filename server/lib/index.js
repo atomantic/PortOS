@@ -694,6 +694,7 @@ export * from './markdownText.js';
 export * from './renderSlot.js';
 export * from './renderTargets.js';
 export * from './renderTiming.js';
+export * from './geminiWebVideo.js';
 export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
 export * from './imageQuotaSignal.js';

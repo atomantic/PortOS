@@ -45,6 +45,7 @@
  */
 
 import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
+import { GEMINI_OMNI_WEB_MODEL } from './geminiWebVideo.js';
 import {
   FAL_AUDIO_VIDEO_MODELS,
   FAL_DEFAULT_IMAGE_VIDEO_MODEL,
@@ -236,8 +237,8 @@ export function performanceCapability(backend, { scene = null, videoSettings = n
  */
 export function performanceBlockedReason(backend) {
   if (performanceCapability(backend)) return null;
-  if (backend === 'grok' || backend === 'runway') {
-    return `${backend === 'grok' ? 'Grok' : 'Runway'} video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.`;
+  if (backend === 'grok' || backend === 'runway' || backend === 'gemini') {
+    return `${{ grok: 'Grok', runway: 'Runway', gemini: 'Gemini' }[backend]} video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.`;
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }
@@ -413,6 +414,7 @@ export function shotSplitLimit(scene, backend, videoSettings = null) {
     return capability ? round6(capability.maxAudioSec - PERFORMANCE_WINDOW_MARGIN_SEC) : null;
   }
   const footage = scene?.visualLayer == null || scene.visualLayer === 'footage';
+  if (backend === 'gemini' && footage) return GEMINI_OMNI_WEB_MODEL.clipSeconds;
   return backend === 'grok' && footage ? GROK_VIDEO_DURATIONS[GROK_VIDEO_DURATIONS.length - 1] : null;
 }
 
