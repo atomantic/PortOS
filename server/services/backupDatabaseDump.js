@@ -39,11 +39,13 @@ const MAX_SCANNED_LINE = 64 * 1024;
  * With `spoolTo`, the exact bytes inspected are also written to that new file
  * (created exclusively, owner-only), so a restore can replay what it checked
  * even if the snapshot changes afterwards; a spool write failure rejects too.
+ * Offline inspectors may supply a bounded stream from their pinned descriptor
+ * and a stricter table inventory. Neither option executes SQL or proves restore.
  * @param {string} path
- * @param {{ spoolTo?: string, omitVersionDirectives?: boolean, targetServerMajor?: number }} [options]
+ * @param {{ spoolTo?: string, omitVersionDirectives?: boolean, targetServerMajor?: number, inputStream?: import('node:stream').Readable, requiredTables?: string[] }} [options]
  * @returns {Promise<{ sizeBytes: number, sha256: string, tableCount: number, complete: boolean, missingTables: string[], extensionMetadata?: {start: number, end: number}[] }>}
  */
-export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false, targetServerMajor } = {}) {
+export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false, targetServerMajor, inputStream, requiredTables = REQUIRED_DUMP_TABLES } = {}) {
   return new Promise((resolvePromise, reject) => {
     const hash = createHash('sha256');
     // Latin-1 preserves byte offsets and dumps in non-UTF-8 client encodings.
@@ -151,7 +153,7 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
       for (const line of text.match(/[^\n]*\n|[^\n]+$/g) || []) scanLine(line);
     };
 
-    const stream = createReadStream(path);
+    const stream = inputStream ?? createReadStream(path);
     const spool = spoolTo ? createWriteStream(spoolTo, { flags: 'wx', mode: 0o600 }) : null;
     let failed = false;
     const fail = (err) => {
@@ -204,7 +206,7 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
         tableCount,
         complete: !unscannable && !copyData && !quote && !dollarQuote && !blockDepth
           && !statement.trim() && COMPLETE_TRAILER.test(tail.toString('latin1')),
-        missingTables: REQUIRED_DUMP_TABLES.filter(name => !tables.has(name)),
+        missingTables: requiredTables.filter(name => !tables.has(name)),
         ...(spoolTo ? { extensionMetadata } : {}),
         ...(omitVersionDirectives ? { replayScanSafe: !unscannable } : {}),
       };

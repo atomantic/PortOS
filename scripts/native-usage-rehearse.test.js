@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, lstat, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import { runNativeUsageRehearsalCli } from './native-usage-rehearse.js';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, open: vi.fn(actual.open) };
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
 });
 
 const hosts = ['host-a', 'host-b', 'host-c'];
@@ -232,5 +232,292 @@ describe('offline barrier-store backup and restore rehearsal', () => {
     await symlink(args[1], join(target, 'usageLedger.json'));
     await expect(run(['preflight', args[1], join(args[4], saved.fileName), target])).rejects.toThrow('input-not-bounded-regular-file');
     expect((await run(['activate'])).code).toBe(2);
+  });
+});
+
+const dumpTables = ['memories', 'memory_links', 'cos_agents', 'ai_connections', 'ai_harness_bindings', 'ai_route_bindings', 'schema_migrations'];
+const dump = tables => '-- PostgreSQL database dump\n'
+  + tables.map(name => `CREATE TABLE public.${name} (\n id text\n);\n`).join('')
+  + '\n--\n-- PostgreSQL database dump complete\n--\n';
+
+async function standardSnapshot() {
+  const fixture = input();
+  const saved = await rehearse(fixture, 'bound-stores');
+  const root = join(dir, 'standard-snapshot');
+  const data = join(root, 'data');
+  await mkdir(data, { recursive: true });
+  const contents = {
+    'usage.json': fixture.files.usageLedger, 'peer-usage.json': fixture.files.peerDigests,
+    'usage-cutover-barrier.json': fixture.files.barrierRecord,
+    'claude-code-transcript-usage.json': bytes({ history: { 'private-history-key': 17 } }),
+    'settings.json': bytes({ backup: { excludePaths: ['private'] } }),
+    'providers.json': bytes({ providers: [{ id: 'private-provider' }] }),
+    'instances.json': bytes({ self: { instanceId: hosts[0] }, peers: [{ pairSecret: 'synthetic-pair-secret' }] }),
+    'private/api-keys.json': bytes({ provider: 'synthetic-api-secret' }),
+    'runs/private-run-id/metadata.json': bytes({ source: 'private-attribution' }),
+    'runs/private-run-id/output.txt': Buffer.from(''),
+    'cos/run-events.jsonl': Buffer.from('{"id":"private-run-id"}\n'),
+    'cos/run-events.1.jsonl': Buffer.from('{"id":"archived-private-run"}\n'),
+    [`image-render-usage/${'e'.repeat(64)}.json`]: bytes({ id: 'private-receipt' }),
+    'migrations.applied.json': bytes(['001-example.js']),
+    'migrations/.applied.json': bytes([]),
+  };
+  for (const [name, value] of Object.entries(contents)) {
+    const target = join(data, name);
+    await mkdir(join(target, '..'), { recursive: true });
+    await writeFile(target, value);
+  }
+  const sql = dump(dumpTables);
+  await writeFile(join(root, 'portos-db.sql'), sql);
+  const manifest = { generatedAt: capturedAt, fileCount: Object.keys(contents).length + 1,
+    files: { ...Object.fromEntries(Object.entries(contents).map(([name, value]) => [name, hash(value)])), '../portos-db.sql': hash(sql) },
+    assetConsistency: { scope: 'global', outstanding: [] } };
+  await writeFile(join(root, 'manifest.json'), bytes(manifest));
+  const args = ['snapshot-preflight', saved.args[1], saved.backupPath, root];
+  return { root, data, manifest, args };
+}
+const saveManifest = fixture => writeFile(join(fixture.root, 'manifest.json'), bytes(fixture.manifest));
+async function replaceSnapshotFile(fixture, name, content) {
+  await writeFile(name === '../portos-db.sql' ? join(fixture.root, 'portos-db.sql') : join(fixture.data, name), content);
+  fixture.manifest.files[name] = hash(content);
+  fixture.manifest.fileCount = Object.keys(fixture.manifest.files).length;
+  await saveManifest(fixture);
+}
+
+describe('detached standard snapshot preflight', () => {
+  it('checks actual bytes and fixed inventory groups without claiming complete sources, matched runtime or restored SQL', async () => {
+    const fixture = await standardSnapshot();
+    const before = await readFile(join(fixture.root, 'manifest.json'));
+    const first = await run(fixture.args);
+    expect(first.code).toBe(3);
+    expect(first.result).toMatchObject({
+      snapshotIntegrityVerified: true, participantIdentityMatched: true, fullStoreInventoryVerified: false, fullRecoveryBackup: false, activationReady: false,
+      checkedFiles: fixture.manifest.fileCount, inventoryScope: 'detached-snapshot-only',
+      groups: { usageLedger: { status: 'present-in-snapshot', files: 1 },
+        runOutput: { status: 'present-in-snapshot', files: 1 },
+        legacyInteractiveScan: { status: 'absent-from-snapshot', files: 0 },
+        quotaReadings: { status: 'absent-from-snapshot', files: 0 },
+        privateConfiguration: { status: 'present-in-snapshot', files: 1 },
+        rotatedLifecycleLog: { status: 'present-in-snapshot', files: 1 } },
+      code: { commit: codeCommit, evidence: 'barrier-backup-operator-supplied', matchedRuntimeVerified: false },
+      fileMigrations: { status: 'present-in-snapshot', selected: 'current', matchedToCode: false, appliedStateVerified: false },
+      database: { envelopeVerified: true, requiredTableDefinitionsPresent: true, schemaAndMigrationsMatched: false, restoreVerified: false },
+      holdReasons: expect.arrayContaining(['source-inventory-and-exclusions-not-verified', 'native-source-preservation-not-verified', 'database-restore-not-verified']),
+    });
+    expect((await run(fixture.args)).stdout).toBe(first.stdout);
+    expect(await readFile(join(fixture.root, 'manifest.json'))).toEqual(before);
+    expect(await readdir(fixture.root)).toEqual(['data', 'manifest.json', 'portos-db.sql']);
+    for (const privateValue of [dir, 'private-run-id', 'private-provider', 'synthetic-api-secret', 'synthetic-pair-secret', 'private-history-key']) {
+      expect(first.stdout).not.toContain(privateValue);
+    }
+  });
+
+  it('supports portable manifest separators and ignores only unmanifested regular OS metadata', async () => {
+    const fixture = await standardSnapshot();
+    const name = 'runs/private-run-id/metadata.json';
+    fixture.manifest.files[name.replaceAll('/', '\\')] = fixture.manifest.files[name];
+    delete fixture.manifest.files[name];
+    await saveManifest(fixture);
+    await writeFile(join(fixture.data, '.DS_Store'), 'metadata');
+    expect((await run(fixture.args)).result).toMatchObject({ snapshotIntegrityVerified: true, ignoredMetadataFiles: 1 });
+  });
+
+  it.each([
+    ['path traversal', f => { f.files['../outside.json'] = hash('{}'); }, 'snapshot-manifest-path-invalid'],
+    ['drive path', f => { f.files['C:\\outside.json'] = hash('{}'); }, 'snapshot-manifest-path-invalid'],
+    ['normalized alias', f => { f.files['private\\api-keys.json'] = f.files['private/api-keys.json']; }, 'snapshot-manifest-path-duplicate'],
+    ['hash shape', f => { f.files['settings.json'] = 'broken'; }, 'snapshot-manifest-hash-invalid'],
+    ['missing dump entry', f => { delete f.files['../portos-db.sql']; }, 'snapshot-database-dump-missing'],
+  ])('refuses a %s before reading payloads', async (_label, edit, reason) => {
+    const fixture = await standardSnapshot();
+    edit(fixture.manifest);
+    fixture.manifest.fileCount = Object.keys(fixture.manifest.files).length;
+    await saveManifest(fixture);
+    await expect(run(fixture.args)).rejects.toThrow(reason);
+  });
+
+  it('requires a readable standard manifest with a matching count and an existing dump', async () => {
+    const fixture = await standardSnapshot();
+    const path = join(fixture.root, 'manifest.json');
+    await rm(path);
+    await expect(run(fixture.args)).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(path, '{');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-json-invalid');
+    fixture.manifest.fileCount += 1;
+    await saveManifest(fixture);
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-manifest-count-mismatch');
+    fixture.manifest.fileCount -= 1;
+    await saveManifest(fixture);
+    await rm(join(fixture.root, 'portos-db.sql'));
+    await expect(run(fixture.args)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a pre-fence snapshot timestamp and noncanonical timestamp text', async () => {
+    const fixture = await standardSnapshot();
+    fixture.manifest.generatedAt = '2026-02-28T23:59:59.000Z';
+    await saveManifest(fixture);
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-capture-precedes-fence');
+    fixture.manifest.generatedAt = 'March 2, 2026 (private timestamp comment)';
+    await saveManifest(fixture);
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-manifest-invalid');
+  });
+
+  it('refuses changed payloads even if the manifest is internally valid, including private config', async () => {
+    const fixture = await standardSnapshot();
+    await writeFile(join(fixture.data, 'private/api-keys.json'), '{"provider":"changed"}');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-file-hash-mismatch');
+    await replaceSnapshotFile(fixture, 'private/api-keys.json', '{}');
+    await replaceSnapshotFile(fixture, 'usage.json', '{}');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-barrier-backup-mismatch');
+  });
+
+  it('refuses missing and extra files, and never treats a failed snapshot as completed', async () => {
+    const fixture = await standardSnapshot();
+    await writeFile(join(fixture.data, 'extra.json'), '{}');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-inventory-mismatch');
+    await rm(join(fixture.data, 'extra.json'));
+    await rm(join(fixture.data, 'settings.json'));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-inventory-mismatch');
+    await writeFile(join(fixture.root, '.failed'), 'synthetic failure');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-incomplete-or-failed');
+    await rm(join(fixture.root, '.failed'));
+    await writeFile(join(dir, '.standard-snapshot.in-progress'), 'synthetic writer');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-incomplete-or-failed');
+  });
+
+  it('refuses linked directories and dump files without following their targets', async () => {
+    const fixture = await standardSnapshot();
+    await rename(join(fixture.data, 'private'), join(dir, 'linked-private'));
+    await symlink(join(dir, 'linked-private'), join(fixture.data, 'private'), 'dir');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-input-not-bounded-regular-file');
+    await rm(join(fixture.data, 'private'));
+    await rename(join(dir, 'linked-private'), join(fixture.data, 'private'));
+    await rename(join(fixture.root, 'portos-db.sql'), join(dir, 'linked.sql'));
+    await symlink(join(dir, 'linked.sql'), join(fixture.root, 'portos-db.sql'));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-input-not-bounded-regular-file');
+  });
+
+  it('requires a checked dump hash, complete envelope and real attribution/schema table definitions', async () => {
+    const fixture = await standardSnapshot();
+    await writeFile(join(fixture.root, 'portos-db.sql'), dump(dumpTables).replace('dump complete', 'incomplete'));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-file-hash-mismatch');
+    await replaceSnapshotFile(fixture, '../portos-db.sql', dump(dumpTables).replace('dump complete', 'incomplete'));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-database-envelope-invalid');
+    const missing = dump(dumpTables.filter(name => name !== 'cos_agents')).replace('-- PostgreSQL database dump complete',
+      '-- CREATE TABLE public.cos_agents (\n-- PostgreSQL database dump complete');
+    await replaceSnapshotFile(fixture, '../portos-db.sql', missing);
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-database-envelope-invalid');
+  });
+
+  it('refuses a different participant identity even when ledger, peer and barrier bytes are identical', async () => {
+    const fixture = await standardSnapshot();
+    await replaceSnapshotFile(fixture, 'instances.json', bytes({ self: { instanceId: hosts[1] } }));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-participant-identity-mismatch');
+    await replaceSnapshotFile(fixture, 'instances.json', bytes({ self: {} }));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-participant-identity-mismatch');
+    await rm(join(fixture.data, 'instances.json'));
+    delete fixture.manifest.files['instances.json'];
+    fixture.manifest.fileCount -= 1;
+    await saveManifest(fixture);
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-participant-identity-missing');
+  });
+
+  it('refuses exhausted aggregate byte and elapsed budgets without a partial integrity verdict', async () => {
+    const fixture = await standardSnapshot();
+    const actual = await vi.importActual('node:fs/promises');
+    const dumpPath = join(fixture.root, 'portos-db.sql');
+    open.mockClear();
+    lstat.mockImplementation(async path => {
+      const info = await actual.lstat(path);
+      if (path === dumpPath) info.size = 100 * 1024 ** 3;
+      return info;
+    });
+    try {
+      await expect(run(fixture.args)).rejects.toThrow('snapshot-byte-limit-exceeded');
+      expect(open.mock.calls.some(([path]) => path === dumpPath)).toBe(false);
+    } finally { lstat.mockImplementation(actual.lstat); }
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(15 * 60 * 1000 + 1);
+    try { await expect(run(fixture.args)).rejects.toThrow('snapshot-time-limit-exceeded'); }
+    finally { clock.mockRestore(); }
+  });
+
+  it('bounds a growing dump to the pinned size plus one and refuses the changed input', async () => {
+    const fixture = await standardSnapshot();
+    const path = join(fixture.root, 'portos-db.sql');
+    const size = (await stat(path)).size;
+    const actual = await vi.importActual('node:fs/promises');
+    let scanned = 0;
+    open.mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      if (args[0] !== path) return handle;
+      const inspect = handle.stat.bind(handle);
+      let changed = false;
+      handle.stat = async () => {
+        const info = await inspect();
+        if (!changed) { changed = true; await writeFile(path, 'x'.repeat(1024 * 1024), { flag: 'a' }); }
+        return info;
+      };
+      const createStream = handle.createReadStream.bind(handle);
+      handle.createReadStream = options => {
+        expect(options.end).toBe(size);
+        const stream = createStream(options);
+        stream.on('data', chunk => { scanned += chunk.length; });
+        return stream;
+      };
+      return handle;
+    });
+    try {
+      await expect(run(fixture.args)).rejects.toThrow('snapshot-input-changed');
+      expect(scanned).toBe(size + 1);
+    } finally { open.mockImplementation(actual.open); }
+  });
+
+  it('detects replacement of an already checked payload before the final inventory pass', async () => {
+    const fixture = await standardSnapshot();
+    const actual = await vi.importActual('node:fs/promises');
+    let changed = false;
+    open.mockImplementation(async (...args) => {
+      if (!changed && args[0] === join(fixture.data, 'providers.json')) {
+        changed = true;
+        const path = join(fixture.data, 'settings.json');
+        const replacement = join(dir, 'replacement.json');
+        await writeFile(replacement, await readFile(path));
+        await rename(replacement, path);
+      }
+      return actual.open(...args);
+    });
+    try { await expect(run(fixture.args)).rejects.toThrow('snapshot-input-changed'); }
+    finally { open.mockImplementation(actual.open); }
+  });
+
+  it('rechecks the sibling dump after the final data inventory and manifest reread', async () => {
+    const fixture = await standardSnapshot();
+    const actual = await vi.importActual('node:fs/promises');
+    let manifestReads = 0;
+    open.mockImplementation(async (...args) => {
+      if (args[0] === join(fixture.root, 'manifest.json') && ++manifestReads === 2) {
+        const path = join(fixture.root, 'portos-db.sql');
+        const replacement = join(dir, 'replacement.sql');
+        await writeFile(replacement, await readFile(path));
+        await rename(replacement, path);
+      }
+      return actual.open(...args);
+    });
+    try { await expect(run(fixture.args)).rejects.toThrow('snapshot-input-changed'); }
+    finally { open.mockImplementation(actual.open); }
+  });
+
+  it('keeps missing migration state explicit and refuses malformed preserved ledgers', async () => {
+    const fixture = await standardSnapshot();
+    await replaceSnapshotFile(fixture, 'migrations.applied.json', '{}');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-migration-ledger-invalid');
+    for (const name of ['migrations.applied.json', 'migrations/.applied.json']) {
+      await rm(join(fixture.data, name));
+      delete fixture.manifest.files[name];
+    }
+    fixture.manifest.fileCount = Object.keys(fixture.manifest.files).length;
+    await saveManifest(fixture);
+    expect((await run(fixture.args)).result.fileMigrations).toEqual({ status: 'absent-from-snapshot', selected: null,
+      sha256: null, matchedToCode: false, appliedStateVerified: false });
   });
 });

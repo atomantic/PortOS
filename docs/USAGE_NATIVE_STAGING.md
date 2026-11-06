@@ -108,7 +108,10 @@ Actual spend and API-equivalent USD stay unknown for all providers.
 
 The [offline barrier-store rehearsal](./USAGE_NATIVE_REHEARSAL.md) can now bind
 detached ledger/peer-store copies to this stage and verify isolated byte restores
-for every participant. It does not establish a full backup or green cutover preflight.
+for every participant. Its read-only `snapshot-preflight` command also checks an
+explicit detached standard snapshot against the bound stores and mandatory SQL
+dump, while reporting present/absent inventory coverage. Neither establishes full
+source preservation, matched-runtime/database restore or green cutover preflight.
 
 Every artifact permanently reports `activation.ready: false`. There is no activate
 command, runtime registration, background task or boot migration in this increment.
