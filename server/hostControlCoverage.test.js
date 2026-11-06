@@ -935,6 +935,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/scenes/cut-on-lyrics', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/split', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/start', RECORDS],
+  ['POST /api/music-video/:id/scenes/:sceneId/end', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/swap-frames', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes', RECORDS],
   ['PATCH /api/music-video/:id/scenes/:sceneId/takes/:takeId', RECORDS],
