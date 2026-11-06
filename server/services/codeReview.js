@@ -1109,7 +1109,7 @@ function headlessCommandPermissionRefusal(result) {
 
 function partialCliReplyFailure(result) {
   const errorMsg = result.stderr?.trim() || result.text?.trim() || 'Reviewer exited before completing its response.'
-  return { ok: false, error: errorMsg, ...pickReviewFailureDetail(result, ['stderr', 'text']) }
+  return { ok: false, error: errorMsg, ...pickReviewFailureDetail(result, ['diagnostics', 'stderr', 'text']) }
 }
 
 // A stream-json reply succeeds only through its last `result` event; any error
@@ -1381,7 +1381,7 @@ async function runSingleCodeReview({ backend, model, diff, effort = null, timeou
     backend,
     model: result.model,
     code: 'MALFORMED_REVIEW',
-    diagnostics: reviewFailureDiagnostics({ reason, finishReason: result.finishReason, responseLengthChars: result.responseLengthChars }),
+    diagnostics: reviewFailureDiagnostics({ ...result.diagnostics, reason, finishReason: result.finishReason, responseLengthChars: result.responseLengthChars }),
     error: `${backend} returned no usable code-review verdict: incomplete or contradictory review output.`,
   }
   return {

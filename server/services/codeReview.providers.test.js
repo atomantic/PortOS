@@ -538,6 +538,18 @@ describe('configured provider reviewers', () => {
     expect(JSON.stringify(result)).not.toContain('private text');
   });
 
+  it('keeps process evidence when a closed CLI response fails verdict parsing', async () => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'grok' });
+    runCliProviderPrompt.mockResolvedValue({ text: 'not a verdict', diagnostics: { cli: {
+      phase: 'closed', elapsedMs: 200, parseMs: 1, stdoutBytes: 13, stderrBytes: 0,
+    } } });
+    const result = await runLocalCodeReview({ backend, diff: 'synthetic diff', kind: 'claim-review' });
+    expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW', diagnostics: {
+      reason: 'invalid_json', cli: { phase: 'closed', elapsedMs: 200, parseMs: 1 },
+    } });
+    expect(result.verdict).toBeUndefined();
+  });
+
   it('names the effective remote budget and the diff size in a timeout failure', async () => {
     getProviderById.mockResolvedValue({ ...provider, timeout: 450_000 });
     callProviderAISimple.mockResolvedValue({ error: 'Provider request failed: This operation was aborted' });
