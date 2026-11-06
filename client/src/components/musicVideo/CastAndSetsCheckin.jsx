@@ -131,6 +131,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
   const tone = stage.status === 'review' || staleText ? 'warning' : stage.status === 'approved' ? 'success' : stage.status === 'failed' ? 'error' : 'muted';
   return (
     <div id={id} tabIndex={-1} style={{ scrollMarginTop: 'calc(var(--mv-header-h, 9rem) + 1rem)' }} className={`rounded-lg border bg-port-card p-3 space-y-2 ${stage.status === 'review' ? 'border-port-warning/60' : 'border-port-border'}`} aria-label="Cast & Sets check-in">
+      <p className="text-xs text-port-text-muted">Generated check-in evidence records what this production run rendered. These saved images and their submitted inputs do not follow later catalog edits. Use Catalog-linked look above for the current cast, environments and objects.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Users size={14} className="text-port-accent shrink-0" aria-hidden="true" />
         <span className="text-sm font-medium">Cast &amp; Sets check-in</span>

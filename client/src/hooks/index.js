@@ -67,6 +67,7 @@ export { default as useSceneBatch } from './useSceneBatch.js';
 export { default as useSceneClipPlayback } from './useSceneClipPlayback.js';
 export { default as useSceneRenderLifecycle } from './useSceneRenderLifecycle.js';
 export { default as useMusicVideoAutoReview } from './useMusicVideoAutoReview.js';
+export { default as useCatalogCastSetsCheckin } from './useCatalogCastSetsCheckin.js';
 export { default as useMusicVideoCastAndSets } from './useMusicVideoCastAndSets.js';
 export { default as useMusicVideoCastingChanges } from './useMusicVideoCastingChanges.js';
 export { default as useMusicVideoDevArtifacts } from './useMusicVideoDevArtifacts.js';

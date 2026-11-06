@@ -608,6 +608,10 @@ leaves finished ones alone. Agents outside PortOS call these with `node scripts/
 | POST | `/music-video/:id/publish/:target/preview` | What Fill draft would post for one platform (same body as prepare) → `{ ready, parts }` or `{ ready: false, problem }` |
 | POST | `/music-video/:id/render` | Start the final render (ffmpeg on the host). Host-control gated: a remote password-free caller, a peer credential or Basic is refused; local connections, operator sessions and `PORTOS_API_TOKEN` agents are allowed. Status, SSE events and cancel stay open |
 | POST | `/music-video/:id/shots/:sceneId/render` | Render one shot segment (ffmpeg). Host-control gated as the final render |
+| GET | `/music-video/:id/cast-and-sets` | Read the retained stage and live `catalogCheckin` projection: items, unresolved problems, semantic basis and approval validity. Resolved filenames are never persisted as copied check-in inputs. |
+| POST | `/music-video/:id/cast-and-sets/catalog` | Switch to catalog-only Cast & Sets, retaining legacy generated evidence and existing shot references. Refuses active production/image work; never creates or recasts catalog records. |
+| POST | `/music-video/:id/cast-and-sets/approve` | Approve current Cast & Sets. Catalog mode requires `{ catalogBasis }` from the displayed projection and rejects missing or changed sources; it does not copy images or publish old generated sheets into catalog. |
+| POST | `/music-video/:id/cast-and-sets/reconfirm` | Reconfirm catalog approval with `{ catalogBasis }`; legacy stages retain their existing contract. |
 | POST | `/music-video/:id/references/catalog-labels` | Fill unlabeled look references with the name of the Casting, Environments or Objects record that owns the image (no provider call) → `{ labels: { [referenceId]: label } }` |
 | POST | `/music-video/:id/shot-renders/preview` | Concat the rendered shots with the song into a preview (ffmpeg). Host-control gated as the final render |
 | POST | `/music-video/:id/excerpt` | Start an excerpt encode (ffmpeg). Host-control gated as the final render |

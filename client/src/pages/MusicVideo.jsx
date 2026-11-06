@@ -950,7 +950,7 @@ function ProjectWorkspace({
     if ((next.productionRuns || []).some((r) => r.status === 'running')) return;
     kickoff.run(next);
   };
-  const approveCastAndSets = () => castSets.approve().then(continueAfterCheckin);
+  const approveCastAndSets = (basis) => castSets.approve(basis).then(continueAfterCheckin);
   const skipCastAndSets = () => castSets.skip().then(continueAfterCheckin);
   const openArtifact = (artifactId) => navigate(`/music-video/${encodeURIComponent(selected.id)}/${activeStage}/dev/${encodeURIComponent(artifactId)}`);
   const closeArtifact = () => navigate(`/music-video/${encodeURIComponent(selected?.id || routeProjectId)}/${activeStage}`);
@@ -1661,6 +1661,7 @@ function ProjectWorkspace({
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
+    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, { castAndSets: { ...selected.castAndSets, catalogCheckin } }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
     // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
     applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({

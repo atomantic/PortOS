@@ -258,6 +258,7 @@ import {
   getCastAndSets,
   getCastAndSetsCastingChanges,
   presentProjectCastAndSets,
+  useCatalogCheckin,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
   summarizeMusicVideoProject,
@@ -295,6 +296,10 @@ async function presentProjectForRead(project) {
   if (project?.publishKit?.youtubeThumbnail?.pending) {
     const { reconcileInterruptedYoutubeThumbnail } = await import('../services/musicVideo/youtubeThumbnail.js');
     current = await reconcileInterruptedYoutubeThumbnail(project);
+  }
+  if (current?.castAndSets?.source === 'catalog') {
+    const { withCatalogCheckin } = await import('../services/musicVideo/catalogCheckin.js');
+    current = await withCatalogCheckin(current);
   }
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(presentMusicVideoDependencies(current)));
   // The track's audio can be replaced in place, so only the server can say the timing predates it (#14793).
@@ -1648,6 +1653,10 @@ router.delete('/:id/dev-artifacts/:artifactId', asyncHandler(async (req, res) =>
 // direction call and the reference images advance in the background and
 // report over `music-video:cast-and-sets`. Only these requests (or a
 // production run the director started) begin work — nothing at boot does.
+router.post('/:id/cast-and-sets/catalog', asyncHandler(async (req, res) => {
+  res.json(await useCatalogCheckin(req.params.id));
+}));
+
 router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
   res.json(await getCastAndSets(req.params.id));
 }));
@@ -1757,13 +1766,17 @@ router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res
 }));
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
-  res.json(await approveCastAndSets(req.params.id));
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
+  res.json(await approveCastAndSets(req.params.id, input));
 }));
 
 // "Keep approved": an approved check-in whose concept, style, subjects or song
 // changed since is re-stamped on the current inputs (#10141). No body.
 router.post('/:id/cast-and-sets/reconfirm', asyncHandler(async (req, res) => {
-  res.json(await reconfirmCastAndSets(req.params.id));
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
+  res.json(await reconfirmCastAndSets(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/skip', asyncHandler(async (req, res) => {

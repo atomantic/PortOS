@@ -60,7 +60,7 @@ const stageError = (status, code, message) => new ServerError(message, { status,
 export const castAndSetsCheckinMode = (project) => (project?.automation?.checkins?.castAndSets === 'auto' ? 'auto' : 'review');
 
 /** The direction a code-authoring request may reuse: only an APPROVED stage's. */
-export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' ? (project.castAndSets.direction || null) : null);
+export const approvedCastAndSetsDirection = (project) => (project?.castAndSets?.status === 'approved' && project.castAndSets.source !== 'catalog' ? (project.castAndSets.direction || null) : null);
 
 export const castAndSetsSettled = (stage) => CAST_SETS_SETTLED.includes(stage?.status);
 
@@ -73,6 +73,7 @@ export const presentCastAndSets = (stage, processId) => (stage
 function requireStage(project) {
   const stage = project?.castAndSets;
   if (!stage) throw stageError(404, 'NOT_FOUND', 'This project has no Cast & Sets check-in yet');
+  if (stage.source === 'catalog') throw stageError(409, 'CAST_SETS_CATALOG_ONLY', 'Edit catalog-linked check-in items in the catalog.');
   return stage;
 }
 
@@ -88,6 +89,7 @@ function write(project, stage, now) {
  */
 export function startCastAndSetsOnProject(project, { processId, productionRunId = null }, now = new Date().toISOString()) {
   const current = project?.castAndSets || null;
+  if (current?.source === 'catalog') throw stageError(409, 'CAST_SETS_CATALOG_ONLY', 'Edit catalog-linked check-in items in the catalog.');
   if (current?.feedbackRenderPlan) throw stageError(409, 'CAST_SETS_FEEDBACK_PENDING', 'Finish or discard the feedback plan before rebuilding the check-in');
   if (current && CAST_SETS_WORKING.includes(current.status) && current.processId === processId) {
     throw stageError(409, 'CAST_SETS_IN_PROGRESS', 'The Cast & Sets check-in is already being prepared');

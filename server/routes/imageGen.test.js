@@ -1,3 +1,6 @@
+const catalogDispatch = vi.hoisted(() => ({ getProject: vi.fn(async () => null), hydrate: vi.fn(async project => project) }));
+vi.mock('../services/musicVideo/projects.js', () => ({ getProject: (...args) => catalogDispatch.getProject(...args) }));
+vi.mock('../services/musicVideo/catalogCheckin.js', async original => ({ ...await original(), withCatalogCheckin: (...args) => catalogDispatch.hydrate(...args) }));
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async id => id) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
@@ -240,6 +243,19 @@ describe('Image Gen Routes', () => {
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+  });
+
+  it('refuses synchronous image dispatch if the catalog changes after preparation', async () => {
+    const project = { scenes: [{ sceneId: 's1' }], castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [] } } };
+    catalogDispatch.getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+    catalogDispatch.hydrate.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project,
+      castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [] } } });
+    const response = await request(app).post('/api/image-gen/generate').send({ mode: 'external', prompt: 'A synthetic scene',
+      musicVideo: { projectId: 'mv-example', sceneId: 's1' } });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('CAST_SETS_CATALOG_APPROVAL_REQUIRED');
+    expect(imageGen.generateImage).not.toHaveBeenCalled();
+    expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
   });
 
   it('deletes an image on the machine that owns it and reports a pending delete as pending', async () => {

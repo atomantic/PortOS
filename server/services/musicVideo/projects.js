@@ -95,9 +95,14 @@ export async function getStoredProject(id, options = {}) {
 }
 
 async function withCatalogDescriptions(project) {
-  if (getBackendName() !== 'postgres' || !hasLinkedSubjects(project)) return project;
-  const { resolveProjectCatalogDescriptions } = await import('./subjectDescriptionSync.js');
-  return resolveProjectCatalogDescriptions(project);
+  let current = project;
+  if (getBackendName() === 'postgres' && hasLinkedSubjects(project)) {
+    const { resolveProjectCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+    current = await resolveProjectCatalogDescriptions(project);
+  }
+  if (current?.castAndSets?.source !== 'catalog') return current;
+  const { withCatalogCheckin } = await import('./catalogCheckin.js');
+  return withCatalogCheckin(current);
 }
 
 /** Null when missing; linked descriptions come from the catalog when usable. */
@@ -280,13 +285,13 @@ export async function deleteProject(id) {
 export async function setProjectAnalysis(id, analysis, sourceProject) {
   const next = await (await selectBackend()).setProjectAnalysis(id, analysis, sourceProject);
   emitRecordUpdated('musicVideoProject', id);
-  return next;
+  return withCatalogDescriptions(next);
 }
 
 export async function setProjectMidiTranscription(id, midi) {
   const next = await (await selectBackend()).setProjectMidiTranscription(id, midi);
   emitRecordUpdated('musicVideoProject', id);
-  return next;
+  return withCatalogDescriptions(next);
 }
 
 /** Add a director's shot at its time; shots locked before stay locked. */
@@ -556,9 +561,17 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   const write = mutate || (await selectBackend()).mutateProjectRecord;
   const outcome = await write(id, async (stored, context = {}) => {
     if (context.client && hasLinkedSubjects(stored)) descriptions = await import('./subjectDescriptionSync.js');
-    const current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
+    let current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
+    if (current?.castAndSets?.source === 'catalog') {
+      const { withCatalogCheckin } = await import('./catalogCheckin.js');
+      current = await withCatalogCheckin(current, { client: context.client });
+    }
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
     const outcome = await transform(current, { ...context, storedProject: stored });
+    if (outcome.project?.castAndSets?.catalogCheckin) {
+      const { catalogCheckin: _projection, ...stage } = outcome.project.castAndSets;
+      outcome.project = { ...outcome.project, castAndSets: stage };
+    }
     // A newly linked subject may be the first catalog link on this project.
     if (context.client && !descriptions && hasLinkedSubjects(outcome.project)) descriptions = await import('./subjectDescriptionSync.js');
     const bases = options.catalogDescriptionBases ?? (current.concept?.subjects || []).map((subject) => ({ subjectId: subject.id, description: subject.description || '' }));
@@ -579,7 +592,13 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     // must not report the saved edit as failed and invite a conflicting retry.
     await descriptions.announceDescriptionEdits(catalogRecords)
       .catch((err) => console.error(`🔁 catalog change notification failed: ${err.message}`));
-    return { ...outcome, project: await descriptions.resolveProjectCatalogDescriptions(outcome.project) };
+    outcome.project = await descriptions.resolveProjectCatalogDescriptions(outcome.project);
+  }
+  // Presentation is reconstructed after commit: sockets and mutation replies need
+  // the same live catalog state as GET, without storing its derived media list.
+  if (outcome.project?.castAndSets?.source === 'catalog') {
+    const { withCatalogCheckin } = await import('./catalogCheckin.js');
+    outcome.project = await withCatalogCheckin(outcome.project);
   }
   return outcome;
 }

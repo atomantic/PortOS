@@ -170,7 +170,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
   generateMusicVideoCode: vi.fn(),
   regenerateMusicVideoCodeSection: vi.fn(),
-  startMusicVideoCastAndSets: vi.fn(),
+  linkMusicVideoCastAndSetsToCatalog: vi.fn(),
   regenerateMusicVideoCastAndSets: vi.fn(),
   resumeMusicVideoCastAndSets: vi.fn(),
   approveMusicVideoCastAndSets: vi.fn(),
@@ -320,7 +320,7 @@ import {
   renderMusicVideoExcerpt, deleteMusicVideoExcerpt, addMusicVideoExcerptNote,
   updateMusicVideoExcerptNote, deleteMusicVideoExcerptNote, getMusicVideoProject, getMusicVideoActiveRender, getMusicVideoActiveJobs,
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
-  startMusicVideoCastAndSets, approveMusicVideoCastAndSets, stopMusicVideoProduction,
+  linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
@@ -2456,19 +2456,19 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
       composition: { mode: 'document' }, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 },
       automation: { tools: ['code:render'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     await openProject(project);
     await openSettings('Autopilot');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     // The server directs it procedurally (no image backend for a code-only brief); the run still gates on it.
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     expect(planMusicVideoProject).not.toHaveBeenCalled();
   });
 
   it('autopilot stops at the Cast & Sets check-in in review mode, and Approve & continue plans', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'review' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const sheet = { id: 'mvd-1', kind: 'cast-sets', title: 'Cast & Sets — Nova', status: 'pending', version: 1, mimeType: 'text/html', versions: [{ version: 1, mimeType: 'text/html', createdAt: '2026-01-01T00:00:00Z' }], notes: [] };
     const reviewing = { ...project, devArtifacts: [sheet], castAndSets: { status: 'review', revision: 1, artifactId: 'mvd-1', plan: {}, images: {} } };
     const approved = { ...reviewing, castAndSets: { ...reviewing.castAndSets, status: 'approved' }, devArtifacts: [{ ...sheet, status: 'approved' }] };
@@ -2478,7 +2478,7 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: reviewing, stage: reviewing.castAndSets });
     closeSettings();
     // Existing Cast & Sets controls still apply references; Production review separately authorizes work.
@@ -2495,14 +2495,14 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
   it('autopilot continues straight to the plan when the check-in auto-approves', async () => {
     const project = { ...PROJECT_ANALYZED, trackId: null, uploadedAudioFilename: 'song.mp3', lyricCues: [], scenes: [], automation: { tools: ['image:codex'], guidance: '', budgetUsd: null, checkins: { castAndSets: 'auto' } } };
     const directing = { ...project, castAndSets: { status: 'directing', revision: 1, plan: {}, images: {} } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project: directing, stage: directing.castAndSets });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project: directing, stage: directing.castAndSets });
     const approved = { ...project, castAndSets: { status: 'approved', revision: 1, plan: {}, images: {} } };
     planMusicVideoProject.mockResolvedValue({ project: approved, scenesAdded: 2, promptsSeeded: true });
     await openProject(project);
     await openSettings('Autopilot');
 
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalled());
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalled());
     // Progress pushes don't release the gate; only a checkpoint does.
     await pushSocket('music-video:cast-and-sets', { projectId: project.id, project: { ...directing, castAndSets: { ...directing.castAndSets, status: 'imaging' } } });
     expect(planMusicVideoProject).not.toHaveBeenCalled();
@@ -3799,14 +3799,14 @@ describe('stage checklist and project options', () => {
     const project = { ...PROJECT_ANALYZED, scenes: [], castAndSets: undefined, devArtifacts: [],
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: false, problems: ['Cast guide needs editable direction.'] },
         storyboard: { approved: false, problems: [] }, proof: { approved: false, problems: [] } } };
-    startMusicVideoCastAndSets.mockResolvedValue({ project, stage: null });
+    linkMusicVideoCastAndSetsToCatalog.mockResolvedValue({ project, stage: null });
     await openProject(project, 'cast-sets');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
-    expect(checklist).toHaveTextContent('Build the cast & sets to draft it from your creative direction, song style and mood board.');
-    expect(checklist).toHaveTextContent('Comes with the cast & sets sheet, or use a file of your own.');
+    expect(checklist).toHaveTextContent('Link the cast & sets from the catalog, then write the art direction separately.');
+    expect(checklist).toHaveTextContent('Pick a file below with Use as visual guide, or import one.');
     expect(checklist).not.toHaveTextContent('needs editable direction');
-    fireEvent.click(within(checklist).getByRole('button', { name: 'Build cast & sets' }));
-    await waitFor(() => expect(startMusicVideoCastAndSets).toHaveBeenCalledWith(project.id, {}, { silent: true }));
+    fireEvent.click(within(checklist).getByRole('button', { name: 'Link cast & sets' }));
+    await waitFor(() => expect(linkMusicVideoCastAndSetsToCatalog).toHaveBeenCalledWith(project.id, { silent: true }));
     fireEvent.click(within(checklist).getByRole('button', { name: 'Write it yourself' }));
     await waitFor(() => expect(screen.getByLabelText('Cast guide')).toHaveFocus());
   });
@@ -4013,7 +4013,7 @@ describe('linked object look references', () => {
     fireEvent.load(screen.getByAltText('Bike reference 2'));
     fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    fireEvent.click(screen.getByText('Visual guidance'));
+    fireEvent.click(screen.getByText('Mood board & other asset links'));
     const guidance = within(screen.getByRole('region', { name: 'Look references' }));
     const condition = guidance.getAllByLabelText('Condition frames')[0];
     fireEvent.click(condition);
@@ -4051,7 +4051,7 @@ describe('linked object look references', () => {
     fireEvent.load(await screen.findByAltText('Bike reference 1'));
     fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
     await waitFor(() => expect(failures).toHaveLength(1));
-    fireEvent.click(screen.getByText('Visual guidance'));
+    fireEvent.click(screen.getByText('Mood board & other asset links'));
     const guidance = within(screen.getByRole('region', { name: 'Look references' }));
     fireEvent.click(guidance.getAllByLabelText('Condition frames')[0]);
     await act(async () => failures[0]());

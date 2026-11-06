@@ -153,7 +153,17 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
       musicVideo.productionStepKey, { sceneId: musicVideo.sceneId, kind: 'video' });
   }
   const { getProject } = await import('./projects.js');
-  const project = await getProject(musicVideo.projectId);
+  let project = await getProject(musicVideo.projectId);
+  if (project?.castAndSets?.source === 'catalog') {
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles } = await import('./clipCastReferences.js');
+    project = await requireCatalogRenderReady(project);
+    params.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
+    assertCatalogReferenceFiles(project, [
+      prepared.sourceImagePath, prepared.lastImagePath, params.lastImagePath,
+      ...(params.referenceImagePaths || []), ...(params.icReferencePaths || []),
+      ...(params.castReferences || []).map(ref => ref.path),
+    ].filter(Boolean).map(file => basename(file)));
+  }
   const run = musicVideo.productionRunId && project?.productionRuns?.find((entry) => entry.id === musicVideo.productionRunId);
   if (run?.limits?.spendCapUsd != null && backend === VIDEO_GEN_MODE.FAL
     && params.modelId === 'minimax/h3-max/reference-to-video' && params.referenceImagePaths?.length) {

@@ -457,6 +457,15 @@ describe('nextProductionStep step types', () => {
   const step = async (project, run) => (await import('./production.js')).nextProductionStep(project, run, { processId: PROCESS });
   const withPilot = (run, pilot = {}) => ({ ...run, planned: true, pilot: { scenes: [{ sceneId: 'scene-a', operation: 'cutaway', ...pilot }] } });
 
+  it('blocks catalog-mode planning and existing-shot dispatch until current links are approved', async () => {
+    for (const scenes of [[], [{ sceneId: 'scene-a', startSec: 0, endSec: 4, visualLayer: 'footage', prompt: 'Example shot' }]]) {
+      const { project, run } = await startedRun({ scenes, castAndSets: { source: 'catalog', status: 'approved', catalogCheckin: { approved: false, problems: [] } } });
+      expect(await step(project, run)).toMatchObject({ type: 'halt', status: 'blocked' });
+      const ready = { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: { approved: true, problems: [] } } };
+      expect((await step(ready, run)).type).not.toBe('halt');
+    }
+  });
+
   it('dispatches a pending pilot that still lacks media before opening its review', async () => {
     const { project, run } = await startedRun();
     expect(await step(project, withPilot(run))).toEqual({ type: 'dispatch', kind: 'frame', sceneId: 'scene-a' });

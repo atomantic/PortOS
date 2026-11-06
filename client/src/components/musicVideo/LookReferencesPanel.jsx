@@ -179,13 +179,15 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
         </div>
       </div>
       <p className="text-xs text-port-text-muted">
-        One list for the video&rsquo;s look: a mood board, gallery images and your own uploads. Identity references take priority; tick &ldquo;Condition frames&rdquo; to send an image to every reference-frame render, and models use as many style uploads as their remaining slots allow, or caption text when references are unsupported.
+        Mood-board links follow their board. Imported images and other asset links pin specific files; they do not track later catalog changes. Identity references take priority; tick &ldquo;Condition frames&rdquo; to send an image to every reference-frame render, and models use as many style uploads as their remaining slots allow, or caption text when references are unsupported.
       </p>
+      <h4 className="text-sm font-medium">Mood board link</h4>
       <MoodBoardReferenceStrip value={spec.moodBoardId || ''} onChange={(id) => onSaveSpec({ moodBoardId: id || null })} newBoardName={project.name} />
 
       {references.length === 0 && uploads.length === 0 && (
         <p className="text-[11px] text-port-text-muted">No look references yet. Import a mood board, add gallery images or upload style images below.</p>
       )}
+      <h4 className="text-sm font-medium">Other asset links · pinned images</h4>
       <ul className={cardListCls}>
         {references.map((ref) => {
           const roleLabel = optionLabel(ROLES, ref.role || 'mood');

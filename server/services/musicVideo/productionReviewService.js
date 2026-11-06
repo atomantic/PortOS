@@ -218,7 +218,8 @@ export async function prepareProductionReview(id, options = {}) {
   if (project.productionReview?.draft?.storyboardSource === 'document') return present(project);
   const stage = project.castAndSets;
   const hasManualGuide = !productionReadiness(project).art.problems.length;
-  if (!hasManualGuide && (!stage?.direction || !stage.artifactId)) {
+  if (stage?.source === 'catalog' && !stage.catalogCheckin?.approved) return present(project);
+  if (stage?.source !== 'catalog' && !hasManualGuide && (!stage?.direction || !stage.artifactId)) {
     if (!stage || ['failed', 'skipped'].includes(stage.status)) {
       const { startCastAndSets } = await import('./castAndSetsService.js');
       await startCastAndSets(id, options);
@@ -227,14 +228,14 @@ export async function prepareProductionReview(id, options = {}) {
   }
   // Applying references does not grant production approval. That lives only in
   // productionReview.approvals and requires the operator route.
-  if (!hasManualGuide && stage?.status === 'review') {
+  if (stage?.source !== 'catalog' && !hasManualGuide && stage?.status === 'review') {
     const { approveCastAndSets } = await import('./castAndSetsService.js');
     await approveCastAndSets(id);
     project = await requireProject(id);
   }
   // Merge against the latest draft while holding the write lock: a guide job
   // may finish while the operator is editing its text.
-  await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
+  if (stage?.source !== 'catalog') await mutateProjectRecord(id, current => ({ project: seedArtDraft(current, stage) }));
   project = await requireProject(id);
   if (project.productionReview?.draft?.storyboardSource === 'document' || !productionReadiness(project).art.approved) return present(project);
   if (!project.scenes?.length) {

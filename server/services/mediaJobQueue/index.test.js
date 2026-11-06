@@ -1,3 +1,5 @@
+const catalogDispatch = vi.hoisted(() => ({ hydrate: vi.fn(async project => project) }));
+vi.mock('../musicVideo/catalogCheckin.js', async original => ({ ...await original(), withCatalogCheckin: (...args) => catalogDispatch.hydrate(...args) }));
 vi.mock('../musicVideo/projects.js', () => ({ getProject: vi.fn(async () => ({ mediaMode: 'code-images-video' })) }));
 vi.mock('../musicVideo/productionReviewService.js', () => ({ assertMusicVideoSceneReview: vi.fn(async () => {}) }));
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
@@ -508,6 +510,29 @@ describe('mediaJobQueue', () => {
     const { jobId } = await mediaJobQueue.enqueueJob(request);
     await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
     expect(mediaJobQueue.getJob(jobId).error).toContain('planning guides');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+  });
+
+  it('rechecks catalog approval between image queue admission and delayed provider dispatch', async () => {
+    const { getProject } = await import('../musicVideo/projects.js');
+    const project = { castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'original' } } };
+    const request = { kind: 'image', params: { prompt: 'Synthetic scene', musicVideo: { projectId: 'mv-example', sceneId: 'scene-example' } } };
+    getProject.mockResolvedValueOnce(project);
+    catalogDispatch.hydrate.mockResolvedValueOnce({ ...project, castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [] } } });
+    await expect(mediaJobQueue.enqueueJob(request)).rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
+    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+    catalogDispatch.hydrate.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project,
+      castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [] } } });
+    const { jobId } = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(jobId).error).toContain('Review and approve');
+    expect(stubs.generateImage).not.toHaveBeenCalled();
+    getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+    catalogDispatch.hydrate.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project,
+      castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'reapproved-change' } } });
+    const reapproved = await mediaJobQueue.enqueueJob(request);
+    await waitFor(() => mediaJobQueue.getJob(reapproved.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(reapproved.jobId).error).toContain('after these render inputs were prepared');
     expect(stubs.generateImage).not.toHaveBeenCalled();
   });
 

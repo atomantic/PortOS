@@ -540,6 +540,10 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
     if (run.documentCheckpoint && (run.documentCheckpoint.directory !== project.composition?.document?.directory
       || run.documentCheckpoint.scenesRevision !== canonicalSnapshotChecksum(project.scenes || []))) return { type: 'halt', status: 'needs-replan', reason: 'The selected document changed — review and resume against the new setup' };
   }
+  if (project.castAndSets?.source === 'catalog') {
+    const gate = castAndSetsGate(project, run);
+    if (gate) return gate;
+  }
   const disposition = reviewRunDisposition(project, run);
   if (disposition) return disposition;
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
@@ -587,6 +591,10 @@ export function nextProductionStep(project, run, { jobs = [], processId = null }
  */
 function castAndSetsGate(project, run) {
   const stage = project?.castAndSets || null;
+  if (stage?.source === 'catalog') {
+    if (stage.catalogCheckin?.approved) return null;
+    return { type: 'halt', status: 'blocked', reason: 'Review and approve the current catalog Cast & Sets links before continuing production.' };
+  }
   if (castAndSetsSettled(stage)) return null;
   if (!stage) {
     return run.castAndSetsStarted

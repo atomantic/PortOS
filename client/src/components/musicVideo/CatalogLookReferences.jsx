@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import socket from '../../services/socket.js';
+import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
 import { isUsableReference, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
 import { musicVideoAllowsMedia } from '../../../../server/lib/musicVideoMediaPolicy.js';
 import { detachCatalogIngredientMedia, listCatalogIngredientMedia } from '../../services/apiCatalog.js';
@@ -10,12 +12,16 @@ import { uuidv4 } from '../../lib/uuid.js';
 import MediaImage from '../MediaImage.jsx';
 import CollapsibleListItem from '../ui/CollapsibleListItem.jsx';
 
+const CATALOG_KINDS = { character: { label: 'Cast', path: '/casting', role: 'character' }, place: { label: 'Environments', path: '/environments', role: 'set' }, object: { label: 'Objects', path: '/objects', role: 'prop' } };
+
 const IMAGE_NAME = /^[^/\\]+\.(png|jpe?g|webp)$/i;
 const BUTTON = 'min-h-[44px] rounded border border-port-border px-2 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50';
 
-// Object media can also live in image-refs. Only gallery files can be saved
+// Catalog media can also live in image-refs. Only gallery files can be saved
 // into visualSpec and sent by the existing music-video reference pipeline.
-function ObjectImage({ item, index, subject, present, full, disabled, addDisabled, onAdd, onRemove, onUnlink, removing, onExited }) {
+// Character canon may also reference a file in its payload; its source editor
+// owns correction rather than a media-row detach that would leave canon intact.
+function CatalogImage({ item, index, subject, present, full, disabled, addDisabled, onAdd, onRemove, onUnlink, canUnlink = true, removing, onExited }) {
   const [location, setLocation] = useState('loading');
   const [confirming, setConfirming] = useState(false);
   const filename = item.mediaKey;
@@ -28,21 +34,22 @@ function ObjectImage({ item, index, subject, present, full, disabled, addDisable
           onError={() => setLocation('missing')} />
         <div className="min-w-0 space-y-1">
           <p className="break-words text-xs">{item.caption || (item.kind === 'portrait' ? 'Canonical image' : 'Reference image')}</p>
-          {present ? <><p className="text-xs text-port-text-muted">Already in look references</p>
-            <button type="button" className={BUTTON} disabled={disabled} aria-label={`Remove ${subject.name} image ${index + 1} from look references`} onClick={() => onRemove(filename)}>Remove from look</button></> : (
+          {present ? <><p className="text-xs text-port-text-muted">Pinned for shots</p>
+            <button type="button" className={BUTTON} disabled={disabled} aria-label={`Remove ${subject.name} image ${index + 1} from look references`} onClick={() => onRemove(filename)}>Unpin from look</button></> : (
             <button type="button" className={BUTTON} disabled={disabled || addDisabled || full || location !== 'gallery'}
               title={full ? 'The look reference list is full' : location !== 'gallery' ? 'This image must be available in the gallery' : 'Make this image available to choose for shots'}
               aria-label={`Add ${subject.name} image ${index + 1} to look references`} onClick={() => onAdd(subject, filename)}>
-              Add to look references
+              Pin image for shots
             </button>
           )}
-          <button type="button" className={BUTTON} disabled={disabled} aria-label={`Unlink ${subject.name} image ${index + 1} from object`} onClick={() => setConfirming(true)}>Unlink from object</button>
+          {canUnlink ? <button type="button" className={BUTTON} disabled={disabled} aria-label={`Unlink ${subject.name} image ${index + 1} from catalog`} onClick={() => setConfirming(true)}>Unlink from catalog</button>
+            : <Link className="inline-flex min-h-11 items-center text-xs text-port-accent" to={`${CATALOG_KINDS[subject.kind].path}/${encodeURIComponent(subject.ingredientId)}`}>Manage image in catalog</Link>}
           {confirming && <div className="space-y-1 text-xs">
-            <p>Unlink this image from {subject.name} everywhere it is used? The object and image file are kept. Existing look and shot references are unchanged.</p>
+            <p>Unlink this image from {subject.name} everywhere it is used? The catalog record and image file are kept. Existing look and shot references are unchanged.</p>
             <button type="button" className={BUTTON} disabled={disabled} onClick={() => onUnlink(subject, filename)}>Confirm unlink</button>
             <button type="button" className={BUTTON} disabled={disabled} onClick={() => setConfirming(false)}>Cancel</button>
           </div>}
-          {!present && location === 'object' && <p className="text-xs text-port-text-muted">Only available in Objects; add it to the gallery before using it in a shot.</p>}
+          {!present && location === 'object' && <p className="text-xs text-port-text-muted">Only available in the catalog; add it to the gallery before using it in a shot.</p>}
           {!present && location === 'missing' && <p className="text-xs text-port-text-muted">Image is not available yet.</p>}
         </div>
       </div>
@@ -50,11 +57,15 @@ function ObjectImage({ item, index, subject, present, full, disabled, addDisable
   );
 }
 
-/** Show media linked to this video's object subjects without editing the approved sheet. */
-export default function LinkedObjectReferences({ project, onSaveSpec, disabled = false }) {
+/** Live catalog media, separate from pinned shot references and generated production evidence. */
+export default function CatalogLookReferences({ project, onSaveSpec, onLinked, checkin = null, catalogOnly = false, children, disabled = false }) {
   const mounted = useMounted();
-  const subjects = (project.concept?.subjects || []).filter((subject) => subject?.kind === 'object' && subject.ingredientId && subject.name);
-  const ids = JSON.stringify([...new Set(subjects.map((subject) => subject.ingredientId))].sort());
+  const subjects = (project.concept?.subjects || []).filter((subject) => CATALOG_KINDS[subject?.kind] && subject.name)
+    .map((subject) => {
+      const current = catalogOnly ? checkin?.items?.find((item) => item.subjectId === subject.id) : null;
+      return current ? { ...subject, name: current.name || subject.name, ingredientId: current.ingredientId, catalogFormLabel: current.formLabel || current.formId } : subject;
+    });
+  const ids = JSON.stringify([...new Set(subjects.map((subject) => subject.ingredientId).filter(Boolean))].sort());
   const [loaded, setLoaded] = useState({ key: '', media: {} });
   const [refresh, setRefresh] = useState(0);
   const [pending, setPending] = useState(null);
@@ -73,7 +84,23 @@ export default function LinkedObjectReferences({ project, onSaveSpec, disabled =
       .then((entries) => { if (active) setLoaded({ key, media: Object.fromEntries(entries) }); });
     return () => { active = false; };
   }, [ids, key, refresh]);
-  if (!subjects.length) return null;
+  useEffect(() => {
+    const linked = new Set(JSON.parse(ids));
+    let timer;
+    const changed = (event) => {
+      if (!linked.has(event?.ingredientId)) return;
+      clearTimeout(timer);
+      // Catalog notifications precede their transaction commit.
+      timer = setTimeout(() => setRefresh((n) => n + 1), 1000);
+    };
+    socket.on('catalog:primitive-changed', changed);
+    socket.on('catalog:assets-changed', changed);
+    return () => {
+      clearTimeout(timer);
+      socket.off('catalog:primitive-changed', changed);
+      socket.off('catalog:assets-changed', changed);
+    };
+  }, [ids]);
   const present = new Set(references.map((reference) => reference.imageId));
   const full = references.length >= MUSIC_VIDEO_MAX_REFERENCES;
   const imageAllowed = musicVideoAllowsMedia(project, 'image');
@@ -86,7 +113,7 @@ export default function LinkedObjectReferences({ project, onSaveSpec, disabled =
       pendingRef.current = null;
       if (mounted.current) setPending(null);
     };
-    Promise.resolve(onSaveSpec({ references: [...references, { id: `mvr-object-${uuidv4()}`, imageId, role: 'prop', label: subject.name.slice(0, 120), condition: false }] }))
+    Promise.resolve(onSaveSpec({ references: [...references, { id: `mvr-object-${uuidv4()}`, imageId, role: CATALOG_KINDS[subject.kind].role, label: subject.name.slice(0, 120), condition: false }] }))
       .then(finish, finish);
   };
 
@@ -125,17 +152,25 @@ export default function LinkedObjectReferences({ project, onSaveSpec, disabled =
   };
 
   return (
-    <section aria-label="Linked object references" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
-      <h3 className="text-sm font-medium">Linked object references</h3>
-      <p className="text-xs text-port-text-muted">Images follow the objects linked to this video. Add a gallery image to look references to choose it for a shot; this is separate from the Cast &amp; Sets sheet.</p>
+    <section aria-label="Catalog-linked look" className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-3">
+      <h3 className="text-sm font-medium">Catalog-linked look</h3>
+      <p className="text-xs text-port-text-muted">Cast, environments and objects are read directly from their catalog records. Correct an image at its source below; changes appear here automatically. Adding an image to shot references pins that specific image, without changing existing shots or generated sheets.</p>
+      <VideoCastLinksDisclosure summary="Manage catalog links" summaryClassName="flex min-h-[44px] cursor-pointer items-center text-sm font-medium"
+        projectId={project.id} universeId={project.concept?.universeId || null} onLinked={onLinked} idPrefix={`mv-look-link-${project.id}`} />
+      {children}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
       {!imageAllowed && <p className="text-xs text-port-text-muted">Code-only projects do not allow image references. Change the media mode to use them.</p>}
       {full && <p className="text-xs text-port-text-muted">The look reference list is full. Remove a reference there before adding another.</p>}
-      {!media ? <p className="text-xs text-port-text-muted">Loading linked object images…</p> : subjects.map((subject) => {
-        const rows = media[subject.ingredientId];
+      {Object.entries(CATALOG_KINDS).map(([kind, group]) => <section key={kind} aria-label={group.label} className="min-w-0 space-y-2">
+        <h4 className="text-sm font-medium">{group.label}</h4>
+        {!subjects.some((subject) => subject.kind === kind) && <p className="text-xs text-port-text-muted">None linked.</p>}
+        {subjects.filter((subject) => subject.kind === kind).map((subject) => {
+        const rows = media?.[subject.ingredientId];
         const rejected = rejectedReferenceKeys(rows);
         const seen = new Set();
-        const images = (rows || []).filter((item) => {
+        const selected = catalogOnly ? new Set(checkin?.items?.find((item) => item.subjectId === subject.id)?.images || []) : null;
+        const images = catalogOnly ? [...selected].map((filename) => (rows || []).find((row) => !row.deleted && ['portrait', 'reference'].includes(row.kind) && row.mediaKey === filename)
+          || { kind: 'reference', mediaKey: filename, caption: 'Catalog reference' }) : (rows || []).filter((item) => {
           const formId = item?.library?.variant?.formId || null;
           const subjectFormId = subject.castForm?.id || null;
           if (!item || item.deleted || !['portrait', 'reference'].includes(item.kind) || !isUsableReference(item)
@@ -146,14 +181,15 @@ export default function LinkedObjectReferences({ project, onSaveSpec, disabled =
         });
         return (
           <div key={subject.id} className="min-w-0 space-y-1">
-            <Link className="break-words text-xs font-medium text-port-accent" to={`/objects/${encodeURIComponent(subject.ingredientId)}`}>{subject.name}</Link>
-            {rows === null ? <div className="flex flex-wrap items-center gap-2"><p className="text-xs text-port-error">Could not load these images.</p><button type="button" className={BUTTON} onClick={() => setRefresh((n) => n + 1)}>Retry</button></div>
+            <div className="flex flex-wrap items-center gap-2">{subject.ingredientId ? <Link className="break-words text-xs font-medium text-port-accent" to={`${group.path}/${encodeURIComponent(subject.ingredientId)}`}>{subject.name}</Link> : <p className="text-xs">{subject.name} · Not linked. Use Manage catalog links above.</p>}{subject.catalogFormLabel && <span className="text-xs text-port-text-muted">Look: {subject.catalogFormLabel}</span>}</div>
+            {!subject.ingredientId || (catalogOnly && !checkin) ? null : !media && !catalogOnly ? <p className="text-xs text-port-text-muted">Loading catalog images…</p> : rows === null && !catalogOnly ? <div className="flex flex-wrap items-center gap-2"><p className="text-xs text-port-error">Could not load these images.</p><button type="button" className={BUTTON} onClick={() => setRefresh((n) => n + 1)}>Retry</button></div>
               : <><div role="list" tabIndex={-1} className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-x-1.5">
-                {images.map((item, index) => <ObjectImage key={item.mediaKey} item={item} index={index} subject={subject} present={present.has(item.mediaKey)} full={full} disabled={disabled || !onSaveSpec || Boolean(pending) || Boolean(removing)} addDisabled={!imageAllowed} onAdd={add} onRemove={remove} onUnlink={unlink} removing={removing?.key === key && removing.ingredientId === subject.ingredientId && removing.imageId === item.mediaKey} onExited={finishRemoval} />)}
-              </div>{!images.length && <p className="text-xs text-port-text-muted">No usable images for this look.</p>}</>}
+                {images.map((item, index) => <CatalogImage key={item.mediaKey} item={item} index={index} subject={subject} present={present.has(item.mediaKey)} full={full} disabled={disabled || !onSaveSpec || Boolean(pending) || Boolean(removing)} addDisabled={!imageAllowed} onAdd={add} onRemove={remove} onUnlink={unlink} canUnlink={subject.kind !== 'character' && !!rows?.some((row) => !row.deleted && row.mediaKey === item.mediaKey && ['portrait', 'reference'].includes(row.kind))} removing={removing?.key === key && removing.ingredientId === subject.ingredientId && removing.imageId === item.mediaKey} onExited={finishRemoval} />)}
+              </div>{!images.length && <p className="text-xs text-port-text-muted">{imageAllowed ? "No usable images for this look." : "Catalog record linked; image references are disabled."}</p>}</>}
           </div>
         );
-      })}
+        })}
+      </section>)}
     </section>
   );
 }

@@ -11,7 +11,7 @@ import { requireProject } from './requireProject.js';
 import { findProductionRun, reserveProductionStep, settleProductionStep } from './production.js';
 
 const editError = (message) => new ServerError(message, { status: 409, code: 'CAST_SETS_EDIT_STALE' });
-const editable = (stage) => stage && !stage.feedbackRenderPlan && ['review', 'approved'].includes(stage.status);
+const editable = (stage) => stage && stage.source !== 'catalog' && !stage.feedbackRenderPlan && ['review', 'approved'].includes(stage.status);
 const currentCandidate = (stage, key, id) => {
   const edit = stage?.images?.[key]?.edit;
   return edit?.requestId === id && stage.revision === edit.revision
@@ -92,6 +92,7 @@ export async function requestCastSetsImageEdit(projectId, input, deps) {
 
 export async function settleCastSetsImageEdit({ projectId, key, editRequestId, jobId, filename, error, status, productionRunId, productionStepKey }, publish) {
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (current.castAndSets?.source === 'catalog') return { project: current, changed: false };
     const candidate = currentCandidate(current.castAndSets, key, editRequestId);
     const available = filename && resolveGalleryImage(filename);
     let next = current;
@@ -110,6 +111,7 @@ export async function settleCastSetsImageEdit({ projectId, key, editRequestId, j
 
 export async function discardCastSetsImageEdit(projectId, { key, requestId }, publish) {
   const out = await mutateProjectRecord(projectId, (current) => {
+    if (current.castAndSets?.source === 'catalog') throw editError('Historical check-in images are read-only. Edit current catalog items in the catalog.');
     if (current.castAndSets?.images?.[key]?.edit?.requestId !== requestId) throw editError('This image edit changed. Refresh the check-in.');
     return { project: withEdit(current, key, null) };
   });

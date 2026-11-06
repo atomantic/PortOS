@@ -182,6 +182,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `memoryValidation.js` | Memory record + retrieval schemas. |
 | `modelPersonalityValidation.js` | LLM personality self-profile test schemas: trait taxonomy (versioned), self-eval + twin-alignment response schemas, run/settings route inputs. |
 | `moodBoardValidation.js` | Mood board + board-item create/update schemas. |
+| `musicVideoCatalogCheckinValidation.js` | Exact displayed catalog-basis schema for catalog-only Cast & Sets approval/reconfirmation. |
 | `musicVideoValidation.js` | Music Video project/scene/reorder + cached audio-analysis schemas. |
 | `musicVideoStoryValidation.js` | Typed Story summary, proposal and selective-apply request schemas. |
 | `musicVideoSubjectLimits.js` | Shared character limit for music-video subject descriptions and linked catalog looks. |

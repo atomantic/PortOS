@@ -578,12 +578,13 @@ function setupNextAction({ project, readiness, kickoffBlockedReason }) {
 }
 
 function castSetsNextAction({ project, castPhase, kickoffBlockedReason }) {
+  if (project.castAndSets?.source === 'catalog' && !project.castAndSets.catalogCheckin?.approved) return { id: 'review-catalog-cast-sets', kind: 'goto', stage: 'cast-sets', anchor: CAST_CHECKIN_ANCHOR, label: 'Review catalog cast & sets', shortLabel: 'Review' };
   if (castPhase === 'review' && project.castAndSets?.feedbackRenderPlan) return { id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin', label: 'Review feedback plan', shortLabel: 'Review' };
   if (castPhase === 'review') return { id: 'approve-cast-sets', kind: 'run', label: 'Approve cast & sets', shortLabel: 'Approve' };
   if (castPhase === 'stopped' && (project.castAndSets?.queuedImagesToCheck ?? Object.values(project.castAndSets?.images || {}).filter((image) => image.status === 'queued' && image.jobId).length)) return { id: 'review-cast-feedback', kind: 'goto', stage: 'cast-sets', anchor: 'mv-cast-checkin', label: 'Review queued images', shortLabel: 'Review' };
   if (castPhase === 'stopped') return { id: 'resume-cast-sets', kind: 'run', label: 'Resume cast & sets', shortLabel: 'Resume' };
   if (castPhase === 'building') return { id: 'busy', kind: 'run', label: 'Building cast & sets…', shortLabel: 'Building…', disabled: true };
-  if (castPhase === 'absent' && !project.automation) return { id: 'start-cast-sets', kind: 'run', label: 'Build cast & sets', shortLabel: 'Build', ...analyzeFirst(project) };
+  if (castPhase === 'absent' && !project.automation) return { id: 'start-cast-sets', kind: 'run', label: 'Link cast & sets', shortLabel: 'Build', ...analyzeFirst(project) };
   return kickoffAction(kickoffBlockedReason);
 }
 
@@ -972,8 +973,8 @@ export function planShotRows(project, readiness = project?.productionReadiness) 
 
 // The art-direction row's detail and action for each Cast & Sets phase, while fields are still unwritten.
 const CAST_DIRECTION_ROWS = {
-  absent: ({ stillMissing, write, analyzed }) => ({ detail: `${stillMissing}Build the cast & sets to draft it from your creative direction, song style and mood board.`,
-    action: { label: 'Build cast & sets', run: 'start-cast-sets', disabled: !analyzed, reason: analyzed ? undefined : 'Analyze the track first' }, secondary: write }),
+  absent: ({ stillMissing, write, analyzed }) => ({ detail: `${stillMissing}Link the cast & sets from the catalog, then write the art direction separately.`,
+    action: { label: 'Link cast & sets', run: 'start-cast-sets', disabled: !analyzed, reason: analyzed ? undefined : 'Analyze the track first' }, secondary: write }),
   building: () => ({ detail: 'The cast & sets sheet is being built. Its art direction fills in when you approve it.', action: null }),
   stopped: ({ write }) => ({ detail: 'The cast & sets sheet stopped before it finished.', action: { label: 'Resume cast & sets', run: 'resume-cast-sets' }, secondary: write }),
   review: () => ({ detail: 'Approve the cast & sets sheet and its art direction fills in here.', action: { label: 'Review cast & sets', anchor: CAST_CHECKIN_ANCHOR } }),
@@ -1037,12 +1038,14 @@ function castSetsChecklist({ project, readiness }) {
   const { missing, guide } = artDirectionGaps(project);
   const cast = project.castAndSets || null;
   const castPhase = castSetsPhase(cast);
-  const fromSheet = cast?.status === 'approved' && !!cast.direction;
+  const catalogMode = cast?.source === 'catalog';
+  const fromSheet = !catalogMode && cast?.status === 'approved' && !!cast.direction;
   const stillMissing = missing.length && missing.length < ART_DIRECTION_FIELDS.length ? `Still missing: ${missing.join(', ')}. ` : '';
   const write = { label: 'Write it yourself', anchor: ART_DIRECTION_ANCHOR };
   const direction = missing.length === 0 ? { detail: null, action: null }
-    : castDirectionRow(castPhase, { missing, stillMissing, write, fromSheet, analyzed: !!project.audioAnalysis });
-  const sheetPending = castPhase !== 'settled';
+    : catalogMode ? { detail: `${stillMissing}Catalog links define the cast and sets. Write the art direction separately.`, action: { label: 'Write art direction', anchor: ART_DIRECTION_ANCHOR } }
+      : castDirectionRow(castPhase, { missing, stillMissing, write, fromSheet, analyzed: !!project.audioAnalysis });
+  const sheetPending = !!cast && !catalogMode && castPhase !== 'settled';
   const files = (project.devArtifacts || []).some((a) => !a.deleted);
   const pick = { label: files ? 'Choose a guide' : 'Import a guide', anchor: LOOK_GUIDES_ANCHOR };
   const guideRow = guide ? { detail: null, action: null }
@@ -1202,7 +1205,7 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   ].filter(Boolean).join(' · ');
   const draft = project.productionReview?.draft || {};
   const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted);
-  const look = guide ? 'Visual guide chosen' : project.castAndSets ? 'Cast and sets built' : '';
+  const look = guide ? 'Visual guide chosen' : project.castAndSets?.source === 'catalog' ? 'Catalog cast and sets linked' : project.castAndSets ? 'Cast and sets built' : '';
   const board = scenes.length ? `${formatCount(scenes.length)} ${scenes.length === 1 ? 'shot' : 'shots'}` : '';
   const mode = project.composition?.mode || 'concat';
   let make = '';
