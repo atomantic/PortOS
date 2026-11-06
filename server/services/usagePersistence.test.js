@@ -11,7 +11,7 @@ const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-commit-
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
-  USAGE_FILE, getUsage, loadUsage, resetUsage, recordRunUsage,
+  USAGE_FILE, getUsage, loadUsage, resetUsage, recordRunUsage, addDatedUsageBatch,
   recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims
 } = await import('./usage.js');
 const { __resetUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
@@ -107,6 +107,21 @@ describe('usage commit failure recovery', () => {
     expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('synthetic disk write failure'));
     expect(await disk()).toMatchObject({ totalTokens: { input: 120, output: 30 } });
     expect(getReconciledUsageRunIds()).toEqual(['later-run']);
+  });
+
+  it('commits a repair batch once and leaves every item retryable after a failed write', async () => {
+    const additions = [10, 20].map((tokensOut, index) => ({ day: timestamp.slice(0, 10),
+      repairId: `synthetic-repair-${index}`, record: { providerId: 'grok-cli', tokensOut } }));
+    const before = await disk();
+    failRename();
+    await expect(addDatedUsageBatch(additions)).rejects.toThrow('synthetic disk write failure');
+    expect(getUsage()).toEqual(before);
+    expect(await disk()).toEqual(before);
+    expect(await addDatedUsageBatch(additions)).toEqual(additions);
+    expect(await disk()).toMatchObject({ totalTokens: { output: 30 }, grokRepairIds: additions.map(item => item.repairId) });
+    const committed = await disk();
+    expect(await addDatedUsageBatch(additions)).toEqual([]);
+    expect(await disk()).toEqual(committed);
   });
 
   it('rolls back backfill counts and watermarks and rejects a stale preview without writing', async () => {

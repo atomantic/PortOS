@@ -10,13 +10,12 @@ const paths = vi.hoisted(() => ({ data: '' }));
 vi.mock('./usage.js', () => ({
   loadUsage: vi.fn(async () => ledger),
   getUsage: vi.fn(() => ledger),
-  addDatedUsage: vi.fn(async (day, record, { repairId } = {}) => {
-    if (ledger.grokRepairIds.includes(repairId)) return false;
-    ledger.grokRepairIds.push(repairId);
-    written.push({ day, record, repairId });
+  addDatedUsageBatch: vi.fn(async additions => additions.filter(item => {
+    if (ledger.grokRepairIds.includes(item.repairId)) return false;
+    ledger.grokRepairIds.push(item.repairId);
+    written.push(item);
     return true;
-  }),
-  flushUsageLedger: vi.fn(async () => {}),
+  })),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -24,7 +23,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 const { applyGrokUsageRepair, planGrokUsageRepairFromDisk } = await import('./grokUsageBackfill.js');
-const { flushUsageLedger } = await import('./usage.js');
+const { addDatedUsageBatch } = await import('./usage.js');
 
 let home;
 let dataDir;
@@ -57,7 +56,7 @@ beforeEach(async () => {
   paths.data = dataDir;
   ledger.grokRepairIds = [];
   written.length = 0;
-  flushUsageLedger.mockClear();
+  addDatedUsageBatch.mockClear();
   await mkdir(join(dataDir, 'images'), { recursive: true });
   await writeFile(join(dataDir, 'usage.json'), JSON.stringify({ grokRepairIds: [] }));
   await writeFile(join(dataDir, 'images', 'job-1.metadata.json'), JSON.stringify({
@@ -101,12 +100,12 @@ describe('applyGrokUsageRepair', () => {
     expect(JSON.parse(await readFile(join(first.backupDir, 'usage.json'), 'utf8')).grokRepairIds).toEqual([]);
     expect(written).toHaveLength(1);
     expect(written[0].repairId).toBe('gallery:job-1');
-    expect(flushUsageLedger).toHaveBeenCalledTimes(1);
+    expect(addDatedUsageBatch).toHaveBeenCalledTimes(1);
 
     const second = await applyGrokUsageRepair({ home, dataDir });
     expect(second).toMatchObject({ added: 0, backedUp: false });
     expect(written).toHaveLength(1);
-    expect(flushUsageLedger).toHaveBeenCalledTimes(1);
+    expect(addDatedUsageBatch).toHaveBeenCalledTimes(1);
   });
 
   it('refuses to apply a plan read from a directory the server will not save', async () => {

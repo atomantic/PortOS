@@ -930,6 +930,18 @@ async function addDatedUsageDraft(dayKey, record, { repairId = null, flush = tru
   return true;
 }
 
+/** Apply a repair batch in one draft and one commit, without cloning per row. */
+async function addDatedUsageBatchDraft(additions = []) {
+  const written = [];
+  for (const item of additions) {
+    if (await addDatedUsageDraft(item.day, item.record, { repairId: item.repairId, flush: false })) {
+      written.push(item);
+    }
+  }
+  if (written.length) await saveUsage();
+  return written;
+}
+
 /** Persist the in-memory ledger. One call after a batch of `addDatedUsage(..., { flush: false })`. */
 async function flushUsageLedgerDraft() {
   if (!usageData) return;
@@ -1577,4 +1589,8 @@ export async function recordLimitBlock(...args) {
 
 export async function resetUsage(...args) {
   return mutateUsage(() => resetUsageDraft(...args));
+}
+
+export async function addDatedUsageBatch(...args) {
+  return mutateUsage(() => addDatedUsageBatchDraft(...args));
 }

@@ -26,7 +26,7 @@ import {
   summarizeGrokRepairAdditions,
   videoHistoryUsageEvents,
 } from './grokUsageRepair.js';
-import { addDatedUsage, flushUsageLedger, getUsage, loadUsage } from './usage.js';
+import { addDatedUsageBatch, getUsage, loadUsage } from './usage.js';
 
 const yieldToEventLoop = () => new Promise((done) => setImmediate(done));
 
@@ -249,11 +249,6 @@ export async function applyGrokUsageRepair({
     return { ...summarizeGrokRepairAdditions([]), backedUp: false, note, backupDir: null };
   }
   const backupDir = await backupLedger(dataDir);
-  const written = [];
-  for (const item of plan.additions) {
-    const wrote = await addDatedUsage(item.day, item.record, { repairId: item.repairId, flush: false });
-    if (wrote) written.push(item);
-  }
-  if (written.length > 0) await flushUsageLedger();
+  const written = await addDatedUsageBatch(plan.additions);
   return { ...summarizeGrokRepairAdditions(written), backedUp: true, note, backupDir };
 }
