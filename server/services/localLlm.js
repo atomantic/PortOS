@@ -653,9 +653,9 @@ export async function upgradeBackend(backend, onProgress = () => {}, signal) {
   // Homebrew is the verification target, read past its cache: `brew update` below
   // can only make the answer newer, and a stale one would under-report an upgrade.
   if (backend === 'ollama') homebrewOllamaCache = { version: null, fetchedAt: 0 }
-  const { latestVersion: target, upstreamAheadVersion: upstreamAhead } = backend === 'ollama'
+  const { latestVersion: target, latestVersionSource: targetSource, upstreamAheadVersion: upstreamAhead } = backend === 'ollama'
     ? await resolveLatestOllamaVersion()
-    : { latestVersion: null, upstreamAheadVersion: null }
+    : { latestVersion: null, latestVersionSource: null, upstreamAheadVersion: null }
   emit('Refreshing Homebrew package metadata…')
   const refresh = await runStreaming('brew', ['update'], emit, BACKEND_INSTALL_TIMEOUT_MS)
   if (!refresh.success) return { success: false, error: `Homebrew refresh failed: ${refresh.error}` }
@@ -675,6 +675,17 @@ export async function upgradeBackend(backend, onProgress = () => {}, signal) {
     const after = await waitForOllamaVersion()
     if (!after) return { success: false, backend, error: 'Could not verify the Ollama upgrade: the service did not come back online within 30s.' }
     const moved = Boolean(before) && compareSemver(after, before) > 0
+    if ((target && compareSemver(target, after) > 0) || (!target && !moved)) {
+      // Homebrew already has the target, so waiting for it cannot help here.
+      const cause = targetSource === 'homebrew'
+        ? 'Homebrew has published it, so the service may not have restarted on the new binary, or another Ollama installation may be serving requests. Restart Ollama and check which one is running'
+        : 'Homebrew may not have packaged the latest release yet, or another Ollama installation may be serving requests. Retry when Homebrew catches up'
+      return {
+        success: false,
+        backend,
+        error: `Ollama is still running ${after}${target ? `; the available release is ${target}` : '; no newer running version was verified'}. ${cause}, or install the official app from ${DOWNLOAD_URL.ollama}.`
+      }
+    }
     // Already on Homebrew's newest with a newer release out: this run delivered
     // nothing, and the caller may need that release (a model pull's 412 upgrade).
     if (!moved && upstreamAhead && compareSemver(upstreamAhead, after) > 0) {
@@ -682,13 +693,6 @@ export async function upgradeBackend(backend, onProgress = () => {}, signal) {
         success: false,
         backend,
         error: `Ollama ${after} is the newest Homebrew has published. Ollama ${upstreamAhead} is out, and Homebrew can install it once it is packaged. Retry then, or install the official app from ${DOWNLOAD_URL.ollama}.`
-      }
-    }
-    if ((target && compareSemver(target, after) > 0) || (!target && !moved)) {
-      return {
-        success: false,
-        backend,
-        error: `Ollama is still running ${after}${target ? `; the available release is ${target}` : '; no newer running version was verified'}. Homebrew may not have packaged the latest release yet, or another Ollama installation may be serving requests. Retry when Homebrew catches up, or install the official app from ${DOWNLOAD_URL.ollama}.`
       }
     }
     return { success: true, backend, note: `Ollama ${before ? `${before} → ` : ''}${after}. The verified binary is now serving requests.` }

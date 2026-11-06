@@ -1482,6 +1482,13 @@ describe('localLlm', () => {
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/still running 0\.40\.14.*available release is 0\.40\.15/);
     });
+
+    it('does not blame Homebrew when the service stays below a version Homebrew already has', async () => {
+      const result = await upgrade('0.40.13', '0.40.13');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/still running 0\.40\.13.*available release is 0\.40\.14.*Homebrew has published it/);
+      expect(result.error).not.toMatch(/newest Homebrew has published/);
+    });
   });
 
   describe('getStatus Ollama diagnostics', () => {
