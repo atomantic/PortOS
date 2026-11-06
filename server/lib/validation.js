@@ -1,3 +1,4 @@
+import { nativeUsageAccountSelectionsSchema } from './nativeUsageSelections.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
@@ -1691,6 +1692,11 @@ const isoDay = z.string()
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, { message: 'Not a valid calendar date' });
 
+export const nativeUsageAccountsQuerySchema = z.strictObject({});
+export const nativeUsageAccountsUpdateSchema = z.strictObject({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  selections: nativeUsageAccountSelectionsSchema,
+});
 export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
 export const nativeUsageMatrixQuerySchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
 export const nativeUsagePeerReportQuerySchema = z.object({ challenge: z.string().regex(/^[a-f0-9]{64}$/) }).strict();

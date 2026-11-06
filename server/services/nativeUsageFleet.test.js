@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalStringify } from '../lib/objects.js';
-import { buildNativeUsageReport, nativeUsageParticipantKey, nativeUsageReportSchema } from '../lib/nativeUsageContract.js';
+import { buildNativeUsageReport, nativeUsageParticipantKey, nativeUsageReportSchema, nativeUsageSelectionRevision } from '../lib/nativeUsageContract.js';
+
+vi.mock('./settings.js', async () => ({ settingsEvents: new (await import('node:events')).EventEmitter() }));
+import { settingsEvents } from './settings.js';
 
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'local'), loadData: vi.fn() }));
 vi.mock('./nativeUsageReport.js', () => ({ captureDashboardNativeUsageReport: vi.fn(), getNativeUsageAccountSelections: vi.fn(), NATIVE_USAGE_DASHBOARD_LIMITS: {} }));
@@ -64,6 +67,23 @@ beforeEach(() => {
 });
 
 describe('explicit fleet native matrix', () => {
+  it('refuses a changed selection during final peer validation, then reopens with its current revision', async () => {
+    let release;
+    revalidateNativeUsagePeerReport.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const pending = getNativeUsageMatrix({ scope: 'fleet' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const changed = selected(['local']).map(selection => ({ ...selection, accountLabel: 'new-selection' }));
+    getNativeUsageAccountSelections.mockResolvedValue(changed);
+    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: changed });
+    const reopened = getNativeUsageMatrix({ scope: 'fleet' });
+    expect(reopened).toBe(pending);
+    release();
+    await expect(reopened).rejects.toThrow('Native usage capture failed');
+    const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(matrix.selectionRevision).toBe(nativeUsageSelectionRevision(changed));
+    expect(family(matrix, 'codex').accounts[0].accountLabel).toBe('new-selection');
+  });
+
   it('deduplicates shared retained records across three participants and selects Codex once without exposing record identities', async () => {
     loadData.mockResolvedValue({ peers: [peer('peer'), peer('other')] });
     getNativeUsageAccountSelections.mockResolvedValue(selected(['local', 'peer', 'other']));
@@ -138,6 +158,30 @@ describe('explicit fleet native matrix', () => {
     const matrix = await pending;
     expect(matrix.participants).toHaveLength(1);
     expect(matrix.peerCollection).toMatchObject({ status: 'partial', received: 0, peers: [{ status: 'forbidden' }] });
+    expect(family(matrix, 'claude').merge.totals).toBeNull();
+  });
+
+  it('refuses an old settings read that settles after a newer selection event', async () => {
+    let releaseSettings;
+    getNativeUsageAccountSelections.mockImplementationOnce(() => new Promise(resolve => { releaseSettings = resolve; }));
+    const pending = getNativeUsageMatrix({ scope: 'fleet' });
+    await vi.waitFor(() => expect(releaseSettings).toBeTypeOf('function'));
+    const changed = selected().map(selection => ({ ...selection, accountLabel: 'newer-selection' }));
+    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: changed });
+    releaseSettings(selected());
+    await expect(pending).rejects.toThrow('Native usage capture failed');
+  });
+
+  it('revalidates peer authority after a delayed settings read before returning any selected totals', async () => {
+    let releaseSettings;
+    getNativeUsageAccountSelections.mockImplementationOnce(() => new Promise(resolve => { releaseSettings = resolve; }));
+    const pending = getNativeUsageMatrix({ scope: 'fleet' });
+    await vi.waitFor(() => expect(releaseSettings).toBeTypeOf('function'));
+    expect(revalidateNativeUsagePeerReport).not.toHaveBeenCalled();
+    revalidateNativeUsagePeerReport.mockRejectedValueOnce(Object.assign(new Error('revoked while settings were read'), { code: 'NATIVE_USAGE_PEER_FORBIDDEN' }));
+    releaseSettings(selected());
+    const matrix = await pending;
+    expect(matrix.peerCollection).toMatchObject({ received: 0, peers: [{ status: 'forbidden' }] });
     expect(family(matrix, 'claude').merge.totals).toBeNull();
   });
 

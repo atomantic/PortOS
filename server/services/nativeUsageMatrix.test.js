@@ -9,7 +9,7 @@ let home;
 vi.mock('node:os', async original => ({ ...await original(), homedir: () => home }));
 vi.mock('./codexAppServer.js', () => ({ getCodexAccountUsageEvidence: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'synthetic-local-instance') }));
-vi.mock('./settings.js', () => ({ getSettingsWithStatus: vi.fn() }));
+vi.mock('./settings.js', async () => ({ getSettingsWithStatus: vi.fn(), settingsEvents: new (await import('node:events')).EventEmitter() }));
 import { getCodexAccountUsageEvidence } from './codexAppServer.js';
 import { getSettingsWithStatus } from './settings.js';
 import { getNativeUsageMatrix, NATIVE_USAGE_DASHBOARD_LIMITS } from './nativeUsageMatrix.js';

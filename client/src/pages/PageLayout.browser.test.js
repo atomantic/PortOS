@@ -42,7 +42,17 @@ const responses = {
   '/instances': { peers: [] },
   '/settings/features': { features: [] },
   '/code-animation/jobs': { items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null },
+  '/usage/native-accounts': {
+    revision: '1'.repeat(64),
+    selections: ['codex', 'claude', 'grok', 'agy'].map(family => ({
+      family, accountLabel: 'example-subscription-with-long-unbroken-label-for-geometry-check', members: ['a'.repeat(32), 'b'.repeat(32), 'c'.repeat(32)],
+      ...(family === 'codex' ? { authoritativeParticipant: 'a'.repeat(32) } : { historyScope: 'operator-confirmed-retained-history' }),
+    })),
+    participants: [{ participantKey: 'a'.repeat(32), kind: 'local', status: 'configured' }, { participantKey: 'b'.repeat(32), kind: 'peer', status: 'configured' }, { participantKey: 'c'.repeat(32), kind: 'unavailable', status: 'not-configured' }],
+    inventory: { status: 'truncated', maxPeers: 64 },
+  },
   '/usage/native-matrix': {
+    selectionRevision: '1'.repeat(64),
     mode: 'read-only', scope: 'local-instance', contractVersion: 4, ledgerChanged: false, peerReports: 'not-collected',
     capturedAt: '2026-11-06T12:00:00Z', generatedAt: '2026-11-06T12:00:01Z',
     providers: [{ family: 'codex', status: 'available',
@@ -174,6 +184,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
     let billed = false;
     const quotaScopes = [];
     const nativeReads = [];
+    const accountWrites = [];
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -183,6 +194,11 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const key = url.pathname.slice(4);
       if (key === '/usage/native-matrix' || key === '/usage/native-coverage') nativeReads.push(`${key}${url.search}`);
+      if (key === '/usage/native-accounts' && route.request().method() === 'PUT') {
+        const body = route.request().postDataJSON();
+        accountWrites.push(body);
+        return route.fulfill({ json: { ...responses[key], selections: body.selections, revision: '2'.repeat(64) } });
+      }
       if (key === '/usage/fleet-billing' && route.request().method() === 'PUT') {
         const body = route.request().postDataJSON();
         billed = !body.usesSubscriptions;
@@ -253,6 +269,43 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
             expect(nativeGeometry.outsideChildren).toEqual([]);
           }
           if (process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS) await page.screenshot({ path: `${process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS}/native-${width}.png` });
+          await page.getByRole('button', { name: 'Edit account selections' }).click();
+          const accountEditor = page.getByRole('dialog', { name: 'Native account selections' });
+          await accountEditor.getByLabel('Opaque account label').waitFor();
+          for (const provider of ['Codex', 'Claude Code', 'Grok', 'Antigravity']) {
+            await accountEditor.getByRole('tab', { name: provider, exact: true }).click();
+            await accountEditor.getByLabel('Opaque account label').waitFor();
+            expect(await accountEditor.getByRole('checkbox', { name: /Missing saved member/ }).isChecked()).toBe(true);
+            const editorGeometry = await accountEditor.evaluate(panel => {
+              const bounds = panel.getBoundingClientRect();
+              const children = [...panel.querySelectorAll('fieldset, label, input, select, p, button, h3')].filter(child => child.getClientRects().length);
+              return {
+                left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+                overflow: panel.scrollWidth > panel.clientWidth + 1,
+                outsideChildren: children.filter(child => {
+                  const rect = child.getBoundingClientRect();
+                  return rect.left < bounds.left - 1 || rect.right > bounds.right + 1;
+                }).map(child => child.textContent.slice(0, 80)),
+              };
+            });
+            expect(editorGeometry.left).toBeGreaterThanOrEqual(0);
+            expect(editorGeometry.right).toBeLessThanOrEqual(width);
+            expect(editorGeometry.top).toBe(0);
+            expect(editorGeometry.bottom).toBe(900);
+            expect(editorGeometry.overflow).toBe(false);
+            expect(editorGeometry.outsideChildren).toEqual([]);
+          }
+          await accountEditor.getByRole('tab', { name: 'Codex', exact: true }).click();
+          await accountEditor.getByLabel('Opaque account label').fill('example-updated-subscription');
+          await accountEditor.getByRole('button', { name: 'Save selections', exact: true }).click();
+          await accountEditor.getByText(/Selections saved locally/).waitFor();
+          expect(accountWrites).toHaveLength(1);
+          expect(accountWrites[0].expectedRevision).toBe('1'.repeat(64));
+          expect(accountWrites[0].selections).toHaveLength(4);
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local', '/usage/native-matrix?scope=fleet']);
+          await accountEditor.getByRole('button', { name: 'Cancel', exact: true }).click();
+          expect(await page.getByText('104,255,445,839', { exact: true }).count()).toBe(0);
+          expect(await page.getByText(/Not scanned yet/).count()).toBe(4);
           await page.getByRole('tab', { name: 'Legacy analytics' }).click();
           await page.getByText('Example claude', { exact: true }).first().waitFor();
         }

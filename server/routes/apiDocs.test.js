@@ -79,6 +79,13 @@ describe('GET /api/api-docs/openapi.json', () => {
     expect(events.status).toBe(200);
     expect(events.body.stats.events).toBeGreaterThan(100);
     expect(events.body.events.some((event) => event.event === 'cos:mind:event')).toBe(true);
+    expect(events.body.events.find(event => event.event === 'usage:native-accounts-updated')).toMatchObject({
+      contractStatus: 'modeled',
+      payloadSchemas: { 'server-to-client': {
+        type: 'object', required: ['revision'], additionalProperties: false,
+        properties: { revision: { anyOf: [{ type: 'string', pattern: '^[0-9a-f]{64}$' }, { type: 'null' }] } },
+      } },
+    });
 
     const asyncapi = await request(buildApp()).get('/api/api-docs/asyncapi.json');
     expect(asyncapi.status).toBe(200);

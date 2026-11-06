@@ -14,6 +14,8 @@
  * `evidenceHash` covers only source-derived facts, so an unchanged source re-hashes
  * equal at a later capture time. `contentHash` also covers the capture time.
  */
+import { nativeUsageAccountSelectionsSchema, nativeUsageParticipantKey } from './nativeUsageSelections.js';
+export { NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, nativeUsageAccountSelectionsSchema, nativeUsageParticipantKey, nativeUsageSelectionRevision } from './nativeUsageSelections.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { CODEX_ERROR_CODES } from './codexAccount.js';
@@ -23,7 +25,6 @@ import { nativeAgyUsageProjectionSchema, unionNativeAgyRecords } from './nativeA
 import { nativeGrokUsageProjectionSchema, unionNativeGrokRecords } from './nativeGrokUsageRecords.js';
 
 export const NATIVE_USAGE_CONTRACT_VERSION = 4;
-export const NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY = 'usageNativeAccountSelections';
 
 const FAMILIES = ['agy', 'claude', 'codex', 'grok'];
 const TRANSCRIPT_FAMILIES = ['agy', 'claude', 'grok'];
@@ -179,42 +180,6 @@ export const nativeUsageReportSchema = z.discriminatedUnion('contractVersion', [
   reportSchemaV1.extend({ contractVersion: z.literal(3), providers: z.array(providerEntrySchemaV3).length(FAMILIES.length) }),
   reportSchemaV1.extend({ contractVersion: z.literal(4), providers: z.array(providerEntrySchemaV4).length(FAMILIES.length) }),
 ]).refine(({ providers }) => FAMILIES.every((family) => providers.filter((entry) => entry.family === family).length === 1), 'provider family must be unique');
-
-const accountSelection = {
-  accountLabel: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
-  members: z.array(participantKey).min(1).max(64),
-};
-/** A selection asserts account membership; equal counters never establish identity.
- * Retained-provider selections apply to retained history, not merely the currently signed-in account.
- */
-export const nativeUsageAccountSelectionsSchema = z.array(z.discriminatedUnion('family', [
-  z.strictObject({ family: z.literal('codex'), ...accountSelection, authoritativeParticipant: participantKey }),
-  z.strictObject({ family: z.literal('claude'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
-  z.strictObject({ family: z.literal('grok'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
-  z.strictObject({ family: z.literal('agy'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
-])).max(64).superRefine((selections, ctx) => {
-  const claimed = new Set();
-  const labels = new Set();
-  for (const [index, selection] of selections.entries()) {
-    const refuse = (message) => ctx.addIssue({ code: 'custom', path: [index], message });
-    const label = `${selection.family}:${selection.accountLabel}`;
-    if (labels.has(label)) refuse('accountLabel is already selected for this provider');
-    labels.add(label);
-    if (selection.family === 'codex' && !selection.members.includes(selection.authoritativeParticipant)) refuse('authoritativeParticipant must be a member');
-    for (const member of selection.members) {
-      const membership = `${selection.family}:${member}`;
-      if (claimed.has(membership)) refuse('a participant can belong to only one account per provider');
-      claimed.add(membership);
-    }
-  }
-});
-
-/** Stable and not reversible to the random instance UUID it is derived from. */
-export const nativeUsageParticipantKey = (instanceId) => (
-  typeof instanceId === 'string' && instanceId && instanceId !== 'unknown'
-    ? sha256(`portos-native-usage-participant/1\0${instanceId}`).slice(0, 32)
-    : null
-);
 
 const baseEntry = (family) => {
   const { source, validator, scopeKind, aggregation, dateBoundary, tokenFields } = PROVIDER_CONTRACTS[family];
