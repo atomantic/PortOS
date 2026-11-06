@@ -2,23 +2,45 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
+import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
 
+// Verified metadata only, never records: path -> { revision, source }. Oldest
+// entries age out, which costs one store read; the persisted store owns the records.
 const sourceInventory = new Map();
+const SOURCE_INVENTORY_ENTRIES = 100_000;
+// path -> the decode running right now. Keyed to a revision, so a joiner never gets
+// bytes older than the stat it just took; that is why the walk itself is not shared.
+const decodesInFlight = new Map();
 export const codexSessionClaimKey = id => `codex-session:v1:${id}`;
 export const codexIdentityHash = value => hash(value);
 
 const DAY_MS = 86_400_000;
+const GIB = 1024 * 1024 * 1024;
 // decodedBytes is a CPU backstop, not a memory bound: skipped lines are never
 // buffered, and retained memory is bounded by `records`. A heavy install decodes
-// tens of GB per week of mostly tool output.
+// tens of GB per week of mostly tool output, so `milliseconds` is the operative
+// ceiling; docs/CODEX_USAGE_PREVIEW.md records why 256 MiB was not kept.
 const CODEX_PREVIEW_LIMITS = Object.freeze({
-  files: 10_000, entries: 100_000, decodedBytes: 256 * 1024 * 1024 * 1024,
+  files: 10_000, entries: 100_000, decodedBytes: 256 * GIB,
   records: 100_000, lineBytes: 1024 * 1024, milliseconds: 30_000, depth: 16
 });
+// Routine accounting converges across passes, so only decoding spends a budget:
+// - cold*: decoding a pass admits. A source already started finishes; the rest wait.
+// - records, decodedBytes, lineBytes: per source. Over them only that source is held.
+// - files, entries: ceilings on the walk and on per-source metadata held for a pass.
+const CODEX_ROUTINE_LIMITS = Object.freeze({
+  files: 250_000, entries: 1_000_000, depth: 16, milliseconds: 30_000,
+  decodedBytes: 256 * GIB, records: 100_000, lineBytes: 1024 * 1024,
+  coldFiles: 5_000, coldBytes: 64 * GIB, coldMilliseconds: 20_000,
+  cacheBytes: 256 * 1024 * 1024
+});
+// What ends one caller's pass, as opposed to describing the source being read.
+const PASS_STOPS = ['cancelled', 'time_limit'];
+const BUDGET_STOPS = ['decoded_byte_limit', 'record_limit'];
 // Envelopes that accountingRecord always drops, recognized from the serialized
 // prefix so tool output and images are neither parsed nor held in memory. Any
 // other shape falls through to the strict parse, so unknown lines still fail closed.
@@ -89,11 +111,11 @@ function projectModel(model) {
   return model;
 }
 
-function scanLimits(overrides) {
+function scanLimits(overrides, ceilings) {
   for (const [key, value] of Object.entries(overrides)) {
-    if (!(key in CODEX_PREVIEW_LIMITS) || !Number.isSafeInteger(value) || value < 1 || value > CODEX_PREVIEW_LIMITS[key]) throw problem('INVALID_LIMIT');
+    if (!(key in ceilings) || !Number.isSafeInteger(value) || value < 1 || value > ceilings[key]) throw problem('INVALID_LIMIT');
   }
-  return { ...CODEX_PREVIEW_LIMITS, ...overrides };
+  return { ...ceilings, ...overrides };
 }
 
 async function* discover(directory, state, depth = 0) {
@@ -129,9 +151,11 @@ async function inspectFile(path, state, range, decompress) {
   const ids = new Set();
   const lineage = { forkedFrom: null };
   const records = [];
-  const fingerprint = createHash('sha256');
   const issues = new Set();
   const compressed = path.endsWith('.zst');
+  // Routine limits apply per source; preview's are cumulative over the scan.
+  const baseRecords = state.routine ? state.coverage.recordsRead : 0;
+  const baseBytes = state.routine ? state.coverage.decodedBytes : 0;
   const addLine = bytes => {
     state.check();
     if (isNonAccountingLine(bytes)) return;
@@ -144,9 +168,8 @@ async function inspectFile(path, state, range, decompress) {
       const record = accountingRecord(entry, ids, lineage);
       if (!record) return;
       if (record.type === 'session_meta' && typeof entry.payload.cwd === 'string') cwd = entry.payload.cwd;
-      if (++state.coverage.recordsRead > state.limits.records) throw problem('record_limit');
+      if (++state.coverage.recordsRead - baseRecords > state.limits.records) throw problem('record_limit');
       records.push(record);
-      fingerprint.update(`${JSON.stringify(record)}\n`);
     } catch (error) {
       if (error.code === 'record_limit') throw error;
       issues.add('malformed');
@@ -169,7 +192,7 @@ async function inspectFile(path, state, range, decompress) {
         for await (const chunk of chunks) {
           state.check();
           state.coverage.decodedBytes += chunk.length;
-          if (state.coverage.decodedBytes > state.limits.decodedBytes) throw problem('decoded_byte_limit');
+          if (state.coverage.decodedBytes - baseBytes > state.limits.decodedBytes) throw problem('decoded_byte_limit');
           let tail = chunk;
           if (skipping) {
             const newline = chunk.indexOf(10);
@@ -197,15 +220,100 @@ async function inspectFile(path, state, range, decompress) {
     if (!unchanged(before, await handle.stat()) || !unchanged(before, after)) issues.add('source_changed');
   } catch (error) {
     const reason = state.stopReason() || error.code;
-    if (['cancelled', 'time_limit', 'decoded_byte_limit', 'record_limit'].includes(reason)) state.stopped = reason;
-    issues.add(['cancelled', 'time_limit', 'decoded_byte_limit', 'record_limit', 'line_limit', 'unsupported_compression', 'unsupported_entry'].includes(reason)
+    if (PASS_STOPS.includes(reason) || (!state.routine && BUDGET_STOPS.includes(reason))) state.stopped = reason;
+    issues.add([...PASS_STOPS, ...BUDGET_STOPS, 'line_limit', 'unsupported_compression', 'unsupported_entry'].includes(reason)
       ? reason : compressed ? 'invalid_compression' : 'unreadable_source');
   } finally {
     await handle?.close();
   }
   if (ids.size !== 1) issues.add(ids.size ? 'conflicting_identity' : 'missing_identity');
-  for (const issue of issues) state.issue(issue);
-  return { ids, records, cwd, issues: [...issues], valid: !issues.size, fingerprint: fingerprint.digest('hex'), byModel: issues.size ? {} : parseCodexRollout(records, range).byModel };
+  return { ids, records, cwd, issues: [...issues], valid: !issues.size, fingerprint: fingerprintRecords(records),
+    byModel: issues.size || !range ? {} : parseCodexRollout(records, range).byModel, loadRecords: async () => records };
+}
+
+const inventoryIncomplete = (issues, { stopped = null, problemSources = [], progress = null } = {}) => {
+  const reasons = Object.entries(issues).map(([reason, count]) => `${reason}=${count}`).join(', ') || 'unknown';
+  // Reasons and counts only: this message reaches the logs. Source names stay on the error.
+  const indexed = progress ? ` (${progress.indexed} of ${progress.total} sources indexed)` : '';
+  return Object.assign(new Error(`Codex source inventory is incomplete: ${reasons}${indexed}`), {
+    code: 'CODEX_SOURCES_INCOMPLETE', issues: { ...issues }, stopped, problemSources, progress
+  });
+};
+
+function storedSource(path, revision, { id, cwd, fingerprint }) {
+  const source = {
+    ids: new Set([id]), cwd, issues: [], valid: true, fingerprint, byModel: {},
+    // Read per session so a pass never holds a whole window's records at once.
+    loadRecords: async () => {
+      const stored = await readInventorySource(hash(path), revision);
+      if (stored?.fingerprint === fingerprint) return stored.records;
+      if (sourceInventory.get(path)?.source === source) sourceInventory.delete(path);
+      throw inventoryIncomplete({ source_changed: 1 });
+    }
+  };
+  sourceInventory.delete(path);
+  sourceInventory.set(path, { revision, source });
+  if (sourceInventory.size > SOURCE_INVENTORY_ENTRIES) sourceInventory.delete(sourceInventory.keys().next().value);
+  return source;
+}
+
+async function decodeAndStore(path, revision, info, state, decompress) {
+  const source = await inspectFile(path, state, null, decompress);
+  if (!source.valid) {
+    sourceInventory.delete(path);
+    return source;
+  }
+  const [id] = source.ids;
+  const projection = { revision, id, cwd: source.cwd, fingerprint: source.fingerprint };
+  if (await writeInventorySource(hash(path), { ...projection, records: source.records, sourceMtimeMs: info.mtimeMs })) {
+    return storedSource(path, revision, projection);
+  }
+  state.retainedRecords += source.records.length;
+  if (state.retainedRecords > state.limits.records) throw problem('record_limit');
+  return source;
+}
+
+const coldBudgetSpent = ({ coverage, limits, started }) => coverage.filesInspected - coverage.filesCached >= limits.coldFiles
+  || coverage.decodedBytes >= limits.coldBytes || performance.now() - started >= limits.coldMilliseconds;
+
+/** A verified source, or null when this pass's cold budget leaves it for a later one. */
+async function readRoutineSource(path, revision, info, state, decompress) {
+  const { coverage, limits } = state;
+  // A runtime without the decoder must report that, not coast on an earlier decode.
+  if (!path.endsWith('.zst') || typeof decompress === 'function') {
+    const known = sourceInventory.get(path);
+    if (known?.revision === revision) {
+      coverage.filesCached++;
+      return known.source;
+    }
+    const stored = await readInventorySource(hash(path), revision);
+    if (stored) {
+      coverage.filesCached++;
+      return storedSource(path, revision, stored);
+    }
+  }
+  const running = decodesInFlight.get(path);
+  if (running?.revision === revision && running.decompress === decompress
+    && running.lineBytes === limits.lineBytes && running.records === limits.records && running.decodedBytes === limits.decodedBytes) {
+    const shared = await running.result;
+    // The owner's deadline or cancellation says nothing about this source.
+    if (!shared.issues.some(issue => PASS_STOPS.includes(issue))) {
+      coverage.filesCached++;
+      return shared;
+    }
+  }
+  if (coldBudgetSpent(state)) {
+    coverage.filesPending++;
+    return null;
+  }
+  const result = decodeAndStore(path, revision, info, state, decompress);
+  const entry = { revision, decompress, lineBytes: limits.lineBytes, records: limits.records, decodedBytes: limits.decodedBytes, result };
+  decodesInFlight.set(path, entry);
+  try {
+    return await result;
+  } finally {
+    if (decodesInFlight.get(path) === entry) decodesInFlight.delete(path);
+  }
 }
 
 /** Explicit, read-only aggregate preview; no ledger or provider dependencies.
@@ -216,17 +324,18 @@ async function inspectFile(path, state, range, decompress) {
  */
 async function scanCodexSources({ from, to, home = homedir(), limits: overrides = {}, signal,
   decompress = zlib.createZstdDecompress, accounting = false, cache = false, modifiedSince = null } = {}) {
-  const range = accounting ? {} : codexPreviewRange(from, to);
+  const range = accounting ? null : codexPreviewRange(from, to);
   const floor = accounting ? modifiedSince : range.from;
-  const limits = scanLimits(overrides);
+  const routine = accounting && cache;
+  const limits = scanLimits(overrides, routine ? CODEX_ROUTINE_LIMITS : CODEX_PREVIEW_LIMITS);
   if (typeof home !== 'string' || !home) throw problem('INVALID_HOME');
   const controller = new AbortController();
   const started = performance.now();
   const timer = setTimeout(() => controller.abort(), limits.milliseconds);
-  const coverage = { complete: false, filesDiscovered: 0, filesInspected: 0, entriesVisited: 0,
+  const coverage = { complete: false, filesDiscovered: 0, filesInspected: 0, filesCached: 0, filesPending: 0, entriesVisited: 0,
     decodedBytes: 0, recordsRead: 0, logicalSessions: 0, resolvedSessions: 0, unresolvedSessions: 0, duplicateCopies: 0, issues: {} };
   const state = {
-    limits, coverage, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+    limits, coverage, routine, started, retainedRecords: 0, signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     stopped: null,
     stopReason: () => signal?.aborted ? 'cancelled' : controller.signal.aborted || performance.now() - started >= limits.milliseconds ? 'time_limit' : null,
     check() { const reason = this.stopped || this.stopReason(); if (reason) throw problem(reason); },
@@ -234,7 +343,6 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   };
   const sessions = new Map();
   const revisions = [];
-  const visited = new Set();
   const problemSources = [];
   try {
     // Refuse symlinked source roots as well as symlinked descendants.
@@ -246,28 +354,22 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
     if (root && (!root.isDirectory() || root.isSymbolicLink())) state.issue('unsupported_entry');
     else if (root) for (const directory of ['sessions', 'archived_sessions']) {
       for await (const path of discover(join(codex, directory), state)) {
-        visited.add(path);
         const info = await lstat(path).catch(() => null);
         if (info && floor != null && info.mtimeMs < floor) continue;
         if (coverage.filesDiscovered >= limits.files) throw problem('file_limit');
         coverage.filesDiscovered++;
         const revision = info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : 'missing';
-        const cached = cache && sourceInventory.get(path);
-        const source = cached?.revision === revision && cached.decompress === decompress
-          ? cached.source : await inspectFile(path, state, range, decompress);
-        if (cached?.source === source) {
-          // Cached records still spend the bounded inventory budget.
-          state.coverage.recordsRead += source.records.length;
-          if (state.coverage.recordsRead > limits.records) throw problem('record_limit');
-        }
-        if (cache && source.valid) sourceInventory.set(path, { revision, source, decompress });
-        else if (cache) sourceInventory.delete(path);
+        const source = routine
+          ? await readRoutineSource(path, revision, info, state, decompress)
+          : await inspectFile(path, state, range, decompress);
+        if (!source) continue;
+        for (const issue of source.issues) state.issue(issue);
         revisions.push([hash(path), revision, source.fingerprint, source.valid]);
         coverage.filesInspected++;
         if (!source.valid && problemSources.length < PROBLEM_SOURCE_SAMPLE) problemSources.push({ source: relative(codex, path), issues: source.issues });
         for (const id of source.ids) {
           const previous = sessions.get(id);
-          if (!previous) sessions.set(id, { id, valid: source.valid, fingerprint: source.fingerprint, byModel: source.byModel, records: source.records, cwd: source.cwd, paths: [path] });
+          if (!previous) sessions.set(id, { id, valid: source.valid, fingerprint: source.fingerprint, byModel: source.byModel, loadRecords: source.loadRecords, cwd: source.cwd, paths: [path] });
           else {
             coverage.duplicateCopies++;
             previous.paths.push(path);
@@ -299,15 +401,12 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   }
   const overflow = Object.values(totals).some(value => !Number.isSafeInteger(value));
   if (overflow) state.issue('counter_overflow');
-  coverage.complete = !Object.keys(coverage.issues).length;
-  // A stopped scan never reached the rest of the tree. Keeping their cached
-  // sources is what lets the next scan get further instead of restarting.
-  if (cache && !state.stopped) {
-    const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
-    for (const path of sourceInventory.keys()) {
-      if (path.startsWith(join(codex, sep)) && !visited.has(path)) sourceInventory.delete(path);
-    }
+  if (coverage.filesPending) {
+    coverage.issues.indexing_pending = coverage.filesPending;
+    state.stopped ??= 'indexing_pending';
   }
+  coverage.complete = !Object.keys(coverage.issues).length;
+  if (routine) await trimInventoryCache(limits.cacheBytes);
   if (accounting) return {
     sessions: [...sessions.values()].filter(session => session.valid), coverage, stopped: state.stopped, problemSources,
     revision: hash(JSON.stringify([revisions.sort((a, b) => a[0].localeCompare(b[0])), coverage.issues]))
@@ -320,8 +419,10 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
 }
 
 /** Internal accounting metadata only. Never expose paths/cwd/records in routes.
- * The process-local inventory is disposable; persisted claims remain authoritative.
+ * The projection store is disposable; persisted claims remain authoritative.
  * Fresh scans are used by explicit preview/apply to reject changed evidence.
+ * A session's `loadRecords()` rejects CODEX_SOURCES_INCOMPLETE once its stored
+ * projection is gone; callers must not advance anything until every load succeeded.
  */
 export const readCodexAccountingSources = options => scanCodexSources({ ...options, accounting: true, cache: options?.cache ?? true });
 export const previewCodexUsage = options => scanCodexSources(options);
@@ -329,9 +430,5 @@ export const previewCodexUsage = options => scanCodexSources(options);
 /** Never reserve or replace trustworthy counts from an incomplete inventory; say which sources held it back. */
 export function assertCodexInventoryComplete({ coverage, stopped = null, problemSources = [] }) {
   if (coverage.complete) return;
-  const reasons = Object.entries(coverage.issues).map(([reason, count]) => `${reason}=${count}`).join(', ') || 'unknown';
-  const sources = problemSources.map(({ source, issues }) => `${source} (${issues.join(', ')})`).join('; ');
-  throw Object.assign(new Error(`Codex source inventory is incomplete: ${reasons}${sources ? ` in ${sources}` : ''}`), {
-    code: 'CODEX_SOURCES_INCOMPLETE', issues: { ...coverage.issues }, stopped, problemSources
-  });
+  throw inventoryIncomplete(coverage.issues, { stopped, problemSources, progress: { indexed: coverage.filesInspected, total: coverage.filesDiscovered } });
 }
