@@ -10,6 +10,7 @@ import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
 import TabPills from '../ui/TabPills.jsx';
+import InfoTooltip from '../ui/InfoTooltip';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
@@ -360,12 +361,20 @@ export default function SceneCard({
         <span>Needs its own beat — this prompt was copied from the longer shot.</span>
         <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
       </div>}
+      <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
+        <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Motion prompt' : 'Shot prompt'}</label>
+        <InfoTooltip label={layer === 'footage' ? 'About the motion prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
+          {layer === 'footage'
+            ? 'What happens during the clip. The video model gets this text with the start frame (and end frame, if used). What the still looks like is its own prompt on the Frames tab.'
+            : 'Describes the shot. The still renders from it only when its own still prompt is empty.'}
+        </InfoTooltip>
+      </div>
       <textarea
-        aria-label="Shot prompt"
+        id={fieldId('prompt')}
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}
         onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
         onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
-        placeholder={layer === 'footage' ? 'Motion prompt: what happens in this shot' : "Shot prompt — what this scene's video should show"}
+        placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
       {boardDirection && (followsBoard ? (

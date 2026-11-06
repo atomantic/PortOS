@@ -310,6 +310,8 @@ export const musicVideoShotSheetSchema = z.object({
   characters: z.array(z.string().trim().min(1).max(120)).max(SHOT_SHEET_CHARACTERS_MAX).optional(),
   // Done: the director has finished this shot. Kept under its first name, `checked`, so stored sheets stay valid.
   checked: z.boolean().optional(),
+  // The still is built from this sheet; the frame prompt is then its general prompt (musicVideoShotSheet.js).
+  promptFromSheet: z.boolean().optional(),
   ...Object.fromEntries(SHOT_SHEET_TEXT_FIELDS.map(([field, max]) => [field, z.string().max(max).optional()])),
 }).strict();
 

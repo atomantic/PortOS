@@ -34,9 +34,26 @@ describe('ShotSheetPanel', () => {
     expect(screen.getByText('0 of 2 shots done · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
     expect(within(row).getByText('Hold still')).toBeInTheDocument();
-    expect(within(row).getByText('Prompt changed since this frame')).toBeInTheDocument();
+    expect(within(row).getByText('Details changed since this frame')).toBeInTheDocument();
     expect(within(row).getByLabelText('Shot 1 camera')).toHaveValue('vhs');
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
+  });
+
+  // Catches the sheet's build switch or general prompt not saving, or the assembled still text not showing in the shot list.
+  it('builds a shot\'s still from its details with an editable general prompt', () => {
+    const board = boardFor();
+    const { rerender } = render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByLabelText('Show prompts'));
+    fireEvent.click(screen.getByLabelText('Shot 1 build still from details'));
+    expect(board.saveScene).toHaveBeenLastCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', promptFromSheet: true } });
+    const scenes = board.project.scenes.map((entry) => (entry.sceneId === 'a' ? { ...entry, shotSheet: { ...entry.shotSheet, promptFromSheet: true } } : entry));
+    rerender(<ShotSheetPanel board={{ ...board, project: { ...board.project, scenes } }} />);
+    const general = screen.getByLabelText('Shot 1 general prompt');
+    fireEvent.change(general, { target: { value: 'Faded tee' } });
+    fireEvent.blur(general);
+    expect(board.saveScene).toHaveBeenLastCalledWith('a', { framePrompt: 'Faded tee' });
+    expect(screen.getByTestId('assembled-still-prompt')).toHaveTextContent('New wording Camera: VHS, held by Kevin. Emotion: Focused.');
   });
 
   // Catches the frame preview not opening the shot editor, the phone path to a shot.

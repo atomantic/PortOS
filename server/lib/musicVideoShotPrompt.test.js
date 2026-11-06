@@ -13,6 +13,31 @@ const ids = (input) => input.promptAdditions.map((item) => item.id);
 
 // Uniquely catches a still's prompt drifting from the chips it lists, or a block
 // reaching a frame kind that should not carry it (#11317).
+describe('sheet-built stills', () => {
+  const sheetProject = { ...project, cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }, { id: 'eye', name: 'Observer', kind: 'observer' }] };
+  const built = { ...scene, prompt: 'they laugh', framePrompt: 'faded lavender tee', shotSheet: { promptFromSheet: true, cameraId: 'snap', holder: 'Renee', view: 'Arm\u2019s-length selfie', location: 'Corner curb', timeOfDay: 'Dusk', light: 'Flash', characters: ['Renee', 'K'], action: 'They bump heads', emotion: 'Playful' } };
+  // Catches the sheet's columns not reaching the still, arriving unlabeled, or out of reading order.
+  it('composes the general prompt and each detail as its own labeled part', () => {
+    const input = musicVideoFrameModelInput(sheetProject, built);
+    expect(input.prompt.startsWith('faded lavender tee\nCamera: Snapshot camera, held by Renee.\nView: Arm\u2019s-length selfie.\nPlace and time: Corner curb, Dusk, lit by Flash.\nWho: Renee and K.\nAction: They bump heads.\nEmotion: Playful.')).toBe(true);
+    expect(ids(input).slice(0, 6)).toEqual(['shot-sheet-camera', 'shot-sheet-view', 'shot-sheet-place', 'shot-sheet-who', 'shot-sheet-action', 'shot-sheet-emotion']);
+  });
+  // Catches an unsplit shot changing what it sends, or a sheet-built one borrowing the motion prompt.
+  it('leaves other shots alone and never falls back to the motion prompt', () => {
+    const plain = { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } };
+    expect(musicVideoFrameModelInput(sheetProject, plain).prompt).not.toContain('Camera:');
+    const noGeneral = musicVideoFrameModelInput(sheetProject, { ...built, framePrompt: '' });
+    expect(noGeneral.prompt.startsWith('Camera:')).toBe(true);
+    expect(noGeneral.prompt).not.toContain('they laugh');
+  });
+  // Catches an observer camera reading as held, and the details leaking into an end frame.
+  it('names an observer camera as unheld and keeps details off the end frame', () => {
+    const observed = musicVideoFrameModelInput(sheetProject, { ...built, shotSheet: { promptFromSheet: true, cameraId: 'eye' } });
+    expect(observed.prompt).toContain('Camera: Observer, an unseen observer camera that nobody in the scene holds.');
+    expect(musicVideoFrameModelInput(sheetProject, built, { slot: 'end' }).prompt).not.toContain('Camera:');
+  });
+});
+
 describe('musicVideoFrameModelInput', () => {
   it('composes a start frame from the director\'s text with each look block listed', () => {
     const input = musicVideoFrameModelInput(project, scene);

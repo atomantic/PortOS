@@ -16,7 +16,7 @@ it('edits and saves each frame prompt on blur', () => {
       onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
   }
   render(<Harness />);
-  const start = screen.getByRole('textbox', { name: 'Reference frame prompt' });
+  const start = screen.getByRole('textbox', { name: 'Start frame prompt' });
   fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
   fireEvent.blur(start);
   expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
@@ -25,6 +25,28 @@ it('edits and saves each frame prompt on blur', () => {
   fireEvent.change(end, { target: { value: '' } });
   fireEvent.blur(end);
   expect(onSave).toHaveBeenLastCalledWith('s1', { endFramePrompt: null });
+});
+
+// Catches the switch not saving, the general prompt keeping the frame prompt's name, a detail edit not saving, or the built text not showing.
+it('builds a still from the shot details with a general prompt and the assembled text', () => {
+  const onSave = vi.fn();
+  const project = { id: 'p', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Renee' }] } };
+  function Harness() {
+    const [draft, setDraft] = useState({ ...scene, endImageId: null });
+    return <SceneFrames project={project} scene={draft} index={0} onSave={onSave}
+      onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
+  }
+  render(<Harness />);
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Build from shot details' }));
+  expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { promptFromSheet: true } });
+  expect(screen.getByRole('textbox', { name: 'General prompt' }).value).toBe('Door opens');
+  fireEvent.change(screen.getByLabelText('Camera'), { target: { value: 'snap' } });
+  fireEvent.change(screen.getByLabelText('Held by'), { target: { value: 'Renee' } });
+  const emotion = screen.getByRole('combobox', { name: 'Emotion' });
+  fireEvent.change(emotion, { target: { value: 'Playful' } });
+  fireEvent.blur(emotion);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { promptFromSheet: true, cameraId: 'snap', holder: 'Renee', emotion: 'Playful' } });
+  expect(screen.getByTestId('assembled-still-prompt')).toHaveTextContent('Door opens Camera: Snapshot camera, held by Renee. Emotion: Playful.');
 });
 
 // The list depends on this render's source frame, not just the number of chips.
@@ -167,7 +189,7 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: 'Reference frame prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('textbox', { name: 'Still prompt' }).value).toBe('Door opens');
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);
   expect(screen.getByRole('button', { name: 'New frame take' }).disabled).toBe(true);

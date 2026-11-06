@@ -873,7 +873,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // project schema rejects with a 400. Optional, no backfill: absent = no route.
   // v46 = route stops' side streets, landmarks and forward/back greybox cameras
   // (`stops[].features`/`views`), which a v45 strict stop schema rejects. Optional, no backfill.
-  musicVideoProjects: 46,
+  // v47 = `scenes[].shotSheet.promptFromSheet` (a still built from its shot sheet), which a v46
+  // strict shot sheet schema rejects. Optional, no backfill.
+  musicVideoProjects: 47,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

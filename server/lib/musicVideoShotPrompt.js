@@ -23,6 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
+import { shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -122,10 +123,14 @@ const KEEP_REFERENCE = 'Keep the reference image\'s composition, subject and fra
 // Sent when a refine or an end frame from a frame carries the shot's character or set references after that frame.
 export const MUSIC_VIDEO_OTHER_REFERENCES_NOTE = 'The other reference images show the characters and places in this shot: keep their faces, hair and wardrobe as shown there.';
 
-/** The director's text for a shot's start or end frame. */
+/**
+ * The director's text for a shot's start or end frame. A sheet-built start
+ * frame's text is its general prompt alone (its ingredients are composed in),
+ * so it never borrows the motion prompt.
+ */
 export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end'
   ? scene?.endFramePrompt?.trim() || ''
-  : scene?.framePrompt?.trim() || scene?.prompt?.trim() || '');
+  : scene?.framePrompt?.trim() || (shotSheetDrivesPrompt(scene) ? '' : scene?.prompt?.trim() || ''));
 
 // Which panel id list names a subject of each kind.
 const PANEL_SUBJECT_IDS = { character: 'castIds', place: 'environmentIds', object: 'objectIds' };
@@ -226,9 +231,12 @@ function composeFrameModelInput(project, scene, {
     return { prompt: [`${text}. ${KEEP_REFERENCE}`, others?.text].filter(Boolean).join(' '),
       promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE), others].filter(Boolean) };
   }
+  // A sheet-built still's ingredients follow its general prompt, each its own labeled part.
+  const sheet = slot === 'start' ? shotSheetPromptLines(project, scene) : [];
+  const shotText = [text, ...sheet.map((item) => item.text)].filter(Boolean).join('\n');
   const board = slot === 'start' && !fromFrame ? panel : null;
   const storyboard = board ? [
-    text ? null : addition('storyboard-action', 'Storyboard action', board.action),
+    shotText ? null : addition('storyboard-action', 'Storyboard action', board.action),
     addition('storyboard-shot', 'Storyboard shot', storyboardPanelShotText(board)),
     panelReference > 0 ? addition('storyboard-sketch', 'Storyboard sketch', storyboardSketchNote(panelReference)) : null,
   ].filter(Boolean) : [];
@@ -246,8 +254,8 @@ function composeFrameModelInput(project, scene, {
   ].filter(Boolean);
   const lookText = look.map((item) => item.text).join(', ');
   // The storyboard leads on its own lines, ahead of the long look blocks.
-  const firstLine = storyboard.length
-    ? [text, ...storyboard.map((item) => item.text), lookText].filter(Boolean).join('\n')
+  const firstLine = storyboard.length || sheet.length
+    ? [shotText, ...storyboard.map((item) => item.text), lookText].filter(Boolean).join('\n')
     : [text, lookText].filter(Boolean).join(', ');
   if (slot === 'end') return { prompt: firstLine, promptAdditions: look };
   const unmet = [...new Set(repairs)];
@@ -257,7 +265,7 @@ function composeFrameModelInput(project, scene, {
     addition('plate-repairs', 'Plate repairs', unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${unmet.join('\n')}` : ''),
     addition('repair-notes', 'Repair notes', fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''),
   ].filter(Boolean);
-  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...storyboard, ...look, ...tail] };
+  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...sheet, ...storyboard, ...look, ...tail] };
 }
 
 const withGreybox = (input, greybox) => {
