@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 vi.mock('../services/socket', async () => {
   const { EventEmitter } = await import('events');
   return { default: new EventEmitter() };
@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../services/api', () => api);
 import UsagePage from './UsagePage';
+import { getNativeUsageMatrix as requestNativeMatrix } from '../services/apiSystem';
 const codex = (tokens = 123456, extra = {}) => ({ family: 'codex', status: 'available',
   totals: { lifetimeTokens: tokens, dailyBuckets: [{ startDate: '2026-01-31', tokens: 10 }, { startDate: '2026-02-01', tokens: 20 }, { startDate: '2026-02-03', tokens: 30 }] },
   runtime: { status: 'observed', versions: ['1.2.3'] }, ...extra,
@@ -27,8 +28,31 @@ const snapshot = (...providers) => ({ mode: 'read-only', scope: 'local-instance'
     retained('claude', 1434), retained('grok', 9876, { cost: { nativeCostSignal: { knownCostUsdTicks: 7654, measuredRecords: 2, missingRecords: 1, conflictingRecords: 0 } } }),
     retained('agy', null, { totals: { totalTokens: null, tokensIn: 40, tokensOut: 20, cacheReadTokens: 200, cacheWriteTokens: 0, thinkingOutputTokens: 12, responseOutputTokens: 8 }, tokenFields: { totalTokens: 'unverified-overlap' } }),
   ], families: [], refusals: [] });
-function Location() { return <output aria-label="Location">{useLocation().search}</output>; }
-const show = () => render(<MemoryRouter initialEntries={['/devtools/usage']}><UsagePage /><Location /></MemoryRouter>);
+const fleetSnapshot = () => {
+  const local = snapshot();
+  const participantKey = 'a'.repeat(32);
+  const peerKey = 'b'.repeat(32);
+  const capturedAt = '2026-02-04T12:00:00Z';
+  return { ...local, scope: 'configured-peers', peerReports: 'collected', participantKey,
+    peerCollection: { status: 'partial', maxPeers: 8, requested: 2, received: 1,
+      peers: [{ participantKey: peerKey, status: 'available', capturedAt },
+        { participantKey: 'c'.repeat(32), status: 'stale', capturedAt: '2026-02-01T12:00:00Z' },
+        { participantKey: 'd'.repeat(32), status: 'invalid', capturedAt: null },
+        { participantKey: 'e'.repeat(32), status: 'not-configured', capturedAt: null },
+        { participantKey: null, status: 'identity-unknown', capturedAt: null }], findings: ['peer-report-stale'] },
+    participants: [{ participantKey, capturedAt, providers: local.providers },
+      { participantKey: peerKey, capturedAt, providers: [retained('claude', 9999, {
+        freshness: { earliestObserved: '2026-02-01T12:00:00Z', latestObserved: '2026-02-03T12:00:00Z' },
+        coverage: { measuredRecords: 4000, missingUsageRecords: 12 },
+      })] }],
+  };
+};
+function Location() {
+  const navigate = useNavigate();
+  return <><output aria-label="Location">{useLocation().search}</output>
+    <button type="button" onClick={() => navigate(-1)}>Back</button><button type="button" onClick={() => navigate(1)}>Forward</button></>;
+}
+const show = (path = '/devtools/usage') => render(<MemoryRouter initialEntries={[path]}><UsagePage /><Location /></MemoryRouter>);
 beforeEach(() => {
   vi.clearAllMocks();
   api.getNativeUsageMatrix.mockResolvedValue(snapshot());
@@ -38,6 +62,7 @@ beforeEach(() => {
   api.getUsageRollingCost.mockResolvedValue({ windowDays: 30, series: [], points: [] });
   api.getClaudeCodeModelUsage.mockResolvedValue({ filesScanned: 0, models: [], totals: {} });
 });
+afterEach(() => vi.restoreAllMocks());
 const read = () => fireEvent.click(screen.getByRole('button', { name: 'Read native sources' }));
 const refresh = () => fireEvent.click(screen.getByRole('button', { name: 'Refresh native sources' }));
 const card = name => screen.getByRole('region', { name: `${name} native history` });
@@ -53,7 +78,7 @@ describe('native usage default view', () => {
     expect(api.getClaudeCodeModelUsage).not.toHaveBeenCalled();
     read();
     expect(await screen.findByText('123,456')).toBeInTheDocument();
-    expect(api.getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ scope: 'local' }, { silent: true });
     expect(metric(card('Claude Code'), 'Measured retained tokens')).toHaveTextContent('1,434');
     expect(metric(card('Grok'), 'Measured retained tokens')).toHaveTextContent('9,876');
     expect(metric(card('Grok'), 'Native cost ticks (unverified scope)')).toHaveTextContent('7,654');
@@ -158,5 +183,89 @@ describe('native usage default view', () => {
     await act(async () => { finishOld(snapshot(codex(999))); });
     expect(screen.queryByText('999')).not.toBeInTheDocument();
     expect(screen.getByText('123,456')).toBeInTheDocument();
+  });
+
+  it('shows fleet collection failures and accepted participant coverage without mixing local counters or asserting account identity', async () => {
+    api.getNativeUsageMatrix.mockResolvedValueOnce(fleetSnapshot());
+    show('/devtools/usage?nativeScope=fleet');
+    expect(screen.getByLabelText('Native history scope')).toHaveValue('fleet');
+    expect(api.getNativeUsageMatrix).not.toHaveBeenCalled();
+    read();
+    const collection = await screen.findByRole('region', { name: 'Configured peer collection' });
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ scope: 'fleet' }, { silent: true });
+    expect(collection).toHaveTextContent('partial · 1 received / 2 requested');
+    expect(collection).toHaveTextContent('Up to 8 eligible peers');
+    expect(collection).toHaveTextContent('does not verify account identity or complete history');
+    expect(collection).toHaveTextContent('Missing reports are not zero usage');
+    expect(within(collection).getByRole('link', { name: 'Manage peers' })).toHaveAttribute('href', '/instances');
+    expect(collection).toHaveTextContent('Report is stale');
+    expect(collection).toHaveTextContent('Report is invalid');
+    expect(collection).toHaveTextContent('Selected member is not a configured peer');
+    expect(collection).toHaveTextContent('Unknown identity 5');
+    expect(collection).toHaveTextContent('aaaaaaaa · Local instance');
+    expect(collection).not.toHaveTextContent('a'.repeat(32));
+    fireEvent.click(within(collection).getByText(/bbbbbbbb · Peer · Captured/));
+    const peer = within(collection).getByRole('region', { name: 'Claude Code coverage for bbbbbbbb' });
+    expect(peer).toHaveTextContent('partial');
+    expect(peer).toHaveTextContent('4,000');
+    expect(peer).toHaveTextContent('Latest observed');
+    expect(peer).not.toHaveTextContent('2026-02-03T12:00:00Z');
+    expect(within(collection).getByRole('region', { name: 'Grok coverage for bbbbbbbb' })).toHaveTextContent('unavailable');
+    expect(metric(card('Claude Code'), 'Measured retained tokens')).toHaveTextContent('1,434');
+    expect(screen.queryByText('9,999')).not.toBeInTheDocument();
+    expect(card('Claude Code')).toHaveTextContent('Configured-peer collection: partial');
+    expect(card('Claude Code')).toHaveTextContent('not a fleet-complete total');
+    expect(screen.queryByText(/Peer reports are not collected/)).not.toBeInTheDocument();
+  });
+
+  it('clears snapshots on scope changes and browser navigation without automatic reads', async () => {
+    show('/devtools/usage?nativeMonth=2026-01'); read();
+    await screen.findByText('123,456');
+    fireEvent.change(screen.getByLabelText('Native history scope'), { target: { value: 'fleet' } });
+    expect(screen.getByLabelText('Location')).toHaveTextContent('nativeScope=fleet');
+    expect(screen.getByLabelText('Location')).not.toHaveTextContent('nativeMonth');
+    expect(screen.queryByText('123,456')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Not scanned yet/)).toHaveLength(4);
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(1);
+    api.getNativeUsageMatrix.mockResolvedValueOnce(fleetSnapshot());
+    read(); await screen.findByRole('region', { name: 'Configured peer collection' });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByLabelText('Native history scope')).toHaveValue('local');
+    expect(screen.queryByRole('region', { name: 'Configured peer collection' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Not scanned yet/)).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+    expect(screen.getByLabelText('Native history scope')).toHaveValue('fleet');
+    expect(screen.getAllByText(/Not scanned yet/)).toHaveLength(4);
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends selected fleet scope through the HTTP wrapper without treating request options as query params', async () => {
+    const fetchRequest = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => fleetSnapshot() });
+    api.getNativeUsageMatrix.mockImplementationOnce(requestNativeMatrix);
+    show('/devtools/usage?nativeScope=fleet');
+    expect(fetchRequest).not.toHaveBeenCalled();
+    read(); await screen.findByRole('region', { name: 'Configured peer collection' });
+    expect(fetchRequest).toHaveBeenCalledExactlyOnceWith('/api/usage/native-matrix?scope=fleet', { headers: { 'Content-Type': 'application/json' } });
+  });
+
+  it('disposes pending scope reads, including late failures, without overwriting a newer read', async () => {
+    let finishLocal;
+    let failFleet;
+    api.getNativeUsageMatrix.mockImplementationOnce(() => new Promise(resolve => { finishLocal = resolve; }));
+    show(); read();
+    fireEvent.change(screen.getByLabelText('Native history scope'), { target: { value: 'fleet' } });
+    expect(screen.getByRole('button', { name: 'Read native sources' })).toBeEnabled();
+    api.getNativeUsageMatrix.mockImplementationOnce(() => new Promise((_, reject) => { failFleet = reject; }));
+    read();
+    fireEvent.change(screen.getByLabelText('Native history scope'), { target: { value: 'local' } });
+    read(); await screen.findByText('123,456');
+    await act(async () => {
+      finishLocal(snapshot(codex(999)));
+      failFleet(new Error('Synthetic delayed peer failure'));
+    });
+    expect(screen.queryByText('999')).not.toBeInTheDocument();
+    expect(screen.getByText('123,456')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(3);
   });
 });

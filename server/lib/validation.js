@@ -1692,7 +1692,8 @@ const isoDay = z.string()
   }, { message: 'Not a valid calendar date' });
 
 export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
-export const nativeUsageMatrixQuerySchema = z.object({}).strict();
+export const nativeUsageMatrixQuerySchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
+export const nativeUsagePeerReportQuerySchema = z.object({ challenge: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 /**
  * Query params for GET /api/usage — either a preset period or an explicit

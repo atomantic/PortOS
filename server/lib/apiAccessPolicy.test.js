@@ -64,6 +64,11 @@ describe('peer API surface (#8387)', () => {
     expect(isPeerApiRequestAllowed('POST', '/api/peer-sync/push')).toBe(true);
     expect(isPeerApiRequestAllowed('GET', '/api/peer-sync/manifest')).toBe(true);
     expect(isPeerApiRequestAllowed('HEAD', '/data/images/example.png')).toBe(true);
+    expect(isPeerApiRequestAllowed('GET', '/api/usage/native-report/v1')).toBe(true);
+    expect(isPeerApiRequestAllowed('HEAD', '/api/usage/native-report/v1')).toBe(true);
+    expect(isPeerApiRequestAllowed('POST', '/api/usage/native-report/v1')).toBe(false);
+    expect(isPeerApiRequestAllowed('GET', '/api/usage/native-report/v1/extra')).toBe(false);
+    expect(isPeerApiRequestAllowed('GET', '/api/usage/native-matrix')).toBe(false);
     expect(isPeerApiRequestAllowed('GET', '/api/apps/')).toBe(true);
     // Operator mutations beside allowed reads stay closed.
     expect(isPeerApiRequestAllowed('POST', '/api/peer-sync/sync-now')).toBe(false);

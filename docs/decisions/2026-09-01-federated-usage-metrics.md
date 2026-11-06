@@ -111,6 +111,19 @@ It carries:
   Each origin sends at most 10,000 receipts and reports truncation as partial.
   They travel only under the user-controlled `usage` sync category and remain
   in the peer usage snapshot until replaced or its origin is retired.
+- An explicit, separate native-report read may exchange v4 accounting
+  projections with an enabled, user-established, paired usage peer. It carries
+  domain-separated hashes of native message/request/session-turn/response
+  identities, measured counters, timestamps, numeric provider/model enums,
+  conflict/finality flags and bounded source coverage. These are linkable
+  pseudonymous accounting records, not anonymous aggregates. They are needed
+  to deduplicate copied native files across the same selected account.
+  The challenge-signed report is source/audience bound, at most 16 MiB, and
+  accepted for five minutes (30 seconds of future clock allowance). It is
+  never saved in the usage digest, forwarded, or exposed to the browser.
+  The browser receives only aggregate coverage and selected-account results.
+  Usage category/direction controls remain in force, even with authentication
+  otherwise disabled; unpaired legacy peers cannot use this new protocol.
 
 It carries no prompts, no transcripts, no record contents, no file paths, and
 nothing about the human. The rejected alternative — federating the raw

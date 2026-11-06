@@ -61,7 +61,7 @@ const responses = {
     }))],
     families: ['claude', 'agy', 'grok', 'codex'].map(family => ({ family,
       merge: { status: 'refused', reasons: ['member-report-missing'], totals: null },
-      accounts: [{ accountLabel: 'example-subscription', status: 'refused', totals: null, members: ['local', 'peer'], membersWithoutReport: ['peer'], findings: ['retained-history-completeness-unknown'] }],
+      accounts: [{ accountLabel: 'example-subscription-with-long-unbroken-label-for-geometry-check', status: 'refused', totals: null, members: ['local', 'peer'], membersWithoutReport: ['peer'], findings: ['retained-history-completeness-unknown'] }],
     })),
     refusals: [{ code: 'member-report-missing', family: 'claude' }],
   },
@@ -83,6 +83,24 @@ const responses = {
     limits: [], error: 'Every window in this reading has since reset — refresh for a current one.' }] },
 };
 
+const nativeFleetResponse = {
+  ...responses['/usage/native-matrix'], scope: 'configured-peers', peerReports: 'collected', participantKey: 'a'.repeat(32),
+  peerCollection: { status: 'partial', maxPeers: 8, requested: 3, received: 1,
+    peers: [{ participantKey: 'b'.repeat(32), status: 'available', capturedAt: '2026-11-06T12:00:00Z' },
+      { participantKey: 'c'.repeat(32), status: 'stale', capturedAt: '2026-11-01T12:00:00Z' },
+      { participantKey: 'd'.repeat(32), status: 'invalid', capturedAt: null },
+      { participantKey: null, status: 'identity-unknown', capturedAt: null }], findings: ['peer-report-stale'] },
+  participants: ['a', 'b'].map(prefix => ({ participantKey: prefix.repeat(32), capturedAt: '2026-11-06T12:00:00Z',
+    providers: responses['/usage/native-matrix'].providers,
+  })),
+};
+
+function fixtureResponse(url) {
+  const key = url.pathname.slice(4);
+  if (key === '/usage/native-matrix' && url.searchParams.get('scope') === 'fleet') return nativeFleetResponse;
+  return Object.hasOwn(responses, key) ? responses[key] : {};
+}
+
 // Real route components and Tailwind, synthetic API only. Layout's classification
 // test covers its main; this models the available space beside the global rail.
 describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
@@ -94,8 +112,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       // a geometry assertion's interaction timeout.
       warmup: async (page, origin) => {
         await page.route('**/api/**', route => {
-          const key = new URL(route.request().url()).pathname.slice(4);
-          return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
+          return route.fulfill({ json: fixtureResponse(new URL(route.request().url())) });
         });
         await page.goto(`${origin}layout-test?route=/code-animation/gallery`, { waitUntil: 'domcontentloaded' });
         await page.locator('h1').waitFor();
@@ -165,7 +182,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       if (url.origin !== new URL(fixture.origin).origin) return route.abort();
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const key = url.pathname.slice(4);
-      if (key === '/usage/native-matrix' || key === '/usage/native-coverage') nativeReads.push(key);
+      if (key === '/usage/native-matrix' || key === '/usage/native-coverage') nativeReads.push(`${key}${url.search}`);
       if (key === '/usage/fleet-billing' && route.request().method() === 'PUT') {
         const body = route.request().postDataJSON();
         billed = !body.usesSubscriptions;
@@ -178,7 +195,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           .filter(card => scope !== 'peers' || card.origin?.self === false);
         return route.fulfill({ json: { providers, federationUnavailable: false, excludedInstanceIds: billed ? ['synthetic-peer'] : [] } });
       }
-      return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
+      return route.fulfill({ json: fixtureResponse(url) });
     });
     try {
       for (const path of ['/code-animation/gallery', '/cos/agents', '/cos/health', '/system-resources/storage', '/devtools/usage']) {
@@ -194,19 +211,30 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           expect(await page.getByText(/Not scanned yet/).count()).toBe(4);
           await page.getByRole('button', { name: 'Read native sources', exact: true }).click();
           await page.getByText('104,255,445,839', { exact: true }).waitFor();
-          expect(nativeReads).toEqual(['/usage/native-matrix']);
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local']);
+          await page.getByLabel('Native history scope', { exact: true }).selectOption('fleet');
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local']);
+          expect(await page.getByText('104,255,445,839', { exact: true }).count()).toBe(0);
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).click();
+          const collection = page.getByRole('region', { name: 'Configured peer collection', exact: true });
+          await collection.waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local', '/usage/native-matrix?scope=fleet']);
+          expect(await collection.getByText('Report is stale', { exact: true }).count()).toBe(1);
+          expect(await collection.getByText('Report is invalid', { exact: true }).count()).toBe(1);
+          for (const summary of await collection.locator('summary').all()) await summary.click();
           await page.getByText('Daily native token history', { exact: true }).click();
           await page.getByRole('table').waitFor();
           const nativeCards = page.getByRole('region', { name: /native history$/ });
           expect(await nativeCards.count()).toBe(4);
-          for (const card of await nativeCards.all()) {
-            await card.getByText('Source coverage and limits', { exact: true }).click();
+          for (const card of await nativeCards.all()) await card.getByText('Source coverage and limits', { exact: true }).click();
+          for (const card of [...await nativeCards.all(), collection]) {
             const nativeGeometry = await card.evaluate(card => {
               const bounds = card.getBoundingClientRect();
               const body = document.querySelector('main').firstElementChild.lastElementChild;
               const bodyBounds = body.getBoundingClientRect();
               const bodyStyle = getComputedStyle(body);
-              const children = [...card.querySelectorAll('dt, dd, select, table')].filter(child => child.getClientRects().length);
+              const children = [...card.querySelectorAll('dt, dd, select, table, summary, li, h2, h3, h4, p')].filter(child => child.getClientRects().length);
               return {
                 overflow: card.scrollWidth > card.clientWidth + 1,
                 left: bounds.left, right: bounds.right,

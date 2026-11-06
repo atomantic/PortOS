@@ -5,7 +5,7 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, nativeUsageCoverageQuerySchema, nativeUsageMatrixQuerySchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
+import { validateRequest, nativeUsageCoverageQuerySchema, nativeUsageMatrixQuerySchema, nativeUsagePeerReportQuerySchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -22,10 +22,16 @@ import {
 
 const router = Router();
 
+router.get('/native-report/v1', asyncHandler(async (req, res) => {
+  const { challenge } = validateRequest(nativeUsagePeerReportQuerySchema, req.query);
+  const { getNativeUsagePeerReport } = await import('../services/nativeUsagePeer.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge));
+}));
+
 router.get('/native-matrix', asyncHandler(async (req, res) => {
-  validateRequest(nativeUsageMatrixQuerySchema, req.query);
+  const query = validateRequest(nativeUsageMatrixQuerySchema, req.query);
   const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
-  res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix());
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix(query));
 }));
 
 // Explicit, uncached diagnostic read. Never consumed by fleet aggregation.
