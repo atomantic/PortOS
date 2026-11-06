@@ -278,3 +278,26 @@ it('asks for a shorter clip when a cold open exceeds the LTX frame limit', async
   expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/split it or choose a shorter clip length/i));
   cleanup();
 });
+
+// Uniquely catches losing the reference picker's catalog snapshot on start/end still and clip submits.
+it('binds shot render inputs to the catalog basis the board displayed', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', prompt: 'A rider turns', endFramePrompt: 'A rider leaves', referenceImageId: 'start.png',
+    startSec: 0, endSec: 4, takes: [] };
+  const catalogBasis = 'a'.repeat(64);
+  const project = { id: 'p-basis', scenes: [shot], castAndSets: { source: 'catalog', catalogCheckin: { basis: catalogBasis, items: [] } } };
+  getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+  generateImage.mockClear();
+  generateVideo.mockResolvedValue({ jobId: 'clip', status: 'queued' });
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project,
+    videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
+  await act(async () => { await result.current.generateFrame(shot); });
+  await act(async () => { await result.current.generateEndFrame(shot); });
+  expect(generateImage.mock.calls.map(([body]) => body.musicVideo)).toEqual([
+    expect.objectContaining({ catalogBasis, sceneId: 's1' }),
+    expect.objectContaining({ catalogBasis, sceneId: 's1', slot: 'end' }),
+  ]);
+  await act(async () => { await result.current.generateSceneVideo(shot); });
+  expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ catalogBasis });
+  cleanup();
+});

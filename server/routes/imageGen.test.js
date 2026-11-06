@@ -258,6 +258,42 @@ describe('Image Gen Routes', () => {
     expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches the HTTP schema stripping the catalog basis before preparation.
+  it('accepts current unapproved catalog references and refuses a stale page before queueing', async () => {
+    await fileUtils.ensureDir(fileUtils.PATHS.images);
+    for (const file of ['catalog-live.png', 'catalog-updated.png']) await writeFile(pathJoin(fileUtils.PATHS.images, file), 'fixture');
+    const basis = 'a'.repeat(64);
+    const project = { scenes: [{ sceneId: 's1' }], castAndSets: { source: 'catalog',
+      catalogCheckin: { approved: false, problems: [], items: [], basis } } };
+    catalogDispatch.getProject.mockResolvedValue(project);
+    catalogDispatch.hydrate.mockImplementation(async value => value);
+    getSettings.mockResolvedValue({ imageGen: { mode: 'codex', codex: { enabled: true } } });
+    const body = { mode: 'codex', prompt: 'A synthetic scene', referenceImageFiles: ['catalog-live.png'],
+      musicVideo: { projectId: 'mv-example', sceneId: 's1', catalogBasis: basis } };
+    try {
+      const current = await request(app).post('/api/image-gen/generate').send(body);
+      expect(current.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({
+        musicVideo: { catalogBasis: basis }, musicVideoCatalogBasis: basis,
+        referenceImagePaths: [pathJoin(fileUtils.PATHS.images, 'catalog-live.png')],
+      });
+      project.castAndSets.catalogCheckin.basis = 'b'.repeat(64);
+      mediaJobQueue.enqueueJob.mockClear();
+      const stale = await request(app).post('/api/image-gen/generate').send(body);
+      expect(stale.status).toBe(409);
+      expect(stale.body.code).toBe('CAST_SETS_CATALOG_REFERENCE_CHANGED');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+      const refreshed = await request(app).post('/api/image-gen/generate').send({ ...body,
+        referenceImageFiles: ['catalog-updated.png'], musicVideo: { ...body.musicVideo, catalogBasis: project.castAndSets.catalogCheckin.basis } });
+      expect(refreshed.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths)
+        .toEqual([pathJoin(fileUtils.PATHS.images, 'catalog-updated.png')]);
+    } finally {
+      catalogDispatch.getProject.mockResolvedValue(null);
+      getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+    }
+  });
+
   it('deletes an image on the machine that owns it and reports a pending delete as pending', async () => {
     const res = await request(app).delete('/api/image-gen/fox.png');
     expect(res.status).toBe(200);

@@ -695,7 +695,7 @@ export default function SceneCard({
               grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
-                musicVideo: { projectId: project.id, sceneId: scene.sceneId, compose: true, promptAsTyped: true, ...songAudioField },
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}

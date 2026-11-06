@@ -28,6 +28,15 @@ export async function requireCatalogRenderReady(project) {
   return current;
 }
 
+/** Bind caller-selected files to the catalog snapshot shown in its reference picker. */
+export function assertCatalogInputBasis(project, basis, { required = false } = {}) {
+  if (project?.castAndSets?.source !== 'catalog') return;
+  if ((required || basis != null) && basis !== project.castAndSets.catalogCheckin?.basis) {
+    throw new ServerError('The catalog references changed. Reload this shot and select the current references before rendering.',
+      { status: 409, code: 'CAST_SETS_CATALOG_REFERENCE_CHANGED' });
+  }
+}
+
 /** Submitted file lists must not reintroduce saved generated sheets behind the reference picker. */
 export function assertCatalogReferenceFiles(project, files) {
   if (files.some(imageId => imageId && isLegacyCatalogReference(project, { imageId }))) {

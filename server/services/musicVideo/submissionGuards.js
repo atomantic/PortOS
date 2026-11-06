@@ -155,8 +155,11 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   const { getProject } = await import('./projects.js');
   let project = await getProject(musicVideo.projectId);
   if (project?.castAndSets?.source === 'catalog') {
-    const { requireCatalogRenderReady, assertCatalogReferenceFiles } = await import('./clipCastReferences.js');
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('./clipCastReferences.js');
     project = await requireCatalogRenderReady(project);
+    assertCatalogInputBasis(project, musicVideo.catalogBasis, {
+      required: !!(body.referenceImageFiles?.length || body.icReferenceImageFiles?.length),
+    });
     params.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
     assertCatalogReferenceFiles(project, [
       prepared.sourceImagePath, prepared.lastImagePath, params.lastImagePath,

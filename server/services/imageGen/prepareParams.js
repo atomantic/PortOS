@@ -394,8 +394,9 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
-    const { requireCatalogRenderReady, assertCatalogReferenceFiles } = await import('../musicVideo/clipCastReferences.js');
+    const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');
     const project = await requireCatalogRenderReady(musicVideoProjectLoaded ? musicVideoProject : await getMusicVideoProject(data.musicVideo.projectId));
+    assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
     assertCatalogReferenceFiles(project, [...namedReferenceFiles, data.initImageFile]);
     if (project?.castAndSets?.source === 'catalog') data.musicVideoCatalogBasis = project.castAndSets.catalogCheckin.basis;
     const standardSize = musicVideoFrameGenSize(project);
