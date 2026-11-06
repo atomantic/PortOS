@@ -2056,6 +2056,11 @@ export const musicVideoSceneStartSchema = z.object({
   startSec: z.number().finite().nonnegative(),
 }).strict();
 
+// Move where a shot ends; the next shot starts there too, so it grows or shrinks to meet it.
+export const musicVideoSceneEndSchema = z.object({
+  endSec: z.number().finite().positive(),
+}).strict();
+
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider
 // for a first-pass framePrompt/prompt per scene — best-effort, never fails the

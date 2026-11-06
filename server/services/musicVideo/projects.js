@@ -349,12 +349,60 @@ export async function reorderProjectScenes(id, orderedIds) {
  * two at `options.atSec`. A locked still stays locked on every piece. Returns `{ project, scenes }` — the persisted project and the pieces.
  */
 export async function splitProjectScene(id, sceneId, options = {}) {
-  const [{ splitScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  return mutateProjectRecord(id, (current) => {
-    const outcome = splitScene(current, sceneId, options);
-    const from = Object.fromEntries(outcome.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
-    return { ...outcome, project: carryShotLocks(current, outcome.project, { from }) };
+  const [{ splitScene }, { carryShotLocks }, followShots] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js'), import('../storyboards/followShots.js')]);
+  // A board with no room for the new panels refuses before the shots change.
+  const stored = await (await selectBackend()).getProject(id);
+  if (!stored) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
+  const panelIds = followShots.boardFollowsShots(stored)
+    ? await followShots.reservePanelsForSplit(stored, sceneId, splitScene(stored, sceneId, options).scenes.length - 1) : [];
+  const outcome = await mutateProjectRecord(id, (current) => {
+    const split = splitScene(current, sceneId, options);
+    const from = Object.fromEntries(split.scenes.slice(1).map((piece) => [piece.sceneId, sceneId]));
+    if (!panelIds.length) return { ...split, project: carryShotLocks(current, split.project, { from }) };
+    if (split.scenes.length - 1 !== panelIds.length) throw new ServerError('The shot changed while it was being split. Try again.', { status: 409, code: 'SHOTS_CHANGED' });
+    // Each later piece gets a panel of its own, so the shots stay 1:1 with the board.
+    const ownPanel = new Map(split.scenes.slice(1).map((piece, i) => [piece.sceneId, panelIds[i]]));
+    const scenes = split.project.scenes.map((scene) => (ownPanel.has(scene.sceneId) ? { ...scene, panelId: ownPanel.get(scene.sceneId) } : scene));
+    const project = carryShotLocks(current, { ...split.project, scenes }, { from });
+    return { project, scenes: split.scenes.map((piece) => (ownPanel.has(piece.sceneId) ? { ...piece, panelId: ownPanel.get(piece.sceneId) } : piece)) };
   });
+  if (!panelIds.length) return outcome;
+  const [first, ...later] = outcome.scenes;
+  await followShots.applyShotEditToBoard(outcome.project, {
+    lengths: [followShots.panelLength(first)].filter(Boolean),
+    copies: later.map((piece) => ({ fromPanelId: first.panelId, id: piece.panelId, seconds: followShots.panelLength(piece)[1] })),
+  });
+  return afterBoardWrite(id, outcome);
+}
+
+// The board write's sync may have touched the shots, so answer with the record as it is now.
+async function afterBoardWrite(id, outcome) {
+  const project = await getProject(id);
+  const fresh = (scene) => project.scenes?.find((entry) => entry.sceneId === scene?.sceneId) ?? scene;
+  return { ...outcome, project,
+    ...(outcome.scene ? { scene: fresh(outcome.scene) } : {}),
+    ...(outcome.scenes ? { scenes: outcome.scenes.map(fresh) } : {}),
+    ...(outcome.previous ? { previous: fresh(outcome.previous) } : {}),
+    ...(outcome.next ? { next: fresh(outcome.next) } : {}),
+  };
+}
+
+/** A merge's panels: the kept shot's takes the joined length and the removed shot's goes. */
+async function mergeIntoBoard(id, before, outcome) {
+  const followShots = await import('../storyboards/followShots.js');
+  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  const stillThere = new Set(outcome.project.scenes.map((scene) => scene.sceneId));
+  const removed = before.filter((scene) => !stillThere.has(scene.sceneId) && scene.panelId && scene.panelId !== outcome.scene.panelId).map((scene) => scene.panelId);
+  await followShots.applyShotEditToBoard(outcome.project, { lengths: [followShots.panelLength(outcome.scene)].filter(Boolean), remove: removed });
+  return afterBoardWrite(id, outcome);
+}
+
+/** A moved cut's panels: both shots beside it take their new lengths. */
+async function moveCutOnBoard(id, outcome, shots) {
+  const followShots = await import('../storyboards/followShots.js');
+  if (!followShots.boardFollowsShots(outcome.project)) return outcome;
+  await followShots.applyShotEditToBoard(outcome.project, { lengths: shots.map(followShots.panelLength).filter(Boolean) });
+  return afterBoardWrite(id, outcome);
 }
 
 /** Cut shots on sung words over the chosen lyric lines, or lay them out on an empty board (projectsLogic.cutScenesOnLyricWords, #14820). */
@@ -386,7 +434,9 @@ export async function recutProjectToPacing(id, revision) {
  */
 export async function mergeProjectNextScene(id, sceneId, options = {}) {
   const { mergeNextScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergeNextScene(current, sceneId, options));
+  let before = [];
+  const outcome = await mutateProjectRecord(id, (current) => { before = current.scenes || []; return mergeNextScene(current, sceneId, options); });
+  return mergeIntoBoard(id, before, outcome);
 }
 
 /**
@@ -396,7 +446,9 @@ export async function mergeProjectNextScene(id, sceneId, options = {}) {
  */
 export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
   const { mergePreviousScene } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => mergePreviousScene(current, sceneId, options));
+  let before = [];
+  const outcome = await mutateProjectRecord(id, (current) => { before = current.scenes || []; return mergePreviousScene(current, sceneId, options); });
+  return mergeIntoBoard(id, before, outcome);
 }
 
 /**
@@ -404,13 +456,14 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
-  const { applySceneUpdate } = await import('./projectsLogic.js');
-  return mutateProjectRecord(id, (current) => {
+  const [{ applySceneUpdate }, { assertBoardHoldsFirstStart }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
     if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
     const scene = scenes[index];
     const previous = index > 0 ? scenes[index - 1] : null;
+    if (typeof previous?.startSec !== 'number') assertBoardHoldsFirstStart(current, startSec);
     if (typeof scene.endSec === 'number' && startSec >= scene.endSec) {
       throw new ServerError('A shot has to start before it ends', { status: 400, code: 'VALIDATION_ERROR' });
     }
@@ -421,6 +474,42 @@ export async function moveProjectSceneStart(id, sceneId, { startSec }) {
     if (previous) project = applySceneUpdate(project, previous.sceneId, { endSec: startSec }).project;
     return { project, scene: project.scenes[index], previous: previous ? project.scenes[index - 1] : null };
   });
+  return moveCutOnBoard(id, outcome, [outcome.previous, outcome.scene]);
+}
+
+// The shortest shot a moved end leaves behind it (projectsLogic MIN_SPLIT_PIECE_SEC).
+const MIN_SHOT_SEC = 0.1;
+
+/**
+ * Move the cut after a shot: the shot ends at `endSec` and the next shot starts
+ * there, growing or shrinking to meet it while its own end stays put. The last
+ * shot just ends there, inside the song. Returns `{ project, scene, next }`.
+ */
+export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
+  const [{ applySceneUpdate }, { assertBoardHoldsLastEnd }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
+  const outcome = await mutateProjectRecord(id, (current) => {
+    const scenes = current.scenes || [];
+    const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
+    if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
+    const scene = scenes[index];
+    const following = scenes[index + 1];
+    const next = following && typeof following.startSec === 'number' && typeof following.endSec === 'number' ? following : null;
+    if (typeof scene.startSec === 'number' && endSec < scene.startSec + MIN_SHOT_SEC) {
+      throw new ServerError(`A shot has to run at least ${MIN_SHOT_SEC}s`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (next && endSec > next.endSec - MIN_SHOT_SEC) {
+      throw new ServerError('That would leave the next shot with no length. Merge the two shots instead, or pick an earlier end.', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    const songSec = current.audioAnalysis?.durationSec;
+    if (!next && songSec > 0 && endSec > songSec) {
+      throw new ServerError('The last shot can\'t run past the end of the song', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (!next) assertBoardHoldsLastEnd(current, endSec);
+    let project = applySceneUpdate(current, sceneId, { endSec }).project;
+    if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
+    return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
+  });
+  return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
 }
 
 /**

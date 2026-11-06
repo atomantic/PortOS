@@ -29,6 +29,7 @@ import {
   cutMusicVideoScenesOnLyrics,
   mergeMusicVideoNextScene, mergeMusicVideoPreviousScene,
   moveMusicVideoSceneStart,
+  moveMusicVideoSceneEnd,
   reorderMusicVideoScenes,
   importMusicVideoLyrics,
   importMusicVideoTrackLyrics,
@@ -1326,6 +1327,11 @@ function ProjectWorkspace({
     .then(({ project }) => replaceProject(project))
     .catch((err) => toast.error(err?.message || 'Failed to move the shot start'));
 
+  // Move the cut after a shot: it ends at `endSec` and the next shot starts there, growing or shrinking.
+  const handleMoveSceneEnd = (sceneId, endSec) => moveMusicVideoSceneEnd(selected.id, sceneId, endSec, { silent: true })
+    .then(({ project }) => replaceProject(project))
+    .catch((err) => toast.error(err?.message || 'Failed to change the shot length'));
+
   const moveScene = (idx, dir) => {
     const scenes = selected.scenes || [];
     const target = idx + dir;
@@ -1709,6 +1715,7 @@ function ProjectWorkspace({
     onMergeNextScene: handleMergeNextScene,
     onMergePreviousScene: handleMergePreviousScene,
     onMoveSceneStart: handleMoveSceneStart,
+    onMoveSceneEnd: handleMoveSceneEnd,
     onRepairPerformance: revisions.repairPerformance,
     repairBusy: revisions.busy,
     onRenderStyle: (mode) => {
