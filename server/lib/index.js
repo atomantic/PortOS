@@ -953,6 +953,8 @@ export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
 export * from './musicVideoCameos.js';
+export * from './musicVideoRouteMapLimits.js';
+export * from './musicVideoRouteMaps.js';
 export * from './musicVideoShotSheet.js';
 export * from './musicVideoSubjectScale.js';
 export * from './musicVideoCreditsOutro.js';

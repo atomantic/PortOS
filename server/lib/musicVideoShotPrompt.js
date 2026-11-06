@@ -22,6 +22,7 @@ import { storyboardPanelShotText } from './storyboardRecipe.js';
 import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
+import { routeMapShotText } from './musicVideoRouteMaps.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -97,6 +98,8 @@ function composeShotModelInput(project, scene, {
   // A take that hears no audio cannot land a move on the downbeat; the shot card's camera stays as shown.
   const cameraSpec = !hears && !asTyped && scene?.camera?.onBeat ? { ...scene.camera, onBeat: false } : scene?.camera;
   const camera = addition('camera-move', 'Camera move', shotCameraPrompt(cameraSpec));
+  // Where the shot is on a route map, so neighbouring shots keep one direction of travel.
+  const route = addition('route-map', 'Route', routeMapShotText(project, scene));
   const actions = addition('shot-actions', 'Shot actions', project ? shotActionPrompt(project, scene, { offsetSec, heard: hears }) : '');
   const tail = audioReactive
     ? [addition('audio-reactive-guard', 'Audio-reactive guard', AUDIO_REACTIVE_PERFORMANCE_GUARD)]
@@ -107,9 +110,9 @@ function composeShotModelInput(project, scene, {
     ];
 
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
-  const body = [firstLine, camera?.text, actions?.text].filter(Boolean).join('\n');
+  const body = [firstLine, camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
   const prompt = [body, ...tail.filter(Boolean).map((item) => item.text)].filter(Boolean).join('. ');
-  return { prompt, promptAdditions: [...look, ...direction, camera, actions, ...tail].filter(Boolean) };
+  return { prompt, promptAdditions: [...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
 }
 
 /** A refine edit's wrapper around the director's instruction ("[instruction]" marks where it goes). */
@@ -235,6 +238,7 @@ function composeFrameModelInput(project, scene, {
     addition('project-style', 'Project style', project?.concept?.style),
     addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project) })),
     addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
+    addition('route-map', 'Route', routeMapShotText(project, scene)),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
     productionMediumAddition(project),

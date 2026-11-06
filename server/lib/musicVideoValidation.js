@@ -1,4 +1,7 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import {
+  ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
+} from './musicVideoRouteMapLimits.js';
 import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_CAMERA_OUTPUTS, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
@@ -275,6 +278,19 @@ export const musicVideoCameraSchema = z.object({
   owner: z.string().trim().max(120).optional(),
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),
+}).strict();
+// A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
+export const musicVideoRouteMapSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(ROUTE_MAP_NAME_MAX),
+  heading: z.enum(ROUTE_MAP_HEADINGS).nullable().optional(),
+  // How they travel and what stays the same along the way, e.g. "riding bikes, the low sun ahead and to the left".
+  travel: z.string().trim().max(ROUTE_MAP_TRAVEL_MAX).optional(),
+  stops: z.array(z.object({
+    id: z.string().min(1).max(64),
+    subjectId: z.string().min(1).max(64),
+    note: z.string().trim().max(ROUTE_MAP_NOTE_MAX).optional(),
+  }).strict()).max(ROUTE_MAP_STOPS_MAX),
 }).strict();
 export const musicVideoShotSheetSchema = z.object({
   cameraId: z.string().min(1).max(64).nullable().optional(),
@@ -1755,6 +1771,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
+  routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.

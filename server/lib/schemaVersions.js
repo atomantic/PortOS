@@ -869,7 +869,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Optional, no backfill: absent plays the cut as before.
   // v44 = active cast alternates; older peers ignore the choice and render both identities.
   // Optional, no backfill: legacy duplicates deterministically choose the first.
-  musicVideoProjects: 44,
+  // v45 = route maps joining the video's places (`routeMaps`), which a v44 strict
+  // project schema rejects with a 400. Optional, no backfill: absent = no route.
+  musicVideoProjects: 45,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
