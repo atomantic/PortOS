@@ -1743,7 +1743,10 @@ function ProjectWorkspace({
       ? { headline: `Status unavailable: ${productionReview.readinessError}`, tone: 'warn', needsYouStage: null }
       : { headline: 'Loading status…', tone: 'muted', needsYouStage: null };
 
-  const reviewStage = selected ? approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active) : null;
+  // Explicit proof links must stay reachable even when no production run needs
+  // proof approval (including an already-approved or stale registered proof).
+  const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
+  const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : 'final' }) : [];
 
   return (

@@ -90,6 +90,8 @@ describe('assembled forge claim prompts', () => {
       expect(prompt).not.toContain('branch-reconcile/checkouts/retire');
     } else {
       expect(prompt).toContain('leave the PR open for human handoff');
+      expect(prompt).toContain('Continue to the human handoff when they pass');
+      expect(prompt).not.toContain('Continue to the authorized merge when they pass');
       expect(prompt).not.toContain('gh pr merge');
       expect(prompt).not.toContain('gh issue close');
       expect(prompt).not.toContain('PortOS cleans up the managed worktree and branch automatically after completion');
@@ -99,6 +101,20 @@ describe('assembled forge claim prompts', () => {
         expect(prompt).toContain('gh pr view --json isDraft');
       }
     }
+  });
+
+  it.each(['github', 'gitlab'])('resumes %s failed CI on the existing claim without bypassing an unsafe blocker', async tracker => {
+    state.tracker = tracker;
+    const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'review-then-merge' });
+    const prompt = renderAgent(claim, true);
+    expect(prompt).toContain('do not create a second PR/MR');
+    expect(prompt).toContain('inspect the failing job logs');
+    expect(prompt).toContain('Filing a follow-up alone is not an attempt');
+    expect(prompt).toContain('recovery is unsafe');
+    expect(prompt).toContain('Respect configured retry budgets');
+    expect(prompt).toContain('exact current head');
+    expect(prompt).toContain('Continue to the authorized merge when they pass.');
+    expect(prompt).toContain('replace `CI_VERIFIED_HEAD` with that full verified SHA');
   });
 
   it('creates and verifies a GitLab draft explicitly', async () => {

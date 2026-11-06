@@ -1699,6 +1699,11 @@ export const usageQuerySchema = z.object({
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
 
+export const usagePreviewSchema = z.object({ from: isoDay, to: isoDay }).strict()
+  .refine(({ from, to }) => from <= to && Date.parse(to) - Date.parse(from) < 366 * 86_400_000,
+    { message: 'Choose an inclusive UTC interval of 1 to 366 days' });
+export const usagePreviewCancelSchema = z.object({ jobId: z.string().uuid() }).strict();
+
 /** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
 export const usageRollingCostQuerySchema = z.object({
   range: z.enum(['1m', '3m', '6m', '1y', 'all']).optional()

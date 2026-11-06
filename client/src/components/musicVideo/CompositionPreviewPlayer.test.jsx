@@ -48,6 +48,7 @@ vi.mock('../../services/apiSystem.js', () => ({ uploadGalleryImage }));
 
 import CompositionPreviewPlayer, { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
+import toast from '../ui/Toast.jsx';
 
 const DOCUMENT = { directory: 'music-video/mv-1/composition/doc-a', entry: 'index.html' };
 const project = {
@@ -549,14 +550,17 @@ describe('CompositionPreviewPlayer', () => {
   it('saves the docked preview frame on screen to the gallery', async () => {
     const blob = new Blob(['jpeg'], { type: 'image/jpeg' });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ blob: async () => blob });
-    const { container } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [{ sceneId: 'a', startSec: 0 }] }} audioUrl="/song.mp3" shotNav />);
+    const success = vi.spyOn(toast, 'success');
+    const { container } = render(<CompositionPreviewPlayer project={{ ...project, scenes: [{ sceneId: 'c', startSec: 0, label: 'Shot 3' }] }} audioUrl="/song.mp3" shotNav />);
     await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toBeTruthy());
     const frameSrc = container.querySelector('img').getAttribute('src');
     await loadImage(container.querySelector('img'));
     await act(async () => { screen.getByRole('button', { name: /Save frame/ }).click(); });
     expect(fetchSpy).toHaveBeenCalledWith(frameSrc);
     expect(uploadGalleryImage).toHaveBeenCalledWith(blob, { silent: true });
+    expect(success).toHaveBeenCalledWith('Saved Example · Shot 3 · frame 0 to the image gallery');
     fetchSpy.mockRestore();
+    success.mockRestore();
   });
 
   it('saves the displayed frame while a film-look redraw is pending and the new frame after it arrives', async () => {

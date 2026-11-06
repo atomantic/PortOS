@@ -12,7 +12,7 @@ vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../l
 const { PATHS } = await import('../lib/fileUtils.js');
 const {
   USAGE_FILE, getUsage, loadUsage, resetUsage, recordRunUsage,
-  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds
+  recordTokens, applyHistoricalUsageCorrections, getReconciledUsageRunIds, getRecentCodexUsageClaims
 } = await import('./usage.js');
 const { __resetUsageClaims, recordCompletedRunUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const home = join(PATHS.data, 'synthetic-home');
@@ -75,16 +75,19 @@ describe('usage commit failure recovery', () => {
       entered.resolve();
       return new Promise((_, reject) => { rejectWrite = reject; });
     });
-    const failed = recordRunUsage({ providerId: 'codex-cli', tokensIn: 120, tokensOut: 30 }, { reconciledRunId: 'retry' });
+    const codexHighWater = [['/synthetic/rollout.jsonl', { tokensIn: 120, tokensOut: 30 }]];
+    const failed = recordRunUsage({ providerId: 'codex-cli', tokensIn: 120, tokensOut: 30 }, { reconciledRunId: 'retry', codexHighWater });
     const failure = expect(failed).rejects.toThrow('synthetic disk write failure');
     await entered.promise;
     const successful = recordTokens(7, 9);
     expect(getUsage()).toEqual(before);
+    expect(await getRecentCodexUsageClaims(0)).toEqual([]);
     rejectWrite(Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' }));
     await failure;
     await successful;
     expect(await disk()).toMatchObject({ totalTokens: { input: 7, output: 9 } });
-    await recordRunUsage({ providerId: 'codex-cli', tokensIn: 120, tokensOut: 30 }, { reconciledRunId: 'retry' });
+    await recordRunUsage({ providerId: 'codex-cli', tokensIn: 120, tokensOut: 30 }, { reconciledRunId: 'retry', codexHighWater });
+    expect(await getRecentCodexUsageClaims(0)).toEqual(codexHighWater);
     expect(await disk()).toMatchObject({ totalTokens: { input: 127, output: 39 } });
   });
 

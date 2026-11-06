@@ -5,7 +5,7 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -14,7 +14,9 @@ import { resolveUsageRange } from '../lib/usageRange.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import {
   getHistoricalUsageBackfillStatus,
-  startHistoricalUsageBackfill
+  startHistoricalUsageBackfill,
+  startCodexUsagePreview,
+  cancelCodexUsagePreview
 } from '../services/usageBackfill.js';
 
 const router = Router();
@@ -193,6 +195,16 @@ router.get('/raw', asyncHandler(async (req, res) => {
 // returns immediately; the worker-thread job reports progress through GET.
 router.get('/backfill', asyncHandler(async (req, res) => {
   res.json(getHistoricalUsageBackfillStatus());
+}));
+
+router.post('/backfill/preview', asyncHandler(async (req, res) => {
+  const range = validateRequest(usagePreviewSchema, req.body ?? {});
+  res.status(202).json(startCodexUsagePreview(range));
+}));
+
+router.post('/backfill/preview/cancel', asyncHandler(async (req, res) => {
+  const { jobId } = validateRequest(usagePreviewCancelSchema, req.body ?? {});
+  res.json(await cancelCodexUsagePreview(jobId));
 }));
 
 router.post('/backfill', asyncHandler(async (req, res) => {
