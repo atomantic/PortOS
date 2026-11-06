@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
@@ -40,6 +40,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   // Unresolved saved guides still occupy slots and must survive an edit.
   const unresolvedGuides = (scene.frameReferenceIds || []).filter((refId) => isCatalogMediaReferenceId(refId) && !ids.includes(refId));
   const full = ids.length + unresolvedGuides.length >= MUSIC_VIDEO_MAX_REFERENCE_CHOICES;
+  const notOffered = auto ? [] : musicVideoCatalogPickPlans(project, [scene])[0]?.unmappedFrame || [];
   const previewProps = (ref) => ({
     title: nameOf(ref),
     onPointerEnter: (e) => { if (e.pointerType === 'mouse') setPreview(ref); },
@@ -114,6 +115,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         )}
       </ul>
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
+      {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
       {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
       <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}

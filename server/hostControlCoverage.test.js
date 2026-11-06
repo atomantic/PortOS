@@ -864,7 +864,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/music-video/:id/cast-and-sets/feedback/:feedbackId', REMOVES_RECORD],
   ['POST /api/music-video/:id/cast-and-sets/feedback/refresh-renderer', IN_PROCESS_COMPUTE],
   ['POST /api/music-video/:id/cast-and-sets/feedback/remove-image-note', REMOVES_RECORD],
-  ['POST /api/music-video/:id/cast-and-sets/catalog', 'Switches the project check-in to catalog links and reads catalog media; preserves historical records, refuses active work, and starts no provider, queue or host process.'],
+  ['POST /api/music-video/:id/cast-and-sets/catalog', 'Switches the project check-in to catalog links, reads catalog media and moves saved shot picks to the same catalog images; preserves historical records, refuses active work when switching, and starts no provider, queue or host process.'],
   ['POST /api/music-video/:id/cast-and-sets/reconfirm', RECORDS],
   ['POST /api/music-video/:id/cast-and-sets/edit-image-preview', READ_OVER_POST],
   ['POST /api/music-video/:id/cast-and-sets/discard-image-edit', RECORDS],

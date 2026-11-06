@@ -1,6 +1,7 @@
 import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
 import CastAndSetsReferenceProgress from '../CastAndSetsReferenceProgress.jsx';
 import CastAndSetsCheckin from '../CastAndSetsCheckin.jsx';
+import CatalogShotReferenceProblems from '../CatalogShotReferenceProblems.jsx';
 import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
@@ -61,10 +62,11 @@ export default function CastSetsStage({ board }) {
           {catalog.error ? <p role="alert" className="text-xs text-port-error">{catalog.error} <button type="button" className="min-h-11 rounded border border-port-border px-2" onClick={catalog.retry}>Retry catalog check-in</button></p>
             : !catalog.checkin ? <p className="text-xs">Loading current catalog check-in…</p> : null}
           {catalog.checkin?.problems.length > 0 && <ul className="list-disc pl-5 text-xs text-port-warning">{catalog.checkin.problems.map((problem, index) => <li key={`${problem.subjectId}:${problem.code}:${index}`}>{problem.message}</li>)}</ul>}
+          <CatalogShotReferenceProblems checkin={catalog.checkin} disabled={catalogBusy} onRemap={castSets.remapCatalogReferences} onOpenShot={board.onEditShot} />
           <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !canApproveCatalog}
             onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
         </div> : castSets.linkCatalog && <div className="space-y-1">
-          <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Existing generated sheets and shot references stay in history.</p>
+          <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Generated sheets stay in history. Shots that picked one move to the same image in the catalog, and any shot the catalog cannot serve is listed here.</p>
           <button type="button" disabled={catalogBusy} className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" onClick={castSets.linkCatalog}>Use catalog-only check-in</button>
         </div>}
       </CatalogLookReferences>

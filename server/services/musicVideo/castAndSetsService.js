@@ -1,4 +1,4 @@
-import { isCatalogCheckin, resolveCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin } from './catalogCheckin.js';
+import { isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
 import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft } from './productionReview.js';
@@ -1386,10 +1386,22 @@ export async function onCastAndSetsImageSettled({ projectId, key, editRequestId 
 }
 
 
-/** Explicitly switch the current check-in without rewriting historical media. */
+/**
+ * Explicitly switch the current check-in without rewriting historical media. Shot
+ * picks of generated sheets move to the same catalog images. Calling it again
+ * moves any the catalog has since come to offer, including on a video switched
+ * before picks moved at all.
+ */
 export async function useCatalogCheckin(projectId) {
-  const out = await mutateProjectRecord(projectId, current => {
-    if (isCatalogCheckin(current)) return { project: current };
+  let moved = 0;
+  const remap = (resolved) => {
+    const remapped = remapCatalogShotReferences(resolved);
+    moved = remapped.moved;
+    return { project: remapped.project };
+  };
+  const out = await mutateProjectRecord(projectId, async (current, { client } = {}) => {
+    // mutateProjectRecord already resolved this catalog project's check-in onto `current`.
+    if (isCatalogCheckin(current)) return remap(current);
     const stage = current.castAndSets;
     if ((CAST_SETS_WORKING.includes(stage?.status) && stage.processId === PROCESS_ID) || Object.values(stage?.images || {}).some(image => image.status === 'queued' || image.edit?.status === 'queued')
       || (current.productionRuns || []).some(run => ['running', 'waiting'].includes(run.status))
@@ -1398,10 +1410,12 @@ export async function useCatalogCheckin(projectId) {
       throw new ServerError('Stop active production and finish or cancel queued check-in work before switching to catalog links.', { status: 409, code: 'CAST_SETS_IN_PROGRESS' });
     }
     const now = new Date().toISOString();
-    return { project: { ...current, castAndSets: { ...stage, source: 'catalog', status: 'review',
+    const switched = { ...current, castAndSets: { ...stage, source: 'catalog', status: 'review',
       revision: (stage?.revision || 0) + 1, catalogApprovedBasis: null, processId: null, productionRunId: null,
-      createdAt: stage?.createdAt || now, updatedAt: now } } };
+      createdAt: stage?.createdAt || now, updatedAt: now } };
+    return remap(await withCatalogCheckin(switched, { catalog: deps.catalog, client }));
   });
+  if (moved) console.log(`🔁 Music Video Cast & Sets ${short(projectId)} moved ${moved} shot references to catalog images`);
   publish(projectId, out.project);
   return { project: out.project, stage: out.project.castAndSets, catalogCheckin: await resolveCatalogCheckin(out.project, { catalog: deps.catalog }) };
 }
