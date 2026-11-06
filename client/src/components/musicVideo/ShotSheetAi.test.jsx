@@ -19,7 +19,7 @@ describe('ShotSheetAi', () => {
     const onApply = vi.fn(async () => true);
     const rows = [row('a', 'Shot 1', { emotion: 'My emotion' }), row('b', 'Shot 2', { checked: true, emotion: 'Done' })];
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
-    fireEvent.click(screen.getByRole('button', { name: /Fill empty columns from prompts \(1 unchecked\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Fill empty columns from prompts \(1 not done\)/ }));
     await screen.findByLabelText('Apply Shot 1');
     expect(proposeMusicVideoShotSheet.mock.calls[0][1]).toMatchObject({ direction: 'from-prompts', sceneIds: ['a'] });
     expect(onApply).not.toHaveBeenCalled();

@@ -157,7 +157,7 @@ export function shotSheetStretches(rows, readValue) {
 
 /**
  * An AI backfill of a shot's sheet, filling only the columns that are empty:
- * whatever the director has set stays theirs, and Checked is never touched.
+ * whatever the director has set stays theirs, and Done is never touched.
  * Returns the merged sheet and which columns it filled.
  */
 export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
@@ -185,7 +185,7 @@ export function shotSheetMediaEdits(rows) {
 /**
  * A column set across a run of shots: the sheet each one saves, leaving out shots
  * it wouldn't change. With `onlyEmpty`, a value the director already set stays.
- * Clearing a column (a blank value) removes it. Checked is left as it was.
+ * Clearing a column (a blank value) removes it. Done is left as it was.
  */
 export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}) {
   const next = typeof value === 'string' ? value.trim() : value;
@@ -194,6 +194,26 @@ export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}
     if ((sheet[field] ?? '') === (next ?? '')) return [];
     return [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, [field]: next }) }];
   });
+}
+
+/**
+ * How many shots the director has marked Done on the sheet (stored as
+ * `shotSheet.checked`, the box's earlier name). Null while no shot has a sheet
+ * yet, so a video planned without the sheet keeps Shots' other done rules.
+ */
+export function shotSheetDoneProgress(project) {
+  const scenes = (project?.scenes || []).filter(Boolean);
+  if (!scenes.some((scene) => scene.shotSheet)) return null;
+  const done = scenes.filter((scene) => scene.shotSheet?.checked === true).length;
+  return { done, total: scenes.length, all: done === scenes.length };
+}
+
+/**
+ * The sheets that mark every listed shot Done, leaving out shots already done.
+ * Nothing else in a sheet changes.
+ */
+export function shotSheetMarkDoneEdits(rows) {
+  return rows.flatMap(({ scene, sheet }) => (sheet?.checked === true ? [] : [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, checked: true }) }]));
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */

@@ -280,7 +280,7 @@ export const musicVideoShotSheetSchema = z.object({
   cameraId: z.string().min(1).max(64).nullable().optional(),
   holder: z.string().trim().max(120).nullable().optional(),
   characters: z.array(z.string().trim().min(1).max(120)).max(SHOT_SHEET_CHARACTERS_MAX).optional(),
-  // The director has read this shot's plan and it's right.
+  // Done: the director has finished this shot. Kept under its first name, `checked`, so stored sheets stay valid.
   checked: z.boolean().optional(),
   ...Object.fromEntries(SHOT_SHEET_TEXT_FIELDS.map(([field, max]) => [field, z.string().max(max).optional()])),
 }).strict();
