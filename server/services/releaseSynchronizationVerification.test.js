@@ -282,9 +282,32 @@ it('verifies an inline owner against its exact synchronization head and settles 
   entry = await getReleaseSynchronization(inlinePublication.identity);
   entry.synchronization.retryAt = '2026-01-01T00:00:00Z';
   await saveReleaseSynchronization(entry);
+  const hold = { branch: candidateSeed.branch, path: candidateSeed.path, reason: 'release-checkout-locked', lockReason: 'operator hold' };
+  inlineCleanup.mockResolvedValueOnce({ attempted: true, retired: [], held: [hold] });
   await recoverReleaseSynchronizationHandoffs(f.agents);
   expect(inlineCleanup).toHaveBeenCalledWith(expect.objectContaining({ version: 2, task: expect.objectContaining({ id: inlineTask }),
     obligations: expect.objectContaining({ processSettlement: expect.objectContaining({ status: 'verified' }) }) }));
+  const sweepAgain = async result => {
+    const due = await getReleaseSynchronization(inlinePublication.identity);
+    due.synchronization.retryAt = '2026-01-01T00:00:00Z';
+    await saveReleaseSynchronization(due);
+    inlineCleanup.mockResolvedValueOnce(result);
+    await recoverReleaseSynchronizationHandoffs(f.agents);
+    return getReleaseSynchronization(inlinePublication.identity);
+  };
+  entry = await getReleaseSynchronization(inlinePublication.identity);
+  const [persisted] = entry.obligations.retirement.evidence.heldCheckouts;
+  expect(persisted).toMatchObject(hold);
+  expect(entry.synchronization.blocker).toMatch(/^retirement:/);
+  expect(projectTaskReleaseMilestones({ id: inlineTask, metadata: {} }, entry).metadata.releaseSynchronization.heldCheckouts)
+    .toEqual([expect.objectContaining({ ...hold, nextAction: expect.stringContaining('unlock the worktree') })]);
+  // Re-verification and an unchanged sweep both keep the first observation; a clean sweep clears it.
+  entry = await sweepAgain({ attempted: true, retired: [], held: [hold] });
+  expect(entry.obligations.retirement.evidence.heldCheckouts).toEqual([persisted]);
+  entry = await sweepAgain({ attempted: false });
+  expect(entry.obligations.retirement.evidence.heldCheckouts).toEqual([persisted]);
+  entry = await sweepAgain({ attempted: true, retired: [], held: [] });
+  expect(entry.obligations.retirement.evidence).not.toHaveProperty('heldCheckouts');
   f.receipts = publisher.metadata.completedCheckouts.map(row => ({ branch: row.branch, path: row.path, head: row.head,
     branchDeleted: true, archiveDir: null, checkoutIdentity: retirementCheckoutIdentityFromPointer(row.incarnation.pointer),
     retiredAt: '2026-01-01T01:13:00Z' }));

@@ -115,7 +115,7 @@ describe('inline release cleanup', () => {
   it('does not unlock a candidate if its settled owner cannot be revalidated', async () => {
     deps.validateLocked.mockResolvedValue(false);
     const result = await settleInlineReleaseCheckouts(entry, deps);
-    expect(result.held).toContainEqual({ branch: candidate.branch, reason: 'release-locked-owner-unverified' });
+    expect(result.held).toContainEqual({ branch: candidate.branch, path: candidate.path, reason: 'release-locked-owner-unverified' });
     expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([sync.branch]);
   });
 
@@ -138,7 +138,7 @@ describe('inline release cleanup', () => {
     await lockSync('Active inline release synchronization owned by owner');
     deps.validateLockedSync.mockResolvedValue(false);
     const result = await settleInlineReleaseCheckouts(entry, deps);
-    expect(result.held).toEqual([{ branch: sync.branch, reason: 'release-locked-owner-unverified' }]);
+    expect(result.held).toEqual([{ branch: sync.branch, path: sync.path, reason: 'release-locked-owner-unverified' }]);
     expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([candidate.branch]);
   });
 
@@ -146,7 +146,7 @@ describe('inline release cleanup', () => {
   ('leaves a synchronization checkout locked as %s to its holder', async lockReason => {
     await lockSync(lockReason);
     const result = await settleInlineReleaseCheckouts(entry, deps);
-    expect(result.held).toEqual([{ branch: sync.branch, reason: 'release-checkout-locked' }]);
+    expect(result.held).toEqual([{ branch: sync.branch, path: sync.path, reason: 'release-checkout-locked', lockReason }]);
     expect(deps.prepare.mock.calls.map(([arg]) => arg.release.branch)).toEqual([candidate.branch]);
   });
 

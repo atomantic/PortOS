@@ -41,10 +41,11 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
   if (!Array.isArray(trees) || !trees.length) return { attempted: false };
   const retired = [], held = [];
   for (const row of checkouts) {
+    const hold = (reason, detail) => held.push({ branch: row.branch, path: row.path, reason, ...detail });
     const publisher = sameCheckout(row, target);
     const prUrl = publisher ? `https://github.com/${entry.publication.repository}/pull/${entry.publication.promotionPrNumber}`
       : row.branch === synchronization.branch && row.head === synchronization.headSha ? synchronization.prUrl : null;
-    if (!prUrl) { held.push({ branch: row.branch, reason: 'release-checkout-delivery-unverified' }); continue; }
+    if (!prUrl) { hold('release-checkout-delivery-unverified'); continue; }
     const matches = trees.filter(tree => tree.path === row.path && tree.branch?.replace(/^refs\/heads\//, '') === row.branch && tree.head === row.head);
     const tree = matches.length === 1 ? matches[0] : null;
     let release;
@@ -59,16 +60,16 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
       // Already fully retired, typically by the branch-reconcile sweep: nothing is held.
       if (receipts.some(receipt => receipt.branchDeleted === true)) continue;
       const unique = [...new Map(receipts.filter(receipt => receipt.branchDeleted === false).map(receipt => [receipt.retiredAt, receipt])).values()];
-      if (unique.length !== 1) { held.push({ branch: row.branch, reason: 'release-checkout-generation-changed' }); continue; }
+      if (unique.length !== 1) { hold('release-checkout-generation-changed'); continue; }
       release = { path: row.path, branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity, retiredAt: unique[0].retiredAt };
     } else if (await readIdentity(row.path) !== row.checkoutIdentity) {
-      held.push({ branch: row.branch, reason: 'release-checkout-generation-changed' }); continue;
+      hold('release-checkout-generation-changed'); continue;
     }
     // A lock belongs to its holder unless it is the exact release-candidate or
     // synchronization lock whose settled owner the service can revalidate.
     const ownLock = publisher ? `Active release candidate ${row.branch}` : inlineSynchronizationLockReason(row.agentId);
     if (tree?.locked && tree.lockReason !== ownLock) {
-      held.push({ branch: row.branch, reason: 'release-checkout-locked' }); continue;
+      hold('release-checkout-locked', { lockReason: tree.lockReason ?? null }); continue;
     }
     if (tree) release = { path: row.path, branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity,
       observedAt: new Date().toISOString(), locked: tree.locked === true, lockReason: tree.lockReason ?? null };
@@ -78,23 +79,22 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
         retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
         nextAction: 'Retain the exact checkout until its reviewed retirement receipt is verified.' });
       const prepared = await prepare({ appId: app.id, release, prUrl });
-      if (!prepared.ok) { held.push({ branch: row.branch, reason: prepared.reason }); continue; }
+      if (!prepared.ok) { hold(prepared.reason); continue; }
       const review = prepared.review;
       if (review?.forge?.prHead !== row.head || review.comparison?.disposition !== 'integrated'
         || review.comparison.difference !== '' || typeof review.digest !== 'string') {
-        held.push({ branch: row.branch, reason: 'release-retirement-review-unverified' }); continue;
+        hold('release-retirement-review-unverified'); continue;
       }
       if (tree?.locked && (!await retainReview({ ...release, repoPath })
         || !await (publisher ? validateLocked : validateLockedSync)({ ...release, repoPath }))) {
-        held.push({ branch: row.branch, reason: 'release-locked-owner-unverified' }); continue;
+        hold('release-locked-owner-unverified'); continue;
       }
       const result = await retire({ appId: app.id, release, review: { prUrl, digest: review.digest, acceptSuperseded: false } },
         { beforeMutation: allowed });
       if (result.ok && result.branchDeleted === true && result.archiveDir == null) retired.push(row.branch);
-      else held.push({ branch: row.branch, reason: result.reason || result.branchRetainedReason || 'retirement-receipt-unverified' });
+      else hold(result.reason || result.branchRetainedReason || 'retirement-receipt-unverified');
     } catch (error) {
-      held.push({ branch: row.branch, reason: ['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message)
-        ? error.message : 'retirement-outcome-unverified' });
+      hold(['daemon-stopped', 'automatic-retirement-disabled'].includes(error.message) ? error.message : 'retirement-outcome-unverified');
     }
   }
   return { attempted: true, retired, held };

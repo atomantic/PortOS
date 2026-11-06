@@ -1,7 +1,8 @@
 import { Fragment } from 'react';
 import { Link } from 'react-router';
-import { CheckCircle, AlertCircle, RotateCcw } from 'lucide-react';
+import { CheckCircle, AlertCircle, Copy, RotateCcw } from 'lucide-react';
 import { formatCount, formatUsd, formatDateTime } from '../../utils/formatters';
+import { copyToClipboard } from '../../lib/clipboard';
 import { isAgentHandoff, agentHandoffReason, normalizeTaskOutcome, isTaskDeliveryComplete } from '../../lib/agentOutcome';
 
 /** Shared delivery and execution verdict for cards and the Resume dialog. */
@@ -146,9 +147,12 @@ export function ReleasePublicationLine({ publication, synchronization, className
 
   const syncStatus = sync?.status;
   const delivered = publicationVerified && sync?.delivery?.status === 'verified';
+  // A reset checkpoint no longer retries; its blocker below is historical.
+  const retired = Boolean(sync?.operatorReset);
   const publicationLabel = publicationVerified ? 'Published' : 'Publication not verified';
   const syncLabel = () => {
     if (delivered) return `${publicationLabel} — delivery observed`;
+    if (retired) return `${publicationLabel} — synchronization retired by operator`;
     if (!syncStatus || syncStatus === 'pending') {
       return sync ? `${publicationLabel} — synchronization pending` : `${publicationLabel} — synchronization not yet verified`;
     }
@@ -160,6 +164,7 @@ export function ReleasePublicationLine({ publication, synchronization, className
 
   const syncTone = () => {
     if (delivered) return 'text-port-success';
+    if (retired) return 'text-port-text-muted';
     if (syncStatus === 'verified') return 'text-port-success';
     if (syncStatus === 'blocked') return 'text-port-error';
     if (syncStatus === 'running') return 'text-port-warning';
@@ -206,16 +211,41 @@ export function ReleasePublicationLine({ publication, synchronization, className
       {delivered && sync.delivery.checkedAt && (
         <div className="text-xs text-port-text-muted">Delivery checked: <time dateTime={sync.delivery.checkedAt}>{formatDateTime(sync.delivery.checkedAt)}</time></div>
       )}
-      {delivered && syncStatus === 'blocked' && (
+      {(delivered || retired) && syncStatus === 'blocked' && (
         <div className="text-xs text-port-text-muted">Historical synchronization: blocked</div>
       )}
       {syncStatus === 'blocked' && sync?.blocker && (
-        <div className="text-xs text-port-error">
-          {delivered ? 'Historical blocker' : 'Blocker'}: {sync.blocker}
+        <div className={`text-xs ${retired ? 'text-port-text-muted' : 'text-port-error'}`}>
+          {delivered || retired ? 'Historical blocker' : 'Blocker'}: {sync.blocker}
         </div>
       )}
       {syncStatus === 'blocked' && sync?.nextAction && (
         <div className="text-xs text-port-text-muted">Next action: {sync.nextAction}</div>
+      )}
+      {sync?.heldCheckouts?.map(hold => <HeldCheckoutRow key={`${hold.path}:${hold.branch}`} hold={hold} />)}
+    </div>
+  );
+}
+
+function HeldCheckoutRow({ hold }) {
+  const unlock = hold.reason === 'release-checkout-locked' && hold.path ? `git worktree unlock ${JSON.stringify(hold.path)}` : null;
+  return (
+    <div className="mt-1 text-xs border-l-2 border-port-warning pl-2 space-y-0.5">
+      <div>Held checkout: <span className="font-mono break-all">{hold.branch}</span></div>
+      <div className="text-port-warning">Reason: {hold.reason}</div>
+      {hold.lockReason && <div className="text-port-text-muted">Lock: {hold.lockReason}</div>}
+      {hold.path && <div className="text-port-text-muted font-mono break-all">{hold.path}</div>}
+      {hold.observedAt && <div className="text-port-text-muted">Held since <time dateTime={hold.observedAt}>{formatDateTime(hold.observedAt)}</time></div>}
+      <div className="text-port-text-muted">Next step: {hold.nextAction}</div>
+      {unlock && (
+        <button
+          type="button"
+          onClick={() => copyToClipboard(unlock, 'Unlock command copied')}
+          className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 py-1 mt-1 rounded border border-port-border hover:bg-port-border/40 transition-colors"
+        >
+          <Copy size={12} aria-hidden="true" />
+          Copy unlock command
+        </button>
       )}
     </div>
   );

@@ -457,7 +457,13 @@ and local/remote ref absence; generic delivery/retirement recovery remains the
 only writer of those receipts. After an inline owner's process settles, the
 bounded server sweep asks that same retirement service to review and retire only
 the exact delivered candidate and synchronization checkout generations. A hold
-leaves their evidence in place; it does not queue another agent. No verifier merges a PR, changes a published tag,
+leaves their evidence in place; it does not queue another agent. The latest held
+branch, path, reason and any foreign lock text are kept with the retirement
+evidence (`heldCheckouts`) and shown on the agent and task release milestones with
+a next step. A lock the sweep cannot attribute to the release belongs to its
+holder: once that holder has finished, `git worktree unlock <path>` lets the next
+sweep retire the checkout. A checkpoint with an operator reset no longer retries
+and is labeled as retired, with its original blocker kept as history. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
 
