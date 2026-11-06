@@ -6,6 +6,8 @@ import {
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import { formatCount } from '../../utils/formatters.js';
+import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../../../server/lib/musicVideoShotTiming.js';
 
 const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
@@ -26,6 +28,9 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni');
+  // The server renders these without the song window (submitJob.js) rather than refusing.
+  const songUnheard = backend === 'local' && model && !localModelTakesSongAudio(model)
+    && project?.videoSettings?.generationMode === 'suppliedAudio' && !isPerformanceScene(scene);
   const save = (next) => {
     onEditLocal(scene.sceneId, { clipReferenceIds: next });
     onSaveState('saving');
@@ -48,6 +53,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
           : unknownModel ? 'Select a model to see its reference support.'
           : capacity ? `PortOS can send up to ${formatCount(capacity)} additional image ${capacity === 1 ? 'reference' : 'references'} with this model.`
             : 'This model does not use additional image references.'}
+        {songUnheard && ' This model does not hear the song, so the clip renders without song audio.'}
       </p>
       {backend === 'fal' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Reference inputs may add to the provider charge.</p>}
       <ul className="flex flex-wrap gap-1">

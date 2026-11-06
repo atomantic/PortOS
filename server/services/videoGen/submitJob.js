@@ -159,10 +159,12 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       if (isPerformanceScene(scene)) body = { ...body, mode: 'image', _suppliedAudio: false };
       else {
         const { model, modelId } = await resolveVideoModelSelection(body.modelId);
+        // A model that cannot hear the song still renders the shot as an image clip;
+        // the shot card's clip references note says so (SceneClipReferences.jsx).
         if (!supportsSourceAudioWindow(model)) {
-          throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
-        }
-        body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
+          console.log(`⏭️ ${model?.name || modelId || 'Local model'} hears no song audio; rendering ${body.musicVideo.sceneId} without its song window`);
+          body = { ...body, mode: 'image', _suppliedAudio: false };
+        } else body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
       }
     }
     prepared = await prepareVideoGenParams({ body, uploads, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
