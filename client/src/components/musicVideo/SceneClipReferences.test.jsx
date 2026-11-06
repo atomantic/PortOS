@@ -18,6 +18,17 @@ describe('clip references', () => {
     expect(screen.getByText(/Remove every reference to pin the opening frame/)).toBeTruthy();
   });
 
+  it('warns that listed references stay behind while the LTX box is off', () => {
+    render(<SceneClipReferences project={project} scene={scene} backend="local" model={{ id: 'ltx', runtime: 'ltx25' }} ltxReferencesOff onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
+    expect(screen.getByRole('status')).toHaveTextContent('These references are not sent with this clip. Turn on Use LTX reference images to send them.');
+  });
+
+  it('has nothing to warn about when no reference is listed', () => {
+    render(<SceneClipReferences project={project} scene={{ ...scene, clipReferenceIds: [] }} backend="local" model={{ id: 'wan' }} onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByText(/does not use additional image references/)).toBeTruthy();
+  });
+
   it('says a Runway end frame holds the references back', () => {
     render(<SceneClipReferences project={project} scene={scene} backend="runway" model={getRunwayVideoModel('seedance2_5')} capacityOverride={0} endFrameBlocksReferences onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
     expect(screen.getByText(/cannot combine an end frame with image references/)).toBeTruthy();

@@ -1220,7 +1220,7 @@ it('passes the selected LTX character references and prompt labels from the shot
     onGenerateVideo={onGenerateVideo} videoModels={models}
     falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
   show('Clip');
-  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
+  expect(screen.getByLabelText(/Use LTX reference images/)).toBeChecked();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByTestId('render-inputs').querySelector('pre').textContent)
     .toContain('Reference sheet: Rider.\n\nGenerated video: The rider turns');
@@ -1231,6 +1231,48 @@ it('passes the selected LTX character references and prompt labels from the shot
     expectedClipReferenceLabels: ['Rider'],
     prompt: 'Reference sheet: Rider.\n\nGenerated video: The rider turns',
   }) }));
+});
+
+describe('LTX reference box default', () => {
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
+  const project = (scene) => ({ id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } });
+  const renderCard = (over) => {
+    const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', startSec: 0, endSec: 6, takes: [], ...over };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project(scene)} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+      onGenerateVideo={onGenerateVideo} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example', generationMode: 'suppliedAudio' }} />);
+    show('Clip');
+    return onGenerateVideo;
+  };
+  const box = () => screen.getByLabelText(/Use LTX reference images/);
+
+  it('stays off for an auto cast and warns its references stay behind', () => {
+    renderCard({ frameReferenceIds: ['rider'] });
+    expect(box()).not.toBeChecked();
+    expect(screen.getByRole('status')).toHaveTextContent('These references are not sent');
+  });
+
+  it('honors unticking a picked selection and warns the references stay behind', () => {
+    const onGenerateVideo = renderCard({ clipReferenceIds: ['rider'] });
+    fireEvent.click(box());
+    expect(box()).not.toBeChecked();
+    expect(screen.getByRole('status')).toHaveTextContent('Turn on Use LTX reference images');
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ expectedClipReferenceFiles: [] });
+    expect(onGenerateVideo.mock.calls[0][1].card).not.toHaveProperty('ltxReferences');
+  });
+
+  it('gives way when the director asks for song audio', () => {
+    renderCard({ clipReferenceIds: ['rider'] });
+    expect(box()).toBeChecked();
+    const song = screen.getByRole('checkbox', { name: /^song audio/i });
+    expect(song).not.toBeChecked();
+    fireEvent.click(song);
+    expect(box()).not.toBeChecked();
+    expect(song).toBeChecked();
+  });
 });
 
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
@@ -1260,6 +1302,7 @@ it('shows the effective LTX reference clip length and refuses an empty motion pr
     falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
   show('Clip');
   fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
   fireEvent.change(screen.getByLabelText('Clip length'), { target: { value: '73' } });
   expect(screen.getByLabelText('Clip length').value).toBe('73');
   fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
