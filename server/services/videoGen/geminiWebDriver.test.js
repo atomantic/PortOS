@@ -9,10 +9,11 @@ const { renderOnGeminiWeb } = await import('./geminiWebDriver.js');
 
 // Just enough of a Playwright page to stand in for the Gemini composer. Each test
 // scripts what the app shows: the consent dialog, and the chat's answers in order.
-function fakeGemini({ consent = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
+function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
   const log = { clicks: [], files: null, typed: '', closed: false, front: 0 };
   let chooserResolve;
-  const chooserEvent = new Promise((resolve) => { chooserResolve = resolve; });
+  let chooserReject;
+  const chooserEvent = new Promise((resolve, reject) => { chooserResolve = resolve; chooserReject = reject; });
   const control = (name) => ({
     filter: () => control(name),
     waitFor: async () => {
@@ -22,6 +23,7 @@ function fakeGemini({ consent = false, url = 'https://gemini.google.com/app', an
     getAttribute: async (attr) => (attr === 'aria-label' ? 'Aspect ratio, Landscape (16:9)' : 'false'),
     click: async () => {
       log.clicks.push(name);
+      if (name === 'uploader' && uploadClickFails) throw new Error('uploader click timed out');
       if (name === 'uploader' && !consent) chooserResolve({ setFiles: async (files) => { log.files = files; } });
     },
   });
@@ -34,7 +36,7 @@ function fakeGemini({ consent = false, url = 'https://gemini.google.com/app', an
     keyboard: { insertText: async (text) => { log.typed = text; } },
     evaluate: async () => answers.shift() ?? { responded: false },
     bringToFront: async () => { log.front += 1; },
-    close: async () => { log.closed = true; },
+    close: async () => { log.closed = true; chooserReject(new Error('Target page has been closed')); },
   };
   const context = {
     newPage: async () => page,
@@ -85,6 +87,18 @@ describe('renderOnGeminiWeb', () => {
     expect(fake.log.clicks).not.toContain('Agree');
     expect(sends(fake.log)).toBe(0);
     expect(fake.log.closed).toBe(false);
+  });
+
+  it('fails the step, with nothing left unhandled, when the upload click fails', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const fake = fakeGemini({ uploadClickFails: true });
+    await expect(render(fake)).rejects.toMatchObject({ code: 'PUBLISH_STEP_FAILED' });
+    await new Promise((resolve) => { setImmediate(resolve); });
+    process.off('unhandledRejection', unhandled);
+    expect(fake.log.closed).toBe(true);
+    expect(sends(fake.log)).toBe(0);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it('asks for a sign-in when Google redirects to its login page', async () => {

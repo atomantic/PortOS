@@ -17,6 +17,10 @@ describe('musicVideoBatchPlan', () => {
   });
 
   it('shows the count only for local and Grok renders', () => {
+    const gemini = videoBatchPreview({ scenes: [scene(0), scene(1)], backend: 'gemini', videoSettings: {} }).text;
+    expect(gemini).toContain('Generate 2 clips on Gemini Omni 1.2 Flash');
+    expect(gemini).toContain('sends prompts and images to Google');
+    expect(gemini).not.toContain('local renderer');
     expect(videoBatchPreview({ scenes: [scene(0)], backend: 'local', videoSettings: {} }).text).toBe('Generate 1 clip on the local renderer');
     expect(videoBatchPreview({ scenes: [scene(0), scene(1)], backend: 'grok', videoSettings: {} }).text).toBe('Generate 2 clips on Grok');
   });

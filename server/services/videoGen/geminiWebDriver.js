@@ -64,17 +64,18 @@ async function chooseAspect(page, choice) {
 
 async function attachFiles(page, files) {
   await page.getByRole('button', { name: 'Upload & tools' }).click({ timeout: STEP_TIMEOUT_MS });
-  const chooser = page.waitForEvent('filechooser', { timeout: STEP_TIMEOUT_MS });
+  // Settled from the start: a failed click below closes the page, which rejects this waiter.
+  const chooser = page.waitForEvent('filechooser', { timeout: STEP_TIMEOUT_MS }).then((value) => ({ chooser: value }), (error) => ({ error }));
   await page.locator('[data-test-id=local-images-files-uploader-button]').click({ timeout: STEP_TIMEOUT_MS });
   const consent = page.getByRole('dialog').filter({ hasText: CONSENT_TITLE });
   const picked = await Promise.race([
-    chooser.then((value) => ({ chooser: value })),
+    chooser,
     consent.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS }).then(() => ({ consent: true })),
   ]);
   if (picked.consent) {
-    chooser.catch(() => {});
     throw fail('GEMINI_WEB_CONSENT_REQUIRED', 'Gemini asks you to agree to its upload terms first. Click Agree in the Gemini tab in the PortOS Browser, then render again.', 409);
   }
+  if (picked.error) throw picked.error;
   await picked.chooser.setFiles(files);
 }
 
