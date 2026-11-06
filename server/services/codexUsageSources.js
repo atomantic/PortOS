@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, opendir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
@@ -12,10 +12,20 @@ export const codexSessionClaimKey = id => `codex-session:v1:${id}`;
 export const codexIdentityHash = value => hash(value);
 
 const DAY_MS = 86_400_000;
+// decodedBytes is a CPU backstop, not a memory bound: skipped lines are never
+// buffered, and retained memory is bounded by `records`. A heavy install decodes
+// tens of GB per week of mostly tool output.
 const CODEX_PREVIEW_LIMITS = Object.freeze({
-  files: 10_000, entries: 100_000, decodedBytes: 256 * 1024 * 1024,
+  files: 10_000, entries: 100_000, decodedBytes: 256 * 1024 * 1024 * 1024,
   records: 100_000, lineBytes: 1024 * 1024, milliseconds: 30_000, depth: 16
 });
+// Envelopes that accountingRecord always drops, recognized from the serialized
+// prefix so tool output and images are neither parsed nor held in memory. Any
+// other shape falls through to the strict parse, so unknown lines still fail closed.
+const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,4}"type":"(?:compacted"|(?:response_item|event_msg)","payload":\{"type":"(?!token_count"|agent_message")[^"]{1,64}")/;
+const LINE_PREFIX_BYTES = 256;
+const isNonAccountingLine = bytes => NON_ACCOUNTING_LINE.test(bytes.latin1Slice(0, Math.min(bytes.length, LINE_PREFIX_BYTES)));
+const PROBLEM_SOURCE_SAMPLE = 5;
 const COUNTERS = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
 const emptyTotals = () => ({ messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 const problem = code => Object.assign(new Error(code), { code });
@@ -37,11 +47,15 @@ function codexPreviewRange(from, to) {
 
 // Project BEFORE retaining or fingerprinting: no cwd, prompt, tool output or
 // assistant text survives a line. Hash identities; only model slugs can escape.
-function accountingRecord(entry, ids) {
+function accountingRecord(entry, ids, lineage) {
   if (!isObject(entry)) throw problem('malformed');
   const payload = entry.payload;
   if (entry.type === 'session_meta') {
     if (!isObject(payload) || typeof payload.id !== 'string' || !payload.id || payload.id.length > 256) throw problem('malformed');
+    // A forked subagent rollout embeds the parent's meta right after its own. That
+    // names its ancestry, not a second identity; the parent's counters are not here.
+    if (payload.id === lineage.forkedFrom) return null;
+    lineage.forkedFrom ??= payload.forked_from_id;
     const id = hash(payload.id);
     ids.add(id);
     const model = projectModel(payload.model);
@@ -100,8 +114,6 @@ async function* discover(directory, state, depth = 0) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) yield* discover(path, state, depth + 1);
     else if (entry.isFile() && /\.jsonl(?:\.zst)?$/.test(entry.name)) {
-      if (state.coverage.filesDiscovered >= state.limits.files) throw problem('file_limit');
-      state.coverage.filesDiscovered++;
       yield path;
     } else if (entry.isSymbolicLink()) state.issue('unsupported_entry');
   }
@@ -115,21 +127,23 @@ function unchanged(before, after) {
 async function inspectFile(path, state, range, decompress) {
   let cwd = null;
   const ids = new Set();
+  const lineage = { forkedFrom: null };
   const records = [];
   const fingerprint = createHash('sha256');
   const issues = new Set();
   const compressed = path.endsWith('.zst');
   const addLine = bytes => {
     state.check();
+    if (isNonAccountingLine(bytes)) return;
     if (bytes.length > state.limits.lineBytes) throw problem('line_limit');
     // JSON and UTF-8 errors are source defects, not silently skipped lines.
     try {
       const line = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim();
       if (!line) return;
       const entry = JSON.parse(line);
-      if (entry?.type === 'session_meta' && typeof entry.payload?.cwd === 'string') cwd = entry.payload.cwd;
-      const record = accountingRecord(entry, ids);
+      const record = accountingRecord(entry, ids, lineage);
       if (!record) return;
+      if (record.type === 'session_meta' && typeof entry.payload.cwd === 'string') cwd = entry.payload.cwd;
       if (++state.coverage.recordsRead > state.limits.records) throw problem('record_limit');
       records.push(record);
       fingerprint.update(`${JSON.stringify(record)}\n`);
@@ -151,18 +165,28 @@ async function inspectFile(path, state, range, decompress) {
       const input = handle.createReadStream({ autoClose: false, end: before.size - 1, highWaterMark: 64 * 1024 });
       const consume = async chunks => {
         let pending = Buffer.alloc(0);
+        let skipping = false;
         for await (const chunk of chunks) {
           state.check();
           state.coverage.decodedBytes += chunk.length;
           if (state.coverage.decodedBytes > state.limits.decodedBytes) throw problem('decoded_byte_limit');
-          const data = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+          let tail = chunk;
+          if (skipping) {
+            const newline = chunk.indexOf(10);
+            if (newline === -1) continue;
+            tail = chunk.subarray(newline + 1);
+            skipping = false;
+          }
+          const data = pending.length ? Buffer.concat([pending, tail]) : tail;
           let start = 0;
           let end;
           while ((end = data.indexOf(10, start)) !== -1) {
             addLine(data.subarray(start, end));
             start = end + 1;
           }
-          pending = Buffer.from(data.subarray(start));
+          const rest = data.subarray(start);
+          skipping = isNonAccountingLine(rest);
+          pending = skipping ? Buffer.alloc(0) : Buffer.from(rest);
           if (pending.length > state.limits.lineBytes) throw problem('line_limit');
         }
         if (pending.length) addLine(pending);
@@ -187,10 +211,13 @@ async function inspectFile(path, state, range, decompress) {
 /** Explicit, read-only aggregate preview; no ledger or provider dependencies.
  * Limits may be lowered, never disabled. All returned fields are path/text-free.
  * An invalid copy taints every identity it names, including earlier good copies.
+ * `modifiedSince` skips files last written before it: they cannot hold a later
+ * record, so lifetime history does not spend a recent window's budget.
  */
 async function scanCodexSources({ from, to, home = homedir(), limits: overrides = {}, signal,
-  decompress = zlib.createZstdDecompress, accounting = false, cache = false } = {}) {
+  decompress = zlib.createZstdDecompress, accounting = false, cache = false, modifiedSince = null } = {}) {
   const range = accounting ? {} : codexPreviewRange(from, to);
+  const floor = accounting ? modifiedSince : range.from;
   const limits = scanLimits(overrides);
   if (typeof home !== 'string' || !home) throw problem('INVALID_HOME');
   const controller = new AbortController();
@@ -208,6 +235,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   const sessions = new Map();
   const revisions = [];
   const visited = new Set();
+  const problemSources = [];
   try {
     // Refuse symlinked source roots as well as symlinked descendants.
     const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
@@ -218,10 +246,13 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
     if (root && (!root.isDirectory() || root.isSymbolicLink())) state.issue('unsupported_entry');
     else if (root) for (const directory of ['sessions', 'archived_sessions']) {
       for await (const path of discover(join(codex, directory), state)) {
+        visited.add(path);
         const info = await lstat(path).catch(() => null);
+        if (info && floor != null && info.mtimeMs < floor) continue;
+        if (coverage.filesDiscovered >= limits.files) throw problem('file_limit');
+        coverage.filesDiscovered++;
         const revision = info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : 'missing';
         const cached = cache && sourceInventory.get(path);
-        visited.add(path);
         const source = cached?.revision === revision && cached.decompress === decompress
           ? cached.source : await inspectFile(path, state, range, decompress);
         if (cached?.source === source) {
@@ -233,6 +264,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
         else if (cache) sourceInventory.delete(path);
         revisions.push([hash(path), revision, source.fingerprint, source.valid]);
         coverage.filesInspected++;
+        if (!source.valid && problemSources.length < PROBLEM_SOURCE_SAMPLE) problemSources.push({ source: relative(codex, path), issues: source.issues });
         for (const id of source.ids) {
           const previous = sessions.get(id);
           if (!previous) sessions.set(id, { id, valid: source.valid, fingerprint: source.fingerprint, byModel: source.byModel, records: source.records, cwd: source.cwd, paths: [path] });
@@ -268,14 +300,16 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   const overflow = Object.values(totals).some(value => !Number.isSafeInteger(value));
   if (overflow) state.issue('counter_overflow');
   coverage.complete = !Object.keys(coverage.issues).length;
-  if (cache) {
+  // A stopped scan never reached the rest of the tree. Keeping their cached
+  // sources is what lets the next scan get further instead of restarting.
+  if (cache && !state.stopped) {
     const codex = home === homedir() && process.env.CODEX_HOME || join(home, '.codex');
     for (const path of sourceInventory.keys()) {
       if (path.startsWith(join(codex, sep)) && !visited.has(path)) sourceInventory.delete(path);
     }
   }
   if (accounting) return {
-    sessions: [...sessions.values()].filter(session => session.valid), coverage, stopped: state.stopped,
+    sessions: [...sessions.values()].filter(session => session.valid), coverage, stopped: state.stopped, problemSources,
     revision: hash(JSON.stringify([revisions.sort((a, b) => a[0].localeCompare(b[0])), coverage.issues]))
   };
   return { range: { from, to, timezone: 'UTC', inclusive: true }, limits,
@@ -291,3 +325,13 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
  */
 export const readCodexAccountingSources = options => scanCodexSources({ ...options, accounting: true, cache: options?.cache ?? true });
 export const previewCodexUsage = options => scanCodexSources(options);
+
+/** Never reserve or replace trustworthy counts from an incomplete inventory; say which sources held it back. */
+export function assertCodexInventoryComplete({ coverage, stopped = null, problemSources = [] }) {
+  if (coverage.complete) return;
+  const reasons = Object.entries(coverage.issues).map(([reason, count]) => `${reason}=${count}`).join(', ') || 'unknown';
+  const sources = problemSources.map(({ source, issues }) => `${source} (${issues.join(', ')})`).join('; ');
+  throw Object.assign(new Error(`Codex source inventory is incomplete: ${reasons}${sources ? ` in ${sources}` : ''}`), {
+    code: 'CODEX_SOURCES_INCOMPLETE', issues: { ...coverage.issues }, stopped, problemSources
+  });
+}

@@ -32,6 +32,19 @@ it('requires bounds, starts only a preview, reconciles fast completion, and canc
 });
 
 describe('preview evidence display', () => {
+  it('names held Codex sources and shows nothing while the scan is healthy', () => {
+    const props = { job: { status: 'idle' }, onStatus: vi.fn(), refreshStatus: vi.fn() };
+    const view = render(<CodexUsagePreview {...props} coverage={null} />);
+    expect(screen.queryByRole('note', { name: 'Codex usage on hold' })).toBeNull();
+    view.rerender(<CodexUsagePreview {...props} coverage={{
+      since: '2026-07-01T00:00:00Z', issues: { line_limit: 2 },
+      sources: [{ source: 'sessions/example.jsonl', issues: ['line_limit'] }]
+    }} />);
+    const notice = screen.getByRole('note', { name: 'Codex usage on hold' });
+    expect(notice).toHaveTextContent('line limit (2)');
+    expect(notice).toHaveTextContent('sessions/example.jsonl: line limit');
+  });
+
   it('keeps incomplete coverage and unknown overlap explicit, with no apply action', () => {
     render(<CodexUsagePreview job={{ mode: 'preview', status: 'complete', preview: {
       range: { from: '2026-10-01', to: '2026-10-31' },

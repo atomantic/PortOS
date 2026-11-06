@@ -1137,7 +1137,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
         </button>
       </div>
 
-      <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} />
+      <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} coverage={usage.codexCoverage} />
 
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">

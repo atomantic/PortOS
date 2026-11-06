@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as zlib from 'node:zlib';
-import { previewCodexUsage } from '../server/services/codexUsageSources.js';
+import { assertCodexInventoryComplete, previewCodexUsage, readCodexAccountingSources } from '../server/services/codexUsageSources.js';
 import { parseCodexRollout } from '../server/lib/providerTranscriptUsage.js';
 
 const exec = promisify(execFile);
@@ -87,6 +87,59 @@ describe('read-only Codex preview command and source boundary', () => {
     expect(result.totals.tokensIn).toBe(0);
     expect(result.coverage.issues).toMatchObject({ conflicting_identity: 1, malformed: 2 });
     expect(JSON.stringify(result)).not.toContain('/private');
+  });
+
+  it('accepts oversized non-accounting lines but fails closed on oversized accounting', async () => {
+    const huge = 'x'.repeat(3 * 1024 * 1024);
+    const envelope = (type, payload) => JSON.stringify({ timestamp: '2026-07-01T00:00:00Z', ordinal: 7, type, payload });
+    const [first, ...rest] = records();
+    await source('sessions/a.jsonl', [
+      JSON.stringify(first),
+      envelope('response_item', { type: 'function_call_output', output: huge }),
+      envelope('event_msg', { type: 'item_completed', item: huge }),
+      envelope('compacted', { message: huge }),
+      ...rest.map(record => JSON.stringify(record))
+    ].join('\n'));
+    const accepted = await preview();
+    expect(accepted.coverage).toMatchObject({ complete: true, issues: {} });
+    expect(accepted.totals.tokensIn).toBe(60);
+    await source('sessions/b.jsonl', serialize([meta('oversized-count'), { ...count('2026-07-01', 100), padding: huge }]));
+    const refused = await preview();
+    expect(refused.coverage.issues.line_limit).toBe(1);
+    expect(refused.coverage.unresolvedSessions).toBe(1);
+  });
+
+  it('treats a forked rollout\'s embedded parent meta as ancestry, keeping both sessions billable', async () => {
+    const parent = 'parent-session';
+    await source('sessions/parent.jsonl', serialize(records(parent)));
+    const child = records('child-session');
+    child[0].payload.forked_from_id = parent;
+    child.splice(1, 0, meta(parent));
+    await source('sessions/child.jsonl', serialize(child));
+    const result = await preview();
+    expect(result.coverage).toMatchObject({ complete: true, logicalSessions: 2, resolvedSessions: 2, duplicateCopies: 0, issues: {} });
+    expect(result.totals.tokensIn).toBe(120);
+  });
+
+  it('skips only sources last written before the window, without spending budgets or losing baselines', async () => {
+    const stale = await source('sessions/stale.jsonl', 'not json');
+    const before = new Date('2026-06-30T00:00:00Z');
+    await utimes(stale, before, before);
+    await source('sessions/current.jsonl', serialize(records()));
+    const result = await preview({ limits: { files: 1 } });
+    expect(result.coverage).toMatchObject({ complete: true, filesInspected: 1 });
+    expect(result.totals.tokensIn).toBe(60);
+  });
+
+  it('names the incomplete reasons and relative sources without exposing the home directory', async () => {
+    await source('sessions/2026/bad.jsonl', '{"truncated":');
+    const inventory = await readCodexAccountingSources({ home, cache: false });
+    let error;
+    try { assertCodexInventoryComplete(inventory); } catch (caught) { error = caught; }
+    expect(error).toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE', issues: { malformed: 1 } });
+    expect(error.message).toContain('malformed=1');
+    expect(error.message).toContain(join('sessions', '2026', 'bad.jsonl'));
+    expect(error.message).not.toContain(home);
   });
 
   it('reports malformed and truncated compressed files and invalidates their identifiable raw copies', async () => {

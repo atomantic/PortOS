@@ -1,4 +1,4 @@
-import { readCodexAccountingSources, codexSessionClaimKey, codexIdentityHash } from './codexUsageSources.js';
+import { assertCodexInventoryComplete, readCodexAccountingSources, codexSessionClaimKey, codexIdentityHash } from './codexUsageSources.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Replace PortOS's estimated per-run token counts with the CLI's own measured
@@ -552,10 +552,9 @@ async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFr
 }
 
 async function readCodexSessions({ home, workspacePath, from, to, fold, codexReserved }) {
-  const inventory = await readCodexAccountingSources({ home });
-  // Unknown/conflicting copies can overlap otherwise valid sessions. Never
-  // reserve or replace trustworthy counts from an incomplete inventory.
-  if (!inventory.coverage.complete) throw Object.assign(new Error('Codex source inventory is incomplete'), { code: 'CODEX_SOURCES_INCOMPLETE' });
+  const inventory = await readCodexAccountingSources({ home, modifiedSince: from });
+  // Unknown/conflicting copies can overlap otherwise valid sessions.
+  assertCodexInventoryComplete(inventory);
   for (const session of inventory.sessions) {
     // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
     // not enough: a rollout that GROWS between two overlapping runs presents
@@ -895,7 +894,10 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
   // change must degrade to the estimate, never throw into the completion hook.
   const readFamily = (family) => readMeasuredUsage({ workspacePath, startTime, endTime, family, home, onCodexClaims })
     .catch((err) => {
-      console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
+      // The interactive scan reports an incomplete inventory once and surfaces it
+      // in the usage UI; a run falling back to its estimate is the handled outcome.
+      if (err.code === 'CODEX_SOURCES_INCOMPLETE') console.log(`⏭️ Usage reconcile kept the estimate for ${run?.providerId} (${family}): ${err.message}`);
+      else console.error(`❌ Usage reconcile failed for ${run?.providerId} (${family}): ${err.message}`);
       return null;
     });
 

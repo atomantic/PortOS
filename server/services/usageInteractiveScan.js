@@ -1,4 +1,4 @@
-import { readCodexAccountingSources } from './codexUsageSources.js';
+import { assertCodexInventoryComplete, readCodexAccountingSources } from './codexUsageSources.js';
 import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -181,8 +181,8 @@ async function listSessions(family, home, from) {
     const root = join(cliHome(home, 'CLAUDE_CONFIG_DIR', '.claude'), 'projects');
     for (const path of await listJsonl(root)) await add(null, path);
   } else if (family === 'codex') {
-    const inventory = await readCodexAccountingSources({ home });
-    if (!inventory.coverage.complete) throw Object.assign(new Error('Codex source inventory is incomplete'), { code: 'CODEX_SOURCES_INCOMPLETE' });
+    const inventory = await readCodexAccountingSources({ home, modifiedSince: from });
+    assertCodexInventoryComplete(inventory);
     for (const session of inventory.sessions) sessions.push({ cwd: session.cwd, entries: session.records });
   } else if (family === 'grok') {
     const root = join(home, '.grok', 'sessions');
@@ -337,12 +337,36 @@ async function repairSettledSidechains({ home, runsDir, providerList, now, cutof
 }
 
 /**
+ * An incomplete inventory is durable state the usage UI shows, not a line per scan:
+ * it logs when its set of reasons changes. A live rollout appended to mid-read is
+ * retried by the next scan, so that alone records nothing.
+ */
+async function recordCodexHold(current, err, now, snapshot) {
+  const reasons = Object.keys(err.issues);
+  if (reasons.every((reason) => reason === 'source_changed')) {
+    console.log(`⏭️ Codex scan held for a live session write: ${err.message}`);
+    return current;
+  }
+  const signature = (issues) => Object.keys(issues || {}).sort().join();
+  const next = {
+    since: current?.since ?? new Date(now).toISOString(),
+    checkedAt: new Date(now).toISOString(),
+    issues: err.issues,
+    sources: err.problemSources
+  };
+  if (signature(current?.issues) !== signature(err.issues)) console.warn(`⚠️ Interactive usage holding Codex: ${err.message}`);
+  await setInteractiveScanState({ ...snapshot(), codexCoverage: next });
+  return next;
+}
+
+/**
  * Bill every un-launched Claude Code / Codex / Grok / Antigravity session since
  * the last scan.
  *
  * Resolves with `{ families: { [family]: { days, tokens } } }`. A family with no
  * configured provider is skipped WITHOUT advancing its watermark, so enabling
- * one later still bills what was skipped (within the first-scan lookback).
+ * one later still bills what was skipped (within the first-scan lookback). Codex
+ * reports `held: true` and keeps its watermark while its inventory is incomplete.
  */
 // A const, not a function declaration: the boot timer below is its only production
 // caller, and tests drive it directly with a fixture home/runs dir.
@@ -383,8 +407,9 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
     summary.unresolved = unresolved;
 
     let sidechainRepairedAt = state?.sidechainRepairedAt ?? null;
+    let codexCoverage = state?.codexCoverage ?? null;
     // Snapshot handed to each commit: the state as it would stand once that write lands.
-    const snapshot = () => ({ coverageVersion: 1, watermarks: { ...watermarks }, deferred: structuredClone(deferred), unresolved, sidechainRepairedAt, updatedAt: new Date(now).toISOString() });
+    const snapshot = () => ({ coverageVersion: 1, watermarks: { ...watermarks }, deferred: structuredClone(deferred), unresolved, sidechainRepairedAt, codexCoverage, updatedAt: new Date(now).toISOString() });
     if (!sidechainRepairedAt && resolveFamilyProvider(providerList, 'claude')) {
       // Process start, not `now`: a run reconciled after boot already ran the fixed reader.
       const cutoff = now - process.uptime() * 1000;
@@ -428,9 +453,25 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
         grouped.get(key).intervals.push([window.from, window.to]);
       }
 
+      let familySessions;
+      try {
+        familySessions = await listSessions(family, home, scanFrom);
+      } catch (err) {
+        if (err.code !== 'CODEX_SOURCES_INCOMPLETE') throw err;
+        // Hold only this family's watermark so the region is billed once the
+        // inventory recovers; the other families keep their own scans.
+        summary.families[family] = { days: 0, tokens: 0, held: true, issues: err.issues };
+        codexCoverage = await recordCodexHold(codexCoverage, err, now, snapshot);
+        continue;
+      }
+      if (family === 'codex' && codexCoverage) {
+        console.log('✅ Codex source inventory is complete again; interactive usage resumed');
+        codexCoverage = null;
+      }
+
       const perDay = new Map();
       const seen = new Set();
-      for (const session of await listSessions(family, home, scanFrom)) {
+      for (const session of familySessions) {
         for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, scanFrom, to, byCwd, seen, regionsOf)) {
           if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [], sources: new Set() });
           const dayTotals = perDay.get(day);
