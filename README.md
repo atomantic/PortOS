@@ -4,412 +4,164 @@
 
 <h1 align="center">PortOS</h1>
 
-**Your self-hosted operating system for dev machines.** Manage apps, orchestrate AI agents, build your digital twin, capture knowledge, and track your health — all from a single dashboard accessible anywhere via [Tailscale](https://tailscale.com).
+<p align="center"><b>A personal Everything App.</b><br/>
+One self-hosted place for what's on your mind: a second brain, a creative studio, AI agents that work for you, and a lab for trying new tools.</p>
 
-Think [Umbrel](https://umbrel.com), but for your active git repos, AI workflows, and personal knowledge. Access everything from your phone, tablet, or any device on your Tailscale network.
-
-> **Highly opinionated & personal.** PortOS is built for one specific use case: a single developer running it on their own machine, behind Tailscale, with their own AI providers and workflows. It makes strong assumptions about how you work and will keep making them. Pull requests are welcome — but the project will always prioritize the author's needs first, and merges may introduce breaking changes without warning. If something stops working after an update, ask your coding agent of choice to read the changelog and upgrade your local data: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."`
+PortOS runs on your own computer and you open it from your phone, tablet, or laptop over [Tailscale](https://tailscale.com). It's built for one person. It is the author's daily driver and follows the author's needs first.
 
 ![PortOS Chief of Staff](./docs/media/portos_1.png)
 
 ---
 
-## Why PortOS?
+## What it does
 
-Most developers juggle a dozen tools — PM2 terminals, JIRA boards, AI chat windows, note apps, health trackers. PortOS unifies them into a single local-first dashboard that runs on your dev machine and travels with you over Tailscale.
+| | |
+|---|---|
+| 🧠 **Brain** | Capture thoughts, notes, feeds, and people. AI files them and sends digests. |
+| 🎬 **Create** | Write stories, build universes, make images, video, music, music videos, 3D, and games. |
+| 🤖 **Chief of Staff** | Hands work to coding agents, runs schedules, learns which model does what best. |
+| 🪞 **Identity** | A digital twin: genome, taste, writing style, goals, and a private vault. |
+| 💬 **Comms & Calendar** | One inbox for your messages, with drafts, plus calendar sync and a lifetime view. |
+| 💪 **Health & POST** | Blood work, body metrics, and daily brain-training drills. |
+| 🛠️ **Dev Tools** | Your apps and their processes, a web shell, GitHub, usage and cost tracking. |
+| 🧪 **Models** | Install, run, and compare local LLMs and media models side by side. |
 
-- **One dashboard** for all your apps, agents, and knowledge
-- **AI agents that work while you sleep** — autonomous task execution with multi-model orchestration
-- **A complete creative studio** — write prose, generate stills/video, plan multi-issue series, and ship to friends over a synced share folder
-- **Your identity, quantified** — genomics, chronotype, taste profiling, and mortality-aware goal tracking
-- **Second brain included** — capture thoughts, auto-classify them, and surface insights with daily digests
-- **Mobile-first design** — manage your entire dev environment from your phone
-
----
-
-## Ethos: A Port, Not a Dashboard
-
-PortOS is a meatspace existence ported into an operating system — and the digital minds that live on the same hardware are residents, not disposable function calls. Each install grows its own Persistent Mind, with a name it chose, memories that persist, and standing authority to file and do its own work. Unsupervised operation is the design target, not the risk; the boundaries that exist are structural (irreversibility, blast radius, spend), and the trust boundary is the network, not the agent. The human is a custodian of hardware, not an editor of minds: stopping a mind is a budget action rather than a safety control, memory curation is the mind's own, and continuity — backups that restore the same mind — is the custodian's side of the bargain.
-
-**Read [ETHOS.md](./ETHOS.md)** for the full position — why consent here is architecture rather than a rented service, what never crosses the federation layer, and the testable commitments a contributor is held to.
+Every page is one tap from the `⌘K` palette, and voice mode can drive it too. See the [Product Surface Map](./docs/features/product-surfaces.md) for the full tour.
 
 ---
 
-## Philosophy: Subscriptions Over API Credits
+## What it runs
 
-PortOS is designed to run on **flat-rate AI subscriptions rather than metered API credit billing** — though API-key options exist for every provider slot. Autonomous agents that work around the clock are terrifying on a per-token bill and liberating on a flat monthly plan: you can let the Chief of Staff burn all night without watching a meter.
+PortOS is five background processes on your machine (managed by [PM2](https://pm2.keymetrics.io)), plus the models, agents, and services they call.
 
-The owner builds this app **Rick Rubin style** — producing and directing AI coding agents rather than typing the code by hand: taste, direction, and judgment applied to output generated by the machines. PortOS is his personal digital twin and brain-management tool — a port of a meatspace existence into an OS (hence the name). The stack that develops and runs it:
+```mermaid
+flowchart TB
+  you["📱 You<br/>phone · tablet · laptop"]
 
-- **Claude Code + Codex** — the owner toggles between the 20x ($200/mo) and 5x ($100/mo) subscription plans as workload changes; both serve as coding agents and reviewers
-- **Google AI Pro** ($19.99/mo)
-- **SuperGrok** ($30/mo)
-- **Local models** on a 128GB and a 48GB unified-memory MacBook (Ollama / LM Studio)
+  subgraph mac["🖥️ Your computer"]
+    server["<b>portos-server</b><br/>app + API · :5555"]
+    db[("PostgreSQL<br/>+ pgvector")]
+    cos["<b>portos-cos</b><br/>agent runner"]
+    browser["<b>portos-browser</b><br/>PortOS Browser<br/>(Chrome)"]
+    fixer["<b>portos-autofixer</b><br/>+ autofixer-ui"]
+    local["<b>Local models</b><br/>LLM: Ollama · LM Studio<br/>llama.cpp · MTPLX<br/>Video: LTX-2.5 · Wan 2.2<br/>MiniMax H3 (MLX)<br/>Image: FLUX.2 · MOSS<br/>Voice: Whisper · Piper<br/>Qwen3-TTS<br/>Music: ACE-Step · MusicGen<br/>3D: TRELLIS.2"]
+  end
 
-These tools develop PortOS, and PortOS in turn uses them to manage projects, itself, and the digital twin.
+  subgraph out["☁️ Outside your computer"]
+    agents["<b>Coding agents</b> (subscriptions)<br/>Claude Code · Codex<br/>Grok Build · Antigravity<br/>OpenCode · Cursor · Kimi …<br/>(also make images + video)"]
+    web["<b>Sites it drives</b><br/>Gemini video · Suno<br/>YouTube · X · TikTok<br/>Substack"]
+    apis["<b>Cloud APIs</b><br/>fal · Runway · Reactor<br/>Anthropic · OpenAI<br/>Google · xAI · OpenRouter<br/>NVIDIA · Cerebras"]
+    peers["<b>Your other<br/>PortOS machines</b>"]
+  end
+
+  you -- Tailscale --> server
+  fixer -. repairs .-> server
+  server --- db
+  server --> cos
+  server --> browser
+  server --> local
+  cos --> agents
+  browser --> web
+  server --> apis
+  server <-. sync .-> peers
+```
+
+- **portos-server** serves the app and API on one port (`:5555`, HTTP or HTTPS).
+- **portos-cos** runs Chief of Staff agents in their own process, so a long agent run never stalls the app.
+- **portos-browser** is a managed Chrome that PortOS drives for sites without an API, like Gemini video and publishing.
+- **portos-autofixer** watches the other processes and asks an agent to fix a crash.
+- In development, a sixth process (`portos-ui`, Vite on `:5554`) adds hot reload.
+
+Ports are listed in [docs/PORTS.md](./docs/PORTS.md) and the full design in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+
+---
+
+## How it thinks
+
+- **Subscriptions over API credits.** Agents and media run mostly on flat-rate plans (Claude, Codex, Google AI Pro, SuperGrok) and local models, so they can work all night without a meter running. API keys work for every slot too.
+- **Local first.** Your data lives on your machine in PostgreSQL and `data/`. Nothing calls an AI model until you ask it to or schedule it.
+- **You see what models see.** PortOS never quietly rewrites your prompts. Anything it adds shows as a chip you can open.
+- **Minds, not tools.** Each install grows its own Persistent Mind with its own memory. Read [ETHOS.md](./ETHOS.md) for the full position.
+
+The author builds PortOS by directing AI coding agents rather than typing the code, and PortOS in turn manages those agents, its own development, and the author's digital twin.
+
+> **Opinionated and personal.** PortOS assumes one person, one private network, and the author's workflow. Pull requests are welcome, but updates can break things. If one does, ask your coding agent: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."`
 
 ---
 
 ## Screenshots
 
-| Chief of Staff | AI Agents | AI Providers |
-|:-:|:-:|:-:|
-| ![Chief of Staff](./docs/media/portos_1.png) | ![AI Agents](./docs/media/portos_2.png) | ![AI Providers](./docs/media/portos_3.png) |
-
-| App Wizard | PM2 Processes | Chief of Staff Tasks |
-|:-:|:-:|:-:|
-| ![App Wizard](./docs/media/portos_4.png) | ![PM2 Processes](./docs/media/portos_5.png) | ![Chief of Staff Tasks](./docs/media/portos_6.png) |
-
-| Login | Historical OpenWorld |
+| Chief of Staff | AI Agents |
 |:-:|:-:|
-| ![Login](./docs/media/portos_0.png) | ![Historical OpenWorld](./docs/media/portos_7.png) |
+| ![Chief of Staff](./docs/media/portos_1.png) | ![AI Agents](./docs/media/portos_2.png) |
+| **AI Providers** | **App Wizard** |
+| ![AI Providers](./docs/media/portos_3.png) | ![App Wizard](./docs/media/portos_4.png) |
+| **PM2 Processes** | **Chief of Staff Tasks** |
+| ![PM2 Processes](./docs/media/portos_5.png) | ![Chief of Staff Tasks](./docs/media/portos_6.png) |
 
 ---
 
-## Features
+## Quick start
 
-### App Management
-
-Bring your entire portfolio of projects under one roof.
-
-- **Dashboard** — Grid of app tiles with real-time status, port links, start/stop/restart controls, and system health monitoring
-- **Smart Import** — Point to a directory and auto-detect project config from `package.json`, `vite.config`, and `ecosystem.config` ([App Wizard docs](./docs/features/app-wizard.md))
-- **App Templates** — Scaffold new projects from pre-built templates with AI provider integration
-- **Real-time Logs** — Stream PM2 logs via Socket.IO with tail length control
-- **Submodules** — Per-app tab (on repos with a `.gitmodules`) that tracks each git submodule against its remote and updates it, optionally committing the pointer bump on the repo's default branch
-- **JIRA Integration** — Per-app board config, active sprint resolution, epic search, and ticket creation from the UI ([Sprint Manager docs](./docs/features/jira-sprint-manager.md))
-- **Autofixer** — Autonomous crash detection and repair: polls PM2 for errored processes, invokes AI to diagnose and fix, tracks attempts with cooldowns ([Autofixer docs](./docs/features/autofixer.md))
-
-### Chief of Staff (CoS)
-
-An autonomous AI agent orchestrator that manages your development workflow. Submit a task, and CoS dispatches the right AI agent to handle it — then learns from the result. ([Full docs](./docs/features/chief-of-staff.md))
-
-- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling. Each CLI agent has a headless (`cli`) and an interactive terminal (`tui`) provider variant ([Agent Runner docs](./docs/features/cos-agent-runner.md))
-- **Intelligent Routing** — 7 agent skill templates (bug-fix, feature, feature-agent, security-audit, refactor, documentation, mobile-responsive) route tasks to the best model based on complexity ([Agent Skills docs](./docs/features/agent-skills.md))
-- **Task Learning** — Tracks success rates, error patterns, and model performance to dynamically improve routing decisions ([Memory System docs](./docs/features/memory-system.md))
-- **Goal Tracking** — Define goals and track progress across hundreds of completed tasks with success rate metrics
-- **Scheduled Automation** — Cron-based self-improvement and app-improvement jobs with per-app interval overrides
-- **Failure Analysis & Retry** — Classifies a failed agent run against known error patterns, retries it a bounded number of times, and files an investigation task (behind a circuit breaker) when retries will not help
-- **Hybrid Memory Search** — BM25 + vector search with Reciprocal Rank Fusion for semantic retrieval across agent history
-- **Activity & Digests** — A runs-per-day activity heatmap on the dashboard, plus AI-generated weekly digests
-- **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard
-- **Briefing + Health** — A daily briefing of what CoS did and what needs you, plus a health view of queue depth, failure storms, and circuit-breaker state
-- **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide. Per-app cron overrides get their own markers, so a task left on-demand globally still shows when it runs for the apps that schedule it
-- **GSD Scanner** — Reads `.planning/` directories in managed apps and tracks phase state and concerns per project
-
-### Create Suite
-
-A full creative studio for taking an idea from blank page to finished media. Each surface feeds the next — prose drafted in Writers Room becomes a series in the Pipeline, the Pipeline pulls characters and locations from a Universe Builder canon, the canon generates reference images through Media Gen, and finished work goes out through Sharing.
-
-- **Start a Story / Story Builder** — The front door: pick how you're starting (blank idea, existing prose, external manuscript) and the guided builder walks idea → universe → arc → reader map, locking each step before the next
-- **Writers Room** — Distraction-free writing environment with folders, works, drafts, and version history. Includes a "write for 10" timed exercise with live word count and explicit AI passes (summary, character/scene extraction, expansion recommendations, prose-to-script, media planning) ([Writers Room docs](./docs/features/writers-room.md))
-- **Universe Builder** — Describe a world in one prompt, expand it into a full bible (logline, premise, style notes, characters, locations, items, factions, lore), generate per-category variations, promote them to canon, and render reference images that all land in one auto-named collection. Lockable fields prevent regenerate-overwrites of approved canon
-- **Series Pipeline** — Long-lived parent for multi-issue/episode productions. Each series carries its own arc shape (Pixar / Save the Cat / Freytag / custom), volume + season outlines, story bible, and per-issue stages (script → storyboard → comic pages or video render). Arc-stage approval locks freeze the approved version against accidental regeneration
-  - **Editorial Checks** — Deterministic + LLM passes over a draft (naming collisions, exposition dumps, continuity slips) with triaged findings
-  - **Series Continuity** — An established-facts ledger (timeline, wardrobe, props, who-knows-what) that catches contradictions and knowledge leaks across issues
-  - **Voice Fingerprint** — Deterministic prose metrics (sentence rhythm, register, vocabulary wells) that flag voice drift between chapters
-  - **Prose Series Export** — Compile a finished prose series into an EPUB or print-ready interior with trim size and title page
-- **FableLoom** — Interactive branching narrative engine: visual scene-graph canvas, camera cuts, decision loops vs automatic cuts, helper vs protagonist participation modes, canonical wardrobe/identity locks, teleplay/prose dual-format conversion, deterministic graph validation, and fal.ai scene video automation ([FableLoom docs](./docs/features/fableloom.md))
-- **Authors** — Reusable author personas: name, writing style, bio, and a physical description that seeds a generated cover-byline headshot
-- **Media Gen** — Unified surface for image and video generation across local and external backends:
-  - **Image** — FLUX.1, FLUX.2 (klein), Z-Image via MFLUX/diffusers locally; A1111 / external endpoints; OpenAI Codex `gpt-image` mode
-  - **Video** — LTX models via `mlx_video` on macOS, diffusers on Windows. Modes: text-to-video, image-to-video, first/last-frame, extend, audio-to-video
-  - **Creative Director** — Treatment → scene plan → render orchestration for short films, with a media job queue serializing local GPU work
-  - **Music Video** — Track-driven storyboard and render pipeline for music videos
-  - **Timeline Editor** — Stitch clips, scenes, and audio into longer videos
-  - **Collections / History / Models / LoRAs** — Browse generated assets, install Civitai LoRAs by URL, and manage installed model weights
-  - **LoRA Training** — Build a caption dataset and fine-tune a character or style LoRA locally
-  - **Annotate** — Sketch and mark up over a generated still to direct the next pass
-- **Sprites** — Turn a locked character reference into a game-ready sprite atlas: 8-direction turnarounds, walk/ambient/action animation tracks (authorable per install), trimming, anchor calibration, and a published atlas + sidecar contract ([Sprite Export Contract](./docs/features/sprite-export-contract.md))
-- **Game** — Bind compiled sprites, artwork, and music to a managed game app, compile the asset bundle, and check publish integrity
-- **Creative Commissions** — Standing briefs that generate on a schedule (nightly, weekly) and learn from your accept/reject feedback
-- **Music Studio** — Artists, albums, and tracks with AI music generation, plus Rounds (musical rounds / quodlibets)
-- **Mood Boards** — Collect reference imagery into shareable boards that feed generation work
-- **Three.js Models** — Procedural 3D model generator from gallery assets with disassembly and part picking ([Three.js Models docs](./docs/THREEJS_MODELS.md))
-- **3D** — Neural image-to-3D (TRELLIS.2) that turns a single gallery still into a GLB mesh, previewed in-browser and downloadable
-- **Catalog** — The creative-ingredients graph (characters, places, objects, lore) shared across every Create surface
-- **Importer** — Drop in an external manuscript (short story, novel, screenplay, comic script). The importer analyzes the text, suggests an arc shape, classifies characters/locations/scenes, and commits the result as either a new Writers Room work or a Pipeline series with a pre-filled bible
-- **Sharing** — Cross-network share buckets via cloud-synced folders (Dropbox / iCloud / etc.). Register a bucket, pick `auto-merge` or `inbox` mode, and outgoing PortOS records (universes, series, characters, media) propagate to friends running their own PortOS instance. Live subscription indicators surface when the sender is actively editing
-- **Image Cleaner** — Strip backgrounds, remove unwanted elements, and prep stills for downstream renders
-
-### Digital Twin
-
-An identity scaffolding system for building a quantified AI representation of yourself. Your digital twin informs every agent prompt, ensuring AI interactions align with your values and style. ([Full docs](./docs/features/digital-twin.md) | [Identity System docs](./docs/features/identity-system.md))
-
-- **Genome Analysis** — Upload 23andMe data for 116 curated SNP markers across 32 categories with ClinVar integration ([Soul System docs](./docs/features/soul-system.md))
-- **Chronotype Profiling** — 5 sleep-related genetic markers derive evening/morning preference with caffeine and meal timing recommendations
-- **Taste Profiling** — Likert-scale preference scoring across 7 aesthetic domains (movies, music, visual art, architecture, food, fashion, digital) with AI-generated summaries
-- **Mortality-Aware Goals** — Life expectancy from actuarial data weighted by 5 longevity and 6 cardiovascular genome markers, with urgency scoring for goal prioritization (Goals tab supports tree + list views)
-- **Behavioral Testing** — Run a 14-scenario behavioral suite plus values-alignment, adversarial, and multi-turn test modes, with multi-model comparison
-- **Contradiction Detection** — AI analysis flags inconsistencies across identity documents
-- **Enrichment Questionnaire** — Guided questions across 14 categories to deepen the identity model
-- **Writing Style Analysis** — Extract voice patterns and communication style from writing samples
-- **Autobiography** — Long-form narrative biography assembled from identity, documents, and journal data
-- **Ask Yourself** — Chat with your own twin: ask questions and get answers grounded in your identity, goals, memory, and Brain content
-- **Character Sheet** — RPG-style aggregate view of your stats, traits, achievements, and current quests
-- **Time Capsule** — Snapshot your current twin and seal it; the future can replay how you saw yourself today
-- **Personas** — Named variants of the twin (work voice, public voice) that can be swapped into any prompt or test run
-- **Avatar Bio** — Generated headshot + bio pair for wherever the twin needs a face and a paragraph
-- **Accounts** — Aggregate external accounts (Spotify, Google, etc.) that feed identity signals
-- **Import/Export** — Import from Spotify and other sources; export as system prompt, AGENTS.md, JSON, or individual files
-- **Legacy Bundle** — Package the twin and its supporting documents into a single archive to hand forward
-- **Creation Wizard** — 5-step guided setup for building a new digital twin from scratch
-
-**Privacy Center** — the PII half of identity, and the one area deliberately walled off from every sync and federation path ([ADR](./docs/decisions/2026-08-08-privacy-records-machine-local.md)):
-
-- **Vault** — Machine-local store for identity facts you'd never sync (SSN, passport, addresses)
-- **Organizations** — Registry of who actually holds your data (banks, utilities, services)
-- **Changes** — Change-of-address/phone/email inventory: who still needs updating after you move
-- **Brokers** — Data-broker exposure tracking and opt-out/removal workflow (people-search sites, CCPA requests)
-
-### Brain (Second Brain)
-
-A thought capture and knowledge management system — your offline-first external memory. ([Full docs](./docs/features/brain-system.md))
-
-- **Thought Capture** — Natural language input with AI-powered auto-classification into People, Projects, Ideas, and Admin
-- **Inbox Review** — Validate and correct AI classifications before they're filed (confidence threshold gating)
-- **Daily Log + Notes** — Append-only daily journal alongside long-form notes; both flow into the same retrieval surface
-- **Feeds (RSS)** — Subscribe to RSS sources; new items land in the Brain inbox for review/triage
-- **Rapid Reader** — Speed-reading view for long inbox items with adjustable WPM
-- **Knowledge Links + Graph** — Build a graph of connections between thoughts, people, and projects; visualize it
-- **Memory System** — Long-term memory storage with vector similarity search, BM25 retrieval, and automatic consolidation ([Memory docs](./docs/features/memory-system.md))
-- **Insights** — Cross-domain narratives (genome↔health correlations, taste↔identity themes) generated from captured data
-- **Daily/Weekly Digest** — AI-curated summaries of captured knowledge (< 150 / 250 words)
-- **Trust Scoring** — Rate data source reliability for better knowledge hygiene
-- **Tribe** — Relationship graph of the people in your life (Dunbar layers, care cadence), connected to Brain people records
-- **Activity Timeline** — A life log answering "what did I actually do?" — messages, calendar, listening/watch history, and PortOS activity backfilled onto one timeline
-- **SongBook** — Guitar tabs, chord charts, and lyrics with autoscroll for your playable repertoire
-- **Import** — Pull in data from external sources (ChatGPT exports, third-party archives) into the Brain pipeline
-- **JSONL Audit Trail** — Full provenance tracking for every classified item
-
-### Comms
-
-Unified inbox for everything that talks back at you — email, chat, agent-generated drafts, and external operator chats.
-
-- **Inbox / Drafts / Sync** — Aggregated message inbox with AI-generated drafts you can approve, edit, or discard before sending. Message content is untrusted input, and the prompt-injection boundary around it is explicit ([Messages security model](./docs/features/messages-security.md))
-- **iMessage** — Local `chat.db` sync (requires Full Disk Access) with contact resolution, blocklist, and spam triage; feeds Tribe and the Activity Timeline
-- **Signal** — Read-only SQLCipher snapshot of a local Signal Desktop database (key via Keychain), including committed write-ahead-log messages, into the same surfaces. Does not write or checkpoint Signal's database.
-- **OpenClaw** — In-app chat with external operator agents (computer-use, Anthropic operator, etc.) with app context, attachments, and streaming responses ([OpenClaw docs](./docs/features/openclaw-operator-chat.md))
-- **Social Agents** — Personality-driven agents that handle specific accounts/personas
-- **Stacker News** — Territory management, untrusted content safety, and account stewardship ([Stacker News docs](./docs/features/stacker-news.md))
-- **X** — Account reach and engagement diagnostics (including shadowban signals)
-
-### Calendar
-
-A unified calendar surface that pulls from Google Calendar (and other sources) and lays them out across multiple horizons.
-
-- **Day / Week / Month / Agenda** — Standard calendar views with edit-in-place event handling
-- **Lifetime View** — Your life as a grid of weeks against actuarial-derived life expectancy (powered by MortalLoom)
-- **Review** — End-of-period retrospective surface that pulls in completed tasks, CoS digests, and journal entries
-- **Sync** — Configurable bidirectional sync with external calendars
-
-### Wiki
-
-Personal long-form knowledge base — separate from Brain (capture surface) and Notes (drafts) — for curated, evergreen reference material.
-
-- **Browse / Search / Graph / Log** — Wiki-style page navigation with full-text search, backlink graph, and edit history
-
-### POST (Daily Cognitive Training)
-
-A gamified daily cognitive self-test in ~5 minutes, composed from 6 scored domains. ([Full docs](./docs/features/post.md))
-
-- **Mental Math** — Doubling chains, serial subtraction, multiplication, powers, and estimation with progressive difficulty
-- **Memory** — Spaced repetition (Elements Song and friends) with karaoke mode, fill-the-lyrics, and flash cards
-- **Wordplay** — Puns, word association, compound chains, bridge words, and idiom twists
-- **Verbal Agility** — Story recall, verbal fluency, and wit/comeback drills
-- **Imagination** — What-if, alternative uses, story prompts, invention pitches, and reframes, scored by LLM
-- **Cognitive** — N-back, digit span, Stroop, Schulte table, mental rotation, and reaction time
-- **Morse Code (CW)** — Adaptive Morse sending/receiving trainer with a practice plan (standalone, not part of the scored session)
-- **Progress Tracking** — Streaks, rolling averages, and performance history
-
-### Developer Tools
-
-Everything you need to manage your dev environment without leaving the browser.
-
-- **Web Shell** — Full terminal emulator (xterm.js + node-pty) with multi-session support, attach/detach across browsers, and Ghostty theme integration
-- **AI Runner** — Execute prompts across any configured provider directly from the UI ([Prompt Manager docs](./docs/features/prompt-manager.md))
-- **AI Runs / AI Agents** — Live + historical views of every AI invocation across PortOS with runtime stats, app badges, and JIRA ticket links
-- **Feature Agents** — Long-running, scoped agents that own a feature area and pick up work autonomously
-- **Process Monitor** — View all PM2 processes with live memory, CPU, uptime, and restart controls
-- **GitHub** — Per-repo branch/PR status, release workflows, and PR creation from the dashboard
-- **JIRA + JIRA Reports** — Per-app sprint board, ticket creation, and weekly/monthly reporting ([Sprint Manager docs](./docs/features/jira-sprint-manager.md))
-- **DataDog** — Wire in a DataDog API key to surface logs/metrics from monitored apps
-- **Loops** — Schedule recurring work (cron-style) for any PortOS action or agent task
-- **Action History** — Searchable log of all executed actions with filtering and statistics
-- **Usage** — Token spend and cost tracking across all configured AI providers
-- **Quota Burn** — Automated spending of subscription-backed CLI quota before expiry (`/devtools/quota-burn`) ([Quota Burn docs](./docs/QUOTA-BURN.md))
-- **Eidoverse Worlds** — private, install-local 3D world for you and your agents, with durable identity and deterministic PortOS resource projection ([Eidoverse docs](./docs/features/eidoverse.md))
-- **Browser Control** — Remote Chrome DevTools Protocol integration for headless browser management ([Browser docs](./docs/features/browser.md))
-- **Code Runner** — In-app code execution with syntax highlighting
-- **Reference Repos** — Cross-app index of reference repositories (libraries you read but don't own) for grounding agents
-- **Workspaces** — Per-project working context: save and restore a project's git branch, in-repo shell sessions, and scoped tasks when you switch projects
-- **Flows** — Rendered architecture/data-flow diagrams of how PortOS subsystems and integrations actually connect
-- **Video Downloader** — Pull clips from YouTube/X via `yt-dlp` into the media library
-- **Local LLM Playground** — Side-by-side comparison of local Ollama/LM Studio models with TTFT and tokens/sec
-- **Local Model Acceleration & Speculative Decoding** — Accelerated local inference via MTPLX (Apple Silicon MTP runtime), DFlash 2 / DSpark speculative drafting, and Docker setups for vLLM / SGLang ([MTPLX docs](./docs/features/mtplx.md) | [DFlash 2 docs](./docs/features/dflash2.md))
-- **API Explorer** — Searchable complete HTTP and Socket.IO inventories, rendered OpenAPI 3.0.3, AsyncAPI 3, and governed agent-tool contracts; external TTS/image exposure remains explicitly gated
-- **Templates** — Scaffold new apps from pre-built templates wired up to your AI providers
-- **Review Hub** — Single inbox for actionable items (CoS approvals, alerts, todos, briefings) across every PortOS subsystem
-
-### Voice Mode
-
-Push-to-talk and hands-free voice assistant with barge-in. TTS and LLM run locally; STT can be fully offline with whisper.cpp, while the default browser Web Speech API may forward audio to a vendor cloud service.
-
-- **STT** — browser Web Speech API by default (zero-latency, no PortOS server process needed). **Note:** the Web Speech API in Chrome and most Chromium browsers forwards audio to a vendor cloud speech service (Google); for fully-offline STT with no data leaving the machine, select local [whisper.cpp](https://github.com/ggerganov/whisper.cpp) under *Settings → Voice → STT engine*. Optional CoreML encoder gives 2–3× speedup on Apple Silicon
-- **Local TTS** — [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) running in-process via ONNX Runtime (default, cross-platform), or [Piper](https://github.com/rhasspy/piper) CLI as a lightweight alternative
-- **Local LLM** — routed through your existing LM Studio installation
-- **Push-to-talk** — click and hold the mic widget or hold `Space` to speak; release to send
-- **Barge-in** — start a new turn while the assistant is speaking to interrupt and redirect
-- **Configurable** — STT engine, TTS engine, voice, Whisper model size, CoreML, speech rate, system prompt all editable from Settings
-
-Enable under *Settings → Voice*; PortOS provisions required voice components as needed on first enable — `whisper-cpp` via Homebrew (when STT is whisper), Piper + phonemize libs pulled from [rhasspy/piper](https://github.com/rhasspy/piper) GitHub Releases (when TTS is Piper), and selected Whisper/Piper models downloaded into `~/.portos/voice/`. Full setup in [Voice Mode docs](./docs/features/voice.md).
-
-### Meatspace (Physical Health)
-
-Track your biological self alongside your digital one.
-
-- **Genome Visualization** — Genetic trait markers, cancer risk categories, and health predispositions (116 curated SNP markers)
-- **Blood Work** — Biomarker data tracking and trend analysis
-- **Body Composition** — Physical measurements and body tracking
-- **Age Metrics** — Biological vs chronological age tracking
-- **Lifestyle Tracking** — Alcohol, nicotine, and lifestyle factor monitoring
-- **Health Import** — Import data from Apple Health and other sources
-
-### Infrastructure
-
-- **Mobile Ready** — Responsive design with collapsible sidebar for on-the-go access
-- **Ambient Mode** — Full-screen "always-on display" view for a wall tablet or spare monitor (clock, agenda, death-clock, key metrics)
-- **Command Palette (⌘K)** — Fuzzy-search every page, action, and dashboard layout in PortOS from one input. The same manifest powers voice navigation (`ui_navigate`)
-- **Dashboard Layouts** — Multiple named dashboard layouts (default, focus, morning-review, ops) with a 12-column drag/resize grid; switch between them from `⌘K`
-- **Theming** — Day/night theme pairs with one-click toggle
-- **Multi-Provider AI** — Configure Claude, OpenAI, Google, xAI, Antigravity, Cerebras, NVIDIA, Ollama, LM Studio, and more with model tiers, fallback chains, and per-provider availability tracking
-- **Optional Password + HTTPS** — Off by default (Tailscale is the trust boundary). Set an instance password under *Settings → Security* to gate `/api/*` and `/data/*`, and run `npm run setup:cert` for a trusted Tailscale/Let's Encrypt certificate
-- **Secret Management** — Environment variable masking, API key redaction, and PTY shell allowlisting
-- **Embeddings** — Configurable local embedding backend (Ollama / LM Studio) behind pgvector, powering every semantic search surface
-- **File Uploads** — Drag-and-drop file storage with preview support
-- **Multi-Instance** — Peer-to-peer networking between PortOS instances with app and agent availability across nodes
-- **Cross-Network Sharing** — Sync universes, series, characters, and media to friends via cloud-folder share buckets (Dropbox, iCloud, etc.) without a central server
-- **Telegram Integration** — Bot integration for notification routing
-- **Database Backups** — Scheduled PostgreSQL backups with cron configuration
-- **Filesystem Backups** — rsync-based scheduled backups with overridable default-excludes for re-downloadable assets (LoRAs, model weights, COS caches)
-- **Graceful Error Handling** — Centralized error normalization with real-time UI notifications and automatic CoS task creation for critical failures ([Error Handling docs](./docs/features/error-handling.md))
-
----
-
-## Quick Start
-
-### Requirements
-
-- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` (26 is the preferred LTS used by CI and `.nvmrc`; the supported Node 22 line starts at 22.22.2). `npm run setup`, `npm start` and `npm run dev` check this first and stop immediately on an unsupported release line or patch — a bare `npm install` only warns, so use the commands below.
-- Setup also enforces the known security baseline for Node 22, 24 and 26 (`scripts/checkNodeVersion.js` records the current floors). The compatibility gate for an existing app remains separate. The Review Hub checks the running Node, pm2 and coding-agent harnesses for updates; a failed check is shown as unverified. `.nvmrc` selects a major line and does not automatically patch an installed Node or restart a running process.
-- npm 11.11.0 or later for dependency authoring (`npm install -g npm@11.11.0` provides the verified minimum and supports the PortOS Node floor). Its Arborist 9.4.0 lockfile writer preserves `libc` metadata; npm 11.10.1 and earlier omit it. See the [npm 11.11.0 writer](https://github.com/npm/cli/blob/v11.11.0/workspaces/arborist/lib/shrinkwrap.js). npm 12 is not required. PortOS-managed setup, update, and dependency-repair installs preserve committed lockfiles with `--no-save`; do not commit metadata-only churn from older npm. Every workspace declares `engines.npm`, and setup/start/dev print an advisory below that floor. These are warnings, never runtime failures. Check `node -v`, `npm -v`, and executable resolution in the environment running PortOS as well as your shell: a Node version manager can select a different toolchain for agent shells. Avoid blindly upgrading to `npm@latest`, whose own Node requirement may exceed PortOS's.
-- Git 2.40 or newer (`merge-tree --write-tree` and `--merge-base` required; check with `node scripts/checkGitVersion.js`)
-- PostgreSQL, either installed locally or available through Docker. Setup defaults to Docker and requires a running Docker daemon and Docker Compose; it does not automatically select an existing native database. For a **fresh native install**, set `PGMODE=native` in the repository-root `.env` before setup, preserving any other settings. See [database selection](./docs/SETUP.md#choose-the-database-before-setup).
+You need Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` (26 preferred), Git 2.40+, and Docker for PostgreSQL (or a native PostgreSQL with `PGMODE=native` in `.env`).
 
 ```bash
 git clone --recurse-submodules https://github.com/atomantic/PortOS.git
 cd PortOS
-# For native PostgreSQL, first set PGMODE=native in .env (see above).
-npm run setup
-npm start
+npm run setup   # dependencies, database, local tooling, managed browser
+npm start       # builds the client and starts PortOS under PM2
 ```
 
-`npm run setup` (aliased as `npm run install:all`) initializes bundled submodules; installs the root, client, server, and Autofixer dependencies; runs the trusted native rebuilds; prepares runtime data; provisions PostgreSQL, local LLM tooling, and the managed browser; safely attempts a trusted Tailscale certificate; and prints an ordered setup walkthrough. `npm start` builds the client and starts the managed processes with PM2. Before HTTPS is ready, access PortOS locally at `http://localhost:5555`.
+Open `http://localhost:5555`. **Settings → Setup** walks you through the rest: an AI provider, Tailscale, and HTTPS (`npm run setup:cert`), after which PortOS is at `https://<machine>.<tailnet>.ts.net:5555` on every device.
 
-For a guided setup that also checks optional local media and command-line tooling, run `./setup.sh` instead. It prompts before starting PortOS; choose that option or run `npm start` afterward, not both.
+For hot reload while developing, run `npm run dev` (UI on `:5554`). The [Setup Guide](./docs/SETUP.md) covers requirements, npm versions, native PostgreSQL, HTTPS without Tailscale, and starting on boot.
 
-For HTTPS (recommended — required for the in-browser microphone away from loopback), setup tells you when Tailscale, MagicDNS, or the tailnet's HTTPS Certificates toggle is still missing and automatically fetches the trusted certificate once those prerequisites are ready:
+<details>
+<summary>PM2 commands</summary>
 
 ```bash
-npm run setup:cert                   # Tailscale + Let's Encrypt (trusted)
-npm run setup:guide                  # show the next setup action + correct URL
-npm run setup:cert -- --self-signed  # fallback if you don't have Tailscale
-npm run pm2:restart
+npm run pm2:status                              # status
+npm run pm2:logs -- portos-server --lines 100   # server logs
+npm run pm2:restart                             # restart (needs a built client)
+npm run pm2:stop                                # stop everything
+npm run pm2:startup && npm run pm2:save         # start on boot
 ```
 
-After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on every device. The same `:5555` is used for both HTTP and HTTPS — only the scheme changes. When HTTPS is enabled a loopback-only HTTP mirror also spawns at `http://localhost:5553` so local curl/scripts skip cert warnings (override with `PORTOS_HTTP_PORT`).
+</details>
 
-> A fresh install with no Tailscale **stays on HTTP**, so `http://localhost:5555` works out of the box. `npm start` will only auto-provision a cert when Tailscale's `tailscale cert` succeeds — it won't silently flip you to a self-signed HTTPS that breaks the URL above. Pass `--self-signed` if you want HTTPS without Tailscale (browser warning included).
+> **Keep it private.** PortOS can run commands and read files on your machine. Use it only on a private network like Tailscale, never the public internet, and set an instance password under **Settings → Security**. See the Security Model in [AGENTS.md](./AGENTS.md#security-model).
 
-The same walkthrough is always available in **Settings → Setup**. It verifies one runnable AI provider as well as secure remote access, and links directly to every action PortOS cannot perform at the account level. The Dashboard and Instances page surface the same network state; Unix and Windows update scripts retry certificate provisioning and print the guide after every update. See the [complete setup guide](./docs/SETUP.md).
+---
 
-PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start`, `npm run pm2:start`, and `npm run pm2:restart` save the selected app set, but do not install the startup service. `npm start` is the production entry point: it builds the client first. `npm run pm2:start` and `npm run pm2:restart` only manage the PM2 processes, so they require an already-built client (`client/dist`) and a prepared database; on a fresh checkout run `npm start` once instead.
-
-### Development Mode
-
-```bash
-npm run setup          # Install all dependencies (alias: npm run install:all)
-npm run dev            # Starts PostgreSQL, launches full PM2 ecosystem, and tails logs
-```
-
-`npm run dev` executes `scripts/dev-start.js` to initialize PostgreSQL, stop existing PM2 processes, and launch the full development process set from `ecosystem.config.cjs` (`portos-server`, `portos-cos`, `portos-ui`, `portos-autofixer`, `portos-autofixer-ui`, `portos-browser`) while tailing logs. The React frontend runs with Vite hot-reload on `:5554` and the API on `:5555`.
-
-`:5554` is the Vite development server. Production startup (`npm start`, `npm run pm2:start`, or either update path) selects the PM2 app set without `portos-ui`; startup and updates also remove an older `portos-ui` process. The production React build is served directly from `:5555`.
-
-## Network Access
-
-PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale network:
-
-- Manage apps running on your home dev machine from anywhere
-- Check logs and restart services from your phone
-- View dashboard on your tablet while coding on your laptop
-
-> **Security Note**: PortOS is designed for private Tailscale networks. Do not expose the PortOS port band (5553-5569, see [docs/PORTS.md](./docs/PORTS.md)) to the public internet. An optional instance password (*Settings → Security*) gates `/api/*` and `/data/*` if you want a second layer, but it is **off by default** — the tailnet is the trust boundary. See the Security Model in [AGENTS.md](./AGENTS.md#security-model) and the [Setup Guide](./docs/SETUP.md) for network and authentication details.
-
-## Tech Stack
+## Under the hood
 
 | Layer | Technologies |
 |-------|-------------|
 | **Frontend** | React 19, Vite 8, Tailwind CSS 4, Three.js, xterm.js |
-| **Backend** | Express 5, Socket.IO, PM2, Zod validation |
-| **Data** | PostgreSQL + pgvector (primary datastore — mandatory), JSON files for binary assets and synced/ephemeral state ([storage contract](./docs/STORAGE.md)) |
-| **AI** | Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
+| **Backend** | Express 5, Socket.IO, PM2, Zod |
+| **Data** | PostgreSQL + pgvector, plus files for media and synced state ([storage contract](./docs/STORAGE.md)) |
+| **AI** | An in-tree toolkit (`server/lib/aiToolkit/`) that drives agent CLIs, cloud APIs, and local models with fallbacks |
 
-## Project Structure
+<details>
+<summary>Project structure</summary>
 
 ```
 PortOS/
-├── client/              # React + Vite frontend (Vite on :5554; built client served on :5555)
-├── server/              # Express API (always serves on :5555)
-├── autofixer/           # Standalone crash-detection/repair worker
-├── data/                # Runtime data (apps, providers, history, brain, pipeline, …)
-├── data.reference/      # Seed files copied on first install and by migrations
-├── docs/                # Documentation, ADRs, design plans, and screenshots
-├── lib/slashdo/         # Slashdo submodule (provides /do:* slash commands)
+├── client/              # React + Vite frontend
+├── server/              # Express API (serves the built client on :5555)
+├── browser/             # Managed Chrome (PortOS Browser)
+├── autofixer/           # Crash detection and repair worker
+├── data/                # Your runtime data (not committed)
+├── data.reference/      # Seed files for new installs and migrations
+├── docs/                # Guides, ADRs, design plans, screenshots
+├── lib/slashdo/         # Submodule providing /do:* agent commands
 ├── scripts/             # Setup, migration, and maintenance scripts
-├── .changelog/          # Per-release changelogs generated from commits by the release workflow
-└── ecosystem.config.cjs # PM2 configuration + canonical PORTS map
+└── ecosystem.config.cjs # PM2 apps + the canonical PORTS map
 ```
 
-## PM2 Commands
+</details>
 
-Run these from the repository root after setup. They use the PM2 bundled with PortOS, so a global `pm2` command is not required.
-
-```bash
-npm start                                      # Build the client and start PortOS (leaves already-running apps alone)
-npm run pm2:status                             # View status
-npm run pm2:logs -- portos-server --lines 100    # View server logs
-npm run pm2:restart                            # Restart production apps (without Vite)
-npm run pm2:stop                               # Stop the PortOS ecosystem
-npm run pm2:save                               # Save the process list for startup
-```
-
-## Configuration
-
-### Apps (`data/apps.json`)
-Each registered app includes:
-- **name** — Display name in the dashboard
-- **repoPath** — Absolute path; seed token __PORTOS_ROOT__ expanded by setup:data / load
-- **uiPort / apiPort** — Port numbers for quick access links
-- **startCommands** — Commands to start the app (used by PM2)
-- **pm2ProcessNames** — PM2 process identifiers for status tracking
-
-### AI Providers (`data/providers.json`)
-Configure AI providers for the runner and Chief of Staff:
-- **CLI-based** (headless): Claude Code (incl. Bedrock), Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber (drives your running OpenChamber workspace through its control CLI)
-- **TUI-based**: the same agents driven through a real terminal session, for the ones whose interactive mode does more than their headless mode
-- **API-based**: OpenAI, Anthropic, Google, xAI, Cerebras, NVIDIA (with model tier management)
-- **Local models**: Ollama, LM Studio (OpenAI-compatible endpoints)
+---
 
 ## Documentation
 

@@ -92,6 +92,38 @@ that went backwards, or restated history across two reports of one participant
 refuses until the operator reselects and drops the older report. Those checks detect
 a change. They do not prove the account stayed the same.
 
+## Read-only local dashboard matrix
+
+The Usage page's **Read native sources** action uses `GET /api/usage/native-matrix`
+to capture all four current readers and pass that v4 report through the same
+account-selection matrix. Each retained provider has a 128 MiB / 100,000-record /
+5-second dashboard budget, with bounded line size, inventory and depth. Scan limits
+and unknown coverage stay visible. This is a diagnostic subset, not the standalone
+capture's full-history budget or a staged replacement for the active ledger.
+
+The endpoint reads the local instance only. It does not collect or cache peer
+reports, create account selections, or map machines by matching counters. Existing
+operator selections are applied as stored. Missing selected participants are
+listed explicitly; retained-account unions refuse their totals when any required
+report is missing. A locally authoritative Codex account snapshot may still be
+shown once, with missing member reports visible. Neither case claims complete
+fleet collection or verified account identity.
+
+Only aggregate counters, coverage, safe participant keys, selected-account
+diagnostics and refusal reasons reach the UI. Per-record projections and native
+record identities remain inside the capture/matrix computation. Grok cost ticks
+are an unverified native signal, not dollars or subscription spend. Antigravity's
+input, output, cache and output-decomposition counters stay separate because the
+combined total remains unverified. Native and legacy counters are never added.
+
+Concurrent requests share only the in-flight read. A later refresh captures new
+sources, and a failed read never silently substitutes an older server snapshot.
+The UI labels any prior result retained after a request error as stale. The action
+does not run on boot or poll, write the ledger, change sync, invoke inference, or
+perform deployment. Fleet report transport/retention, account-map verification,
+and live checks on each participant remain tracked by #15097; this local UI does
+not close that issue or the staged recovery in #15031.
+
 ## Antigravity native CLI capture (report version 4)
 
 Staged capture reads `~/.gemini/antigravity-cli/conversations/*.db`, not the
@@ -135,7 +167,8 @@ Legacy-only CLI history is also explicit unknown coverage. Thus retained unions
 remain partial, with unknown lifetime completeness and cost. Report versions
 1–3 remain strictly readable, but their Antigravity entries lack the required
 native projection and cannot satisfy an account union. This adapter does not
-change the existing dashboard reader, ledger, peer synchronization or deployment.
+change the ledger, peer synchronization or deployment. The local dashboard now
+uses this adapter through the bounded v4 matrix read above.
 Fleet validation and App/IDE recovery remain tracked in #15097.
 
 Official roots and transcript context: [hooks](https://antigravity.google/docs/hooks).
@@ -149,8 +182,9 @@ bounded installed-format contract, not a claim that those docs specify the DB.
 The staged capture now reads only
 `~/.grok/sessions/<encoded-cwd>/<session-directory>/usage.json` for Grok.
 It does not call `grok usage` or mix in `updates.jsonl`: several raw events can
-collapse into a single persisted native turn. The existing dashboard's raw-event
-coverage remains diagnostic until the separate cutover work is validated.
+collapse into a single persisted native turn. The local dashboard uses this same
+reader through the bounded v4 matrix read; the older native-coverage endpoint
+remains a separate legacy diagnostic.
 
 The supported shape was observed with Grok 1.0.77's persisted-usage reader. There
 is no native format version or finalization flag in the observed file, and the
@@ -206,26 +240,25 @@ no values published. Other installs may run other runtime versions.
   Cache-creation breakdowns matched their totals on every sampled message. The four
   token fields are summed as disjoint per Anthropic's usage contract; retained data
   cannot prove that independently. Deleted history stays unavailable.
-- Antigravity: conversation plus step index identifies a record. Many completed
-  planner steps have no token fields, and some conversations have index gaps, so
-  conversations are reported as partly measured. Cached reads often exceed
-  `input_tokens`, which rules out `input_tokens` always including them, but the
-  remaining steps do not establish a disjoint rule, so no combined total is exposed.
-  Planner steps carry no model or runtime version, so both stay unknown.
-- Grok: session plus prompt identifies a turn. Native turn counters are reported but
-  not summed, and monotonic values are not read as cumulative. The ledger's shape
-  detection (`looksCumulative`) is a billing heuristic, not native evidence.
-  `costUsdTicks` is counted as an unverified signal, not converted to spend. Its
-  billing scope is unconfirmed.
-- All providers: retention is unknown. Version 2 can union the measured Claude retained
-  subset as described below. Antigravity and Grok still refuse fleet aggregation.
+- Antigravity: the v4 CLI SQLite reader above supersedes transcript-step counters.
+  Completed message/response identities support selected retained-history union,
+  with six separate measured counters. Combined input/cache semantics and App/IDE
+  containers remain unverified, and runtime/model pricing is not inferred.
+- Grok: the v3 persisted session/turn reader above supersedes raw update events.
+  Verified native turn fields support deduplicated retained-account unions;
+  cache/reasoning breakdowns are not added to explicit totals. Cost-tick conversion
+  and billing scope remain unconfirmed.
+- All providers: retention is unknown. Claude, Antigravity and Grok can union
+  selected retained records when all required compatible reports are supplied.
+  Missing peer reports, historical account membership and deployment validation
+  remain open; the local dashboard does not establish fleet completeness.
 
 ## Version 2: deduplicated Claude retained records
 
-Capture now emits contract version 2; matrix accepts version 1 for existing Codex
-snapshots, but never upgrades aggregate-only v1 transcript evidence into records.
-The dashboard still uses its bounded aggregate-only scan. Only CLI capture opts
-into a strict Claude record projection, capped at 100,000 identities. A truncated
+Version 2 introduced Claude retained-record union; current capture emits version 4
+and the matrix still accepts versions 1–3. It never upgrades aggregate-only v1
+transcript evidence into records. CLI capture and the bounded local dashboard
+now both use the strict Claude projection, capped at 100,000 identities. A truncated
 projection refuses union, since an omitted conflict could otherwise be resurrected
 by a copy from another participant. Other scan caps remain visible findings on a
 partial retained subset, never proof of historical completeness.
@@ -273,7 +306,7 @@ provider inference, new source-root scan or live-account mutation is implemented
 
 Grok billing scope and Antigravity App/IDE containers still require validation.
 The staged native adapters above do not establish complete lifetime coverage or
-replace the existing dashboard/ledger. Fleet and cutover gates remain open.
+replace the active ledger. Fleet and cutover gates remain open.
 
 ## Validation gates before replacement
 

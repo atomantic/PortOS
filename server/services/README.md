@@ -6,6 +6,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `nativeUsageMatrix.js` | Bounded, explicit v4 native capture for the Usage dashboard; local-only selected-account diagnostics, no per-record HTTP output, coalesced in-flight reads and explicit missing peer reports. |
 | `codexUsageSources.js` | Explicit bounded, read-only streamed Codex raw/Zstandard/archive inspection; accounting-only projection, logical-session deduplication, source-integrity coverage and unknown ledger overlap. |
 | `spawnBudgetProof.js` | Server-owned retry-episode and latest-dispatch proof validation, including counter round trips. |
 | `spawnBudgetReconciliation.js` | Ownership-fenced monotone correction of a stopped task from its exact latest dispatch receipt; correction remains held. |

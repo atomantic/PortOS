@@ -302,6 +302,9 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
 // Short caption for one `referenceImageN` upload (what the image shows).
 const referenceLabel = z.string().max(MAX_VIDEO_REFERENCE_LABEL_LENGTH).optional();
 
+// Browsers send every line break in a multipart text field as CRLF (the HTML form
+// encoding rule), so undo that before a prompt is measured, compared or sent to a model.
+const lfLineBreaks = (value) => (typeof value === 'string' ? value.replace(/\r\n/g, '\n') : value);
 const generateBodySchema = z.object({
   referenceLabel1: referenceLabel,
   referenceLabel2: referenceLabel,
@@ -380,8 +383,8 @@ const generateBodySchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.enum(REACTOR_ASPECTS).optional(),
   ),
-  prompt: z.string().max(20000),
-  negativePrompt: z.string().max(8000).optional(),
+  prompt: z.preprocess(lfLineBreaks, z.string().max(20000)),
+  negativePrompt: z.preprocess(lfLineBreaks, z.string().max(8000).optional()),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),
   height: optionalNum(64, 2048, 'height'),

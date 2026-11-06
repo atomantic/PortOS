@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { RefreshCw } from 'lucide-react';
 import * as api from '../../services/api';
@@ -42,70 +42,127 @@ function DailyHistory({ buckets }) {
   );
 }
 
-function SourceCard({ row, busy, error, onRead }) {
-  const { family, label, native, legacy } = row;
+const COUNTERS = [
+  ['tokensIn', 'Input tokens'], ['tokensOut', 'Output tokens'],
+  ['cacheReadTokens', 'Cache read tokens'], ['cacheWriteTokens', 'Cache write tokens'],
+  ['thinkingOutputTokens', 'Thinking output tokens'], ['responseOutputTokens', 'Response output tokens'],
+  ['reasoningTokens', 'Reasoning tokens'], ['modelCalls', 'Model calls'],
+];
+
+function Counters({ totals, family, tokenFields }) {
+  return <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+    <div className="sm:col-span-2"><dt className="text-gray-400">{family === 'codex' ? 'Native lifetime tokens' : 'Measured retained tokens'}</dt><dd className="text-2xl font-semibold tabular-nums text-white">{unknownCount(family === 'codex' ? totals?.lifetimeTokens : totals?.totalTokens)}</dd>
+      {tokenFields?.totalTokens && <dd className="text-xs text-gray-500">{tokenFields.totalTokens}</dd>}
+    </div>
+    {family !== 'codex' && COUNTERS.filter(([key]) => !['thinkingOutputTokens', 'responseOutputTokens'].includes(key) || family === 'agy').filter(([key]) => !['reasoningTokens', 'modelCalls'].includes(key) || key in (totals ?? {})).map(([key, label]) => <div key={key}>
+      <dt className="text-gray-400">{label}</dt><dd className="tabular-nums text-white">{unknownCount(totals?.[key])}</dd>
+      {tokenFields?.[key] && <dd className="text-xs text-gray-500">{tokenFields[key]}</dd>}
+    </div>)}
+  </dl>;
+}
+
+function Findings({ findings }) {
+  return findings?.length ? <ul className="list-inside list-disc text-xs text-port-warning">{[...new Set(findings)].map(code => <li key={code}>{code}</li>)}</ul> : null;
+}
+
+function Evidence({ label, value }) {
+  return <div className="min-w-0"><dt className="text-gray-500">{label}</dt><dd className="break-words text-gray-300">
+    {value === null || value === undefined ? 'Unknown' : typeof value === 'object' ? <dl className="ml-2 space-y-1">{Object.entries(value).map(([key, item]) => <Evidence key={key} label={key.replace(/([A-Z])/g, ' $1')} value={item} />)}</dl> : typeof value === 'number' ? formatCount(value) : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value}
+  </dd></div>;
+}
+
+function Cost({ cost }) {
+  const signal = cost?.nativeCostSignal;
+  return <div className="text-xs text-gray-400">
+    <p>Cost: Unknown · tokens and native cost ticks are not a bill.</p>
+    {signal && <dl className="mt-2 space-y-1">
+      <div><dt>Native cost ticks (unverified scope)</dt><dd className="tabular-nums">{unknownCount(signal.knownCostUsdTicks)}</dd></div>
+      <Evidence label="Cost signal coverage" value={{ measuredRecords: signal.measuredRecords ?? signal.records, missingRecords: signal.missingRecords, conflictingRecords: signal.conflictingRecords }} />
+    </dl>}
+  </div>;
+}
+
+function AccountUnion({ matrix, family }) {
+  return <div className="space-y-2 border-t border-port-border pt-3">
+    <h3 className="text-sm font-semibold text-white">Selected account union</h3>
+    <p className="text-xs text-gray-400">{matrix?.merge?.status ?? 'Unknown'} · Peer reports are not collected by this read. This is not a fleet-complete total.</p>
+    <Findings findings={matrix?.merge?.reasons} />
+    {['merged', 'partial'].includes(matrix?.merge?.status) && <Counters totals={matrix.merge.totals} family={family} />}
+    {!matrix?.accounts?.length && <p className="text-xs text-gray-400">No usable account selection. Local measurements above remain separate.</p>}
+    {matrix?.accounts?.map(account => <div key={account.accountLabel} className="space-y-2 rounded border border-port-border p-2">
+      <h4 className="text-sm text-white">{account.accountLabel} · {account.status}</h4>
+      <p className="text-xs text-gray-400">{unknownCount(account.members?.length)} selected members · {unknownCount(account.membersWithoutReport?.length)} members without reports</p>
+      {account.membersWithoutReport?.length > 0 && <p className="text-xs text-port-warning">Missing peer reports prevent a complete selected-account view.</p>}
+      {account.status !== 'refused' && account.totals && <Counters totals={account.totals} family={family} />}
+      <Cost cost={account.cost} />
+      <Findings findings={account.findings} />
+      <details className="text-xs"><summary className="cursor-pointer text-gray-400">Account coverage</summary><dl><Evidence label="Coverage" value={account.coverage} /></dl></details>
+    </div>)}
+    {matrix?.unresolvedParticipants?.length > 0 && <p className="text-xs text-port-warning">{formatCount(matrix.unresolvedParticipants.length)} participants have unresolved account selection.</p>}
+  </div>;
+}
+
+function SourceCard({ family, label, provider, matrix, scanned }) {
   const account = family === 'codex';
-  const read = native?.status === 'available' || native?.status === 'partial';
-  const total = account ? native?.summary?.lifetimeTokens : native?.summary?.totalTokens;
-  const coverage = native?.coverage;
-  return (
-    <section aria-label={`${label} native history`} className="min-w-0 rounded-xl border border-port-border bg-port-card p-3 sm:p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold text-white">{label}</h2>
-        <button type="button" disabled={busy} onClick={onRead} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
-          {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}
-          {busy ? 'Reading…' : account ? 'Refresh Codex' : `Read ${label} history`}
-        </button>
-      </div>
-      <p className="text-xs text-gray-400">{account ? 'Currently signed-in Codex account · all devices in its reported scope' : 'Native files retained on this instance · account identity unverified'}</p>
-      {error && <p role="alert" className="text-sm text-port-warning">{error} {read ? 'The previous snapshot remains below.' : ''}</p>}
-      {read ? <>
-        <div><p className="text-xs text-gray-400">{account ? 'Native lifetime tokens' : 'Measured retained tokens'}</p><p className="text-2xl font-semibold tabular-nums text-white">{unknownCount(total)}</p></div>
-        {native.status === 'partial' && <p className="text-sm text-port-warning">Partial source coverage. This is not a complete usage total.</p>}
-        {native.reason && <p className="text-xs text-gray-400">{native.reason}</p>}
-        <dl className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
-          <div><dt className="text-gray-500">Read at</dt><dd className="text-gray-300">{formatDateTime(native.fetchedAt, 'Unknown')}</dd></div>
-          <div><dt className="text-gray-500">Cost</dt><dd className="text-gray-300">Unknown · tokens are not a bill</dd></div>
-          {account && <div><dt className="text-gray-500">Latest reported day</dt><dd className="text-gray-300">{formatDateNumeric(native.latestReportedDay, 'Unknown')}</dd></div>}
+  return <section aria-label={`${label} native history`} className="min-w-0 rounded-xl border border-port-border bg-port-card p-3 sm:p-4 space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold text-white">{label}</h2><span className="text-xs text-gray-400">{provider?.status ?? (scanned ? 'unavailable' : 'Not scanned')}</span></div>
+    <p className="text-xs text-gray-400">{account ? 'Account snapshot read on this instance · shown once, never summed across instances' : 'Native files retained on this instance · not an account-wide total'}</p>
+    {!scanned ? <p className="text-sm text-gray-400">Not scanned yet. Read native sources without changing your usage records.</p> : <>
+      <Counters totals={provider?.totals} family={family} tokenFields={provider?.tokenFields} />
+      {provider?.status === 'partial' && <p className="text-sm text-port-warning">Partial source coverage. This is not a complete usage total.</p>}
+      {(!provider || ['unavailable', 'absent'].includes(provider.status)) && <p className="text-sm text-port-warning">History unavailable or source absent. Check the source and retry the read.</p>}
+      <Findings findings={provider?.findings} />
+      {family === 'agy' && <p className="text-xs text-gray-400">Input, output, and cache counters may overlap. A combined total is unknown; separate counters are not added together.</p>}
+      <Cost cost={provider?.cost} />
+      <p className="text-xs text-gray-400">Runtime: {provider?.runtime?.versions?.length ? provider.runtime.versions.join(', ') : 'Unknown'} · Retention and completeness are unknown.</p>
+      <details className="text-xs"><summary className="cursor-pointer text-gray-400">Source coverage and limits</summary>
+        <dl className="mt-2 space-y-2">
+          <Evidence label="Source" value={provider?.source} /><Evidence label="Validator" value={provider?.validator} />
+          <div><dt className="text-gray-500">Earliest observed</dt><dd>{(account ? formatDateNumeric : formatDateTime)(provider?.freshness?.earliestObserved, 'Unknown')}</dd></div>
+          <div><dt className="text-gray-500">Latest observed</dt><dd>{(account ? formatDateNumeric : formatDateTime)(provider?.freshness?.latestObserved, 'Unknown')}</dd></div>
+          <Evidence label="Date boundary" value={provider?.dateBoundary} /><Evidence label="Coverage" value={provider?.coverage} />
+          <Evidence label="Scan limits" value={provider?.scanCaps} /><Evidence label="Duplicates" value={provider?.duplicates} />
+          {provider?.nativeUsageCoverage && <Evidence label="Persisted usage coverage" value={provider.nativeUsageCoverage} />}
+          {provider?.nativeAgyCoverage && <Evidence label="Antigravity metadata coverage" value={provider.nativeAgyCoverage} />}
+          <Evidence label="Missing intervals" value={provider?.missingIntervals} />
         </dl>
-        {account && <DailyHistory buckets={native.dailyUsageBuckets} />}
-      </> : <p className="text-sm text-gray-400">{native?.reason || (account ? 'Read the native account snapshot to see its history.' : 'Not scanned yet. Read retained native files without changing your usage records.')}</p>}
-      {native?.status === 'unavailable' && <p className="text-sm text-port-warning">History unavailable. Check the source and retry the read.</p>}
-      {coverage && <p className="text-xs text-gray-400">
-          {formatCount(coverage.files)} files · {formatCount(coverage.measuredRecords)} measured records · {formatCount(coverage.missingUsageRecords)} missing usage · {formatCount(coverage.conflictingRecords)} conflicts · {formatCount(coverage.unreadableFiles)} unreadable files · {formatCount(coverage.invalidLines)} invalid lines
-        {coverage.capped ? ' · scan limit reached' : ''}. Retention and completeness are unknown.
-        </p>}
-      {account && native?.status === 'unavailable' && <Link className="inline-flex rounded border border-port-border px-3 py-2 text-sm text-port-accent" to="/ai/services">Check Codex connection</Link>}
-      <p className="text-xs text-gray-500">{account ? 'Account total is shown once, never summed across instances.' : 'Local retained records are not an account-wide total and are not summed across instances.'}</p>
-      {legacy && <details className="border-t border-port-border pt-2 text-xs text-gray-400"><summary className="cursor-pointer">Legacy ledger comparison</summary><p className="mt-2">This instance recorded {unknownCount(legacy.tokens)} tokens ({legacy.provenance?.join(', ') || 'unknown provenance'}). Its scope does not match this native source. No difference is treated as a correction, and the counts are never added.</p></details>}
-    </section>
-  );
+      </details>
+      {account && <DailyHistory buckets={provider?.totals?.dailyBuckets ?? null} />}
+      {account && provider?.status === 'unavailable' && <Link className="inline-flex rounded border border-port-border px-3 py-2 text-sm text-port-accent" to="/ai/services">Check Codex connection</Link>}
+      <AccountUnion matrix={matrix} family={family} />
+    </>}
+  </section>;
 }
 
 export default function NativeUsageOverview() {
-  const [rows, setRows] = useState(FAMILIES);
-  const [busy, setBusy] = useState({});
-  const [errors, setErrors] = useState({});
-  const requests = useRef(new Set());
+  const [snapshot, setSnapshot] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const request = useRef(false);
   const mounted = useMounted();
-  const read = useCallback(async family => {
-    if (requests.current.has(family)) return;
-    requests.current.add(family);
-    setBusy(previous => ({ ...previous, [family]: true }));
-    setErrors(previous => ({ ...previous, [family]: null }));
-    const result = await api.getNativeUsageCoverage({ family }, { silent: true }).catch(() => null);
-    requests.current.delete(family);
+  const read = useCallback(async () => {
+    if (request.current) return;
+    request.current = true;
+    setBusy(true);
+    const result = await api.getNativeUsageMatrix({ silent: true }).catch(() => null);
+    request.current = false;
     if (!mounted.current) return;
-    const row = result?.providers?.find(candidate => candidate.family === family);
-    if (row) setRows(previous => previous.map(candidate => candidate.family === family ? row : candidate));
-    else setErrors(previous => ({ ...previous, [family]: `Could not read ${FAMILIES.find(candidate => candidate.family === family)?.label} history.` }));
-    setBusy(previous => ({ ...previous, [family]: false }));
+    if (result) setSnapshot(result);
+    setError(!result);
+    setBusy(false);
   }, [mounted]);
-  useEffect(() => { void read('codex'); }, [read]);
   return <div className="space-y-4">
-    <p className="max-w-3xl text-sm text-gray-400">Provider-native history is the source for these counts. Snapshots are read on demand, with gaps left unknown. Existing PortOS records remain unchanged in Legacy analytics.</p>
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <p className="max-w-3xl text-sm text-gray-400">Read-only local native history. One bounded read captures all four providers. Peer reports are not collected; existing PortOS usage records remain unchanged.</p>
+      <button type="button" disabled={busy} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
+        {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}{busy ? 'Reading…' : snapshot ? 'Refresh native sources' : 'Read native sources'}
+      </button>
+    </div>
+    {error && <p role="alert" className="text-sm text-port-warning">Could not read native sources. {snapshot ? 'Stale: the previous snapshot remains below. Retry to get current values.' : 'No snapshot was captured. Retry the read.'}</p>}
+    {snapshot && <p className="text-xs text-gray-400">Snapshot read at {formatDateTime(snapshot.capturedAt ?? snapshot.generatedAt, 'Unknown')} · Local instance only</p>}
+    <Findings findings={snapshot?.refusals?.map(({ code, family }) => `${family ?? 'All providers'}: ${code}`)} />
     <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
-      {rows.map(row => <SourceCard key={row.family} row={row} busy={busy[row.family]} error={errors[row.family]} onRead={() => { void read(row.family); }} />)}
+      {FAMILIES.map(row => <SourceCard key={row.family} {...row} scanned={snapshot !== null} provider={snapshot?.providers?.find(provider => provider.family === row.family)} matrix={snapshot?.families?.find(family => family.family === row.family)} />)}
     </div>
   </div>;
 }
