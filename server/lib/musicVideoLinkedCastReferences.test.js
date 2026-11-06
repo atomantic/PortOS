@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoConditioningReferences,
-  musicVideoFrameReferenceFiles, musicVideoLimitReferenceFiles, musicVideoLinkedCastIds, musicVideoLinkedCastReferences,
+  musicVideoFrameReferenceFiles, musicVideoLimitReferenceFiles, musicVideoLinkedCastIds, musicVideoLinkedCastReferences, musicVideoLinkedReferenceId, musicVideoMissingFrameLinkedPicks,
   musicVideoOfferedReferences, musicVideoReferenceCapacity, musicVideoSceneCastIds,
 } from './musicVideoConditioning.js';
 
@@ -24,6 +24,7 @@ const media = [
   { kind: 'reference', mediaKey: 'child-good.png', library: { review: { status: 'good' }, variant: { formId: 'child' } } },
 ];
 const castMedia = { [CAST]: media };
+const linkedId = musicVideoLinkedReferenceId;
 
 describe('catalog assets offered for a linked character', () => {
   // Uniquely catches a linked character offering only its portrait, or an unapproved image reaching a shot.
@@ -54,24 +55,45 @@ describe('catalog assets offered for a linked character', () => {
 
   // Uniquely catches a pick that shows in the picker but is dropped when the render resolves it.
   it('resolves a picked asset for frames and clips, and loads its media for that scene', () => {
-    const scene = { frameReferenceIds: ['mvr-linked-face.png'], clipReferenceIds: ['mvr-linked-sheet.png'] };
+    const scene = { frameReferenceIds: [linkedId('face.png')], clipReferenceIds: [linkedId('sheet.png')] };
     expect(musicVideoConditioningReferences(project(), scene, castMedia).map((ref) => ref.imageId)).toEqual(['face.png']);
     expect(musicVideoClipConditioningReferences(project(), scene, castMedia).map((ref) => ref.imageId)).toEqual(['sheet.png']);
-    expect(musicVideoClipReferenceChoices(project(), scene, castMedia).some((ref) => ref.id === 'mvr-linked-sheet.png')).toBe(true);
+    expect(musicVideoClipReferenceChoices(project(), scene, castMedia).some((ref) => ref.id === linkedId('sheet.png'))).toBe(true);
     expect(musicVideoSceneCastIds(project(), scene)).toEqual([CAST]);
     expect(musicVideoSceneCastIds(project(), {})).toEqual([]);
   });
 
   it('keeps a pick within a five-image renderer in the chosen order', () => {
-    const scene = { frameReferenceIds: ['r1', 'r2', 'r3', 'r4', 'r5', 'mvr-linked-face.png'] };
+    const scene = { frameReferenceIds: ['r1', 'r2', 'r3', 'r4', 'r5', linkedId('face.png')] };
     const withRefs = project({ visualSpec: { references: ['r1', 'r2', 'r3', 'r4', 'r5'].map((id) => ({ id, imageId: `${id}.png`, role: 'set' })) } });
     const files = musicVideoFrameReferenceFiles(null, musicVideoConditioningReferences(withRefs, scene, castMedia));
     expect(files).toHaveLength(6);
     expect(musicVideoLimitReferenceFiles(files, musicVideoReferenceCapacity('codex'))).toEqual(['r1.png', 'r2.png', 'r3.png', 'r4.png', 'r5.png']);
   });
 
+  // Uniquely catches a truncated id, where picking one long filename sends another.
+  it('gives long filenames that share a prefix their own ids', () => {
+    const prefix = `portrait_${'a'.repeat(120)}`;
+    const rows = [`${prefix}_face.png`, `${prefix}_fullbody.png`].map((mediaKey) => ({ kind: 'reference', role: 'sheet:face', mediaKey }));
+    const refs = musicVideoLinkedCastReferences(project(), { [CAST]: rows });
+    expect(new Set(refs.map((ref) => ref.id)).size).toBe(2);
+    expect(refs.every((ref) => ref.id.length <= 128)).toBe(true);
+    const scene = { frameReferenceIds: [refs[1].id] };
+    expect(musicVideoConditioningReferences(project(), scene, { [CAST]: rows }).map((ref) => ref.imageId)).toEqual([rows[1].mediaKey]);
+  });
+
+  // Uniquely catches a paid frame render that silently loses the sheet the director picked.
+  it('reports a picked asset that does not resolve', () => {
+    const scene = { frameReferenceIds: ['own', linkedId('face.png')] };
+    expect(musicVideoMissingFrameLinkedPicks(project(), scene, castMedia)).toEqual([]);
+    expect(musicVideoMissingFrameLinkedPicks(project(), scene, null)).toEqual([linkedId('face.png')]);
+    expect(musicVideoMissingFrameLinkedPicks(project(), scene, { [CAST]: null })).toEqual([linkedId('face.png')]);
+    expect(musicVideoMissingFrameLinkedPicks(project(), scene, { [CAST]: [{ ...media[1], library: { review: { status: 'bad' } } }] })).toEqual([linkedId('face.png')]);
+    expect(musicVideoMissingFrameLinkedPicks(project(), { }, null)).toEqual([]);
+  });
+
   it('offers an image once, keeping the project reference that already holds it', () => {
     const offered = musicVideoOfferedReferences([{ id: 'own', imageId: 'portrait.png', role: 'character' }, ...musicVideoLinkedCastReferences(project(), castMedia)]);
-    expect(offered.map((ref) => ref.id)).toEqual(['mvr-linked-face.png', 'mvr-linked-sheet.png', 'mvr-linked-good.png', 'own']);
+    expect(offered.map((ref) => ref.id)).toEqual([linkedId('face.png'), linkedId('sheet.png'), linkedId('good.png'), 'own']);
   });
 });

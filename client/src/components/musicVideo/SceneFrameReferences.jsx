@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
@@ -113,6 +113,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           </li>
         )}
       </ul>
+      {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked catalog reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
       <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}

@@ -132,13 +132,18 @@ export function isLegacyCatalogReference(project, ref) {
 }
 
 // Browser-safe FNV-1a 64-bit identity. Hash the full tuple, never a truncated filename or its position.
-function catalogReferenceId(subjectId, filename) {
+function fnv1a64(text) {
   let hash = 0xcbf29ce484222325n;
-  for (const character of JSON.stringify([subjectId, filename])) {
+  for (const character of text) {
     hash = BigInt.asUintN(64, (hash ^ BigInt(character.codePointAt(0))) * 0x100000001b3n);
   }
-  return `mvr-catalog-${hash.toString(16).padStart(16, '0')}`;
+  return hash.toString(16).padStart(16, '0');
 }
+
+const catalogReferenceId = (subjectId, filename) => `mvr-catalog-${fnv1a64(JSON.stringify([subjectId, filename]))}`;
+
+/** A linked catalog asset's id, from its whole filename: long names can share any prefix. */
+export const musicVideoLinkedReferenceId = (mediaKey) => `mvr-linked-${fnv1a64(mediaKey)}`;
 
 /** Virtual choices resolved from the catalog on read, never published copies of catalog images. */
 function musicVideoCatalogReferences(project) {
@@ -247,7 +252,7 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
     const rank = ({ m, sheet }) => (m.kind === 'portrait' ? 0 : sheet ? 1 : 2);
     return [...assets].sort((a, b) => rank(a) - rank(b)).filter(({ m }) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
       .map(({ m, sheet }) => ({
-        id: `mvr-linked-${m.mediaKey}`.slice(0, 128),
+        id: musicVideoLinkedReferenceId(m.mediaKey),
         imageId: m.mediaKey,
         role: 'character',
         label: `${subject.name || 'Cast member'} · ${linkedAssetDetail(m, sheet)}`.slice(0, 120),
@@ -266,6 +271,17 @@ export function musicVideoSceneCastIds(project, scene) {
   const picksLinked = [scene?.frameReferenceIds, scene?.clipReferenceIds]
     .some((ids) => Array.isArray(ids) && ids.some((id) => String(id).startsWith('mvr-linked-')));
   return [...new Set([...(variant ? [variant.ingredientId] : []), ...(picksLinked ? musicVideoLinkedCastIds(project) : [])])];
+}
+
+/**
+ * A shot's picked linked assets that do not resolve: their cast media failed to
+ * load, or the asset has since left the catalog's approved set. Resolving would
+ * silently drop them, so a frame render must stop instead of spending a take.
+ */
+export function musicVideoMissingFrameLinkedPicks(project, scene, castMedia) {
+  if (!Array.isArray(scene?.frameReferenceIds)) return [];
+  const linked = musicVideoLinkedCastReferences(project, castMedia);
+  return scene.frameReferenceIds.filter((id) => String(id).startsWith('mvr-linked-') && !linked.some((ref) => ref.id === id));
 }
 
 /** What a picker offers: the linked cast first, minus any image the project's own references already offer. */

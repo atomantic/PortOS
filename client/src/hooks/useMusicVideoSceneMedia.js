@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { normalizePreMusic, preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -229,6 +229,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
+    if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
+      toast.error('A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.');
+      return Promise.resolve({ ok: false });
+    }
     // The shot's references (the card's References row) ride along on every frame render, a refine included.
     const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
     if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
