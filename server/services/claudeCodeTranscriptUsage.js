@@ -7,6 +7,7 @@ import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
+import { usageLedgerFenced } from './usageCutoverBarrier.js';
 
 /**
  * Per-model token usage for EVERY Claude Code session on this machine —
@@ -189,6 +190,8 @@ export function refreshLocalTranscriptUsage({ root, force = false, staleMs = REF
     const stored = await readLocalTranscriptUsage();
     const age = stored.updatedAt ? Date.now() - Date.parse(stored.updatedAt) : Infinity;
     if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
+    // Native transcripts stay on disk, so the next refresh after a fence catches up.
+    if (await usageLedgerFenced()) return { ...stored, filesScanned: 0, refreshed: false };
     const from = stored.updatedAt
       ? new Date(Date.now() - REFRESH_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10)
       : null;

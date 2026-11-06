@@ -270,6 +270,14 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // The usage cutover barrier (#15098) runs nothing on the host, but it decides
+  // whether this machine's accounting is written and federated, so it needs an
+  // operator: a network caller on a password-free install cannot hold or activate it.
+  'POST /api/usage/cutover/acquire',
+  'POST /api/usage/cutover/verify',
+  'POST /api/usage/cutover/activate',
+  'POST /api/usage/cutover/rollback',
+  'POST /api/usage/cutover/release',
   // Stacker News review authorizes a later saved-key publication or browser
   // handoff; both the decision and execution require operator authority.
   'POST /api/stacker-news/actions/:id/review',
