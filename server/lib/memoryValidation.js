@@ -72,6 +72,11 @@ export const memorySchema = memoryCreateSchema.extend({
   id: z.string().guid(),
   version: z.number().int().min(1).optional(),
   lastReview: memoryLastReviewSchema.nullable().optional(),
+  reviewOrigin: z.object({
+    sourceId: memoryIdSchema, sourceVersion: z.number().int().min(1),
+    mindId: z.string(), turnId: z.string(), providerId: z.string(), model: z.string(),
+    reviewedAt: z.string().datetime(),
+  }).nullable().optional(),
   embedding: z.array(z.number()).optional(),
   embeddingModel: z.string().optional(),
   accessCount: z.number().int().min(0).default(0),

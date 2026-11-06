@@ -8,7 +8,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview } from '../lib/persistentMindMemory.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistentMindMemory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { UUID_RE } from '../lib/fileCore.js';
@@ -30,6 +30,7 @@ function rowToMemory(row) {
     version: row.version,
     archiveReason: row.archive_reason,
     lastReview: row.last_review ?? null,
+    reviewOrigin: row.review_origin ?? null,
     type: row.type,
     content: row.content,
     summary: row.summary,
@@ -94,7 +95,7 @@ function embeddingColumns(embedding) {
 /**
  * Create a new memory
  */
-async function insertMemory(client, data, embedding) {
+async function insertMemory(client, data, embedding, reviewOrigin = null) {
   const id = uuidv4();
   const summary = data.summary || generateSummary(data.content);
   const now = new Date().toISOString();
@@ -107,12 +108,12 @@ async function insertMemory(client, data, embedding) {
       id, type, content, summary, category, tags,
       embedding, embedding_model, confidence, importance,
       source_task_id, source_agent_id, source_app_id,
-      expires_at, status, created_at, updated_at, origin_instance_id
+      expires_at, status, created_at, updated_at, origin_instance_id, review_origin
     ) VALUES (
       $1, $2, $3, $4, $5, $6,
       $7, $8, $9, $10,
       $11, $12, $13,
-      $14, $15, $16, $17, $18
+      $14, $15, $16, $17, $18, $19
     ) RETURNING *`,
     [
       id, data.type, data.content, summary, data.category || 'other', data.tags || [],
@@ -120,7 +121,7 @@ async function insertMemory(client, data, embedding) {
       embeddingCol.model,
       data.confidence ?? 0.8, data.importance ?? 0.5,
       data.sourceTaskId || null, data.sourceAgentId || null, data.sourceAppId || null,
-      data.expiresAt || null, data.status || 'active', now, now, originInstanceId
+      data.expiresAt || null, data.status || 'active', now, now, originInstanceId, reviewOrigin ? toPgJson(reviewOrigin) : null
     ]
   );
 
@@ -167,7 +168,7 @@ export async function reviewMindMemory(input, provenance) {
         type: 'learning', content: input.lesson, category: source.category,
         sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId,
         confidence: source.confidence, importance: source.importance,
-      }, null);
+      }, null, createPersistentMindReviewOrigin(input, provenance));
       await client.query(
         "INSERT INTO memory_links (source_id, target_id, link_type, note, created_by) VALUES ($1, $2, 'derived-from', $3, $4)",
         [lesson.id, source.id, input.rationale ?? null, provenance.mindId]

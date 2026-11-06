@@ -1361,6 +1361,11 @@ describe.skipIf(!runDb)('mind memory review transactions', () => {
     expect((await memoryDB.peekMemory(source.id)).status).toBe('archived');
     expect((await memoryDB.getMemories({ sourceAgentId: provenance.mindId })).total).toBe(1);
     expect((await query('SELECT COUNT(*)::int AS count FROM memories')).rows[0].count).toBe(2);
+    const corrected = await memoryDB.updateMemory(source.id, { content: 'Corrected source', status: 'active' });
+    await review(corrected, 'keep');
+    expect((await memoryDB.peekMemory(a.review.lessonId)).reviewOrigin).toMatchObject({ sourceId: source.id, sourceVersion: source.version, ...provenance });
+    await memoryDB.updateMemory(a.review.lessonId, { reviewOrigin: { sourceId: 'spoofed' } });
+    expect((await memoryDB.peekMemory(a.review.lessonId)).reviewOrigin.sourceId).toBe(source.id);
   });
 
   it('rejects a correction/protection committed while the review waits on the source lock', async () => {

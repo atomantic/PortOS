@@ -32,6 +32,7 @@ export const memorySearchDdl = [
 // Local history also captures current-row replacements arriving through federation.
 export const memoryReviewDdl = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB`,
+    `ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB`,
 ];
 
 export const memoryHistoryDdl = [

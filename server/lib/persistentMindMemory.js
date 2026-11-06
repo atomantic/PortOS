@@ -105,3 +105,12 @@ export function mergePersistentMindReview(memory, review) {
     },
   };
 }
+
+export function createPersistentMindReviewOrigin(input, provenance) {
+  return {
+    sourceId: input.memoryId, sourceVersion: input.expectedVersion,
+    mindId: provenance.mindId, turnId: provenance.turnId,
+    providerId: provenance.providerId, model: provenance.model,
+    reviewedAt: new Date().toISOString(),
+  };
+}

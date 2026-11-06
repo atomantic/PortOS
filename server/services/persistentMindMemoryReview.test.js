@@ -2,7 +2,6 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-mind-review-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
-vi.mock('./memoryBM25.js', () => ({ indexMemory: vi.fn(async () => {}) }));
 const memory = await import('./memory.js');
 const { reviewPersistentMindMemory, createPersistentMindMemory, protectPersistentMindMemory, updatePersistentMindMemory } = await import('./persistentMindContext.js');
 const context = { turnId: 'turn-example', providerId: 'provider-example', model: 'model-example' };
@@ -23,9 +22,11 @@ describe('mind-owned memory review service', () => {
     expect(lesson).toMatchObject({ type: 'learning', content: input.lesson, sourceAgentId: 'cos-persistent-mind', sourceTaskId: context.turnId,
       typedLinks: [expect.objectContaining({ targetId: source.id, linkType: 'derived-from' })] });
     expect((await memory.peekMemory(source.id)).status).toBe('active');
+    expect((await memory.hybridSearchMemories('Preserve uncertainty', null)).memories.map(item => item.id)).toContain(lesson.id);
     await review(source, 'archive');
     expect((await memory.peekMemory(source.id)).lastReview.outcomes.learn).toEqual(first.review);
     expect(await review(source, 'archive')).toMatchObject({ duplicate: true });
+    expect((await memory.hybridSearchMemories('synthetic observation', null)).memories.map(item => item.id)).not.toContain(source.id);
   });
 
   it('refuses foreign records, protected archival, stale content and changed replay arguments', async () => {
@@ -36,10 +37,13 @@ describe('mind-owned memory review service', () => {
     await expect(review(source, 'learn', { lesson: 'Replacement lesson' })).rejects.toMatchObject({ code: 'MEMORY_REVIEW_CONFLICT' });
     await protectPersistentMindMemory({ memoryId: source.id, protection: 'important' });
     await expect(review(source, 'learn', { lesson: 'Original lesson' })).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    const originalLesson = (await memory.peekMemory(source.id)).lastReview.outcomes.learn.lessonId;
     const protectedSource = await memory.peekMemory(source.id);
     await expect(review(protectedSource, 'archive')).rejects.toMatchObject({ code: 'MEMORY_PROTECTED' });
     await updatePersistentMindMemory(source.id, { content: 'Corrected prose' });
     await expect(review(protectedSource, 'keep')).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    await review(await memory.peekMemory(source.id), 'keep');
+    expect((await memory.peekMemory(originalLesson)).reviewOrigin).toMatchObject({ sourceId: source.id, sourceVersion: 1, mindId: 'cos-persistent-mind', ...context });
     expect((await memory.peekMemory(foreign.id)).status).toBe('active');
   });
 

@@ -13,7 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview } from '../lib/persistentMindMemory.js';
+import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -60,6 +60,7 @@ export async function createMemory(data, embedding = null) {
       id,
       version: 1,
       lastReview: null,
+      reviewOrigin: null,
       type: data.type,
       content: data.content,
       summary: data.summary || generateSummary(data.content),
@@ -965,7 +966,7 @@ export function reviewMindMemory(input, provenance) {
     const index = structuredClone(originalIndex);
     const now = new Date().toISOString();
     const lesson = input.verdict === 'learn' ? {
-      id: uuidv4(), version: 1, lastReview: null, type: 'learning', content: input.lesson,
+      id: uuidv4(), version: 1, lastReview: null, reviewOrigin: createPersistentMindReviewOrigin(input, provenance), type: 'learning', content: input.lesson,
       summary: generateSummary(input.lesson), category: source.category, tags: [], relatedMemories: [],
       sourceAgentId: provenance.mindId, sourceTaskId: provenance.turnId, sourceAppId: null,
       confidence: source.confidence, importance: source.importance,
