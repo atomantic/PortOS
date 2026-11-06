@@ -66,8 +66,9 @@ tool-free CLI recipe, scratch isolation and a 600-second deadline. It returned a
 validated clean envelope: first output 649 ms, last output 10,990 ms, process exit
 and pipe close 15,039 ms, stdout 11,244 bytes, stderr zero. This was a CLI-boundary
 probe with a synthetic review prompt, not a historical failed review replay.
-It demonstrates successful execution for that input only. It does not reproduce
-or explain the prior 600-second failures in #15122. Preserve that issue until the activity-aware policy is verified against a long-running review. Do not increase the budget or enable tools to obtain a verdict.
+It demonstrates successful execution for that input only. The subsequent measured
+branch reviews below establish why the old deadline was premature. Do not enable
+tools or infer approval from activity.
 
 
 A second, full-bridge one-file synthetic review on the same scratch-directory path
@@ -79,3 +80,13 @@ events during its first minute. This establishes that the request reached Grok's
 reasoning stream; a basic scratch-directory access failure is not supported by
 these observations. It does not identify why the model takes so long on this
 input or establish an internal vendor cause. Raw stream content stays private.
+
+
+The traced branch review completed with a validated clean verdict after 994,811 ms
+(16 minutes 35 seconds): last output 990,507 ms, process/pipe close 994,803 ms,
+604,907 stdout bytes, stderr zero. Its already-running timer was extended to a
+30-minute renewable silence window without restarting Grok. That completed call
+reviewed the diagnostics revision before the inactivity fix; fake-process and
+shared-batch regressions pin the repository implementation. This demonstrates
+that the old ten-minute wall-clock cutoff discarded a live review. No underlying
+vendor outage or directory-permission failure was established.
