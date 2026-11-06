@@ -11,6 +11,7 @@ import {
   getSiblingReconciledUsageRunIds
 } from './usage.js';
 import { listProviders } from './providers.js';
+import { registerUsageCutoverParticipant } from './usageCutoverBarrier.js';
 import { mergeUsageClaims, snapshotUsageClaims } from './usageReconciler.js';
 
 const idleJob = () => ({
@@ -27,6 +28,7 @@ const idleJob = () => ({
 });
 
 let job = idleJob();
+registerUsageCutoverParticipant({ name: 'historicalBackfill', inFlight: () => (job.status === 'running' ? 1 : 0) });
 let previewWorker = null;
 
 const publicJob = () => ({ ...job });

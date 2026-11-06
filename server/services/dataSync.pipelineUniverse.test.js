@@ -1234,6 +1234,9 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     // assertion stays honest about what the snapshot map IS and ISN'T
     // responsible for.
     const OUT_OF_BAND_SYNC_KEYS = new Set([
+      // Usage cutover barrier protocol (#15098): its own stamp gate, deliberately
+      // not the snapshot schema gate, so an older peer keeps syncing with no barrier.
+      'usageCutover',
       // Memory current-row pull negotiates version metadata at /api/memory/sync;
       // memorySync rejects future versions, and history never enters snapshots.
       'memoryHistory',

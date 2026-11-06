@@ -1518,6 +1518,49 @@ describe('syncOrchestrator', () => {
       expect(result.usage.checksum).toBe('remote-manifest');
     });
 
+    // Caching a refused payload's checksum would skip this peer's digest once the
+    // fence lifts, until that digest next happened to move.
+    it('does not converge on a payload the usage barrier refused, and keeps syncing other categories', async () => {
+      dataSync.getSupportedCategories.mockReturnValue(['usage', 'goals']);
+      dataSync.applyRemote.mockImplementation(async (category) => (category === 'usage'
+        ? { applied: false, count: 0, refusedByBarrier: 'barrier-fenced' }
+        : { applied: true, count: 1 }));
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'remote-manifest' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => remoteManifest };
+        if (url.includes('/snapshot')) return { ok: true, json: async () => ({ data: { goals: [], instances: {} }, checksum: 'remote-manifest' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      const result = await syncWithPeer({ ...mockPeer, syncCategories: { usage: true, goals: true } });
+      expect(result.usage).toEqual({ totalApplied: 0, checksum: null });
+      expect(result.goals).toMatchObject({ totalApplied: 1, checksum: 'remote-manifest' });
+    });
+
+    // The shortcut stands in for a fetched snapshot, so it must face the same gate.
+    it('reads epoch slots from the stamp and carries the stamp when no slot moved', async () => {
+      const cutover = { migrationEpoch: 'epoch-a', state: 'activated', barrierSchema: 1 };
+      const stamped = { ...remoteManifest, data: { instances: {}, tombstones: [], cutover: { ...cutover, instances: { 'inst-b': '2026-09-01T12:00:00.000Z' } } } };
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'remote-manifest' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => stamped };
+        return { ok: true, json: async () => ({ data: { instances: {}, cutover }, checksum: 'remote-manifest' }) };
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+      expect(urlFor('snapshot')).toContain('slots=inst-b');
+
+      mockFetch.mockClear();
+      dataSync.applyRemote.mockClear();
+      dataSync.getManifest.mockResolvedValue({ data: { instances: {}, tombstones: [], cutover: { ...cutover, instances: { 'inst-b': '2026-09-01T12:00:00.000Z' } } }, checksum: 'local' });
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'moved' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => stamped };
+        return { ok: true, json: async () => ({}) };
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+      expect(urlFor('snapshot')).toBeUndefined();
+      expect(dataSync.applyRemote).toHaveBeenCalledWith('usage', { instances: {}, tombstones: [], cutover }, expect.anything());
+    });
+
     it('applies the tombstones without a snapshot fetch when no slot moved', async () => {
       // A retirement advances no capturedAt, so the checksum moves and the
       // manifest diff comes back empty — the tombstones still have to land.

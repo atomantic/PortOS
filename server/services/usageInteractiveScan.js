@@ -30,6 +30,7 @@ import {
   setInteractiveScanState
 } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
+import { isUsageCutoverFenced } from './usageCutoverBarrier.js';
 import { diffRunRecord } from '../lib/agentRunReconcile.js';
 
 /**
@@ -527,6 +528,7 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
 
 export function startInteractiveUsageRefresh({ intervalMs = 30 * 60_000, firstDelayMs = 90_000 } = {}) {
   const run = () => refreshInteractiveUsage().catch((err) => {
+    if (isUsageCutoverFenced(err)) return console.log(`⏸️ Interactive usage scan held: ${err.message}`);
     console.error(`❌ Interactive usage scan failed: ${err.message}`);
   });
   setTimeout(run, firstDelayMs).unref();
