@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({
   root: { config: { persistentMindPrompt: { identity: 'Example identity', instructions: 'Example instructions' } } },
   memories: [{ id: 'memory-1', type: 'fact', content: 'A durable fact.', sourceAgentId: 'cos-persistent-mind', status: 'active' }],
+  readRecall: vi.fn(async () => ({ state: 'none', memories: [] })),
   runPrompt: vi.fn(),
   stopRun: vi.fn(),
   assertVision: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('./persistentMindContext.js', () => ({
   applyPersistentMindContinuationNote: (...args) => mock.applyContinuationNote(...args),
   createPersistentMindMemoryFromCandidate: (...args) => mock.createPersistentMindMemoryFromCandidate(...args),
   readPersistentMindMemories: vi.fn(async () => mock.memories),
+  readPersistentMindRecall: (...args) => mock.readRecall(...args),
   readPersistentMindName: vi.fn(async () => resolvePersistentMindChosenName(mock.memories)),
   revalidatePersistentMindReflection: vi.fn(async (_reflection, enabled) => enabled ? mock.reflectionState : 'disabled'),
 }));
@@ -227,6 +229,16 @@ describe('persistent mind adapter', () => {
     expect(mock.runPrompt).not.toHaveBeenCalled();
     expect(mock.resolvePlaybookPhase).not.toHaveBeenCalled();
     expect(prepared.playbookPhase).toBeNull();
+  });
+
+  it('recalls against the admitted wake without inference', async () => {
+    const wake = { kind: 'message', message: { id: 'message-1', text: 'What about the zebra migration?' } };
+    const memoryRecall = { state: 'matched', memories: [{ id: 'recalled-1', content: 'Zebra migration notes.' }] };
+    mock.readRecall.mockResolvedValueOnce(memoryRecall);
+    const prepared = await createPersistentMindTurnAdapter().prepare({ wake, profile });
+    expect(mock.readRecall).toHaveBeenCalledWith(wake, 'cos-persistent-mind');
+    expect(prepared.memoryRecall).toBe(memoryRecall);
+    expect(mock.runPrompt).not.toHaveBeenCalled();
   });
 
   it('resolves a maturity-aware phase and wires it into instructions only for continuous-play (#7458)', async () => {

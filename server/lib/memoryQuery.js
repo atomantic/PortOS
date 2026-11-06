@@ -136,7 +136,7 @@ export function passesSearchMetaFilters(meta, options = {}) {
 
 /**
  * Post-search metadata filter for hybrid search. Requires the entry to be
- * active and pass any type/category/tag/app constraints. Does NOT special-case
+ * active and pass any type/category/tag/app/owner constraints. Does NOT special-case
  * the `__not_brain` sentinel (matches the original inline behavior).
  *
  * @param {Object|undefined} meta - Index entry for a search hit.
@@ -149,6 +149,7 @@ export function passesHybridMetaFilters(meta, options = {}) {
   if (options.categories?.length > 0 && !options.categories.includes(meta.category)) return false;
   if (options.tags?.length > 0 && !meta.tags.some(t => options.tags.includes(t))) return false;
   if (options.appId && meta.sourceAppId !== options.appId) return false;
+  if (options.sourceAgentId && meta.sourceAgentId !== options.sourceAgentId) return false;
   return true;
 }
 

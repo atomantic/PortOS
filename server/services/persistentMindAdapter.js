@@ -33,6 +33,7 @@ import {
   applyPersistentMindContinuationNote,
   createPersistentMindMemoryFromCandidate,
   readPersistentMindMemories,
+  readPersistentMindRecall,
   readPersistentMindName,
 } from './persistentMindContext.js';
 import { persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
@@ -525,10 +526,11 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
 
 export function createPersistentMindTurnAdapter() {
   return {
-    async prepare({ profile, signal }) {
-      const [root, memories] = await Promise.all([
+    async prepare({ wake, profile, signal }) {
+      const [root, memories, memoryRecall] = await Promise.all([
         loadState(),
         readPersistentMindMemories(PERSISTENT_MIND_ID),
+        readPersistentMindRecall(wake, PERSISTENT_MIND_ID),
       ]);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
       const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
@@ -551,6 +553,7 @@ export function createPersistentMindTurnAdapter() {
         playbook,
         playbookPhase,
         memories,
+        memoryRecall,
         ...(promptBudget ? { contextMaxChars: promptBudget.contextMaxChars } : {}),
       };
     },

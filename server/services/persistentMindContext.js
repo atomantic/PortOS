@@ -37,6 +37,7 @@ import {
 } from './persistentMindJournal.js';
 import { persistentMindJournalDigest } from '../lib/persistentMindJournal.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG, persistentMindChooseNameSchema, resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
+import { PERSISTENT_MIND_RECALL_LIMITS, persistentMindRecallTerms, selectPersistentMindRecall } from '../lib/persistentMindRecall.js';
 import * as memoryBackend from './memoryBackend.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
@@ -187,6 +188,38 @@ export function applyPersistentMindContinuationNote({
   });
 }
 
+/**
+ * Records relevant to a human message, searched with its unchanged text. Lexical
+ * only: no setting yet authorizes sending message text to the embedding route.
+ * Peeks only, so a record that never reaches a prompt keeps its access stats.
+ */
+export async function readPersistentMindRecall(wake, mindId = PERSISTENT_MIND_ID) {
+  const message = wake?.kind === 'message' ? wake.message?.text : null;
+  if (persistentMindRecallTerms(message).length === 0) return { state: 'none', memories: [] };
+  try {
+    const { memories: hits = [] } = await memoryBackend.hybridSearchMemories(message, null, {
+      sourceAgentId: mindId,
+      lexicalMatch: 'any',
+      limit: PERSISTENT_MIND_RECALL_LIMITS.candidates,
+    });
+    const candidates = await Promise.all(hits.map((hit) => memoryBackend.peekMemory(hit.id)));
+    // The continuation note has its own context section and budget.
+    const recallable = candidates.filter((memory) => !isPersistentMindContinuationNote(memory));
+    const memories = selectPersistentMindRecall({ message, candidates: recallable, mindId }).map(projectPersistentMindMemory);
+    return { state: memories.length ? 'matched' : 'no-match', memories };
+  } catch (error) {
+    console.error(`❌ Persistent mind memory recall unavailable: ${error.message}`);
+    return { state: 'unavailable', memories: [] };
+  }
+}
+
+/** Counts as access only records that were in a prompt a turn actually sent. */
+export async function recordPersistentMindRecallAccess(memoryIds = []) {
+  const results = await Promise.allSettled(memoryIds.map((id) => memoryBackend.getMemory(id)));
+  const failed = results.filter((result) => result.status === 'rejected').length;
+  if (failed > 0) console.error(`❌ Failed to record access for ${failed} recalled persistent mind memories`);
+}
+
 /** Named installs need only one record for frequent page/turn identity refreshes. */
 export async function readPersistentMindName(mindId = PERSISTENT_MIND_ID) {
   const { memories = [] } = await memoryBackend.getMemories({
@@ -294,6 +327,7 @@ export async function preparePersistentMindContext({
   identity = '',
   instructions = '',
   memories = [],
+  memoryRecall = null,
   reflection = null,
   maxChars,
   recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
@@ -429,6 +463,7 @@ export async function preparePersistentMindContext({
     instructions,
     memories,
     continuationNote,
+    memoryRecall,
     reflection,
     events: history,
     rollups,
