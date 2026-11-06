@@ -1545,6 +1545,7 @@ describe('mediaJobQueue', () => {
     const failed = mediaJobQueue.getJob(jobId);
     expect(failed.error).toContain('original image retained');
     expect(failed.statusMsg).toBe('Film finishing failed; original image retained');
+    // The live failed status is published only after its snapshot is durable.
     const saved = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).jobs.find(row => row.id === jobId);
     expect(saved).toMatchObject({ status: 'failed', statusMsg: failed.statusMsg, result: { filename: 'example-source.png' } });
     const retry = await mediaJobQueue.enqueueJob({ kind: 'image', params: failed.params });
