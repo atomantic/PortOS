@@ -187,6 +187,30 @@ describe('ProviderHarnessesTab', () => {
     expect(within(claude).getByText('Update available')).toBeInTheDocument();
   });
 
+  it('explains an npm release Homebrew has not published yet', async () => {
+    api.getHarnesses.mockResolvedValue({
+      harnesses: [{
+        id: 'claude',
+        vendor: 'claude',
+        label: 'Claude Code CLI',
+        command: 'claude',
+        installed: true,
+        version: '2.1.0',
+        latestVersion: '2.1.0',
+        npmAheadVersion: '2.2.0',
+        latestVersionSource: 'homebrew',
+        updateAvailable: false,
+        updatable: true,
+        providers: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
+      }],
+    });
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    expect(await within(claude).findByText(/Latest 2\.1\.0 on Homebrew/)).toBeInTheDocument();
+    expect(within(claude).getByText(/npm has 2\.2\.0; Update can install it once Homebrew publishes it/)).toBeInTheDocument();
+    expect(within(claude).queryByText('Update available')).not.toBeInTheDocument();
+  });
+
   it('opens the shared install modal for update action', async () => {
     api.getHarnesses.mockResolvedValue({
       harnesses: [{

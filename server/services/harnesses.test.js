@@ -199,6 +199,37 @@ describe('listHarnesses', () => {
     expect(opencode.providers.find((p) => p.id === 'opencode-ollama').usesHarnessCatalog).toBe(false);
   });
 
+  describe('a Homebrew-managed copy', () => {
+    const brewDeps = (publishedByBrew) => ({
+      findCommand: async (command) => (command === 'codex' ? '/example/Caskroom/codex/0.166.0/bin/codex' : command === 'npm' ? '/example/npm' : null),
+      probeCommand: async () => 'codex-cli 0.166.0',
+      run: async () => '0.167.0',
+      fresh: true,
+      fetchImpl: async () => (publishedByBrew
+        ? new Response(JSON.stringify({ version: publishedByBrew }))
+        : new Response('{}', { status: 404 })),
+    });
+    const codexRow = async (published) => (await listHarnesses(brewDeps(published))).find((row) => row.id === 'codex');
+
+    // The updater runs `brew upgrade`, so an npm release Homebrew lacks is an
+    // update it cannot perform, and alerting on it never clears.
+    it('offers no update until Homebrew publishes one, and names the npm release', async () => {
+      const row = await codexRow('0.166.0');
+
+      expect(row).toMatchObject({ latestVersion: '0.166.0', latestVersionSource: 'homebrew', npmAheadVersion: '0.167.0', updateAvailable: false });
+      expect(row.installChannel).toEqual({ manager: 'homebrew', kind: 'cask', name: 'codex', thirdPartyTap: false });
+      expect(JSON.stringify(row)).not.toContain('/example/');
+    });
+
+    it('offers the update once Homebrew has it', async () => {
+      expect(await codexRow('0.167.0,build1')).toMatchObject({ latestVersion: '0.167.0', npmAheadVersion: null, updateAvailable: true });
+    });
+
+    it('falls back to npm for a package Homebrew cannot describe', async () => {
+      expect(await codexRow(null)).toMatchObject({ latestVersion: '0.167.0', latestVersionSource: 'npm', npmAheadVersion: null, updateAvailable: true });
+    });
+  });
+
   it('never publishes a resolved executable path', async () => {
     // A global bin directory embeds the host account name.
     expect(JSON.stringify(await listHarnesses(deps()))).not.toContain('/example/');

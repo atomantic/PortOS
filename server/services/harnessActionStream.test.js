@@ -140,6 +140,16 @@ describe('streamHarnessAction — update', () => {
     expect(response.text).not.toContain('up to date');
   });
 
+  it('names Homebrew as the reason a managed copy did not move', async () => {
+    installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode', {
+      installChannel: { manager: 'homebrew', kind: 'cask', name: 'opencode' },
+    }));
+
+    const response = await runAction('runtime=opencode&action=update');
+
+    expect(response.text).toContain('still observes version 1.18.27. Homebrew manages this copy (cask `opencode`)');
+  });
+
   it('says so when it could not read a version to compare', async () => {
     installer.getProviderRuntimeStatus.mockResolvedValue(statusOf('opencode', { version: null }));
 
