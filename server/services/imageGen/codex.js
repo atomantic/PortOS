@@ -13,8 +13,9 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * and usually writes the final PNG to
  * `~/.codex/generated_images/<session-id>/*.png` (`ig_*.png` historically;
  * newer builds use `exec-*.png`). Other Codex builds can keep the image bytes
- * only in the session JSONL's `image_generation_end` event, so we parse the
- * banner and harvest both locations after the child exits.
+ * only in the session JSONL, so we parse the banner and harvest both locations
+ * after the child exits. A session can hold several images; codexSessionImages.js
+ * decides which one is the job's.
  *
  * The user must explicitly enable this provider in Settings → Image Gen
  * because not every Codex account has access to the `image_gen` tool. When
@@ -41,6 +42,7 @@ import { withoutServerSecretsEnv } from '../../lib/processEnv.js';
 const CODEX_AUTH_ENV_KEYS = ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE'];
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { noFabricationClause } from './fabricationGuard.js';
+import { IMAGE_GEN_ITEM_KIND, parseSessionImageRecords, selectJobImage } from './codexSessionImages.js';
 import { randomUUID } from 'crypto';
 import { atomicWrite, copyFileGuarded, ensureDir, PATHS, sleep, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -187,6 +189,7 @@ export async function checkConnection({ codexPath } = {}) {
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 
+const SINGLE_IMAGE_CALL = 'Call image_gen exactly once. Do not call it again after it returns an image: no summary, progress or completion image, and no extra variation.';
 
 /**
  * The `$imagegen` directive describing however many images are attached.
@@ -246,11 +249,12 @@ export function codexSentPrompt({ prompt = '', negativePrompt, width, height, in
     ? `When calling image_gen, pass the ${inputCount} attached image${inputCount === 1 ? '' : 's'} as image inputs, in attachment order, using their local paths in referenced_image_paths. Describing the images in the prompt alone does not include them.\n`
     : '';
   const buildWith = (text) => `$imagegen ${toolInputs}${editPrefix}${text}${sizeHint}${qualityHint}${avoidHint}`;
-  const fullPrompt = buildWith(prompt) + '\n' + noFabricationClause('image_gen');
+  const withInstructions = (text) => `${buildWith(text)}\n${noFabricationClause('image_gen')}\n${SINGLE_IMAGE_CALL}`;
+  const fullPrompt = withInstructions(prompt);
   return {
     fullPrompt,
     record: sentPromptRecord({ sentPrompt: fullPrompt, carried: carriedPromptAdditions({ promptAdditions }),
-      added: [agentInstructionsAddition('Codex image tool instructions', text => buildWith(text) + '\n' + noFabricationClause('image_gen'))] }),
+      added: [agentInstructionsAddition('Codex image tool instructions', withInstructions)] }),
   };
 }
 
@@ -504,7 +508,7 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
       // while we're still finalizing this one, then the in-flight
       // finalizer could clobber the new job's activeJob snapshot.
       // EventEmitter doesn't await async listeners — without this try/catch,
-      // a throw from harvestLatestImage / copyFile would surface as an
+      // a throw from the harvest / copyFile would surface as an
       // unhandled rejection (process-killing on Node ≥15) and the job would
       // be stuck in 'running' forever with no SSE error to the client.
       try {
@@ -522,12 +526,18 @@ function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA
         // Codex writes the PNG asynchronously while it's wrapping up the turn.
         // Empirically the file is on disk by the time `codex exec` exits, but
         // poll for a few seconds in case there's a flush lag on slow disks.
-        const harvested = await harvestGeneratedImage(sessionId, harvestTimeoutMs);
+        const harvested = await harvestGeneratedImage(sessionId, meta.prompt, harvestTimeoutMs);
         if (!harvested) {
           return finalizeJobFailure(job, jobId, proc, await noImageSessionReason(sessionId, stdoutTail));
         }
-        if (harvested.path) {
-          await copyFileGuarded(harvested.path, outputPath);
+        if (harvested.unmatchedImages) {
+          return finalizeJobFailure(job, jobId, proc, `Codex made ${harvested.unmatchedImages} images in this session and none could be matched to this job's prompt, so nothing was saved. Run the job again.`);
+        }
+        if (harvested.ignoredImages) {
+          console.log(`⏭️ Codex session made ${harvested.ignoredImages + 1} images; saved the one matching the job's prompt [${jobId.slice(0, 8)}]`);
+        }
+        if (harvested.fileName) {
+          await copyFileGuarded(join(codexImagesDir(sessionId), harvested.fileName), outputPath);
         } else {
           await atomicWrite(outputPath, harvested.buffer);
         }
@@ -631,42 +641,13 @@ const finalizeJobFailure = createJobFailureFinalizer({
   failedPayload: (jobId, reason, proc) => ({ mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason, inputProcessSettled: !proc || !proc.pid || typeof proc.exitCode === 'number' || typeof proc.signalCode === 'string' }),
 });
 
-// Returns the absolute path to the newest PNG in the session dir. Codex has
-// used both `ig_*.png` and `exec-*.png`; the per-session directory is already
-// the ownership boundary, so a filename-prefix allowlist only turns valid tool
-// output into a false failure when the CLI changes its internal naming again.
-async function latestGeneratedImageFile(sessionId) {
-  const dir = codexImagesDir(sessionId);
-  if (!existsSync(dir)) return null;
-  const names = await readdir(dir).catch(() => []);
-  const pngs = names.filter((name) => name.toLowerCase().endsWith('.png'));
-  if (pngs.length) {
-    const stats = await Promise.all(pngs.map(async (n) => {
-      const s = await stat(join(dir, n)).catch(() => null);
-      return s ? { n, mtimeMs: s.mtimeMs } : null;
-    }));
-    const latest = stats.filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
-    if (latest) return join(dir, latest.n);
-  }
-  return null;
+// Codex has used both `ig_*.png` and `exec-*.png`; the per-session directory is
+// already the ownership boundary, so a filename-prefix allowlist only turns valid
+// tool output into a false failure when the CLI changes its internal naming again.
+async function generatedImageNames(sessionId) {
+  const names = await readdir(codexImagesDir(sessionId)).catch(() => []);
+  return names.filter((name) => name.toLowerCase().endsWith('.png'));
 }
-
-async function harvestLatestImage(sessionId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const latest = await latestGeneratedImageFile(sessionId);
-    if (latest) return latest;
-    const remainingMs = Math.max(1, deadline - Date.now());
-    await sleep(Math.min(250, remainingMs));
-  }
-  return null;
-}
-
-const isPngBuffer = (buf) => {
-  if (!Buffer.isBuffer(buf) || buf.length < 12) return false;
-  return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47
-    && buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a;
-};
 
 async function findSessionLogFile(sessionId) {
   const root = codexSessionsDir();
@@ -696,7 +677,11 @@ async function noImageSessionReason(sessionId, stdoutTail) {
     try {
       const payload = JSON.parse(line)?.payload;
       const name = payload?.name || '';
-      if (['image_gen', 'image_gen.text2im', 'image_gen.imagegen'].includes(name) || ['image_generation_call', 'image_generation_end'].includes(payload?.type)) imageToolObserved = true;
+      // Current builds call the tool from inside an `exec` script.
+      if (['image_gen', 'image_gen.text2im', 'image_gen.imagegen'].includes(name)
+        || ['image_generation_call', 'image_generation_end'].includes(payload?.type)
+        || payload?.item?.kind === IMAGE_GEN_ITEM_KIND
+        || (typeof payload?.input === 'string' && payload.input.includes('tools.image_gen'))) imageToolObserved = true;
       if (['function_call', 'custom_tool_call'].includes(payload?.type) && /^(exec|exec_command|shell|shell_command)$/.test(name)) shellObserved = true;
     } catch { /* Incomplete transcript lines do not establish tool usage. */ }
   }
@@ -704,44 +689,26 @@ async function noImageSessionReason(sessionId, stdoutTail) {
   return `No image_gen call was observed in the Codex session${shellObserved ? '; shell activity was recorded' : ''}. No generated image was found. This does not establish whether the tool is available to this account. Check Settings → Image Gen and the Codex session. ${noImageReason(stdoutTail)}`;
 }
 
-async function harvestSessionLogImage(sessionId) {
+async function sessionImageRecords(sessionId) {
   const logPath = await findSessionLogFile(sessionId);
-  if (!logPath) return null;
-  const text = await readFile(logPath, 'utf8').catch(() => '');
-  let latest = null;
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const record = JSON.parse(line);
-      const payload = record?.payload;
-      if (payload?.type !== 'image_generation_end' || typeof payload.result !== 'string') continue;
-      const raw = payload.result.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
-      const buffer = Buffer.from(raw, 'base64');
-      if (isPngBuffer(buffer)) latest = { buffer, path: logPath, callId: payload.call_id || null };
-    } catch {
-      // Session JSONL can contain arbitrarily large model payloads; ignore
-      // malformed/truncated lines and keep scanning for a valid image event.
-    }
-  }
-  return latest;
+  if (!logPath) return [];
+  return parseSessionImageRecords(await readFile(logPath, 'utf8').catch(() => ''));
 }
 
-async function harvestGeneratedImage(sessionId, timeoutMs) {
+async function harvestGeneratedImage(sessionId, jobPrompt, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  let selection = null;
   while (Date.now() < deadline) {
-    const path = await latestGeneratedImageFile(sessionId);
-    if (path) return { path };
-
-    // Newer Codex builds may persist image bytes only in the session JSONL as
-    // image_generation_end.result (base64), without materializing a PNG in
-    // ~/.codex/generated_images/<session-id>/. Decode that fallback so
-    // a real generation does not get reported as "success but no file".
-    const sessionImage = await harvestSessionLogImage(sessionId);
-    if (sessionImage) return { buffer: sessionImage.buffer, sessionLogPath: sessionImage.path };
-
+    selection = selectJobImage({
+      fileNames: await generatedImageNames(sessionId),
+      records: await sessionImageRecords(sessionId),
+      jobPrompt,
+    });
+    // An unmatched session keeps polling: its log entries may still be flushing.
+    if (selection && !selection.unmatchedImages) return selection;
     await sleep(250);
   }
-  return null;
+  return selection;
 }
 
 // Tiny helper for unit tests — overrides the homedir lookup so tests can
@@ -752,9 +719,6 @@ export const _internals = {
   codexImagesDir,
   codexSessionsDir,
   SESSION_ID_RE,
-  harvestLatestImage,
-  harvestSessionLogImage,
-  harvestGeneratedImage,
   setHarvestTimeoutForTests: (timeoutMs = DEFAULT_HARVEST_TIMEOUT_MS) => {
     harvestTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
       ? timeoutMs
