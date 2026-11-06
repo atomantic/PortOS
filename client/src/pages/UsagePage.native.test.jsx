@@ -6,45 +6,80 @@ vi.mock('../services/socket', async () => {
   return { default: new EventEmitter() };
 });
 const api = vi.hoisted(() => ({
-  getNativeUsageCoverage: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
+  getNativeUsageMatrix: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
   getUsageBackfillStatus: vi.fn(), getUsageRollingCost: vi.fn(), getClaudeCodeModelUsage: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
 import UsagePage from './UsagePage';
-const codex = (tokens = 123456, extra = {}) => ({ family: 'codex', label: 'Codex', native: {
-  status: 'available', summary: { lifetimeTokens: tokens }, fetchedAt: '2026-02-04T12:00:00Z', latestReportedDay: '2026-02-03',
-  dailyUsageBuckets: [{ startDate: '2026-01-31', tokens: 10 }, { startDate: '2026-02-01', tokens: 20 }, { startDate: '2026-02-03', tokens: 30 }], ...extra,
-}, legacy: { tokens: 17, provenance: ['mixed'] } });
-const snapshot = (...providers) => ({ providers });
+const codex = (tokens = 123456, extra = {}) => ({ family: 'codex', status: 'available',
+  totals: { lifetimeTokens: tokens, dailyBuckets: [{ startDate: '2026-01-31', tokens: 10 }, { startDate: '2026-02-01', tokens: 20 }, { startDate: '2026-02-03', tokens: 30 }] },
+  runtime: { status: 'observed', versions: ['1.2.3'] }, ...extra,
+});
+const retained = (family, totalTokens, extra = {}) => ({ family, status: 'partial',
+  totals: { totalTokens, tokensIn: 1200, tokensOut: 234, cacheReadTokens: 0, cacheWriteTokens: null },
+  tokenFields: { totalTokens: 'measured', tokensIn: 'measured', cacheWriteTokens: 'unsupported' },
+  coverage: { files: 2, measuredRecords: 3, missingUsageRecords: 1, unreadableFiles: 0 },
+  scanCaps: { capped: true, stoppedEarly: false, limits: { records: 10000 } },
+  findings: ['scan-capped'], runtime: { status: 'unknown', versions: [] }, ...extra,
+});
+const snapshot = (...providers) => ({ mode: 'read-only', scope: 'local-instance', contractVersion: 4,
+  generatedAt: '2026-02-04T12:00:00Z', peerReports: 'not-collected', providers: providers.length ? providers : [codex(),
+    retained('claude', 1434), retained('grok', 9876, { cost: { nativeCostSignal: { knownCostUsdTicks: 7654, measuredRecords: 2, missingRecords: 1, conflictingRecords: 0 } } }),
+    retained('agy', null, { totals: { totalTokens: null, tokensIn: 40, tokensOut: 20, cacheReadTokens: 200, cacheWriteTokens: 0, thinkingOutputTokens: 12, responseOutputTokens: 8 }, tokenFields: { totalTokens: 'unverified-overlap' } }),
+  ], families: [], refusals: [] });
 function Location() { return <output aria-label="Location">{useLocation().search}</output>; }
 const show = () => render(<MemoryRouter initialEntries={['/devtools/usage']}><UsagePage /><Location /></MemoryRouter>);
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getNativeUsageCoverage.mockResolvedValue(snapshot(codex()));
+  api.getNativeUsageMatrix.mockResolvedValue(snapshot());
   api.getProviderUsage.mockResolvedValue({ providers: [] });
   api.getUsage.mockResolvedValue({ totalTokens: {}, last7Days: [], hourlyActivity: [], topProviders: [], topModels: [], report: { providers: [], totals: { estimatedCost: 0 } } });
   api.getUsageBackfillStatus.mockResolvedValue({ status: 'idle' });
   api.getUsageRollingCost.mockResolvedValue({ windowDays: 30, series: [], points: [] });
   api.getClaudeCodeModelUsage.mockResolvedValue({ filesScanned: 0, models: [], totals: {} });
 });
+const read = () => fireEvent.click(screen.getByRole('button', { name: 'Read native sources' }));
+const refresh = () => fireEvent.click(screen.getByRole('button', { name: 'Refresh native sources' }));
+const card = name => screen.getByRole('region', { name: `${name} native history` });
+const metric = (region, label) => within(region).getByText(label).nextElementSibling;
+
 describe('native usage default view', () => {
-  it('reads only native Codex on mount and keeps legacy accounting behind a URL-backed view', async () => {
+  it('starts unscanned, reads all four providers only on explicit request, and keeps legacy accounting URL-backed', async () => {
     show();
-    expect(await screen.findByText('123,456')).toBeInTheDocument();
-    expect(api.getNativeUsageCoverage).toHaveBeenCalledExactlyOnceWith({ family: 'codex' }, { silent: true });
+    expect(screen.getAllByText(/Not scanned yet/)).toHaveLength(4);
+    expect(api.getNativeUsageMatrix).not.toHaveBeenCalled();
     expect(api.getUsage).not.toHaveBeenCalled();
     expect(api.getProviderUsage).not.toHaveBeenCalled();
     expect(api.getClaudeCodeModelUsage).not.toHaveBeenCalled();
-    expect(screen.getByText('Account total is shown once, never summed across instances.')).toBeInTheDocument();
+    read();
+    expect(await screen.findByText('123,456')).toBeInTheDocument();
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ silent: true });
+    expect(metric(card('Claude Code'), 'Measured retained tokens')).toHaveTextContent('1,434');
+    expect(metric(card('Grok'), 'Measured retained tokens')).toHaveTextContent('9,876');
+    expect(metric(card('Grok'), 'Native cost ticks (unverified scope)')).toHaveTextContent('7,654');
+    expect(metric(card('Antigravity'), 'Measured retained tokens')).toHaveTextContent('Unknown');
+    expect(metric(card('Antigravity'), 'Input tokens')).toHaveTextContent('40');
+    expect(metric(card('Antigravity'), 'Output tokens')).toHaveTextContent('20');
+    expect(metric(card('Antigravity'), 'Cache read tokens')).toHaveTextContent('200');
+    expect(metric(card('Antigravity'), 'Cache write tokens')).toHaveTextContent('0');
+    expect(metric(card('Antigravity'), 'Thinking output tokens')).toHaveTextContent('12');
+    expect(metric(card('Antigravity'), 'Response output tokens')).toHaveTextContent('8');
+    expect(metric(card('Claude Code'), 'Cache write tokens')).toHaveTextContent('Unknown');
+    expect(screen.queryByText(/\$7,654/)).not.toBeInTheDocument();
+    expect(card('Codex')).toHaveTextContent('1.2.3');
+    expect(card('Claude Code')).toHaveTextContent('scan-capped');
+    expect(card('Claude Code')).toHaveTextContent('10,000');
     fireEvent.click(screen.getByRole('tab', { name: 'Legacy analytics' }));
     await waitFor(() => expect(api.getUsage).toHaveBeenCalled());
     expect(screen.getByLabelText('Location')).toHaveTextContent('view=legacy');
     fireEvent.click(screen.getByRole('tab', { name: 'Native history' }));
-    expect(await screen.findByText('123,456')).toBeInTheDocument();
     expect(screen.getByLabelText('Location')).not.toHaveTextContent('view=legacy');
+    expect(screen.getAllByText(/Not scanned yet/)).toHaveLength(4);
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(1);
   });
+
   it('shows native calendar buckets without inventing gaps and shares month selection in the URL', async () => {
-    show();
+    show(); read();
     await screen.findByText('123,456');
     fireEvent.click(screen.getByText('Daily native token history'));
     const table = screen.getByRole('table');
@@ -52,57 +87,73 @@ describe('native usage default view', () => {
     fireEvent.change(screen.getByLabelText('Reported month'), { target: { value: '2026-01' } });
     expect(within(table).getAllByRole('row')).toHaveLength(2);
     expect(screen.getByLabelText('Location')).toHaveTextContent('nativeMonth=2026-01');
-    expect(api.getNativeUsageCoverage).toHaveBeenCalledTimes(1);
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(1);
   });
-  it('does not confuse unknown history with zero and retains a clearly stale snapshot after transport failure', async () => {
-    api.getNativeUsageCoverage.mockResolvedValueOnce(snapshot(codex(null, { dailyUsageBuckets: null, latestReportedDay: null })));
-    show();
-    const card = screen.getByRole('region', { name: 'Codex native history' });
-    await waitFor(() => expect(within(card).getAllByText('Unknown').length).toBeGreaterThan(0));
-    api.getNativeUsageCoverage.mockResolvedValueOnce(snapshot(codex(0, { dailyUsageBuckets: [] })));
-    fireEvent.click(within(card).getByRole('button', { name: 'Refresh Codex' }));
-    expect(await within(card).findByText('0')).toBeInTheDocument();
-    api.getNativeUsageCoverage.mockRejectedValueOnce(new Error('synthetic network failure'));
-    fireEvent.click(within(card).getByRole('button', { name: 'Refresh Codex' }));
-    expect(await within(card).findByRole('alert')).toHaveTextContent('previous snapshot remains');
-    expect(within(card).getByText('0')).toBeInTheDocument();
+
+  it('retains explicitly stale data after transport failure but replaces successes with unavailable snapshots and recovers', async () => {
+    api.getNativeUsageMatrix.mockResolvedValueOnce(snapshot(codex(0)));
+    show(); read();
+    await waitFor(() => expect(metric(card('Codex'), 'Native lifetime tokens')).toHaveTextContent('0'));
+    api.getNativeUsageMatrix.mockRejectedValueOnce(new Error('synthetic network failure'));
+    refresh();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Stale: the previous snapshot remains');
+    expect(metric(card('Codex'), 'Native lifetime tokens')).toHaveTextContent('0');
+    api.getNativeUsageMatrix.mockResolvedValueOnce(snapshot(codex(null, { status: 'unavailable', totals: null, findings: ['source-unavailable'] })));
+    refresh();
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(metric(card('Codex'), 'Native lifetime tokens')).toHaveTextContent('Unknown');
+    expect(card('Codex')).toHaveTextContent('History unavailable');
+    refresh();
+    expect(await screen.findByText('123,456')).toBeInTheDocument();
   });
-  it('reads a selected local source once, preserves Codex, and never presents partial records as an account total', async () => {
-    show();
-    await screen.findByText('123,456');
-    let finish;
-    api.getNativeUsageCoverage.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const button = screen.getByRole('button', { name: 'Read Antigravity history' });
-    fireEvent.click(button); fireEvent.click(button);
-    expect(api.getNativeUsageCoverage).toHaveBeenCalledTimes(2);
-    await act(async () => { finish(snapshot({ family: 'agy', label: 'Antigravity', native: {
-      status: 'partial', summary: { totalTokens: null }, fetchedAt: '2026-02-04T12:00:00Z', reason: 'Token overlap is not validated.',
-      coverage: { files: 2, measuredRecords: 3, missingUsageRecords: 1, conflictingRecords: 0, capped: false },
-    } })); });
-    const agy = screen.getByRole('region', { name: 'Antigravity native history' });
-    expect(within(agy).getByText('Unknown')).toBeInTheDocument();
-    expect(within(agy).getByText('Partial source coverage. This is not a complete usage total.')).toBeInTheDocument();
-    expect(screen.getByText('123,456')).toBeInTheDocument();
-    expect(api.getUsage).not.toHaveBeenCalled();
+
+  it('separates local measurements from refused selected-account totals and missing peers', async () => {
+    const response = snapshot();
+    response.families = [{ family: 'agy', scope: 'selected-account-retained-records',
+      merge: { status: 'refused', reasons: ['member-report-missing'], totals: null },
+      accounts: [{ accountLabel: 'example-subscription', status: 'refused', totals: null,
+        members: ['local', 'peer'], membersWithoutReport: ['peer'], findings: ['retained-history-completeness-unknown'] }], unresolvedParticipants: ['other'] }];
+    response.refusals = [{ code: 'selections-invalid', family: null }];
+    api.getNativeUsageMatrix.mockResolvedValueOnce(response);
+    show(); read(); await screen.findByText('123,456');
+    const agy = card('Antigravity');
+    expect(agy).toHaveTextContent('2 selected members · 1 members without reports');
+    expect(agy).toHaveTextContent('Missing peer reports');
+    expect(agy).toHaveTextContent('member-report-missing');
+    expect(agy).toHaveTextContent('unresolved account selection');
+    expect(agy).toHaveTextContent('not a fleet-complete total');
+    expect(screen.getByText('All providers: selections-invalid')).toBeInTheDocument();
+    expect(metric(agy, 'Input tokens')).toHaveTextContent('40');
+    expect(within(agy).getAllByText('Measured retained tokens')).toHaveLength(1);
   });
-  it('shows diagnostics when a scan stops before any usable records', async () => {
-    show();
-    await screen.findByText('123,456');
-    api.getNativeUsageCoverage.mockResolvedValueOnce(snapshot({ family: 'claude', label: 'Claude Code', native: {
-      status: 'unavailable', reason: 'No usable native records were read.',
-      coverage: { files: 0, measuredRecords: 0, missingUsageRecords: 0, conflictingRecords: 0, unreadableFiles: 2, invalidLines: 0, capped: true },
-    } }));
-    fireEvent.click(screen.getByRole('button', { name: 'Read Claude Code history' }));
-    const card = screen.getByRole('region', { name: 'Claude Code native history' });
-    expect(await within(card).findByText('History unavailable. Check the source and retry the read.')).toBeInTheDocument();
-    expect(within(card).getByText(/2 unreadable files/)).toHaveTextContent('scan limit reached');
+
+  it('shows a valid partial account union separately without implying complete account history', async () => {
+    const response = snapshot();
+    const totals = { totalTokens: null, tokensIn: 80, tokensOut: 30, cacheReadTokens: 300, cacheWriteTokens: 0, thinkingOutputTokens: 18, responseOutputTokens: 12 };
+    response.families = [{ family: 'agy', merge: { status: 'partial', reasons: [], totals },
+      accounts: [{ accountLabel: 'example-subscription', status: 'partial', totals, members: ['local'], membersWithoutReport: [], findings: ['retained-history-completeness-unknown'] }] }];
+    api.getNativeUsageMatrix.mockResolvedValueOnce(response);
+    show(); read(); await screen.findByText('123,456');
+    const union = within(card('Antigravity')).getByText('Selected account union').parentElement;
+    expect(union).toHaveTextContent('partial');
+    expect(union).toHaveTextContent('not a fleet-complete total');
+    expect(within(union).getAllByText('Input tokens').map(label => label.nextElementSibling.textContent)).toEqual(['80', '80']);
+    expect(within(union).getAllByText('Measured retained tokens').map(label => label.nextElementSibling.textContent)).toEqual(['Unknown', 'Unknown']);
+    expect(within(card('Antigravity')).getAllByText('Input tokens')[0].nextElementSibling).toHaveTextContent('40');
   });
-  it('does not let a response from a departed view replace a newer native snapshot', async () => {
+
+  it('guards repeated clicks and ignores an old response after leaving and re-entering the view', async () => {
     let finishOld;
-    api.getNativeUsageCoverage.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
+    api.getNativeUsageMatrix.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
     show();
+    const button = screen.getByRole('button', { name: 'Read native sources' });
+    fireEvent.click(button); fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('tab', { name: 'Legacy analytics' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Native history' }));
+    expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(1);
+    read();
     expect(await screen.findByText('123,456')).toBeInTheDocument();
     await act(async () => { finishOld(snapshot(codex(999))); });
     expect(screen.queryByText('999')).not.toBeInTheDocument();

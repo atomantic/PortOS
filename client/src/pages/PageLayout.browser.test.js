@@ -42,10 +42,29 @@ const responses = {
   '/instances': { peers: [] },
   '/settings/features': { features: [] },
   '/code-animation/jobs': { items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null },
-  '/usage/native-coverage': { providers: [{ family: 'codex', label: 'Codex', native: {
-    status: 'available', summary: { lifetimeTokens: 104255445839 }, fetchedAt: '2026-11-06T12:00:00Z',
-    latestReportedDay: '2026-11-05', dailyUsageBuckets: [{ startDate: '2026-11-05', tokens: 1234567 }],
-  } }] },
+  '/usage/native-matrix': {
+    mode: 'read-only', scope: 'local-instance', contractVersion: 4, ledgerChanged: false, peerReports: 'not-collected',
+    capturedAt: '2026-11-06T12:00:00Z', generatedAt: '2026-11-06T12:00:01Z',
+    providers: [{ family: 'codex', status: 'available',
+      totals: { lifetimeTokens: 104255445839, dailyBuckets: [{ startDate: '2026-11-05', tokens: 1234567 }] },
+      freshness: { earliestObserved: '2026-11-05', latestObserved: '2026-11-05' },
+      runtime: { status: 'observed', versions: ['1.2.3'] },
+    }, ...['claude', 'agy', 'grok'].map(family => ({ family, status: 'partial',
+      totals: { totalTokens: family === 'agy' ? null : 1234567890, tokensIn: 123456789, tokensOut: 23456789,
+        cacheReadTokens: 34567890, cacheWriteTokens: 0,
+        ...(family === 'agy' ? { thinkingOutputTokens: 1234567, responseOutputTokens: 2345678 } : {}) },
+      tokenFields: { totalTokens: family === 'agy' ? 'unverified-overlap' : 'measured' },
+      coverage: { files: 12, records: 123, measuredRecords: 120, missingUsageRecords: 3, unreadableFiles: 0 },
+      scanCaps: { capped: true, stoppedEarly: false, limits: { records: 10000 } },
+      findings: ['scan-capped'], runtime: { status: 'unknown', versions: [] },
+      cost: { nativeCostSignal: family === 'grok' ? { knownCostUsdTicks: 1234567890, measuredRecords: 120, missingRecords: 3, conflictingRecords: 0 } : null },
+    }))],
+    families: ['claude', 'agy', 'grok', 'codex'].map(family => ({ family,
+      merge: { status: 'refused', reasons: ['member-report-missing'], totals: null },
+      accounts: [{ accountLabel: 'example-subscription', status: 'refused', totals: null, members: ['local', 'peer'], membersWithoutReport: ['peer'], findings: ['retained-history-completeness-unknown'] }],
+    })),
+    refusals: [{ code: 'member-report-missing', family: 'claude' }],
+  },
   '/usage': usage,
   '/usage/backfill': { status: 'idle' },
   '/usage/rolling-cost': { windowDays: 30, instanceCount: 1, series: [], points: [] },
@@ -137,6 +156,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
     const page = await fixture.browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
     let billed = false;
     const quotaScopes = [];
+    const nativeReads = [];
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -145,6 +165,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       if (url.origin !== new URL(fixture.origin).origin) return route.abort();
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const key = url.pathname.slice(4);
+      if (key === '/usage/native-matrix' || key === '/usage/native-coverage') nativeReads.push(key);
       if (key === '/usage/fleet-billing' && route.request().method() === 'PUT') {
         const body = route.request().postDataJSON();
         billed = !body.usesSubscriptions;
@@ -168,15 +189,41 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         if (path === '/cos/health') await page.getByText('No issues detected', { exact: true }).waitFor();
         if (path === '/cos/agents') await page.getByRole('heading', { name: 'Active Agents', exact: true }).waitFor();
         if (path === '/devtools/usage') {
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).waitFor();
+          expect(nativeReads).toEqual([]);
+          expect(await page.getByText(/Not scanned yet/).count()).toBe(4);
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).click();
           await page.getByText('104,255,445,839', { exact: true }).waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix']);
           await page.getByText('Daily native token history', { exact: true }).click();
           await page.getByRole('table').waitFor();
-          const nativeGeometry = await page.getByRole('region', { name: 'Codex native history' }).evaluate(card => ({
-            overflow: card.scrollWidth > card.clientWidth + 1,
-            right: card.getBoundingClientRect().right,
-          }));
-          expect(nativeGeometry.overflow).toBe(false);
-          expect(nativeGeometry.right).toBeLessThanOrEqual(width);
+          const nativeCards = page.getByRole('region', { name: /native history$/ });
+          expect(await nativeCards.count()).toBe(4);
+          for (const card of await nativeCards.all()) {
+            await card.getByText('Source coverage and limits', { exact: true }).click();
+            const nativeGeometry = await card.evaluate(card => {
+              const bounds = card.getBoundingClientRect();
+              const body = document.querySelector('main').firstElementChild.lastElementChild;
+              const bodyBounds = body.getBoundingClientRect();
+              const bodyStyle = getComputedStyle(body);
+              const children = [...card.querySelectorAll('dt, dd, select, table')].filter(child => child.getClientRects().length);
+              return {
+                overflow: card.scrollWidth > card.clientWidth + 1,
+                left: bounds.left, right: bounds.right,
+                bodyLeft: bodyBounds.left + parseFloat(bodyStyle.paddingLeft),
+                bodyRight: bodyBounds.left + body.clientWidth - parseFloat(bodyStyle.paddingRight),
+                outsideChildren: children.filter(child => {
+                  const rect = child.getBoundingClientRect();
+                  return rect.left < bounds.left - 1 || rect.right > bounds.right + 1 || child.scrollWidth > child.clientWidth + 1;
+                }).map(child => child.textContent.slice(0, 80)),
+              };
+            });
+            expect(nativeGeometry.overflow).toBe(false);
+            expect(nativeGeometry.left).toBeGreaterThanOrEqual(nativeGeometry.bodyLeft - 1);
+            expect(nativeGeometry.right).toBeLessThanOrEqual(nativeGeometry.bodyRight + 1);
+            expect(nativeGeometry.right).toBeLessThanOrEqual(width);
+            expect(nativeGeometry.outsideChildren).toEqual([]);
+          }
           if (process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS) await page.screenshot({ path: `${process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS}/native-${width}.png` });
           await page.getByRole('tab', { name: 'Legacy analytics' }).click();
           await page.getByText('Example claude', { exact: true }).first().waitFor();
