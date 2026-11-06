@@ -6,8 +6,9 @@ import ScenePoster from './ScenePoster.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
+import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetCast, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
@@ -85,6 +86,32 @@ function ShotSheetMap({ rows, active, onPick }) {
   );
 }
 
+const BULK_FIELDS = [['location', 'Location'], ['timeOfDay', 'Time of day'], ['light', 'Light'], ['emotion', 'Emotion'], ['view', 'View']];
+
+/** Set one column across the shots listed, so a stretch of the video can be planned in one go. */
+function BulkFill({ rows, disabled, onApply }) {
+  const [field, setField] = useState('location');
+  const [value, setValue] = useState('');
+  const [onlyEmpty, setOnlyEmpty] = useState(true);
+  const edits = shotSheetBulkEdits(rows, field, value, { onlyEmpty });
+  const apply = () => { onApply(edits); setValue(''); };
+  return (
+    <fieldset disabled={disabled} className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+      <legend className="sr-only">Set a column across the shots listed</legend>
+      <select aria-label="Column to set" value={field} onChange={(event) => setField(event.target.value)} className={`${inputCls} max-w-[9rem]`}>
+        {BULK_FIELDS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+      </select>
+      <input aria-label="Value to set" list={`mv-sheet-${field}`} value={value} onChange={(event) => setValue(event.target.value)} className={`${inputCls} max-w-xs`} placeholder="Value" />
+      <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <input type="checkbox" checked={onlyEmpty} onChange={(event) => setOnlyEmpty(event.target.checked)} /> Only empty
+      </label>
+      <button type="button" disabled={!value.trim() || !edits.length} onClick={apply} className="min-h-[44px] rounded border border-port-border px-2 py-1 disabled:opacity-50 sm:min-h-0">
+        Set on {edits.length} listed shot{edits.length === 1 ? '' : 's'}
+      </button>
+    </fieldset>
+  );
+}
+
 /** The cameras that exist in this video: each shot on the sheet picks one. */
 function CameraList({ project, disabled, onChange }) {
   const cameras = project.cameras || [];
@@ -93,14 +120,19 @@ function CameraList({ project, disabled, onChange }) {
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-1.5">
       <legend className="text-xs font-medium">Cameras in this video</legend>
-      <p className="text-xs text-port-text-muted">Name each camera the story has. An in-world camera has an owner and can be borrowed or set down; an observer isn’t in their world, so nobody ever looks at it.</p>
+      <p className="text-xs text-port-text-muted">Name each camera the story has, and whether it shoots photos or video. An in-world camera has an owner and can be borrowed or set down; an observer isn’t in their world, so nobody ever looks at it.</p>
       {cameras.map((camera) => (
-        <div key={camera.id} className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_8rem_minmax(0,1fr)_2.75rem]">
+        <div key={camera.id} className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
           <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
             onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
           <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
             <option value="in-world">In their world</option>
             <option value="observer">Observer</option>
+          </select>
+          <select aria-label={`${camera.name} shoots`} value={camera.output || ''} className={inputCls} onChange={(event) => patch(camera.id, { output: event.target.value || null })}>
+            <option value="">Photo or video</option>
+            <option value="image">Photos only</option>
+            <option value="video">Video only</option>
           </select>
           <input key={`o-${camera.owner || ''}`} aria-label={`${camera.name} owner`} placeholder="Owner" defaultValue={camera.owner || ''} maxLength={120} className={inputCls}
             onBlur={(event) => { if (event.target.value.trim() !== (camera.owner || '')) patch(camera.id, { owner: event.target.value.trim() }); }} />
@@ -123,7 +155,7 @@ function CameraList({ project, disabled, onChange }) {
 
 /** One shot's row. Each column is the director's own plan; the prompts it sits beside are shown on request. */
 function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen }) {
-  const { scene, sheet, lyric, camera, frameOutdated, problems } = row;
+  const { scene, sheet, lyric, camera, frameOutdated, problems, output } = row;
   const setField = (field, value) => onEdit(scene.sceneId, { ...sheet, [field]: value });
   const label = scene.label || 'Shot';
   const toggleCharacter = (name) => {
@@ -155,6 +187,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
           <option value="">No camera set</option>
           {(project.cameras || []).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
         </select>
+        <span className="block text-xs text-port-text-muted">{output === 'image' ? 'Photo' : 'Video'}</span>
         {camera?.kind !== 'observer' && (
           <select aria-label={`${label} held by`} value={sheet.holder || ''} disabled={disabled || !camera} className={inputCls} onChange={(event) => setField('holder', event.target.value || null)}>
             <option value="">Held by</option>
@@ -166,7 +199,8 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
       <td className="w-44 p-1.5"><SheetPick label={`${label} view`} field="view" value={sheet.view} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
       <td className="w-36 space-y-1 p-1.5">
         <SheetPick label={`${label} location`} field="location" value={sheet.location} maxLength={200} disabled={disabled} onCommit={(value) => setField('location', value)} />
-        <SheetPick label={`${label} time and light`} field="light" value={sheet.light} maxLength={300} disabled={disabled} onCommit={(value) => setField('light', value)} />
+        <SheetPick label={`${label} time of day`} field="timeOfDay" value={sheet.timeOfDay} maxLength={100} disabled={disabled} onCommit={(value) => setField('timeOfDay', value)} />
+        <SheetPick label={`${label} light`} field="light" value={sheet.light} maxLength={300} disabled={disabled} onCommit={(value) => setField('light', value)} />
       </td>
       <td className="w-28 p-1.5">
         <div role="group" aria-label={`${label} characters`} className="flex flex-wrap gap-1">
@@ -202,38 +236,45 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
  * and motion prompts stay the shot's inputs, shown here with Show prompts.
  */
 export default function ShotSheetPanel({ board }) {
-  const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot } = board;
+  const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot, treatment } = board;
   const [query, setQuery] = useState('');
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
-  const [mapFilter, setMapFilter] = useState(null);
+  const [mapFilter, setMapFilter] = useShotSheetMapFilter();
   const [uncheckedOnly, setUncheckedOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiApplying, setAiApplying] = useState(false);
   const rows = useMemo(() => shotSheetRows(project).map((row, at, all) => ({ ...row, problems: shotSheetProblems(row, all[at - 1]) })), [project]);
-  const options = useMemo(() => ['view', 'location', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
+  const options = useMemo(() => ['view', 'location', 'timeOfDay', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
   const cast = useMemo(() => shotSheetCast(project), [project]);
   const outdated = rows.filter((row) => row.frameOutdated).length;
   const checked = rows.filter((row) => row.sheet.checked).length;
   const withProblems = rows.filter((row) => row.problems.length).length;
   const needle = query.trim().toLowerCase();
-  const listed = rows.filter((row) => {
+  const listed = shotSheetMapRows(rows, mapFilter).filter((row) => {
     if (outdatedOnly && !row.frameOutdated) return false;
-    if (mapFilter && SHOT_SHEET_MAP_BARS.find(([bar]) => bar === mapFilter.bar)[2](row) !== mapFilter.value) return false;
     if (uncheckedOnly && row.sheet.checked) return false;
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;
     if (!needle) return true;
-    const { characters = [], view, location, light, action, emotion, notes } = row.sheet;
-    return [row.scene.label, row.lyric, row.scene.framePrompt, row.scene.prompt, ...characters, view, location, light, action, emotion, notes]
+    const { characters = [], view, location, timeOfDay, light, action, emotion, notes } = row.sheet;
+    return [row.scene.label, row.lyric, row.scene.framePrompt, row.scene.prompt, ...characters, view, location, timeOfDay, light, action, emotion, notes]
       .some((text) => typeof text === 'string' && text.toLowerCase().includes(needle));
   });
   const editSheet = (sceneId, sheet) => {
     const shotSheet = normalizeShotSheet(sheet);
     editSceneLocal(sceneId, { shotSheet });
     saveScene(sceneId, { shotSheet });
+  };
+  const mediaEdits = shotSheetMediaEdits(rows);
+  const matchMedia = async () => {
+    const shotDirections = mediaEdits.filter((edit) => edit.medium).map(({ sceneId, medium }) => ({ sceneId, medium, mediumPinned: true }));
+    if (shotDirections.length && !(await treatment.save({ shotDirections }))) return;
+    for (const { sceneId, visualLayer } of mediaEdits) {
+      if (visualLayer) { editSceneLocal(sceneId, { visualLayer }); saveScene(sceneId, { visualLayer }); }
+    }
   };
   const editCameras = (cameras) => {
     editProjectLocal({ cameras });
@@ -264,6 +305,12 @@ export default function ShotSheetPanel({ board }) {
         </label>
         <span className="text-port-text-muted">{listed.length} shown</span>
       </div>
+      {mediaEdits.length > 0 && (
+        <button type="button" disabled={locked} onClick={matchMedia} className="min-h-[44px] rounded border border-port-warning px-2 py-1 text-xs text-port-warning sm:min-h-0">
+          Match {mediaEdits.length} shot{mediaEdits.length === 1 ? '' : 's'} to {mediaEdits.length === 1 ? 'its camera' : 'their cameras'}
+        </button>
+      )}
+      <BulkFill rows={listed} disabled={locked} onApply={(edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); })} />
       <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Checked when it’s right. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
@@ -285,7 +332,7 @@ export default function ShotSheetPanel({ board }) {
         <table className="w-full min-w-[78rem] border-collapse text-left">
           <thead className="sticky top-0 z-10 bg-port-card text-xs text-port-text-muted">
             <tr>
-              {['Shot', 'Frame', 'Lyric', 'Camera', 'View', 'Where, time and light', 'Who', 'Action', 'Emotion', 'Notes', ...(showPrompts ? ['Prompts'] : [])]
+              {['Shot', 'Frame', 'Lyric', 'Camera', 'View', 'Where, time, light', 'Who', 'Action', 'Emotion', 'Notes', ...(showPrompts ? ['Prompts'] : [])]
                 .map((heading) => <th key={heading} scope="col" className="border-b border-port-border p-1.5 font-medium">{heading}</th>)}
             </tr>
           </thead>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, shotSheetCast, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
@@ -81,7 +81,7 @@ describe('shot sheet storage', () => {
 });
 
 describe('shotSheetProblems', () => {
-  const full = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', light: 'Dusk', emotion: 'Joy', action: 'Rides', characters: ['Renee'] };
+  const full = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Joy', action: 'Rides', characters: ['Renee'] };
   const vhs = { id: 'vhs', name: 'VHS', kind: 'in-world' };
   // Catches a complete plan being nagged about.
   it('has nothing to say about a complete plan', () => {
@@ -89,7 +89,7 @@ describe('shotSheetProblems', () => {
   });
   // Catches the empty columns not being named.
   it('names the empty columns', () => {
-    expect(shotSheetProblems({ sheet: {}, camera: null })).toEqual(['Missing camera, location, time and light, emotion, action, who']);
+    expect(shotSheetProblems({ sheet: {}, camera: null })).toEqual(['Missing camera, location, time of day, emotion, action, who']);
   });
   // Catches an observer being asked for a holder, or an in-world camera escaping the rule.
   it('asks who holds an in-world camera but never an observer', () => {
@@ -127,12 +127,64 @@ describe('shotSheetStretches', () => {
     ]);
   });
   // Catches a borrowed camera reading as no change, an observer gaining a holder, or the light bar reading the wrong column.
-  it('shows who has each camera and reads time of day from the light column', () => {
+  it('shows who has each camera and reads time of day from its own column', () => {
     const vhs = { name: 'VHS' };
     const observer = { name: 'Observer' };
-    const rows = [row(0, 1, { holder: 'Kevin', light: 'Dusk' }, vhs), row(1, 2, { holder: 'Renee', light: 'Dusk' }, vhs), row(2, 3, { light: 'Night' }, observer)];
+    const rows = [row(0, 1, { holder: 'Kevin', timeOfDay: 'Dusk', light: 'Flash' }, vhs), row(1, 2, { holder: 'Renee', timeOfDay: 'Dusk', light: 'Lamp' }, vhs), row(2, 3, { timeOfDay: 'Night' }, observer)];
     expect(shotSheetStretches(rows, bar('camera')).map((stretch) => stretch.value)).toEqual(['VHS · Kevin', 'VHS · Renee', 'Observer']);
-    expect(shotSheetStretches(rows, bar('light')).map((stretch) => stretch.value)).toEqual(['Dusk', 'Night']);
+    expect(shotSheetStretches(rows, bar('timeOfDay')).map((stretch) => stretch.value)).toEqual(['Dusk', 'Night']);
+  });
+});
+
+describe('camera output', () => {
+  const project = (medium, visualLayer, output) => ({
+    cameras: [{ id: 'c', name: 'Snapshot', kind: 'in-world', output }],
+    treatment: { shotDirections: [{ sceneId: 's', medium }] },
+    scenes: [{ sceneId: 's', startSec: 0, endSec: 1, visualLayer, shotSheet: { cameraId: 'c' } }],
+  });
+  // Catches the plan and the picture layer disagreeing unnoticed, which is how a photo shot renders as video.
+  it('edits only what disagrees with the camera', () => {
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'footage', 'image')))).toEqual([{ sceneId: 's', visualLayer: 'still' }]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('generated-footage', 'footage', 'image')))).toEqual([{ sceneId: 's', medium: 'still', visualLayer: 'still' }]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'still', 'video')))).toEqual([{ sceneId: 's', medium: 'generated-footage', visualLayer: 'footage' }]);
+  });
+  // Catches a match failing outright on a shot the treatment doesn't know yet.
+  it('only changes the layer of a shot with no compiled direction', () => {
+    const noDirection = { ...project('still', 'footage', 'image'), treatment: null };
+    expect(shotSheetMediaEdits(shotSheetRows(noDirection))).toEqual([{ sceneId: 's', visualLayer: 'still' }]);
+  });
+  // Catches existing footage being replanned, or a camera that shoots both being constrained.
+  it('leaves agreeing shots and unconstrained cameras alone', () => {
+    expect(shotSheetMediaEdits(shotSheetRows(project('existing-footage', 'footage', 'video')))).toEqual([]);
+    expect(shotSheetMediaEdits(shotSheetRows(project('still', 'footage', undefined)))).toEqual([]);
+  });
+  // Catches a mismatch that the sheet's problems don't report.
+  it('reports a mismatch as a problem', () => {
+    const [row] = shotSheetRows(project('still', 'footage', 'image'));
+    expect(shotSheetProblems(row)).toContain('Snapshot shoots photos, but this shot is set to video');
+  });
+});
+
+describe('shotSheetMapRows', () => {
+  const rows = [{ scene: {}, sheet: { location: 'Mall' } }, { scene: {}, sheet: {} }];
+  // Catches the board and sheet disagreeing about a stretch, or "not set" matching everything.
+  it('narrows to a stretch\u2019s value, including not set, and passes everything with no filter', () => {
+    expect(shotSheetMapRows(rows, { bar: 'location', value: 'Mall' })).toEqual([rows[0]]);
+    expect(shotSheetMapRows(rows, { bar: 'location', value: '' })).toEqual([rows[1]]);
+    expect(shotSheetMapRows(rows, null)).toEqual(rows);
+  });
+});
+
+describe('shotSheetBulkEdits', () => {
+  const rows = [{ scene: { sceneId: 'a' }, sheet: { location: 'Mine', checked: true } }, { scene: { sceneId: 'b' }, sheet: {} }];
+  // Catches a bulk set overwriting a director's value by default.
+  it('fills only empty shots by default', () => {
+    expect(shotSheetBulkEdits(rows, 'location', ' Mall ')).toEqual([{ sceneId: 'b', shotSheet: { location: 'Mall' } }]);
+  });
+  // Catches a deliberate overwrite skipping set shots, or a bulk edit unticking Checked.
+  it('can overwrite, keeping Checked, and skips shots already at that value', () => {
+    expect(shotSheetBulkEdits(rows, 'location', 'Mine', { onlyEmpty: false })).toEqual([{ sceneId: 'b', shotSheet: { location: 'Mine' } }]);
+    expect(shotSheetBulkEdits(rows, 'location', 'Mall', { onlyEmpty: false })[0].shotSheet).toEqual({ location: 'Mall', checked: true });
   });
 });
 

@@ -1,5 +1,5 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
-import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
+import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_CAMERA_OUTPUTS, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
@@ -270,6 +270,7 @@ export const musicVideoCameraSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().trim().min(1).max(120),
   kind: z.enum(SHOT_CAMERA_KINDS),
+  output: z.enum(SHOT_CAMERA_OUTPUTS).nullable().optional(),
   owner: z.string().trim().max(120).optional(),
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),

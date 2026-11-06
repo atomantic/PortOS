@@ -221,4 +221,17 @@ describe('Board pacing beat review', () => {
     expect(editSceneLocal).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
     expect(saveScene).toHaveBeenCalledWith('s1', { beatNeedsReview: false });
   });
+
+  // Catches the board ignoring a stretch tapped on the shot sheet's map, or no way to clear it from the board.
+  it('narrows to the stretch selected on the shot sheet map and clears from a chip', () => {
+    const scenes = [
+      { sceneId: 'a', label: 'Shot 1', startSec: 0, endSec: 2, shotSheet: { location: 'Mall' } },
+      { sceneId: 'b', label: 'Shot 2', startSec: 2, endSec: 4, shotSheet: { location: 'Street' } },
+    ];
+    render(<MemoryRouter initialEntries={['/?mapBar=location&mapValue=Mall']}><BoardStage board={board(scenes)} /></MemoryRouter>);
+    expect(screen.getByText(/Shot 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Shot 2/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the map filter' }));
+    expect(screen.getByText(/Shot 2/)).toBeInTheDocument();
+  });
 });
