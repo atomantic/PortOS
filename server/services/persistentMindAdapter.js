@@ -10,7 +10,7 @@ import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.j
  */
 
 import { persistentMindNamePrompt, persistentMindChosenNameSchema } from '../lib/persistentMindChosenName.js';
-import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
+import { PERSISTENT_MIND_CONTINUATION_NOTE_MAX_CHARS, persistentMindContinuationNoteSchema, persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { z } from 'zod';
 import {
@@ -30,6 +30,7 @@ import { canonicalStringify } from '../lib/objects.js';
 import { resolveScreenshot, sha256Text } from '../lib/fileUtils.js';
 import { loadState } from './cosState.js';
 import {
+  applyPersistentMindContinuationNote,
   createPersistentMindMemoryFromCandidate,
   readPersistentMindMemories,
   readPersistentMindName,
@@ -107,6 +108,7 @@ export const persistentMindResponseSchema = z.object({
   // absence; malformed text and every action contract remain strict.
   thinkingSummary: z.string().trim().max(4_000).nullish().transform(value => value ?? ''),
   message: z.string().trim().max(8_000).nullish().transform(value => value ?? ''),
+  continuationNote: persistentMindContinuationNoteSchema,
   memoryCandidates: z.array(memoryCandidateSchema).max(MAX_MEMORY_CANDIDATES_PER_TURN).optional().default([]),
   taskRequests: z.array(persistentMindTaskRequestSchema)
     .max(PERSISTENT_MIND_TASK_LIMITS.maxPerTurn)
@@ -287,6 +289,26 @@ async function recordTurnMemoryCandidates(parsed, state) {
   return state.unsavedMemory || state.writes.some((write) => write.status === 'rejected');
 }
 
+// Written only after every provider round succeeded, so a failed turn cannot
+// replace a valid note. A refusal is reported to the mind, not a turn failure.
+async function recordTurnContinuationNote({ note, context, turnId, provider, model, signal, actionNotices }) {
+  if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
+  const shown = context?.continuationNote;
+  const outcome = await applyPersistentMindContinuationNote({
+    turnId, note, providerId: provider?.id ?? null, model: model ?? null,
+    expected: shown ? { memoryId: shown.memoryId ?? null, version: shown.version ?? null } : undefined,
+  }).catch((error) => {
+    console.error(`❌ Persistent mind continuation note failed for turn ${turnId}: ${error.message}`);
+    return { action: 'failed' };
+  });
+  if (outcome.action !== 'stale' && outcome.action !== 'failed') return null;
+  const displayText = outcome.action === 'stale'
+    ? 'The continuation note changed after this wake read it, so this replacement was refused.'
+    : 'The continuation note could not be saved.';
+  actionNotices.add(displayText);
+  return { kind: 'mind.continuation.refused', id: `continuation-note-refused:${turnId}`, data: { displayText, reason: outcome.action } };
+}
+
 // Mirrors tools.activate / tools.deactivate receipts into the run-local
 // selection, then drops targets whose own receipt completed.
 function applyToolActivationReceipts(toolResults, activatedFamilies, requestedToolNames) {
@@ -409,7 +431,7 @@ Return ONLY one JSON object with this shape:
   "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 },
   "callRequest": null
 }
-Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Set protection to "core-identity" for your chosen name, enduring identity, and foundational commitments, "important" for critical lasting knowledge, or "standard" for ordinary memories. Core identity and important memories survive all bulk cleanup. Save identity learned from conversation as a protected memory before clearing history. Use mind.protect-memory, when granted, to protect an existing memory by its context id before cleanup; it cannot remove protection. Protection affects cleanup retention, not permission or instruction authority. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
+Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Set protection to "core-identity" for your chosen name, enduring identity, and foundational commitments, "important" for critical lasting knowledge, or "standard" for ordinary memories. Core identity and important memories survive all bulk cleanup. Save identity learned from conversation as a protected memory before clearing history. Use mind.protect-memory, when granted, to protect an existing memory by its context id before cleanup; it cannot remove protection. Protection affects cleanup retention, not permission or instruction authority. You may also add a top-level "continuationNote" string, at most ${PERSISTENT_MIND_CONTINUATION_NOTE_MAX_CHARS} characters: your own note to your next wake with the current thread, open threads, and next useful action, in user-visible facts and never private reasoning. It is kept word for word across compaction and provider changes. Write it when meaningful progress or a changed plan makes it useful; no turn requires one. Leave the field out to keep the current note, send the whole new note to replace it, or send "" to clear it. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
 Do not open with a recap. The human already sees the trajectory, the memories, and every earlier reply, so summarizing prior turns or listing what you remember is wasted output. Say only what is new this turn: what you are thinking now, what you decided, and what you need from them. Reference prior context only where it changes the decision you are stating.
 On a self-directed wake, never claim the user asked for something. Prefer toolCalls that advance the standing playbook (usually eidoverse.*) over conversational filler. Keep callRequest null unless placing a phone call is ON and something truly cannot wait.`;
 }
@@ -696,6 +718,8 @@ export function createPersistentMindTurnAdapter() {
       const memoryState = {
         turnId, actionNotices, candidates: [], writes: [], fingerprints: new Set(), unsavedMemory: false,
       };
+      // undefined means no round spoke; a later round's note revises an earlier one.
+      let continuationNote;
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
@@ -719,6 +743,7 @@ export function createPersistentMindTurnAdapter() {
           || parsed.message === 'The conversational reply. Required for a human message; optional for a self-directed wake.') {
           throw new Error('Persistent Mind received response-contract placeholders instead of an assistant response');
         }
+        if (parsed.continuationNote !== undefined) continuationNote = parsed.continuationNote;
         const memoryUnsaved = await recordTurnMemoryCandidates(parsed, memoryState);
         if (memoryUnsaved && parsed.toolCalls.some((call) => isToolNamed(call, 'mind.cleanup'))) {
           throw new Error('Mind cleanup was not run because a memory candidate could not be saved.');
@@ -836,6 +861,9 @@ export function createPersistentMindTurnAdapter() {
         // lie in the one case the user cannot check by looking at a screen.
         actionNotices.add(`The requested phone call was not placed (${callOutcome.reason}).`);
       }
+      const continuationRefusal = continuationNote === undefined ? null : await recordTurnContinuationNote({
+        note: continuationNote, context, turnId, provider, model, signal, actionNotices,
+      });
       if (actionNotices.size > 0) {
         const notice = [...actionNotices].join(' ');
         parsed = wake?.kind === 'message'
@@ -844,10 +872,10 @@ export function createPersistentMindTurnAdapter() {
         result = { ...result, text: JSON.stringify(parsed) };
       }
       const message = parsed.message || (wake?.kind === 'message' ? parsed.thinkingSummary : '');
-      if (!parsed.thinkingSummary && !message && memoryState.candidates.length === 0 && parsed.taskRequests.length === 0 && toolBudget.used === 0 && !callOutcome) {
+      if (!parsed.thinkingSummary && !message && memoryState.candidates.length === 0 && parsed.taskRequests.length === 0 && toolBudget.used === 0 && !callOutcome && continuationNote === undefined) {
         throw new Error('Persistent mind returned no visible thought, reply, memory candidate, task request, or tool call');
       }
-      const events = [];
+      const events = continuationRefusal ? [continuationRefusal] : [];
       if (parsed.thinkingSummary) {
         events.push({
           kind: 'mind.thought',

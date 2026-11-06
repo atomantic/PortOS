@@ -52,3 +52,29 @@ it('distinguishes a store failure from an honest empty reflection', async () => 
   await act(async () => { for (const handler of handlers.get('cos:memory:updated') || []) handler({ id: source.id }); });
   await waitFor(() => expect(screen.getByText('No eligible memory awaiting reflection.')).toBeInTheDocument());
 });
+
+it('shows the mind-authored continuation note read-only with factual provenance', async () => {
+  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  api.getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+    state: 'omitted-budget', memoryId: 'note-1', version: 2, content: 'Next: read the reply.', updatedAt: '2026-01-02T00:00:00.000Z',
+    provenance: { turnId: 'turn-7', providerId: 'provider-b', model: 'model-b', at: '2026-01-02T00:00:00.000Z' },
+  } } });
+  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  const note = (await screen.findByRole('heading', { name: 'Continuation note' })).closest('section');
+  expect(note).toHaveTextContent('Next: read the reply.');
+  expect(note).toHaveTextContent('provider-b / model-b');
+  expect(note).toHaveTextContent('turn turn-7');
+  expect(note).toHaveTextContent('Omitted from this context');
+  expect(note.querySelector('textarea, input, select, button')).toBeNull();
+});
+
+it('does not attribute an unattested note to the mind', async () => {
+  api.getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  api.getPersistentMindContext.mockResolvedValue({ memories: [], prompt: {}, preview: { continuationNote: {
+    state: 'included', memoryId: 'note-1', version: 1, content: 'Legacy text', updatedAt: null, provenance: null,
+  } } });
+  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  const note = (await screen.findByRole('heading', { name: 'Continuation note' })).closest('section');
+  expect(note).toHaveTextContent('Author unknown');
+  expect(note).not.toHaveTextContent('Written by the mind');
+});
