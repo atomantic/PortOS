@@ -10,11 +10,28 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { STORYBOARD_LIMITS, newStoryboardEntityId } from '../../lib/storyboardVocabulary.js';
 import { isPreMusicShot } from '../../lib/musicVideoColdOpen.js';
+import { storyboardFitSong } from '../../lib/storyboardFit.js';
+import { STORYBOARD_SYNC_END_SLACK_SEC } from '../../lib/storyboardShotSync.js';
 import { getStoryboard, mutateStoryboard } from './index.js';
 
 const hundredths = (sec) => Math.round(sec * 100) / 100;
 
 export const boardFollowsShots = (project) => Boolean(project?.storyboardId && project.storyboardSync === true);
+
+// Panels play end to end from the song's start, and the last one runs to the song's end when it gets within
+// a second of it (storyboardPanelSpans). A cut the board can't hold would be undone by the sync after the board
+// write, so it is refused before anything changes.
+export function assertBoardHoldsFirstStart(project, startSec) {
+  if (!boardFollowsShots(project) || startSec < 0.005) return;
+  throw new ServerError("This video's shots follow its storyboard, which starts with the song, so the first shot starts at 0.", { status: 400, code: 'STORYBOARD_FIRST_START' });
+}
+
+export function assertBoardHoldsLastEnd(project, endSec) {
+  if (!boardFollowsShots(project)) return;
+  const songSec = storyboardFitSong(project)?.durationSec;
+  if (!(songSec > 0) || Math.abs(songSec - endSec) < 0.005 || Math.abs(songSec - endSec) > STORYBOARD_SYNC_END_SLACK_SEC) return;
+  throw new ServerError(`This video's shots follow its storyboard, where the last shot runs to the song's end unless it stops more than ${STORYBOARD_SYNC_END_SLACK_SEC}s before it. End it at ${songSec.toFixed(2)}s or earlier than ${(songSec - STORYBOARD_SYNC_END_SLACK_SEC).toFixed(2)}s.`, { status: 400, code: 'STORYBOARD_LAST_END' });
+}
 
 /** A linked song shot's panel length, as `[panelId, seconds]`, or null for a cold-open or unlinked shot. */
 export function panelLength(scene) {

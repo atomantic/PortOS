@@ -102,6 +102,17 @@ describe('sync a music video\'s shots to its storyboard', () => {
     await expect(projects.moveProjectSceneEnd(project.id, first.sceneId, { endSec: 0.05 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await expect(projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 21 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
 
+    // Cuts the board can't hold are refused and change nothing: its first panel starts with the song,
+    // and its last one snaps to the song's end from within a second.
+    const held = await times();
+    await expect(projects.moveProjectSceneStart(project.id, first.sceneId, { startSec: 1 })).rejects.toMatchObject({ code: 'STORYBOARD_FIRST_START' });
+    await expect(projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 19.5 })).rejects.toMatchObject({ code: 'STORYBOARD_LAST_END' });
+    expect(await times()).toEqual(held);
+    // Stopping further before the song's end holds, and so does running back to it.
+    const shorter = await projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 18 });
+    expect(shorter.scene.endSec).toBe(18);
+    expect((await projects.moveProjectSceneEnd(project.id, third.sceneId, { endSec: 20 })).scene.endSec).toBe(20);
+
     // A moved start reaches the panels too.
     await projects.moveProjectSceneStart(project.id, second.sceneId, { startSec: 6 });
     expect(await panelSeconds()).toEqual([['She steps off the bus', 6], ['The town square', 4], ['Crowd lifts her up', 10]]);

@@ -451,13 +451,14 @@ export async function mergeProjectPreviousScene(id, sceneId, options = {}) {
  * before it ends there, so the two stay joined. Returns `{ project, scene, previous }`.
  */
 export async function moveProjectSceneStart(id, sceneId, { startSec }) {
-  const { applySceneUpdate } = await import('./projectsLogic.js');
+  const [{ applySceneUpdate }, { assertBoardHoldsFirstStart }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
     if (index < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
     const scene = scenes[index];
     const previous = index > 0 ? scenes[index - 1] : null;
+    if (typeof previous?.startSec !== 'number') assertBoardHoldsFirstStart(current, startSec);
     if (typeof scene.endSec === 'number' && startSec >= scene.endSec) {
       throw new ServerError('A shot has to start before it ends', { status: 400, code: 'VALIDATION_ERROR' });
     }
@@ -480,7 +481,7 @@ const MIN_SHOT_SEC = 0.1;
  * shot just ends there, inside the song. Returns `{ project, scene, next }`.
  */
 export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
-  const { applySceneUpdate } = await import('./projectsLogic.js');
+  const [{ applySceneUpdate }, { assertBoardHoldsLastEnd }] = await Promise.all([import('./projectsLogic.js'), import('../storyboards/followShots.js')]);
   const outcome = await mutateProjectRecord(id, (current) => {
     const scenes = current.scenes || [];
     const index = scenes.findIndex((scene) => scene.sceneId === sceneId);
@@ -498,6 +499,7 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
     if (!next && songSec > 0 && endSec > songSec) {
       throw new ServerError('The last shot can\'t run past the end of the song', { status: 400, code: 'VALIDATION_ERROR' });
     }
+    if (!next) assertBoardHoldsLastEnd(current, endSec);
     let project = applySceneUpdate(current, sceneId, { endSec }).project;
     if (next) project = applySceneUpdate(project, next.sceneId, { startSec: endSec }).project;
     return { project, scene: project.scenes[index], next: next ? project.scenes[index + 1] : null };
