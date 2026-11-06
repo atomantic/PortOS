@@ -618,7 +618,7 @@ export default function SceneCard({
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onApplyCameos={onApplyCameos} />
         </div>
-        {/* Clip: the picture and its takes, Render, the motion prompt and where it renders, then other ways to get a clip. */}
+        {/* Clip: the picture and its takes, the motion prompt and where it renders, then Render and other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -664,26 +664,6 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
-          <div className="flex flex-wrap items-center gap-2">
-            {storyboardDefault && (
-              <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
-                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
-            )}
-            {!storyboardDefault && <button onClick={generateVideo}
-              disabled={renderBlocked}
-              className={PRIMARY_BUTTON}
-              title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
-                  : "Render this shot's clip from its still")}>
-              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-              {generatingVideo ? 'Rendering…' : `Render${scene.videoHistoryId ? ' again' : ''}`}
-            </button>}
-          </div>
-          {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
-              <span>{videoRefusal}</span>
-            </div>
-          )}
           {layer === 'footage' && promptField}
           {/* The camera move sits with the motion prompt and shows the text it adds to it. */}
           {layer === 'footage' && (
@@ -730,9 +710,20 @@ export default function SceneCard({
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}
             </p>
           )}
-          {/* Other ways to fill the shot, after Render and its settings so Render stays the one action under the takes. */}
-          {(onPlacePoolItem || onImportClipTake || (scene.videoHistoryId && canContinueShot)) && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="clip-other-sources">
+          {/* Render and the other ways to fill the shot, under all its prompts and settings. */}
+          <div className="flex flex-wrap items-center gap-2" data-testid="clip-actions">
+            {storyboardDefault && (
+              <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
+                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
+            )}
+            {!storyboardDefault && <button onClick={generateVideo}
+              disabled={renderBlocked}
+              className={PRIMARY_BUTTON}
+              title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
+                  : "Render this shot's clip from its still")}>
+              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+              {generatingVideo ? 'Rendering…' : `Render${scene.videoHistoryId ? ' again' : ''}`}
+            </button>}
             {onPlacePoolItem && (
               <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy} className={SECONDARY_BUTTON}
                 title="Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor">
@@ -756,6 +747,11 @@ export default function SceneCard({
               </button>
             )}
           </div>
+          {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
+          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
+              <span>{videoRefusal}</span>
+            </div>
           )}
           </>
           )}
