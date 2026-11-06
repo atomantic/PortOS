@@ -36,7 +36,7 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
-import { musicVideoLimitReferenceFiles, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -77,7 +77,12 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     localModel = route.model ? models.find((model) => model.id === route.model) : selectLocalImageModelFromSettings(settings, null, models);
   }
   // A Casting guide may live in any image-input root (catalog.js validates it with resolveImageInputPath).
-  const castMedia = await loadSceneCastMedia(scene);
+  const castMedia = await loadSceneCastMedia(scene, { project });
+  // A director's explicit pick must never silently fall out of a paid render.
+  const missingPicks = musicVideoMissingFrameLinkedPicks(project, scene, castMedia);
+  if (missingPicks.length) {
+    throw new ServerError(`A reference picked for "${scene.label || scene.sceneId}" is unavailable. Restore it or reset the shot's references.`, { status: 409, code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
+  }
   const allReferences = conditioningReferences(project, scene, castMedia, greybox);
   // As many references, in priority order, as this route's image renderer takes.
   const capacity = musicVideoReferenceCapacity(route.mode, { modelId: resolved.cloud?.modelId || route.model, localModel });
@@ -87,6 +92,9 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const available = [];
   for (const ref of allReferences) {
     const path = ref.greybox ? greybox.path : ref.castGuide ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
+    if (!path && ref.linkedCast) {
+      throw new ServerError(`The picked reference ${ref.label} is missing. Restore it or reset the shot's references.`, { status: 409, code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
+    }
     if (!path) continue;
     available.push({ ref, path });
   }

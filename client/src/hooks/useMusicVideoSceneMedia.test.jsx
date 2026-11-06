@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react';
+import { musicVideoLinkedReferenceId } from '../../../server/lib/musicVideoConditioning.js';
 
 // Every listener per event, like the real socket: the frame and end-frame
 // lanes both listen on music-video:scene-image (#11173).
@@ -112,6 +113,22 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
     expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
     expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+  });
+
+  // Uniquely catches a paid frame going out without the catalog sheet the director picked.
+  it('refuses a frame whose picked catalog asset failed to load', async () => {
+    listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+    const cast = {
+      id: 'p2',
+      concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], frameReferenceIds: [musicVideoLinkedReferenceId('face.png')] }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());
+    let outcome;
+    await act(async () => { outcome = await result.current.generateFrame(cast.scenes[0]); });
+    expect(outcome).toEqual({ ok: false });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.

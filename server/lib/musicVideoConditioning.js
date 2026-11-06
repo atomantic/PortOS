@@ -1,4 +1,4 @@
-import { pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
+import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
@@ -132,13 +132,18 @@ export function isLegacyCatalogReference(project, ref) {
 }
 
 // Browser-safe FNV-1a 64-bit identity. Hash the full tuple, never a truncated filename or its position.
-function catalogReferenceId(subjectId, filename) {
+function fnv1a64(text) {
   let hash = 0xcbf29ce484222325n;
-  for (const character of JSON.stringify([subjectId, filename])) {
+  for (const character of text) {
     hash = BigInt.asUintN(64, (hash ^ BigInt(character.codePointAt(0))) * 0x100000001b3n);
   }
-  return `mvr-catalog-${hash.toString(16).padStart(16, '0')}`;
+  return hash.toString(16).padStart(16, '0');
 }
+
+const catalogReferenceId = (subjectId, filename) => `mvr-catalog-${fnv1a64(JSON.stringify([subjectId, filename]))}`;
+
+/** A linked catalog asset's id, from its whole filename: long names can share any prefix. */
+export const musicVideoLinkedReferenceId = (mediaKey) => `mvr-linked-${fnv1a64(mediaKey)}`;
 
 /** Virtual choices resolved from the catalog on read, never published copies of catalog images. */
 function musicVideoCatalogReferences(project) {
@@ -210,6 +215,81 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
     });
 }
 
+const SHEET_ROLE = /^sheet:([^@]+)(?:@(.+))?$/;
+const titleCase = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function linkedAssetDetail(m, sheet) {
+  if (sheet) return sheet[1] === 'standard' ? 'Character sheet' : `${titleCase(sheet[1])} sheet`;
+  if (m.kind === 'portrait') return 'Portrait';
+  const v = m.library?.variant || {};
+  return v.label || (Number.isInteger(v.age) ? `age ${v.age}` : v.era || 'Reference');
+}
+
+/** The linked cast member ids a project's shots may pick catalog assets from. */
+export const musicVideoLinkedCastIds = (project) => [...new Set((project?.concept?.subjects || [])
+  .filter((subject) => subject?.kind === 'character' && subject.ingredientId).map((subject) => subject.ingredientId))];
+
+/**
+ * Every approved asset of each character linked from the catalog, as extra
+ * choices for a shot's picker. Approved means the portrait, a render guide, a
+ * reference rated good, or a character sheet, and never one rated bad or left
+ * out of likeness. A subject linked at an age or look offers that form's assets
+ * only; otherwise it offers the canonical ones. These never join the automatic
+ * set, so a new sheet changes no shot until the director picks it.
+ */
+export function musicVideoLinkedCastReferences(project, castMedia) {
+  const seen = new Set();
+  return (project?.concept?.subjects || []).flatMap((subject) => {
+    const media = subject?.kind === 'character' && castMedia?.[subject.ingredientId];
+    if (!Array.isArray(media)) return [];
+    const rejected = rejectedReferenceKeys(media);
+    const formId = subject.castForm?.id || null;
+    const assets = media.map((m) => ({ m, sheet: SHEET_ROLE.exec(m?.role || '') })).filter(({ m, sheet }) => m && !m.deleted
+      && CAST_IMAGE_KINDS.has(m.kind) && typeof m.mediaKey === 'string' && SENDABLE_REFERENCE_FILE.test(m.mediaKey)
+      && !rejected.has(m.mediaKey) && !String(m.role || '').startsWith('archive:')
+      && (m.library?.variant?.formId || sheet?.[2] || null) === formId
+      && (sheet || m.kind === 'portrait' || m.library?.guide === true || isGoodReference(m)));
+    const rank = ({ m, sheet }) => (m.kind === 'portrait' ? 0 : sheet ? 1 : 2);
+    return [...assets].sort((a, b) => rank(a) - rank(b)).filter(({ m }) => !seen.has(m.mediaKey) && seen.add(m.mediaKey))
+      .map(({ m, sheet }) => ({
+        id: musicVideoLinkedReferenceId(m.mediaKey),
+        imageId: m.mediaKey,
+        role: 'character',
+        label: `${subject.name || 'Cast member'} · ${linkedAssetDetail(m, sheet)}`.slice(0, 120),
+        castGuide: true,
+        linkedCast: true,
+      }));
+  }).filter((ref) => !isLegacyCatalogReference(project, ref));
+}
+
+/** A saved pick of a catalog asset, which only resolves once its cast member's media loads. */
+export const isCatalogMediaReferenceId = (id) => /^mvr-(guide|linked)-/.test(String(id));
+
+/** The cast members whose media this scene's saved references need before they can resolve or render. */
+export function musicVideoSceneCastIds(project, scene) {
+  const variant = sceneCastVariant(scene);
+  const picksLinked = [scene?.frameReferenceIds, scene?.clipReferenceIds]
+    .some((ids) => Array.isArray(ids) && ids.some((id) => String(id).startsWith('mvr-linked-')));
+  return [...new Set([...(variant ? [variant.ingredientId] : []), ...(picksLinked ? musicVideoLinkedCastIds(project) : [])])];
+}
+
+/**
+ * A shot's picked linked assets that do not resolve: their cast media failed to
+ * load, or the asset has since left the catalog's approved set. Resolving would
+ * silently drop them, so a frame render must stop instead of spending a take.
+ */
+export function musicVideoMissingFrameLinkedPicks(project, scene, castMedia) {
+  if (!Array.isArray(scene?.frameReferenceIds)) return [];
+  const linked = musicVideoLinkedCastReferences(project, castMedia);
+  return scene.frameReferenceIds.filter((id) => String(id).startsWith('mvr-linked-') && !linked.some((ref) => ref.id === id));
+}
+
+/** What a picker offers: the linked cast first, minus any image the project's own references already offer. */
+export function musicVideoOfferedReferences(choices) {
+  const own = choices.filter((ref) => !ref.linkedCast);
+  return [...choices.filter((ref) => ref.linkedCast && !own.some((other) => other.imageId === ref.imageId)), ...own];
+}
+
 /**
  * The references a scene's frames condition on, in priority order, capped at
  * `limit` (the renderer's capacity when known). Explicit `frameReferenceIds` win;
@@ -225,7 +305,7 @@ function baseConditioningReferences(project, scene, castMedia = null, limit = MU
   const panel = musicVideoPanelArtReferences(scene).filter((ref) => !isLegacyCatalogReference(project, ref));
   // The director's own pick for this shot (the shot card's References row) wins over the automatic set.
   if (Array.isArray(scene?.frameReferenceIds)) {
-    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project)]
+    const choices = [...research, ...guides, ...panel, ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)]
       .filter((ref) => !isLegacyCatalogReference(project, ref));
     return scene.frameReferenceIds.map((id) => choices.find((ref) => ref.id === id)).filter(Boolean)
       .slice(0, limit);
@@ -429,7 +509,7 @@ export function musicVideoClipConditioningReferences(project, scene, castMedia =
 
 /** References that may be selected independently for a clip. */
 export function musicVideoClipReferenceChoices(project, scene, castMedia = null) {
-  return [...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project)]
+  return [...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)]
     .filter((ref) => !isLegacyCatalogReference(project, ref));
 }
 

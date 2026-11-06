@@ -29,7 +29,7 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -182,7 +182,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
   ]);
   const [greybox, panel, castMedia] = await Promise.all([
     loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
-    castGuideMedia?.loadSceneCastMedia(scene),
+    castGuideMedia?.loadSceneCastMedia(scene, { project }),
   ]);
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
@@ -221,7 +221,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
     const sentInitCount = initInputCount;
-    const known = [greybox?.reference, ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project)];
+    const known = [greybox?.reference, ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.

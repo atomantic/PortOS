@@ -71,7 +71,7 @@ async function planSection(project, section, env) {
   const stepKind = section.kind === 'image' ? 'frame' : 'clip';
   const planned = stepKind === 'frame' ? await frameRoute(project, env) : await clipRoute(project, env);
   if (planned.reason) return planned;
-  const refused = await routeUnavailableReason(planned.route, sceneRequirement(project, scene, stepKind, stepKind === 'frame' ? await loadSceneCastMedia(scene) : null), env);
+  const refused = await routeUnavailableReason(planned.route, sceneRequirement(project, scene, stepKind, stepKind === 'frame' ? await loadSceneCastMedia(scene, { project }) : null), env);
   return refused ? unavailable(refused) : { scene, stepKind, route: planned.route };
 }
 
