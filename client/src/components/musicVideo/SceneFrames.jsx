@@ -6,6 +6,7 @@ import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
+import InfoTooltip from '../ui/InfoTooltip';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
@@ -46,6 +47,9 @@ function FramePrompt({ id, label, value, ...props }) {
 }
 
 const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End frame' };
+// Both render from the current prompt and Casting look; only Re-render replaces the selected frame (takes.js `replaceSelection`).
+const NEW_TAKE_HINT = 'Renders another candidate and adds it to the takes below. The frame in use stays selected until you pick a new take.';
+const RERENDER_HINT = 'Renders this frame again from the current Casting look and swaps it in as the selected frame. The old frame stays in the takes.';
 
 /**
  * A shot's frames: the still its clip starts from and, for footage, the
@@ -121,16 +125,22 @@ export default function SceneFrames({
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
-            title={needsPrompt ? 'Describe the end frame first' : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
+            title={needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
           {olderLook && (
             <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
               aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
-              title="Render this frame again from the current Casting look and use it">
+              title={RERENDER_HINT}>
               Re-render
             </button>
+          )}
+          {imageId && (
+            <InfoTooltip label={olderLook ? 'New take vs Re-render' : 'About new takes'} placement="below" align="start" width={280}>
+              <strong>{start ? 'New frame take' : 'New end frame take'}:</strong> {NEW_TAKE_HINT}
+              {olderLook && <><br /><strong>Re-render:</strong> {RERENDER_HINT}</>}
+            </InfoTooltip>
           )}
           {refChoices.length > 1 && (
             <span className="flex min-w-0 items-center gap-1">
