@@ -217,10 +217,27 @@ describe('EditAppDrawer work tracker selector', () => {
     renderDrawer({ app: { ...APP, defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'draft' } });
     await openTab('Workflow');
     expect(await screen.findByLabelText('Default PR completion')).toHaveValue('draft');
-    expect(screen.getByText(/Automatic merging is managed by PortOS, not GitHub native auto-merge/)).toBeInTheDocument();
+    expect(screen.getByText(/Per-run choices override this default/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
     await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
     expect(api.updateApp.mock.calls[0][1].defaultPrCompletion).toBe('draft');
+  });
+
+  it('defaults Use auto-merge off for a managed app and on for PortOS, and saves the choice', async () => {
+    renderDrawer({ app: { ...APP } });
+    await openTab('Workflow');
+    const toggle = await screen.findByLabelText('Use auto-merge');
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].useAutoMerge).toBe(true);
+  });
+
+  it('defaults Use auto-merge on for PortOS itself', async () => {
+    renderDrawer({ app: { ...APP, id: 'portos-default' } });
+    await openTab('Workflow');
+    expect(await screen.findByLabelText('Use auto-merge')).toBeChecked();
   });
 
   it('defaults the repo-state audit ON for an app that has never set it, and saves an opt-out', async () => {

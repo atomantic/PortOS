@@ -353,6 +353,8 @@ export const appSchema = z.object({
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
   mergeHandoffMinQueuedRuns: z.number().int().min(1).max(10000).nullable().optional(),
+  // Agents enable GitHub native auto-merge once reviews pass. Unset = on for PortOS itself, off elsewhere (resolveUseAutoMerge).
+  useAutoMerge: z.boolean().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),

@@ -1,4 +1,5 @@
-import { isTruthyMeta } from './metadataFlags.js';
+import { PORTOS_APP_ID } from './appIdentity.js';
+import { isFalsyMeta, isTruthyMeta } from './metadataFlags.js';
 /**
  * PR disposition for CoS agent tasks — how a pull request completes.
  *
@@ -34,7 +35,8 @@ const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
 
 // New PR tasks default to PortOS-coordinated review and automatic merge. Stored
 // task records retain their legacy resolution below; app defaults never rewrite
-// a run's pinned policy or authorize GitHub native auto-merge.
+// a run's pinned policy. GitHub native auto-merge is the separate
+// `useAutoMerge` choice (resolveUseAutoMerge).
 export const DEFAULT_PR_COMPLETION = PR_COMPLETIONS.REVIEW_THEN_MERGE;
 
 export function resolveAppPrCompletion(app, metadata = {}) {
@@ -43,6 +45,19 @@ export function resolveAppPrCompletion(app, metadata = {}) {
   // genuinely missing settings acquire the new reviewed auto-merge default.
   if ([true, false, 'true', 'false'].includes(metadata?.reviewLoop)) return resolvePrCompletion(metadata);
   return DEFAULT_PR_COMPLETION;
+}
+
+/**
+ * Whether an agent that merges its own PR should enable GitHub native
+ * auto-merge once review requirements pass, instead of waiting out CI and
+ * merging by hand. A task's explicit choice wins, then the app's `useAutoMerge`
+ * setting; unset defaults ON only for PortOS itself.
+ */
+export function resolveUseAutoMerge(app, metadata = {}) {
+  if (isTruthyMeta(metadata?.useAutoMerge)) return true;
+  if (isFalsyMeta(metadata?.useAutoMerge)) return false;
+  if (typeof app?.useAutoMerge === 'boolean') return app.useAutoMerge;
+  return app?.id === PORTOS_APP_ID;
 }
 
 /**

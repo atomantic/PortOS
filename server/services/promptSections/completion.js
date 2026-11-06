@@ -655,7 +655,23 @@ function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
 }
 
 /** Hosting providers own merge eligibility; local scope and cleanup remain bound. */
-export function buildMergeAdmissionSection(agentId, { review = true } = {}) {
+/**
+ * The app's "Use auto-merge" workflow setting: enable GitHub native auto-merge as
+ * soon as review requirements pass, so GitHub lands the PR when CI finishes
+ * instead of the agent merging by hand afterwards. The agent still owns CI.
+ */
+export const AUTO_MERGE_SECTION = [
+  '## Use auto-merge',
+  'This task uses GitHub native auto-merge to skip the manual merge step after CI. As soon as every configured review requirement has passed for the current PR head (requested reviews done, accepted findings fixed and pushed, PR not a draft; with no review configured, right after the PR is opened), enable auto-merge without waiting for CI: `gh pr merge <PR_URL> --auto --merge --match-head-commit <reviewed-head>` (use `--squash` or `--rebase` when the repository disallows merge commits). GitHub then merges once required checks pass.',
+  'Auto-merge enabled is pending, not delivered. Keep watching CI on that head until the PR reports MERGED, then finish cleanup and completion as usual. If a check fails, run `gh pr merge <PR_URL> --disable-auto` before pushing a fix so an unreviewed head cannot merge, fix and push as the CI steps describe, repeat any review the new head requires, then enable auto-merge again for the new head. If GitHub refuses auto-merge (disabled for the repository, or no protected checks), merge normally after CI passes. GitLab, leave-open and draft policies ignore this section.',
+].join('\n');
+
+export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false } = {}) {
+  const section = buildMergeAdmissionBody(agentId, { review });
+  return autoMerge ? `${section}\n\n${AUTO_MERGE_SECTION}` : section;
+}
+
+function buildMergeAdmissionBody(agentId, { review }) {
   if (!agentId) return [
     '## Hosting-provider merge authority',
     'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
@@ -672,7 +688,7 @@ export function buildMergeAdmissionSection(agentId, { review = true } = {}) {
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -681,7 +697,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(pin ? [pin, ''] : []),
     ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen }), ''] : []),
+    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge }), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
