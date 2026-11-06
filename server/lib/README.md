@@ -1114,3 +1114,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `nativeAgyUsageRecords.js` | Private Antigravity record schema and conflict-preserving message/response union with separate native token counters and unknown combined total. |
 | `nativeGrokUsageRecords.js` | Strict persisted Grok session/turn projections and deterministic selected-account union; explicit native totals, overlapping cache/reasoning breakdowns, unknown spend and nullable native cost ticks. |
 | `nativeUsageStaging.js` | Offline provider/account partition artifacts, strict staging inputs, immutable evidence binding and non-activation verification. |
+
+| `nativeUsageRehearsal.js` | Offline barrier-store backup manifests, isolated byte-restore receipts and fail-closed fleet rehearsal preflight; never activates a runtime. |
