@@ -1,3 +1,4 @@
+import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * One-shot TUI prompt runner.
@@ -49,7 +50,7 @@ import {
   createTerminalModelErrorDetector,
   createTerminalRequestTimeoutDetector,
 } from '../lib/aiToolkit/errorDetection.js';
-import { getRunsPath, finalizeRunRecord, failRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from './runner.js';
+import { getRunsPath, patchRunMetadata, finalizeRunRecord, failRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun, consumeRunStopRequested, resolveRunCwd } from './runner.js';
 import { registerExternalSession, unregisterExternalSession, isExternalSessionAttached, pasteToSession } from './shell.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -199,6 +200,7 @@ async function executeAdmittedTuiRun({ runId, provider, prompt, screenshots = []
     const { patchRunMetadata } = await import('./runner.js');
     await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });
   }
+  await patchRunMetadata(runId, runOwnership('tui'));
   const invocation = buildTuiInvocation(provider, provider.defaultModel);
   const { command } = invocation;
   const args = buildOneShotTuiArgs(command, invocation.args);
@@ -380,6 +382,8 @@ ${prompt}`;
     }
     pendingPtyExit = pendingPtyExit || event;
   });
+
+  const childIdentitySaved = patchRunMetadata(runId, { executionChild: runChildIdentity(ptyProcess.pid) });
 
   // Register in the same active-runs map the patched stopRun/isRunActive
   // consult, so /runs UI can stop a hung TUI run. Without this, stopRun is a
@@ -584,6 +588,7 @@ ${prompt}`;
         // shared runner helper. `completionReason` lands in `extras` so it
         // gets persisted to metadata.json BEFORE the write (was previously
         // set post-write and never made it to disk → /runs replay missed it).
+        await childIdentitySaved;
         const metadata = await finalizeRunRecord({
           runId, output: responseText, exitCode, success, error, startTime,
           identity: runIdentity,

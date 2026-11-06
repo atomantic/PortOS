@@ -416,6 +416,8 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },
 
+    recoverInterruptedRuns: () => import('./interruptedRunRecovery.js').then(({ recoverInterruptedRuns }) => recoverInterruptedRuns()),
+
     // Auto-fixer for error recovery.
     initAutoFixer,
     // Task learning system, tracking agent completions.

@@ -92,7 +92,8 @@ it('creation cannot publish metadata when prompt persistence fails', async () =>
 it.each(['close', 'error'])('CLI %s drains the actual output/metadata tail', async event => {
   const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); seam.child = child;
   const reached = deferred(); const commit = deferred(); const complete = deferred();
-  seam.beforeWrite = async path => { if (path === metadataPath) { reached.resolve(); await commit.promise; } };
+  // Ownership is written before spawn; this barrier targets terminal recording.
+  seam.beforeWrite = async (path, data) => { if (path === metadataPath && data.endTime) { reached.resolve(); await commit.promise; } };
   const leaseStates = [];
   await runner().executeCliRun({ runId: 'example', provider, prompt: 'Example', timeout: 10000,
     onComplete: () => { leaseStates.push(holdsBackupAssetPublication()); complete.resolve(); } });
@@ -102,6 +103,27 @@ it.each(['close', 'error'])('CLI %s drains the actual output/metadata tail', asy
   try { await settle(); expect(ready).toBe(false); } finally { commit.resolve(); }
   await complete.promise; const release = await cut;
   try { await assertPair(); expect(leaseStates).toEqual([false]); } finally { release(); }
+});
+it.each(['executeCliRun', 'executeApiRun'])('%s ownership recording waits for an open backup cut', async execute => {
+  const reached = deferred();
+  const service = runner(work => { reached.resolve(); return withBackupAssetPublication(work); });
+  const release = await acquireBackupSnapshotCut();
+  const before = await capture();
+  let writes = 0;
+  seam.beforeWrite = async () => { writes++; };
+  // Reject dispatch after ownership persistence so no provider or child runs.
+  const beforeExecute = vi.fn(async () => { throw new Error('Synthetic dispatch canceled'); });
+  const work = service[execute]({ runId: 'example', provider, prompt: 'Example', beforeExecute });
+  try {
+    await reached.promise;
+    await settle();
+    expect(writes).toBe(0);
+    expect(await capture()).toEqual(before);
+    expect(beforeExecute).not.toHaveBeenCalled();
+  } finally { release(); }
+  await work;
+  expect(beforeExecute).toHaveBeenCalledOnce();
+  expect((await capture()).metadata).toMatchObject({ executionOwner: { pid: process.pid }, canceled: true });
 });
 it('deletion waits for the cut before removing a recording tree', async () => {
   const release = await acquireBackupSnapshotCut(); const work = runner().deleteRun('example');

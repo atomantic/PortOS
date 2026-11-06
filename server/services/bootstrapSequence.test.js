@@ -82,6 +82,7 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       warmProviders: step('warmProviders', () => Promise.resolve([])),
       ensureLocalLlmBackend: step('ensureLocalLlmBackend'),
       registerRunners: step('registerRunners'),
+      recoverInterruptedRuns: step('recoverInterruptedRuns', () => Promise.resolve()),
       initAutoFixer: step('initAutoFixer'),
       initTaskLearning: step('initTaskLearning'),
       startSpawner: step('startSpawner', () => Promise.resolve()),
@@ -101,6 +102,7 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       'warmProviders',
       'ensureLocalLlmBackend',
       'registerRunners',
+      'recoverInterruptedRuns',
       'initAutoFixer',
       'initTaskLearning',
       'startSpawner'
@@ -119,6 +121,7 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       'registerToolkitShims',
       'warmProviders',
       'registerRunners',
+      'recoverInterruptedRuns',
       'initTaskLearning'
     ]);
   });
@@ -137,6 +140,19 @@ describe('runPreRouteSequence — pre-route boot order', () => {
     expect(deps.registerToolkitShims).toHaveBeenCalledWith(aiToolkit);
     expect(deps.warmProviders).toHaveBeenCalledWith(aiToolkit);
     expect(deps.registerRunners).toHaveBeenCalledWith(aiToolkit);
+  });
+
+  it('finishes local interrupted-run recovery before arming agents', async () => {
+    const recorder = createRecorder();
+    const gate = deferred();
+    const deps = buildDeps(recorder, { recoverInterruptedRuns: recorder.step('recoverInterruptedRuns', () => gate.promise) });
+    const done = runPreRouteSequence(deps);
+    await flush();
+    expect(recorder.calls.at(-1)).toBe('recoverInterruptedRuns');
+    expect(deps.startSpawner).not.toHaveBeenCalled();
+    gate.resolve();
+    await done;
+    expect(deps.startSpawner).toHaveBeenCalledOnce();
   });
 
   it('awaits the data migrations before the toolkit reads its config files', async () => {

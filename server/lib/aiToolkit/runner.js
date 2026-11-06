@@ -1,3 +1,4 @@
+import { runOwnership, runChildIdentity } from './internal/runOwnership.js';
 import { resolveExecutionOptions, executionOptionsError } from './internal/executionOptions.js';
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
@@ -229,6 +230,16 @@ export function createRunnerService(config = {}) {
     }
   }
 
+  // Execution ownership is best-effort tracking, like the host's metadata patch.
+  async function patchRunMetadata(runId, patch) {
+    return withAssetPublication(async () => {
+      const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf8').catch(() => null), null);
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+      await atomicWrite(metadataPath, { ...metadata, ...patch }).catch(() => {});
+    });
+  }
+
   const service = {
     // ── Extension-point setters / external-run registry ──────────────────
     // Register a host CLI runner. Pass `null` to revert to the toolkit's
@@ -424,6 +435,7 @@ export function createRunnerService(config = {}) {
       // still account for it.
       if (cliRunnerOverride) return cliRunnerOverride(opts);
       const { runId, provider, prompt, workspacePath, onData, onComplete, timeout, beforeExecute } = opts;
+      await patchRunMetadata(runId, runOwnership('cli'));
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -483,6 +495,7 @@ export function createRunnerService(config = {}) {
       // A child that dies before reading stdin emits EPIPE on the pipe — that
       // stream error is the same crash if nobody is listening. 'close' and
       // 'error' share one settlement so a race cannot double-fire hooks.
+      const childIdentitySaved = patchRunMetadata(runId, { executionChild: runChildIdentity(childProcess.pid) });
       let settled = false;
       let timeoutHandle = null;
       const releaseRun = () => {
@@ -518,6 +531,7 @@ export function createRunnerService(config = {}) {
             outputSize: Buffer.byteLength(output),
           };
           try {
+            await childIdentitySaved;
             let metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
             if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) metadata = {};
             Object.assign(metadata, failMetadata);
@@ -569,6 +583,7 @@ export function createRunnerService(config = {}) {
         // rejection and crash the process, so guard the body and still settle
         // the caller on failure.
         try {
+          await childIdentitySaved;
           releaseRun();
 
           const metadata = await withAssetPublication(async () => {
@@ -623,6 +638,7 @@ export function createRunnerService(config = {}) {
     },
 
     async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure }) {
+      const ownershipSaved = patchRunMetadata(runId, runOwnership('api'));
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -641,6 +657,7 @@ export function createRunnerService(config = {}) {
       const controller = new AbortController();
       activeStopRequests.delete(runId);
       activeRuns.set(runId, controller);
+      await ownershipSaved;
 
       const stallTimeout = timeout ?? provider.timeout ?? DEFAULT_API_RUN_TIMEOUT_MS;
       const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
