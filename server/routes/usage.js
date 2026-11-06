@@ -21,6 +21,12 @@ import {
 
 const router = Router();
 
+// Explicit, uncached diagnostic read. Never consumed by fleet aggregation.
+router.get('/native-coverage', asyncHandler(async (req, res) => {
+  const { getNativeUsageCoverage } = await import('../services/nativeUsageCoverage.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageCoverage());
+}));
+
 // GET /api/usage/hourly - Fixed-size local counters, without building cost reports.
 router.get('/hourly', (req, res) => {
   const { hourlyActivity } = usage.getUsage();

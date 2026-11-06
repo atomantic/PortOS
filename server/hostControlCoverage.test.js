@@ -1674,6 +1674,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/providers/active', PROVIDER_STATUS],
   ['GET /api/providers/catalog', PROVIDER_STATUS],
   ['GET /api/providers/codex/account', PROVIDER_STATUS],
+  ['GET /api/usage/native-coverage', 'Fixed Codex account/usage/read probe; no caller-controlled command, config, thread or inference.'],
   ['GET /api/providers/codex/models', PROVIDER_STATUS],
   ['GET /api/providers/comparison', TOOLKIT_INJECTED],
   ['GET /api/providers/composites/:id', PROVIDER_STATUS],
