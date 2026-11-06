@@ -43,6 +43,10 @@ describe('preview evidence display', () => {
     const notice = screen.getByRole('note', { name: 'Codex usage on hold' });
     expect(notice).toHaveTextContent('line limit (2)');
     expect(notice).toHaveTextContent('sessions/example.jsonl: line limit');
+    view.rerender(<CodexUsagePreview {...props} coverage={{
+      since: '2026-07-01T00:00:00Z', issues: { indexing_pending: 3 }, sources: [], progress: { indexed: 1200, total: 1203 }
+    }} />);
+    expect(screen.getByRole('note', { name: 'Codex usage on hold' })).toHaveTextContent('Indexed 1,200 of 1,203 sources');
   });
 
   it('keeps incomplete coverage and unknown overlap explicit, with no apply action', () => {

@@ -1,7 +1,20 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+
+const { makeProxy, cleanup: cleanupDataRoot } = mockPathsDataRoot({ prefix: 'portos-usage-reconciler-' });
+vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const inventoryStore = vi.hoisted(() => ({ reads: [] }));
+vi.mock('./codexInventoryCache.js', async (original) => {
+  const actual = await original();
+  return { ...actual, readInventorySource: (...args) => {
+    const planned = inventoryStore.reads.shift();
+    return planned === undefined ? actual.readInventorySource(...args) : planned;
+  } };
+});
+afterAll(cleanupDataRoot);
 
 vi.mock('./usage.js', () => ({
   getRecentCodexUsageClaims: vi.fn().mockResolvedValue([]),
@@ -1763,5 +1776,21 @@ describe('Codex source inventory accounting', () => {
     expect(snapshotUsageClaims().codexHighWater).toEqual([]);
     await writeFile(path, zstdCompressSync(text));
     expect(await readMeasuredUsage(args)).toMatchObject({ tokensOut: 50 });
+  });
+
+  it('advances no claim when one matching session can no longer be loaded, then bills every session on the retry', async () => {
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const rollout = (id, output) => codexRollout({ timestamp: '2026-07-01T10:01:00Z', input: 100, cached: 20, output }).replace('rollout-1', id);
+    await writeCodexRollout(['sessions'], 'first.jsonl', rollout('first-session', 50));
+    await writeCodexRollout(['sessions'], 'second.jsonl', rollout('second-session', 70));
+    const args = { home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' };
+    const { sessions } = await readCodexAccountingSources({ home });
+    expect(sessions).toHaveLength(2);
+    // The first session still loads; the second's stored projection has gone.
+    const real = await sessions[0].loadRecords();
+    inventoryStore.reads = [Promise.resolve({ fingerprint: sessions[0].fingerprint, records: real }), Promise.resolve(null)];
+    await expect(readMeasuredUsage(args)).rejects.toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE', issues: { source_changed: 1 } });
+    expect(snapshotUsageClaims().codexHighWater).toEqual([]);
+    expect(await readMeasuredUsage(args)).toMatchObject({ tokensOut: 120 });
   });
 });

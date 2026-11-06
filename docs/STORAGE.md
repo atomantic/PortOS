@@ -1490,11 +1490,16 @@ preview/apply workflow. No migration rewrites historical counts for this format.
 
 ### Codex accounting source inventory
 
-The shared source reader keeps a disposable, process-local inventory of projected
-accounting records, keyed by source path and device/inode/size/mtime/ctime. It
-retains no transcript prose. Source changes invalidate the entry; incomplete
-reads are never cached. There is no new durable store or automatic historical
-rewrite, and restarting a worker safely rebuilds this inventory.
+Routine accounting keeps verified projections in `data/cache/codex-usage-inventory/`,
+one gzip file per source, named by a hash of the source path and bound to its
+device/inode/size/mtime/ctime. It is an `ephemeral-file` store: counters, hashed
+session identity, model and working directory, with no transcript prose and no
+source path. It is machine-local, never federated, and excluded from backup by
+`/cache/`. It needs no seed or migration: a missing, damaged or other-version file
+is a cold rescan of that source. Source changes invalidate the entry and incomplete
+reads are never stored. The store is capped at 256 MiB, dropping the oldest sources
+first. Process memory holds per-source metadata only, and records load one session
+at a time. Explicit preview reads none of this and writes none of it.
 
 Accounting claims use `codex-session:v1:<SHA-256 session ID>` in the existing
 `codexHighWater` snapshot. Readers accept older path-keyed claims through current

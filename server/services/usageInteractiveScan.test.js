@@ -4,8 +4,17 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
+const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const codexPass = vi.hoisted(() => ({ limits: undefined, afterInventory: null }));
+vi.mock('./codexUsageSources.js', async (original) => {
+  const actual = await original();
+  return { ...actual, readCodexAccountingSources: async (options) => {
+    const inventory = await actual.readCodexAccountingSources({ ...options, limits: codexPass.limits });
+    await codexPass.afterInventory?.();
+    return inventory;
+  } };
+});
 const applied = [];
 const lifecycle = vi.hoisted(() => ({ projections: [] }));
 vi.mock('./agentRunEventLog.js', () => ({
@@ -69,6 +78,8 @@ describe('refreshInteractiveUsage', () => {
     ledger.scan = null;
     ledger.failStateSave = false;
     ledger.failApply = false;
+    codexPass.limits = undefined;
+    codexPass.afterInventory = null;
     home = await mkdtemp(join(tmpdir(), 'interactive-home-'));
     runsDir = await mkdtemp(join(tmpdir(), 'interactive-runs-'));
     await rm(INTERACTIVE_SCAN_FILE, { force: true });
@@ -116,6 +127,51 @@ describe('refreshInteractiveUsage', () => {
     applied.length = 0;
     await refreshInteractiveUsage({ ...args, now: NOW + HOUR });
     expect(applied).toEqual([]);
+  });
+
+  const writeArchivedRollouts = async (names) => {
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    for (const name of names) {
+      await writeFile(join(archive, `${name}.jsonl`), [
+        JSON.stringify({ type: 'session_meta', payload: { id: `session-${name}`, cwd: CWD, model: 'example-codex-model' } }),
+        JSON.stringify({ timestamp: new Date(P1).toISOString(), payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+      ].join('\n'));
+    }
+  };
+
+  it('indexes a Codex backlog across scans as progress, holding only its watermark until every source is read', async () => {
+    await writeArchivedRollouts(['backlog-one', 'backlog-two']);
+    codexPass.limits = { coldFiles: 1 };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log');
+    const held = await refreshInteractiveUsage({ home, runsDir, providers: [CODEX, GROK], now: NOW });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { indexing_pending: 1 } });
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(ledger.scan.codexCoverage).toMatchObject({ issues: { indexing_pending: 1 }, progress: { indexed: 1, total: 2 }, sources: [] });
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    const lines = log.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('holding Codex'));
+    expect(lines).toEqual([expect.stringContaining('indexing_pending=1 (1 of 2 sources indexed)')]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    log.mockRestore();
+
+    expect((await refreshInteractiveUsage({ home, runsDir, providers: [CODEX], now: NOW + 1 })).families.codex.tokens).toBe(300);
+    expect(ledger.scan.codexCoverage).toBeNull();
+    expect(ledger.scan.watermarks.codex).toBeDefined();
+  });
+
+  it('holds the Codex watermark when a projection vanishes before it is parsed, then bills it once', async () => {
+    await writeArchivedRollouts(['vanishing']);
+    codexPass.afterInventory = () => rm(join(tempRoot, 'cache', 'codex-usage-inventory'), { recursive: true, force: true });
+    const held = await refreshInteractiveUsage({ home, runsDir, providers: [CODEX, GROK], now: NOW });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { source_changed: 1 } });
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    codexPass.afterInventory = null;
+    expect((await refreshInteractiveUsage({ home, runsDir, providers: [CODEX], now: NOW + 1 })).families.codex.tokens).toBe(150);
   });
 
   it('replays deferred archived Codex records after lifecycle resolution without rebilling', async () => {

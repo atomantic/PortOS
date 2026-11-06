@@ -40,9 +40,12 @@ content does not affect the accounting fingerprint, but malformed JSON anywhere
 in the source invalidates it. Missing source directories are legitimate empty
 coverage; inaccessible directories are incomplete coverage.
 
-Limits per invocation are 10,000 files, 100,000 directory entries, 256 MiB decoded
+Limits per invocation are 10,000 files, 100,000 directory entries, 256 GiB decoded
 bytes, 100,000 accounting records, 1 MiB per line, 16 directory levels and 30
-seconds. Byte checks occur at stream chunk boundaries (at most one extra 64 KiB
+seconds. The decoded-byte limit is a CPU backstop, so the 30-second deadline is the
+ceiling a real scan meets: lines without accounting data are skipped from their
+prefix and never buffered, and memory is bound by the record limit. An earlier 256
+MiB limit reported even a one-day window as incomplete on a heavy install. Byte checks occur at stream chunk boundaries (at most one extra 64 KiB
 raw or 16 KiB decoded chunk, included in `decodedBytes`); over-budget chunks are
 never parsed. The reusable `previewCodexUsage` service accepts lower positive limits
 and an `AbortSignal`; callers cannot disable or raise the caps. SIGINT/SIGTERM
@@ -63,6 +66,27 @@ and `missingUsage: null` are intentional. The preview cannot establish what a
 prior run already attributed to the live ledger, and must not be treated as a
 backfill amount. Reader integration and provable ledger application are separate
 work under #15030 and #15031.
+
+## Routine accounting
+
+Run reconciliation and the interactive scan read the same sources under separate
+limits, so these do not change what a preview reports. Each pass decodes at most
+5,000 unindexed files, 64 GiB or 20 seconds of work and stores each verified
+projection (see [Storage](./STORAGE.md#codex-accounting-source-inventory)). Sources
+already stored spend none of that budget. A pass that leaves work reports
+`indexing_pending` with counts, holds the Codex watermark and claims, and the next
+pass continues, so a history larger than one pass converges. A single source is
+limited to 100,000 accounting records; a larger one holds accounting until it is
+resolved, and only that source is reported.
+
+Concurrent passes share a running decode of the same source revision. Each pass
+keeps its own window and walks the tree itself, so a caller never receives a
+narrower result or one read before its own request.
+
+Logs carry reasons and counts only. The Usage page notice also names up to five
+sources that could not be read, by path relative to the Codex home, because those
+are what you need to repair. It is served only to an operator session: the
+federated usage digest and the peer API surface do not include it.
 
 ## Usage page preview
 

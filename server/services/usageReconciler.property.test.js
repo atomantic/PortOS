@@ -13,11 +13,15 @@
  *
  * The PRNG is seeded, so a failure reproduces exactly.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-property-' });
+vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+afterAll(cleanup);
 vi.mock('./usage.js', () => ({
   markUsageRunReconciled: vi.fn(),
   recordRunUsage: vi.fn()
