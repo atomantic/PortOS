@@ -206,7 +206,8 @@ legacy sheet generation or write historical output back into the catalog.
 
 Mood boards, pinned shot assets and optional visual guides remain separate from
 the catalog check-in. Existing shot choices are preserved; new conditioning in
-catalog mode uses the approved live catalog projection.
+catalog mode uses the current live catalog projection. Automated production
+retains its catalog approval gates.
 
 Implementation: `server/services/musicVideo/catalogCheckin.js` resolves and
 validates sources; `server/lib/musicVideoCatalogCheckinValidation.js` validates

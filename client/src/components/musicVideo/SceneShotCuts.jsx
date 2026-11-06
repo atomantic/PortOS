@@ -15,9 +15,10 @@ const secOf = (frame) => Math.round((frame / CLIP_TIMING_FPS) * 1000) / 1000;
 /** Cut a shot in two at a time the director picks on a slider (default: its middle). */
 function SplitAt({ sceneId, startSec, endSec, onSplit }) {
   const [open, setOpen] = useState(false);
-  const min = tenth(startSec + MIN_PIECE_SEC);
-  const max = tenth(endSec - MIN_PIECE_SEC);
+  const min = Math.ceil((startSec + MIN_PIECE_SEC) * 10) / 10;
+  const max = Math.floor((endSec - MIN_PIECE_SEC) * 10) / 10;
   const [atSec, setAtSec] = useState(() => tenth((startSec + endSec) / 2));
+  const splitSec = Math.min(max, Math.max(min, atSec));
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className={BUTTON} title="Cut this shot in two at a time you pick">
@@ -29,10 +30,10 @@ function SplitAt({ sceneId, startSec, endSec, onSplit }) {
   return (
     <div className="flex w-full min-w-0 flex-wrap items-center gap-2 text-xs">
       <label htmlFor={inputId} className="shrink-0">Split at</label>
-      <input id={inputId} type="range" min={min} max={max} step={0.1} value={Math.min(max, Math.max(min, atSec))}
+      <input id={inputId} type="range" min={min} max={max} step={0.1} value={splitSec}
         onChange={(e) => setAtSec(Number(e.target.value))} className="min-w-0 flex-1 basis-32" />
-      <span className="shrink-0 tabular-nums text-port-text-muted">{(atSec - startSec).toFixed(1)}s in · {formatDurationSec(atSec)}</span>
-      <button type="button" onClick={() => { onSplit(sceneId, null, atSec); setOpen(false); }} className={BUTTON}>
+      <span className="shrink-0 tabular-nums text-port-text-muted">{(splitSec - startSec).toFixed(1)}s in · {formatDurationSec(splitSec)}</span>
+      <button type="button" onClick={() => { onSplit(sceneId, null, splitSec); setOpen(false); }} className={BUTTON}>
         <Scissors size={13} /> Split here
       </button>
       <button type="button" onClick={() => setOpen(false)} className={BUTTON}>Cancel</button>
