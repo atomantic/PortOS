@@ -790,6 +790,20 @@ async function embeddedImages(stage) {
   return out;
 }
 
+const renderStageSheet = async (project, stage, status) => renderCastAndSetsSheet({
+  title: project.name,
+  project,
+  direction: stage.direction,
+  images: await embeddedImages(stage),
+  sections: songSections(project),
+  durationSec: project.audioAnalysis?.durationSec ?? null,
+  bpm: project.audioAnalysis?.bpm ?? null,
+  revision: stage.revision,
+  notesApplied: stage.notesApplied || [],
+  checkinMode: castAndSetsCheckinMode(project),
+  status,
+});
+
 /** Build the sheet, save it as the stage's development artifact, then check in. */
 async function assemble(projectId) {
   const marked = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'assembling'));
@@ -798,19 +812,7 @@ async function assemble(projectId) {
   const stage = marked.stage;
   const mode = castAndSetsCheckinMode(project);
   const autoApprove = mode === 'auto' && !stage.manualImageEditReview && !castSetsInspectionBlockers(stage).length;
-  const html = renderCastAndSetsSheet({
-    title: project.name,
-    project,
-    direction: stage.direction,
-    images: await embeddedImages(stage),
-    sections: songSections(project),
-    durationSec: project.audioAnalysis?.durationSec ?? null,
-    bpm: project.audioAnalysis?.bpm ?? null,
-    revision: stage.revision,
-    notesApplied: stage.notesApplied || [],
-    checkinMode: mode,
-    status: autoApprove ? 'approved' : 'review',
-  });
+  const html = await renderStageSheet(project, stage, autoApprove ? 'approved' : 'review');
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
   const { artifact } = await saveGeneratedDevArtifact(projectId, {
@@ -824,12 +826,38 @@ async function assemble(projectId) {
     extra: { artifactId: artifact.id, artifactVersion: artifact.version },
   }));
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} sheet v${artifact.version} ready (${autoApprove ? 'auto-approve' : 'waiting for check-in'})`);
-  if (autoApprove) return approveCastAndSets(projectId);
+  if (autoApprove) return approveCastAndSets(projectId, { sheetRendered: true });
   publish(projectId, out.project);
   return out;
 }
 
 // ---- approval ------------------------------------------------------------------------
+
+// A sheet rendered for review still asks its check-in questions; once approved,
+// save it again as an approved version that drops them.
+async function refreshApprovedSheet(projectId) {
+  const project = await requireProject(projectId);
+  const stage = project.castAndSets;
+  if (isCatalogCheckin(project) || stage?.status !== 'approved' || !stage.artifactId) return;
+  if (!(project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) return;
+  const html = await renderStageSheet(project, stage, 'approved');
+  const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
+  const { artifact } = await saveGeneratedDevArtifact(projectId, {
+    artifactId: stage.artifactId, kind: 'cast-sets', title: null, html, status: 'approved', source: 'cast-and-sets',
+  });
+  const out = await mutateProjectRecord(projectId, (current) => (current.castAndSets?.status === 'approved' && current.castAndSets.artifactId === artifact.id
+    ? { project: { ...current, castAndSets: { ...current.castAndSets, artifactVersion: artifact.version } } }
+    : { project: current }));
+  publish(projectId, out.project);
+}
+
+// Not inBackground: a failed re-save must not mark the approved stage failed.
+function queueApprovedSheetRefresh(projectId) {
+  const work = refreshApprovedSheet(projectId)
+    .catch((err) => console.error(`❌ Music Video Cast & Sets ${short(projectId)}: saving the approved sheet failed: ${err.message}`))
+    .finally(() => backgroundWork.delete(work));
+  backgroundWork.add(work);
+}
 
 // Save the approved check-in's new cast and sets to the catalog (Casting /
 // Environments), then show the stamped subjects. The approval already landed.
@@ -966,6 +994,7 @@ export async function approveCastAndSets(projectId, input = {}) {
   console.log(`✅ Music Video Cast & Sets ${short(projectId)} approved (r${out.stage.revision})`);
   publish(projectId, out.project);
   queueCheckinCastToCatalog(projectId);
+  if (!input.sheetRendered) queueApprovedSheetRefresh(projectId);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
@@ -1458,6 +1487,7 @@ export async function rebuildCatalogGuide(projectId) {
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const { artifact } = await saveGeneratedDevArtifact(projectId, {
     artifactId: existing, kind: 'cast-sets', title: existing ? null : `Cast & Sets — ${project.name}`, html, source: 'cast-and-sets',
+    status: project.castAndSets.status === 'approved' ? 'approved' : null,
   });
   const out = await mutateProjectRecord(projectId, (current) => (isCatalogCheckin(current)
     ? { project: selectArtGuideIfNone({ ...current, castAndSets: { ...current.castAndSets, artifactId: artifact.id, artifactVersion: artifact.version, updatedAt: new Date().toISOString() } }, artifact.id) }
@@ -1475,7 +1505,11 @@ async function approveCatalogCheckin(projectId, { catalogBasis } = {}) {
     if (!catalogBasis || catalogBasis !== checkin.basis) throw new ServerError('The catalog check-in changed. Review the current links and images before approving.', { status: 409, code: 'CAST_SETS_CATALOG_STALE' });
     const now = new Date().toISOString();
     const stage = { ...current.castAndSets, status: 'approved', catalogApprovedBasis: checkin.basis, approvedAt: now, updatedAt: now };
-    return settleAndRebase({ project: { ...current, castAndSets: stage } }, now);
+    let next = { ...current, castAndSets: stage };
+    if (stage.artifactId && (next.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted)) {
+      next = reviewDevArtifact(next, stage.artifactId, { status: 'approved' }, now).project;
+    }
+    return settleAndRebase({ project: next }, now);
   });
   publish(projectId, out.project);
   return { project: out.project, stage: out.project.castAndSets, catalogCheckin: await resolveCatalogCheckin(out.project, { catalog: deps.catalog }) };
