@@ -189,6 +189,22 @@ it('keeps a transcript failure from dropping a Grok repair that already landed',
   }));
 });
 
+it('keeps worker claims retryable when applying its accounting batch fails', async () => {
+  const { applyHistoricalUsageCorrections } = await import('./usage.js');
+  const { __resetUsageClaims, snapshotUsageClaims } = await import('./usageReconciler.js');
+  __resetUsageClaims();
+  applyHistoricalUsageCorrections.mockRejectedValueOnce(new Error('synthetic usage write failure'));
+  await startHistoricalUsageBackfill({ home: '/example/home', WorkerClass: FakeWorker, providers: [] });
+  const claimsSnapshot = { claimedMessages: [['/synthetic/transcript', 'message', Date.now()]], codexHighWater: [] };
+  FakeWorker.instances.at(-1).emit('message', { type: 'complete', result: { corrections: [], claimsSnapshot } });
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus()).toMatchObject({ status: 'error', error: 'synthetic usage write failure' }));
+  expect(snapshotUsageClaims().claimedMessages).toEqual([]);
+  await startHistoricalUsageBackfill({ home: '/example/home', WorkerClass: FakeWorker, providers: [] });
+  FakeWorker.instances.at(-1).emit('message', { type: 'complete', result: { corrections: [], claimsSnapshot } });
+  await vi.waitFor(() => expect(getHistoricalUsageBackfillStatus().status).toBe('complete'));
+  expect(snapshotUsageClaims().claimedMessages).toEqual(claimsSnapshot.claimedMessages);
+  __resetUsageClaims();
+});
 
 describe('read-only Codex preview job', () => {
   it('separates preview completion from every repair callback and guards cancellation by job id', async () => {
