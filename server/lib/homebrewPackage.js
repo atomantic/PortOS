@@ -12,7 +12,6 @@
 
 import { readFileSync, realpathSync } from 'node:fs';
 import { fetchWithTimeout } from './fetchWithTimeout.js';
-import { readBodyCapped } from './safeUrlFetch.js';
 
 const MANAGED_PATH = /^(.*\/(Caskroom|Cellar)\/([\w.+@-]+)\/[^/]+)\//;
 const API_TIMEOUT_MS = 12_000;
@@ -50,6 +49,9 @@ export async function fetchHomebrewLatestVersion({ kind, name }, { fetchImpl = f
   const url = `https://formulae.brew.sh/api/${kind === 'cask' ? 'cask' : 'formula'}/${encodeURIComponent(name)}.json`;
   const response = await fetchImpl(url, { headers: { accept: 'application/json' }, redirect: 'error' }, API_TIMEOUT_MS);
   if (!response.ok) { await response.body?.cancel(); return null; }
+  // Runtime probes need only path classification; avoid loading URL/catalog
+  // validation until a Homebrew response actually needs its bounded reader.
+  const { readBodyCapped } = await import('./safeUrlFetch.js');
   const bytes = await readBodyCapped(response, API_MAX_BYTES);
   if (!bytes) { await response.body?.cancel().catch(() => {}); return null; }
   const data = JSON.parse(bytes.toString('utf8'));

@@ -322,6 +322,14 @@ describe('instance identity stays a leaf (#6836)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/harnesses.js', 'lib/homebrewPackage.js',
+    'loads Homebrew version discovery only for an installed Homebrew harness', '../lib/homebrewPackage.js'],
+  ['services/localLlm.js', 'lib/homebrewPackage.js',
+    'loads Homebrew discovery only when checking a managed Ollama installation', '../lib/homebrewPackage.js'],
+  ['services/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
+    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../lib/homebrewPackage.js'],
+  ['lib/homebrewPackage.js', 'lib/safeUrlFetch.js',
+    'loads the bounded response reader only for a Homebrew version fetch, not runtime path classification', './safeUrlFetch.js'],
   ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
     'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
   ['services/aiProvider.js', 'services/providerExecutionReadiness.js',
