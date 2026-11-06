@@ -1431,7 +1431,7 @@ export function LegacyUsagePage({ sourceTabs = null }) {
 export function UsagePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get('view') === 'legacy' ? 'legacy' : 'native';
-  const tabs = <TabPills ariaLabel="Usage source" variant="pills" size="sm" tabs={[
+  const tabs = <TabPills ariaLabel="Usage source" variant="pills" size="sm" stretch className="sm:max-w-sm" tabs={[
     { id: 'native', label: 'Native history', icon: Fingerprint },
     { id: 'legacy', label: 'Legacy analytics', icon: History },
   ]} activeTab={view} onChange={value => {
