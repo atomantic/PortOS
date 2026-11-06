@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   preparePersistentMindContext: vi.fn(),
   promotePersistentMindMemory: vi.fn(),
   readPersistentMindMemories: vi.fn(),
+  readPersistentMindReflection: vi.fn(async () => ({ state: 'empty', source: null, inspected: null })),
   readPersistentMindRollups: vi.fn(),
   updatePersistentMindMemory: vi.fn(),
   getProviderById: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock('../services/persistentMindContext.js', () => ({
   preparePersistentMindContext: mocks.preparePersistentMindContext,
   promotePersistentMindMemory: mocks.promotePersistentMindMemory,
   readPersistentMindMemories: mocks.readPersistentMindMemories,
+  readPersistentMindReflection: mocks.readPersistentMindReflection,
   readPersistentMindName: async () => resolvePersistentMindChosenName(await mocks.readPersistentMindMemories()),
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
@@ -119,6 +121,19 @@ const post = (path, body) => request(app()).post(`/api/cos${path}`).send(body);
 const put = (path, body) => request(app()).put(`/api/cos${path}`).send(body);
 
 describe('persistent mind routes', () => {
+  it('uses the live manageMind grant for inspect-only reflection and includes the same projection in context preview', async () => {
+    expect((await get('/mind/reflection')).body).toMatchObject({ state: 'empty' });
+    expect(mocks.readPersistentMindReflection).toHaveBeenLastCalledWith({ enabled: false });
+    const root = await mocks.loadState();
+    root.config.persistentMindCapabilities.manageMind = true;
+    expect((await get('/mind/reflection')).status).toBe(200);
+    expect(mocks.readPersistentMindReflection).toHaveBeenLastCalledWith({ enabled: true });
+    await get('/mind/context');
+    expect(mocks.preparePersistentMindContext).toHaveBeenLastCalledWith(expect.objectContaining({ reflection: { state: 'empty', source: null, inspected: null } }));
+    expect(mocks.createPersistentMindMemory).not.toHaveBeenCalled();
+    expect(mocks.updatePersistentMindMemory).not.toHaveBeenCalled();
+  });
+
   it('projects the current protected name without changing trajectory identity or exposing memory records', async () => {
     mocks.readPersistentMindMemories.mockResolvedValue([
       { content: 'My chosen name is Earlier.', protection: 'core-identity' },

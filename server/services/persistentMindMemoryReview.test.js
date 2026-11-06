@@ -77,3 +77,28 @@ describe('mind-owned memory review service', () => {
     expect((await memory.peekMemory(source.id)).content).toBe(source.content);
   });
 });
+
+// This catches starvation by ordinary importance-ranked pages, and selection
+// accidentally acknowledging/accessing a source before the mind has reviewed it.
+it('selects an old owned standard source beyond context pages without mutating it, then excludes the reviewed version', async () => {
+  const store = await import('./memoryStore.js');
+  const { projectIndexMeta } = await import('../lib/memoryQuery.js');
+  const candidate = await createPersistentMindMemory({ type: 'observation', content: 'Complete fading synthetic experience.', importance: 0.1 });
+  const aged = { ...candidate, createdAt: '2020-01-01T00:00:00.000Z' };
+  await store.saveMemory(aged);
+  const index = await store.loadIndex();
+  const original = structuredClone(index);
+  const distractors = Array.from({ length: 120 }, (_, i) => ({ ...projectIndexMeta(aged), id: `irrelevant-${i}`, importance: 0.9 }));
+  const foreign = { ...aged, id: 'foreign-source', sourceAgentId: 'other-mind' };
+  const protectedSource = { ...aged, id: 'protected-source', tags: ['mind:core-identity'] };
+  await store.saveMemory(foreign);
+  await store.saveMemory(protectedSource);
+  await store.saveIndex({ ...index, memories: [...distractors, projectIndexMeta(foreign), projectIndexMeta(protectedSource), projectIndexMeta(aged)] });
+  expect(await memory.selectMindMemoryForReview('cos-persistent-mind')).toEqual(aged);
+  expect(await memory.peekMemory(aged.id)).toEqual(aged);
+  await review(aged, 'keep');
+  expect(await memory.selectMindMemoryForReview('cos-persistent-mind')).toBeNull();
+  await memory.updateMemory(aged.id, { content: 'Changed exact source.' });
+  expect(await memory.selectMindMemoryForReview('cos-persistent-mind')).toMatchObject({ id: aged.id, version: 2 });
+  await store.saveIndex(original);
+});

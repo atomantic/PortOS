@@ -20,6 +20,7 @@ const mock = vi.hoisted(() => ({
   realToolExposure: false,
   toolPromptOptions: [],
   recipeCatalog: [],
+  reflectionState: 'pending',
   realRegistry: null,
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
@@ -45,6 +46,7 @@ vi.mock('./persistentMindContext.js', () => ({
   createPersistentMindMemoryFromCandidate: (...args) => mock.createPersistentMindMemoryFromCandidate(...args),
   readPersistentMindMemories: vi.fn(async () => mock.memories),
   readPersistentMindName: vi.fn(async () => resolvePersistentMindChosenName(mock.memories)),
+  revalidatePersistentMindReflection: vi.fn(async (_reflection, enabled) => enabled ? mock.reflectionState : 'disabled'),
 }));
 vi.mock('./promptRunner.js', () => ({
   runPromptThroughProvider: (...args) => mock.runPrompt(...args),
@@ -1261,4 +1263,33 @@ describe('family activation through the public turn adapter', () => {
     await createPersistentMindTurnAdapter().run({ ...profile, turnId: `zero-${change}`, wake: { kind: 'self' }, context: { text: 'Example request.' } });
     expect(round).toBe(3);
   });
+});
+
+it('sends one intact optional reflection, but removes it after grant revocation, source change, or lack of budget', async () => {
+  const { assemblePersistentMindContext } = await import('../lib/persistentMindTrajectory.js');
+  const source = { id: 'synthetic-source', version: 7, content: '  Intact source ``` with fences and whitespace.  ' };
+  const reflection = { state: 'pending', source };
+  const context = assemblePersistentMindContext({ identity: 'Protected identity', reflection });
+  expect(context.reflection.state).toBe('pending');
+  expect(context.text).toContain(JSON.stringify(source.content));
+  mock.reflectionState = 'pending';
+  mock.root.config.persistentMindCapabilities = { manageMind: true };
+  mock.runPrompt.mockResolvedValue({ text: JSON.stringify({ message: 'Ignored optional reflection.' }) });
+  await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'reflection', wake: { kind: 'self' }, context });
+  expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('expectedVersion');
+  expect(mock.runPrompt.mock.calls[0][0].prompt).toContain(JSON.stringify(source.content));
+  expect(mock.executeToolCall).not.toHaveBeenCalled();
+  for (const state of ['revoked', 'changed', 'unavailable', 'budget']) {
+    mock.runPrompt.mockClear();
+    mock.reflectionState = state;
+    mock.root.config.persistentMindCapabilities = { manageMind: state !== 'revoked' };
+    const next = state === 'budget' ? assemblePersistentMindContext({ identity: 'Protected identity', reflection: { ...reflection, source: { ...source, content: 'x'.repeat(10000) } }, maxChars: 1000 }) : context;
+    if (state === 'budget') {
+      expect(next.chars).toBeLessThanOrEqual(1000);
+      expect(next.text).toContain('Protected identity');
+      expect(next.reflection.state).toBe('omitted-budget');
+    }
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: `reflection-${state}`, wake: { kind: 'self' }, context: next });
+    expect(mock.runPrompt.mock.calls[0][0].prompt).not.toContain('# Optional memory reflection');
+  }
 });

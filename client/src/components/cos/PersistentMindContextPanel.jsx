@@ -4,6 +4,9 @@ import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import PersistentMindMaintainerControls from './PersistentMindMaintainerControls';
+import { Link } from 'react-router';
+import { useSocketResource } from '../../hooks/useSocketResource';
+import { formatDateTime } from '../../utils/formatters';
 import { formatCount } from '../../utils/formatters';
 
 const EMPTY_MEMORY = {
@@ -83,6 +86,8 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
       {error && <Banner tone="error" title="Context unavailable">{error}</Banner>}
 
       {view !== 'memories' && <PersistentMindMaintainerControls />}
+
+      <MemoryReflection />
 
       {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -317,5 +322,39 @@ function MemoryEditor({ memory, onSaved }) {
         <div className="flex justify-end"><button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><Save size={14} aria-hidden="true" /> {saving ? 'Saving…' : 'Save memory'}</button></div>
       </form>
     </details>
+  );
+}
+
+const REFLECTION_EVENTS = ['cos:memory:created', 'cos:memory:updated', 'cos:memory:deleted', 'cos:config:changed', 'cos:mind:event'];
+
+function MemoryReflection() {
+  const { data, loading, error, refetch } = useSocketResource(async ({ signal }) => {
+    return api.getPersistentMindReflection({ signal, silent: true });
+  }, { namespace: 'cos', events: REFLECTION_EVENTS });
+  const sources = [data?.source, data?.inspected].filter((source, index, all) => source && all.findIndex(item => item?.id === source.id) === index);
+  return (
+    <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-reflection-heading">
+      <h3 id="mind-reflection-heading" className="text-sm font-semibold text-port-text">Memory reflection</h3>
+      <p className="mt-1 text-xs text-port-text-muted">An optional invitation during an authorized wake. Only the mind can review or retire this source here; ignoring it changes nothing.</p>
+      {loading && !data ? <BrailleSpinner text="Loading reflection" /> : null}
+      {(error || data?.state === 'unavailable') && <Banner tone="error" title="Reflection unavailable">The memory store could not be inspected. <button type="button" onClick={refetch} className="rounded border border-port-border px-3 py-1.5">Retry</button></Banner>}
+      {data?.state === 'disabled' && <p className="mt-2 text-xs text-port-text-muted">Memory management is not granted.</p>}
+      {data?.state === 'empty' && sources.length === 0 && <p className="mt-2 text-xs text-port-text-muted">No eligible memory awaiting reflection.</p>}
+      {sources.map(source => {
+        const review = source.lastReview?.outcomes?.[source.lastReview.latestVerdict];
+        const currentReview = review?.expectedVersion === source.version;
+        return <div key={source.id} className="mt-3 space-y-2 text-xs text-port-text">
+        <p>{currentReview ? `Settled · ${review.verdict}` : source.status === 'active' && source.protection === 'standard' ? 'Pending · optional' : 'Source changed · no longer eligible'} · version {source.version}</p>
+        <Link className="text-port-accent underline" to={`/cos/memory/${encodeURIComponent(source.id)}`}>Source memory</Link>
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-port-border p-3">{source.content}</pre>
+        {review && <div className="space-y-2">
+          <p className="text-port-text-muted">{review.providerId} / {review.model} · {formatDateTime(review.reviewedAt)} · turn {review.turnId || 'unknown'}{!currentReview ? ' · previous source version' : ''}</p>
+          {review.rationale && <p className="whitespace-pre-wrap break-words">{review.rationale}</p>}
+          {review.lessonId && <Link className="inline-block text-port-accent underline" to={`/cos/memory/${encodeURIComponent(review.lessonId)}`}>Linked lesson</Link>}
+          {review.lesson && <p className="whitespace-pre-wrap break-words">{review.lesson}</p>}
+        </div>}
+      </div>;
+      })}
+    </section>
   );
 }

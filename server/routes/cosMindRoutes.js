@@ -48,6 +48,7 @@ import {
   preparePersistentMindContext,
   promotePersistentMindMemory,
   readPersistentMindMemories,
+  readPersistentMindReflection,
   readPersistentMindName,
   readPersistentMindRollups,
   updatePersistentMindMemory,
@@ -275,12 +276,19 @@ router.get('/mind/maintainer', asyncHandler(async (_req, res) => {
   res.json(await describePersistentMindMaintainerSetup());
 }));
 
+router.get('/mind/reflection', asyncHandler(async (_req, res) => {
+  const root = await loadState();
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const reflection = await readPersistentMindReflection({ enabled: capabilities.manageMind });
+  res.json(reflection);
+}));
+
 router.get('/mind/context', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
   const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
-  const [memories, rollups, provider, playbookPhase] = await Promise.all([
+  const [memories, rollups, provider, playbookPhase, reflection] = await Promise.all([
     readPersistentMindMemories(PERSISTENT_MIND_ID),
     readPersistentMindRollups(PERSISTENT_MIND_ID),
     profile.providerId ? getProviderById(profile.providerId) : null,
@@ -288,12 +296,14 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
     // too so the Mind Context panel can show the phase a continuous-play
     // wake would currently pick (#7458).
     playbook.mode === 'continuous-play' ? resolvePersistentMindPlaybookPhase() : null,
+    readPersistentMindReflection({ enabled: normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities).manageMind }),
   ]);
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
     instructions: composeMaintainerInstructions(composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase), root.config?.persistentMindMaintainer),
     memories,
+    reflection,
   });
   res.json({
     prompt,

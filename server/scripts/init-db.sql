@@ -2893,3 +2893,5 @@ CREATE OR REPLACE VIEW catalog_identity_read_revisions AS
 -- Machine-local latest mind review; does not change source content/version.
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS last_review JSONB;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15;

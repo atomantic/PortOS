@@ -1293,3 +1293,18 @@ export function invalidateCaches() {
 export async function flushBM25Index() {
   // No-op: tsvector indexes are maintained transactionally
 }
+
+/** One fading, owned, unreviewed source; selection never records access. */
+export async function selectMindMemoryForReview(mindId) {
+  const result = await query(`
+    SELECT * FROM memories
+    WHERE source_agent_id = $1 AND status = 'active'
+      AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
+      AND created_at < NOW() - INTERVAL '30 days' AND importance < 0.15
+      AND NOT (last_review IS NOT NULL
+        AND last_review->>'expectedVersion' = version::text
+        AND last_review->>'latestVerdict' IN ('keep', 'learn', 'archive', 'defer'))
+    ORDER BY created_at ASC, id ASC LIMIT 1
+  `, [mindId, protectedMindMemoryTags]);
+  return result.rows[0] ? rowToMemory(result.rows[0]) : null;
+}

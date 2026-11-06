@@ -86,6 +86,7 @@ vi.mock('./agentRunEventLog.js', () => ({
 }));
 
 vi.mock('./persistentMindContext.js', () => ({
+  readPersistentMindReflection: vi.fn(async () => ({ state: 'empty', source: null })),
   preparePersistentMindContext: (...args) => mocks.prepareContext(...args),
 }));
 
