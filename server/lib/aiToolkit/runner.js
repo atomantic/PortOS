@@ -232,10 +232,12 @@ export function createRunnerService(config = {}) {
 
   // Execution ownership is best-effort tracking, like the host's metadata patch.
   async function patchRunMetadata(runId, patch) {
-    const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
-    const metadata = safeJsonParse(await readFile(metadataPath, 'utf8').catch(() => null), null);
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
-    await atomicWrite(metadataPath, { ...metadata, ...patch }).catch(() => {});
+    return withAssetPublication(async () => {
+      const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
+      const metadata = safeJsonParse(await readFile(metadataPath, 'utf8').catch(() => null), null);
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+      await atomicWrite(metadataPath, { ...metadata, ...patch }).catch(() => {});
+    });
   }
 
   const service = {

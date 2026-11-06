@@ -1,6 +1,6 @@
 import { opendir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { RUN_OWNER } from '../lib/aiToolkit/internal/runOwnership.js';
+import { getRunOwner } from '../lib/aiToolkit/internal/runOwnership.js';
 import { finalizeRunRecord, getRunsPath } from './runner.js';
 
 const validProcess = (value) => value && Number.isSafeInteger(value.pid) && value.pid > 0
@@ -12,7 +12,7 @@ const isGone = (pid) => {
 
 // One streaming pass over existing records. No retries, age inference, provider
 // calls or process termination; uncertainty leaves the original record intact.
-export async function recoverInterruptedRuns({ owner = RUN_OWNER, isDead = isGone, now = Date.now } = {}) {
+export async function recoverInterruptedRuns({ owner = getRunOwner(), isDead = isGone, now = Date.now } = {}) {
   const runsPath = getRunsPath();
   const directory = await opendir(runsPath).catch(error => {
     if (error.code === 'ENOENT') return null;

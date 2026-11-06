@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RUN_OWNER } from '../lib/aiToolkit/internal/runOwnership.js';
+import { getRunOwner } from '../lib/aiToolkit/internal/runOwnership.js';
 import { setAIToolkit } from './runner.js';
 import { recoverInterruptedRuns } from './interruptedRunRecovery.js';
 
@@ -50,8 +50,8 @@ describe('boot interrupted-run recovery', () => {
 
   it('preserves current owners, live or unreadable processes, CoS runs and unknown or malformed identities', async () => {
     const fixtures = {
-      current: { executionOwner: RUN_OWNER },
-      reusedOwnerPid: { executionOwner: { ...oldOwner, pid: RUN_OWNER.pid } },
+      current: { executionOwner: getRunOwner() },
+      reusedOwnerPid: { executionOwner: { ...oldOwner, pid: getRunOwner().pid } },
       liveOwner: { executionOwner: { ...oldOwner, pid: 201 } },
       liveChild: { executionChild: { ...child, pid: 202 } },
       denied: { executionChild: { ...child, pid: 203 } },
