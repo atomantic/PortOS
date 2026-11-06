@@ -236,6 +236,8 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
       // An init image or picked frame occupies a slot without being a character sheet.
       references: [...Array(sentInitCount).fill(null), ...sentFiles.map((file, index) =>
         !sentInitCount && index === 0 && (tag.fromFrame || tag.refine) ? null : known.find((ref) => ref?.imageId === file) || null)],
+      // The bible describes only the subjects these references show, even when a peer decides their positions.
+      subjectReferences: namedReferenceFiles.map((file) => known.find((ref) => ref?.imageId === file) || null),
     });
     data.prompt = composed.prompt;
     if (composed.promptAdditions.length) data.promptAdditions = [...(data.promptAdditions || []), ...composed.promptAdditions];

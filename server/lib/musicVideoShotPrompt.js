@@ -20,6 +20,8 @@ import { peopleLightLine } from './musicVideoSnapshotLight.js';
 import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 import { storyboardPanelShotText } from './storyboardRecipe.js';
 import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
+import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
+import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -126,16 +128,27 @@ export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end
 const PANEL_SUBJECT_IDS = { character: 'castIds', place: 'environmentIds', object: 'objectIds' };
 
 /**
- * The subjects a storyboard panel puts in its shot: of each kind the panel
- * names (its cast, places or objects match a subject's catalog id), only
- * those; a kind it names none of keeps every subject. So a shot of one person
- * is not handed the whole cast to fill the frame with.
+ * The subjects a still describes (its production bible and scale lines): those
+ * its references show (musicVideoReferenceSubjectIds), its picked set and cast
+ * variant, and those its storyboard panel names. A place, object or person the
+ * shot neither sends nor names is left out, so its description cannot pull it
+ * into the frame. A subject no shot can attach (a director's text-only subject
+ * with no catalog link or Cast & Sets asset) stays, as nothing else picks it.
+ * `references` defaults to the shot's own conditioning set when the caller
+ * does not know what it sends.
  */
-function panelSubjects(subjects, panel) {
-  if (!panel || !Array.isArray(subjects)) return subjects;
-  const named = (subject) => (panel[PANEL_SUBJECT_IDS[subject?.kind]] || []).includes(subject?.ingredientId);
-  const kindsNamed = new Set(subjects.filter(named).map((subject) => subject.kind));
-  return subjects.filter((subject) => !kindsNamed.has(subject?.kind) || named(subject));
+function shotSubjects(project, scene, { panel = null, references } = {}) {
+  const subjects = project?.concept?.subjects;
+  if (!Array.isArray(subjects)) return subjects;
+  const refs = Array.isArray(references) ? references : musicVideoConditioningReferences(project, scene);
+  const ids = new Set(refs.flatMap((ref) => musicVideoReferenceSubjectIds(project, ref)));
+  if (scene?.setReference?.subjectId) ids.add(scene.setReference.subjectId);
+  const variant = scene?.characterVariant?.ingredientId;
+  const checkedIn = new Set((project?.castAndSets?.catalogCheckin?.items || []).map((item) => item.subjectId));
+  const attachable = (subject) => Boolean(subject?.ingredientId) || String(subject?.id || '').startsWith('cs-') || checkedIn.has(subject?.id);
+  const inShot = (subject) => ids.has(subject.id) || (Boolean(subject.ingredientId)
+    && (subject.ingredientId === variant || (panel?.[PANEL_SUBJECT_IDS[subject.kind]] || []).includes(subject.ingredientId)));
+  return subjects.filter((subject) => !attachable(subject) || inShot(subject));
 }
 
 /**
@@ -182,15 +195,20 @@ const storyboardSketchNote = (position) => `Reference image ${position} is the s
  * `panel` is the shot's live storyboard panel (a start frame from its prompt
  * only): its action stands in for an empty frame prompt, its shot picks and
  * the place of its sketch among the references (`panelReference`, 1-based,
- * 0 when not sent) lead the prompt, and the bible names only the subjects it
+ * 0 when not sent) lead the prompt, and the bible also names the subjects it
  * puts in frame.
+ *
+ * `references` are the sent references in send order (the reference map); the
+ * bible and scale lines describe only the subjects they show (shotSubjects).
+ * `subjectReferences` stands in for them there when send positions are unknown
+ * (a peer-routed render). Neither given: the shot's own conditioning set.
  *
  * `sizes` is `{ [subjectId]: text }` (loadMusicVideoSubjectSizes): the real-world
  * heights and sizes of the shot's subjects, stated as their own addition.
  */
 function composeFrameModelInput(project, scene, {
   slot = 'start', authored = authoredFramePromptText(scene, slot), fromFrame = false, refine = false,
-  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references = [], sizes = null,
+  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references, subjectReferences, sizes = null,
 } = {}) {
   const others = otherReferences > 0 ? addition('other-references', 'Character references', MUSIC_VIDEO_OTHER_REFERENCES_NOTE) : null;
   const text = typeof authored === 'string' ? authored.trim() : '';
@@ -211,7 +229,7 @@ function composeFrameModelInput(project, scene, {
     addition('storyboard-shot', 'Storyboard shot', storyboardPanelShotText(board)),
     panelReference > 0 ? addition('storyboard-sketch', 'Storyboard sketch', storyboardSketchNote(panelReference)) : null,
   ].filter(Boolean) : [];
-  const concept = board && project?.concept ? { ...project.concept, subjects: panelSubjects(project.concept.subjects, board) } : project?.concept;
+  const concept = project?.concept ? { ...project.concept, subjects: shotSubjects(project, scene, { panel: board, references: subjectReferences ?? references }) } : project?.concept;
   const look = [
     addition('reference-map', 'Reference images', musicVideoReferenceMapText(references)),
     addition('project-style', 'Project style', project?.concept?.style),

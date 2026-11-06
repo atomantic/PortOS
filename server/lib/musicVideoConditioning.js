@@ -276,6 +276,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
         role: 'character',
         label: `${name}${detail ? ` · ${detail}` : ''}`.slice(0, 120),
         castGuide: true,
+        ingredientId: variant.ingredientId,
       };
     });
 }
@@ -328,6 +329,7 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
         // Only a cast member's images are recorded as cast guides on the take.
         ...(kind.role === 'character' ? { castGuide: true } : {}),
         linkedCast: true,
+        subjectId: subject.id,
       }));
   }).filter((ref) => !isLegacyCatalogReference(project, ref));
 }
