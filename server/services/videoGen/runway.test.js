@@ -247,6 +247,30 @@ describe('videoGen/runway — generateVideo', () => {
     expect(entry.promptAdditions).toEqual([expect.objectContaining({ id: 'avoid', text: 'text' })]);
   });
 
+  it('sends a Seedance clip\'s references with its frame and names them in the prompt', async () => {
+    const refPath = join(TEST_ROOT, 'ref.png');
+    await sharp({ create: { width: 90, height: 60, channels: 3, background: '#993366' } }).png().toFile(refPath);
+    let posted;
+    vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => {
+      if (url.endsWith('/v1/image_to_video')) { posted = JSON.parse(options.body); return jsonResponse({ id: 'task-1' }); }
+      if (url === TASKS) return jsonResponse({ status: 'SUCCEEDED', output: ['https://cdn.example.com/out.mp4'] });
+      if (url === 'https://cdn.example.com/out.mp4') return { ok: true, arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer };
+      throw new Error(`Unexpected fetch ${url}`);
+    }));
+    const job = await runway.generateVideo({ apiKey: 'test-key', modelId: 'seedance2_5', prompt: 'She rides on', duration: 5,
+      sourceImagePath: framePath, frameAspect: '16:9', referenceImagePaths: [refPath], clipReferenceLabels: [{ label: 'The rider' }] });
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
+    expect(posted.promptImage).toHaveLength(2);
+    expect(posted.promptImage.every((image) => image.uri.startsWith('data:image/') && !('position' in image))).toBe(true);
+    // A reference keeps its own 3:2 framing rather than being cropped to the project's 16:9.
+    const sentReference = Buffer.from(posted.promptImage[1].uri.split(',')[1], 'base64');
+    expect(await sharp(sentReference).metadata()).toMatchObject({ width: 90, height: 60 });
+    expect(posted.promptText).toBe('She rides on\nUse @Image1 as the opening view. @Image2 is the reference for The rider.');
+    const [entry] = await loadHistory();
+    expect(entry).toMatchObject({ prompt: 'She rides on', clipReferenceFiles: ['ref.png'] });
+    expect(entry.sentPrompt).toBe(posted.promptText);
+  });
+
   it('renders Gen-4.5 from text alone: posts /v1/text_to_video and records a text-mode take', async () => {
     const calls = [];
     vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {

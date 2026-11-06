@@ -82,6 +82,12 @@ not the Runway API key. Local owned inputs are cleaned on success/failure/cancel
 Runway's remote uploads expire automatically. Reloaded forms require video files to
 be selected again before a new submission.
 
+Music Video clips on Seedance 2.0, 2.0 Fast, 2.0 Mini and 2.5 send the shot's clip
+references as unpositioned `promptImage` entries with the start frame first. Runway
+cannot mix those with `first`/`last` keyframes, so with references the start frame
+guides the clip rather than pinning its opening, and an end frame sends no references.
+A shot with no references still pins its start frame.
+
 Specialized models stay out of text/image-only Music Video and Creative Director
 selectors. Other models' advanced video-reference controls, multiple timed Aleph
 keyframes, non-MP4 delivery, upscaling, HDR and avatars remain outside these forms.

@@ -30,6 +30,7 @@ export function musicVideoClipReferenceCapacity(backend, model = null) {
     const max = Number(model?.referenceImages?.max) || 0;
     return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));
   }
+  if (backend === 'runway') return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, (Number(model?.referenceImages?.max) || 0) - 1));
   if (backend === 'local') {
     const images = Number(model?.maxReferenceImages) || 0;
     const total = Number(model?.maxReferenceTotal) || Infinity;

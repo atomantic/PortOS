@@ -13,7 +13,7 @@ const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded b
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
 /** The extra images this model will receive alongside the shot's frame. */
-export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, onEditLocal, onSave, onSaveState, saveState }) {
+export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, endFrameBlocksReferences = false, onEditLocal, onSave, onSaveState, saveState }) {
   const [adding, setAdding] = useState(false);
   const allChoices = musicVideoClipReferenceChoices(project, scene, castMedia);
   const choices = musicVideoOfferedReferences(allChoices).filter((ref) => ref.imageId !== scene.referenceImageId);
@@ -24,9 +24,11 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.clipReferenceIds);
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model);
-  const unknownModel = !backend || (['local', 'fal'].includes(backend) && !model);
+  const unknownModel = !backend || (['local', 'fal', 'runway'].includes(backend) && !model);
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
+  // Runway pins the start frame unless references go with it: its keyframe and reference modes cannot mix.
   const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
+    || (backend === 'runway' && capacity > 0 && chosen.length > 0)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni');
   // The server renders these without the song window (submitJob.js) rather than refusing.
   const songUnheard = backend === 'local' && model && !localModelTakesSongAudio(model)
@@ -51,11 +53,13 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
           : 'Select a start frame before rendering.'}
         {' '}{backend === 'remote' ? 'Peer render pools cannot receive extra clip references.'
           : unknownModel ? 'Select a model to see its reference support.'
+          : endFrameBlocksReferences ? 'Runway cannot combine an end frame with image references, so these are not sent while the end frame is on.'
           : capacity ? `PortOS can send up to ${formatCount(capacity)} additional image ${capacity === 1 ? 'reference' : 'references'} with this model.`
             : 'This model does not use additional image references.'}
         {songUnheard && ' This model does not hear the song, so the clip renders without song audio.'}
       </p>
       {backend === 'fal' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Reference inputs may add to the provider charge.</p>}
+      {backend === 'runway' && capacity > 0 && <p className="text-[11px] text-port-text-muted">Remove every reference to pin the opening frame.</p>}
       <ul className="flex flex-wrap gap-1">
         {chosen.map((ref, index) => (
           <li key={ref.id} className={`${BUTTON} pr-0.5`}>
