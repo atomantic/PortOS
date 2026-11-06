@@ -16,6 +16,8 @@ import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
  */
 
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { completeAgentRun } from './agentRunTracking.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
@@ -51,7 +53,7 @@ import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { buildInvestigationFingerprint } from '../lib/investigationTasks.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 import { release } from './executionLanes.js';
@@ -150,6 +152,7 @@ registerPauseReleaseAdapter({
   retirePausedAgent: async (agentId, taskId, branchName) => {
     const agent = await getAgentRecord(agentId).catch(() => null);
     if (agent?.status !== 'paused') return;
+    await closePausedRun(agent);
     pausedAgents.delete(agentId);
     await completeAgent(agentId, {
       success: false,
@@ -159,6 +162,19 @@ registerPauseReleaseAdapter({
     });
   }
 });
+
+// Close the stopped execution before retiring its agent. This bypasses provider
+// failure handling: a pause has no delivery verdict, and its continuation owns it.
+async function closePausedRun(agent) {
+  const runId = agent.metadata?.runId;
+  if (!runId) return;
+  const output = isPrivateSecurityTask(agent)
+    ? 'Private security assessment interrupted; inspect its local assessment archive.'
+    : await tryReadFile(join(PATHS.cosAgents, agent.id, 'output.txt'));
+  await completeAgentRun(runId, output || '', 143, 0, {
+    category: 'interrupted', origin: 'operator', message: 'Paused execution retired for continuation',
+  }, false, null, { endedAt: agent.pausedAt ?? agent.metadata?.pausedAt });
+}
 
 async function markPausedTask(agentInfo, agentId, pausedAt, reason) {
   const task = agentInfo?.task || (agentInfo?.taskId ? await getTaskById(agentInfo.taskId).catch(() => null) : null);
@@ -449,6 +465,7 @@ export async function resumeAgent(agentId, overrides = {}) {
       data: { mode: resumed.mode ?? mode, branchName: resumed.branchName ?? null },
     });
   }
+  await closePausedRun(agent);
   await completeAgent(agentId, {
     success: false,
     resumed: true,
@@ -1195,6 +1212,7 @@ async function retireStrandedPausedAgents(agents) {
     const reason = !task
       ? `its task ${taskId} no longer exists`
       : `task ${taskId} is ${task.status} and no longer holds this pause`;
+    await closePausedRun(agent);
     pausedAgents.delete(agent.id);
     // `resumed: true` for the same reason `resumeAgent` uses it: this run produced no
     // verdict of its own, so charging it an error would invent a failure the task
