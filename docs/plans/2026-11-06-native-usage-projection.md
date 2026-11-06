@@ -92,6 +92,58 @@ that went backwards, or restated history across two reports of one participant
 refuses until the operator reselects and drops the older report. Those checks detect
 a change. They do not prove the account stayed the same.
 
+## Antigravity native CLI capture (report version 4)
+
+Staged capture reads `~/.gemini/antigravity-cli/conversations/*.db`, not the
+incomplete overlapping transcript or generator-metadata views. The validated
+CLI 1.5.2 format has SQLite `user_version=1`, `application_id=0`, exact ordinary
+`steps` and `trajectory_meta` column shapes, `step_format=0` and protobuf
+`step_generation_version=0`. SQLite's schema change counter is not a format
+version. Historical runtime versions are unknown, not inferred from the installed
+CLI. Unknown schemas, generated columns, malformed protobuf, missing identities,
+missing usage on planner/checkpoint steps and scan caps refuse a usable union.
+
+The reader copies each bounded, stable source into a private temporary snapshot
+and opens only that copy with immutable read-only SQLite. Source sidecars, links,
+file changes and unsupported containers refuse the projection. WAL header flags
+are accepted only with absent sidecars and an unchanged source around the copy.
+No source locks, writes, inference, credential reads or native CLI invocation are
+needed. The strict wire decoder skips content and response-header fields; it
+accepts absent proto3 scalar counters as zero only inside a present validated
+usage message. It rejects truncated, duplicate or wrongly typed fields and
+unsafe integers. Snapshots are removed after each read.
+
+Completed planner and checkpoint records preserve input, output, cache read,
+cache write, thinking output and response output separately. Output decomposition
+is checked, but cache is never subtracted from input or assumed to overlap. No
+combined token total, inferred marketing model, price or bill is invented. Native
+numeric model/provider enums and UTC timestamps survive the projection. Model
+cost metadata has unverified units and is ignored.
+
+Account-scoped merging requires an explicit `agy` selection with
+`historyScope: operator-confirmed-retained-history`. Message and response IDs are
+separately hashed with domain separation, independent of host, filename or root.
+Copies agree on all counters, enums, type and timestamps or are excluded, and
+both identity aliases survive conflict tombstones. Reused message or response IDs
+in different account selections refuse the account partition. These IDs are a
+practical observed identity contract, not proof of a globally unique vendor ID.
+Repeated capture reads sources again; no previous total is used as a fallback.
+
+App and IDE `conversations` containers are counted as present but unverified.
+Their `.pb` wrapper has not been validated and must not use the CLI decoder.
+Legacy-only CLI history is also explicit unknown coverage. Thus retained unions
+remain partial, with unknown lifetime completeness and cost. Report versions
+1–3 remain strictly readable, but their Antigravity entries lack the required
+native projection and cannot satisfy an account union. This adapter does not
+change the existing dashboard reader, ledger, peer synchronization or deployment.
+Fleet validation and App/IDE recovery remain tracked in #15097.
+
+Official roots and transcript context: [hooks](https://antigravity.google/docs/hooks).
+The [headless contract](https://antigravity.google/docs/cli/headless/) distinguishes
+per-step usage from cumulative `result.usage`; it does not establish App container
+encoding or legacy counter overlap. The SQLite/protobuf acceptance above is a
+bounded installed-format contract, not a claim that those docs specify the DB.
+
 ## Grok persisted usage capture (report version 3)
 
 The staged capture now reads only
@@ -219,10 +271,9 @@ not account lifetime, subscription charges, API-equivalent cost or actual spend.
 This is reproducible staged input only: no history writes, cutover, deployment,
 provider inference, new source-root scan or live-account mutation is implemented.
 
-Grok still needs version-specific persisted turn semantics and billing scope
-verified against its native usage command. Antigravity still needs its multiple
-native roots and transcript versions validated, including the distinction between
-per-step usage and cumulative session results. Neither is added up by this change.
+Grok billing scope and Antigravity App/IDE containers still require validation.
+The staged native adapters above do not establish complete lifetime coverage or
+replace the existing dashboard/ledger. Fleet and cutover gates remain open.
 
 ## Validation gates before replacement
 

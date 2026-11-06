@@ -72,6 +72,9 @@ describe('versioned provider validators', () => {
       // v1 raw update fixtures are deliberately not a persisted usage source.
       expect(entry(report, family)).toMatchObject({ status: 'unavailable', totals: null, source: 'grok:persisted-session-usage', coverage: { measuredRecords: 0 } });
       expect(entry(report, family).findings).toContain('native-usage-files-missing');
+    } else if (family === 'agy') {
+      // Legacy transcript fixtures are retained as validation history, never added to native SQLite counters.
+      expect(entry(report, family)).toMatchObject({ status: 'unavailable', totals: null, source: 'agy:cli-sqlite-metadata', coverage: { measuredRecords: 0 } });
     } else expect(entry(report, family)).toMatchObject(scenario.expect);
     expect(nativeUsageReportSchema.safeParse(report).success).toBe(true);
   });
@@ -132,7 +135,7 @@ describe('reproducible staged input', () => {
     const matrix = buildNativeUsageMatrix({ reports: [first, copied], selections: [{
       family: 'claude', accountLabel: 'acct-a', historyScope: 'operator-confirmed-retained-history', members: [first.participantKey, copied.participantKey],
     }] });
-    expect(first.contractVersion).toBe(3);
+    expect(first.contractVersion).toBe(4);
     expect(matrix.families.find(({ family }) => family === 'claude')).toMatchObject({
       merge: { status: 'partial', completeness: 'unknown', totals: { totalTokens: 41 } },
       accounts: [{ coverage: { uniqueRecords: 2, measuredRecords: 2, duplicateRecords: 2 }, records: expect.any(Array) }],
