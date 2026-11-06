@@ -225,6 +225,16 @@ describe('Settings routes — apiAccess slice', () => {
     vi.clearAllMocks();
   });
 
+  it('validates the machine-local native usage account selection and refuses an email as a label', async () => {
+    const participant = 'a'.repeat(32);
+    const selection = { family: 'codex', accountLabel: 'acct-a', authoritativeParticipant: participant, members: [participant] };
+    const saved = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [selection] });
+    expect(saved.status).toBe(200);
+    expect(saved.body.usageNativeAccountSelections).toEqual([selection]);
+    const email = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [{ ...selection, accountLabel: 'alice@example.com' }] });
+    expect(email.status).toBe(400);
+  });
+
   it('accepts a valid apiAccess patch and persists it', async () => {
     const res = await request(buildApp())
       .put('/api/settings')

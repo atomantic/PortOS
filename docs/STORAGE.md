@@ -1140,6 +1140,8 @@ before manually retiring history.
 
 Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
 
+`usageNativeAccountSelections` is an optional, machine-local operator choice in the existing file-primary `data/settings.json` store: which participant is authoritative for each Codex account, under the operator's own opaque label, referencing hashed participant keys. It holds no credentials or account identifiers, adds no relation or search need, is covered by the rsync backup with the rest of that file, and is never sent to peers. `PUT /api/settings` validates it with `nativeUsageAccountSelectionsSchema`, and `scripts/native-usage-report.js matrix` reads it.
+
 `passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.
 
 ### CoS raw recording maintenance

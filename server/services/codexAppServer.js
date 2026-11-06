@@ -55,6 +55,7 @@ import {
   normalizeCodexAccountUsage,
   normalizeCodexLoginStart,
   normalizeCodexRateLimits,
+  parseCodexRuntimeVersion,
   redactCodexMessage,
   redactCodexPayload,
 } from '../lib/codexAccount.js';
@@ -423,7 +424,8 @@ const openConnection = async () => {
 
   connectingTarget = target;
   try {
-    await sendRequest(target, CODEX_RPC.initialize, { clientInfo: CLIENT_INFO }, HANDSHAKE_TIMEOUT_MS);
+    const initialized = await sendRequest(target, CODEX_RPC.initialize, { clientInfo: CLIENT_INFO }, HANDSHAKE_TIMEOUT_MS);
+    target.runtimeVersion = parseCodexRuntimeVersion(initialized?.userAgent);
     await sendNotification(target, CODEX_RPC.initialized, {});
     console.log('🔌 Codex app-server connected');
     return target;
@@ -562,6 +564,24 @@ export async function getCodexAccountReadiness({ fresh = false } = {}) {
 export async function getCodexAccountUsage() {
   const usage = normalizeCodexAccountUsage(await call(CODEX_RPC.usageRead));
   return { ...usage, fetchedAt: new Date().toISOString() };
+}
+
+/** Account history bracketed by two account reads so a sign-in change during the
+ * capture is detectable. Expected failures are returned as codes: the raw messages
+ * can quote upstream text and never belong in a report.
+ */
+export async function getCodexAccountUsageEvidence() {
+  const readAccount = () => call(CODEX_RPC.accountRead).then(
+    (result) => ({ status: 'read', account: normalizeCodexAccount(result) }),
+    () => ({ status: 'unread', account: null }),
+  );
+  const accountBefore = await readAccount();
+  const read = await getCodexAccountUsage().then(
+    (usage) => ({ usage, failureCode: null }),
+    (err) => ({ usage: null, failureCode: err.code || CODEX_ERROR_CODES.protocol }),
+  );
+  const accountAfter = await readAccount();
+  return { ...read, accountBefore, accountAfter, runtimeVersion: connection?.runtimeVersion ?? null };
 }
 
 /**

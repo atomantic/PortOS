@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { getNativeTranscriptCoverage } from './nativeTranscriptCoverage.js';
@@ -83,6 +83,37 @@ describe('read-only native retained history', () => {
     await writeFile(file, JSON.stringify(claude('inflight')) , { flag: 'a' });
     expect(await getNativeTranscriptCoverage('claude', { home })).toMatchObject({ status: 'partial', summary: null,
       coverage: { measuredRecords: 0, missingUsageRecords: 2, invalidLines: 1 } });
+  });
+
+  it('resolves streamed Claude emissions to the final one whatever order the copies are read in', async () => {
+    const emission = (output, final) => { const row = claude('m', output); row.requestId = 'r'; row.message.stop_reason = final ? 'end_turn' : null; return row; };
+    const orders = [[[3, false], [7, false], [9, true]], [[9, true], [3, false], [7, false]], [[7, false], [9, true], [3, false]]];
+    for (const [index, order] of orders.entries()) {
+      await rm(join(home, '.claude'), { recursive: true, force: true });
+      await save(`.claude/projects/p/${index}.jsonl`, order.map(([output, final]) => emission(output, final)));
+      expect(await getNativeTranscriptCoverage('claude', { home })).toMatchObject({ status: 'available',
+        summary: { tokensOut: 9 }, coverage: { measuredRecords: 1, conflictingRecords: 0, streamingSupersededRecords: 2 } });
+    }
+    // A final emission smaller than a partial, in either order, cannot be a stream.
+    for (const order of [[[12, false], [9, true]], [[9, true], [12, false]]]) {
+      await rm(join(home, '.claude'), { recursive: true, force: true });
+      await save('.claude/projects/p/s.jsonl', order.map(([output, final]) => emission(output, final)));
+      expect(await getNativeTranscriptCoverage('claude', { home })).toMatchObject({ summary: null, coverage: { conflictingRecords: 1 } });
+    }
+  });
+
+  it('keeps scanning past an oversized record and reports it instead of stopping', async () => {
+    // One line wholly inside a read chunk, and one spanning several.
+    const small = JSON.stringify({ type: 'user', content: 'x'.repeat(2 * 1024) });
+    const big = JSON.stringify({ type: 'user', content: 'x'.repeat(200 * 1024) });
+    await save('.claude/projects/p/s.jsonl', [claude('a'), small, big, claude('b')]);
+    // An unterminated oversized tail that ends in a short final chunk is still that line, not an invalid one.
+    const trailing = await save('.claude/projects/p/t.jsonl', [claude('c')]);
+    const { size } = await stat(trailing);
+    await writeFile(trailing, 'x'.repeat(3 * 64 * 1024 + 100 - size), { flag: 'a' });
+    const result = await getNativeTranscriptCoverage('claude', { home, limits: { lineBytes: 1024 } });
+    expect(result).toMatchObject({ status: 'partial', summary: { tokensIn: 30 },
+      coverage: { measuredRecords: 3, capped: true, stoppedEarly: false, oversizedLines: 3, invalidLines: 0 } });
   });
 
   it('bounds bytes, line length, enumeration, record memory and time without following symlinks', async () => {
