@@ -219,6 +219,14 @@ vi.mock('../lib/commandExists.js', () => ({
     new Promise((resolve) => cp.execFile(cmd, args, {}, (err) => resolve(!err))),
 }));
 
+// Which Homebrew package supplies `ollama`, and what Homebrew has published. The
+// default answer (no package) keeps every other case on the GitHub comparison.
+const homebrew = vi.hoisted(() => ({ channel: null, latest: null }));
+vi.mock('../lib/homebrewPackage.js', () => ({
+  homebrewPackageFor: () => homebrew.channel,
+  fetchHomebrewLatestVersion: async () => homebrew.latest,
+}));
+
 // Build a fake `brew` child that streams `lines`, then closes with `code`.
 const fakeChild = ({ code = 0, lines = [] } = {}) => {
   const child = new EventEmitter();
@@ -1400,6 +1408,79 @@ describe('localLlm', () => {
       const s = await svc.getStatus();
       expect(s.ollama.latestVersion).toBeNull();
       expect(s.ollama.updateAvailable).toBe(false);
+    });
+  });
+
+  describe('Homebrew-managed Ollama', () => {
+    const FORMULA = { manager: 'homebrew', kind: 'formula', name: 'ollama', thirdPartyTap: false };
+    const stubGithub = (tag) => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tag_name: tag }) })));
+    const running = (version) => ({ available: true, baseUrl: 'x', version, modelCount: 0, models: [] });
+    let restorePlatform;
+
+    beforeEach(() => {
+      restorePlatform = pinPlatform('darwin');
+      homebrew.channel = FORMULA;
+      homebrew.latest = '0.40.14';
+      stubGithub('v0.40.15');
+    });
+    afterEach(() => {
+      restorePlatform();
+      homebrew.channel = null;
+      homebrew.latest = null;
+      pathExistsImpl.fn = async () => false;
+      vi.unstubAllGlobals();
+    });
+
+    it('offers no update while Homebrew has not published the GitHub release', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce(running('0.40.14'));
+      expect((await svc.getStatus()).ollama).toMatchObject({
+        latestVersion: '0.40.14', latestVersionSource: 'homebrew', upstreamAheadVersion: '0.40.15',
+        installChannel: { kind: 'formula', name: 'ollama' }, updateAvailable: false,
+      });
+    });
+
+    it('offers the update once Homebrew publishes one', async () => {
+      homebrew.latest = '0.40.15';
+      mocks.ollama.getStatus.mockResolvedValueOnce(running('0.40.14'));
+      expect((await svc.getStatus()).ollama).toMatchObject({
+        latestVersion: '0.40.15', latestVersionSource: 'homebrew', upstreamAheadVersion: null, updateAvailable: true,
+      });
+    });
+
+    it.each([
+      ['a failed Homebrew read', () => { homebrew.latest = null; }],
+      ['a third-party tap', () => { homebrew.channel = { ...FORMULA, thirdPartyTap: true }; }],
+      ['a present Ollama.app, which the updater replaces from GitHub', () => { pathExistsImpl.fn = async () => true; }],
+    ])('compares against GitHub for %s', async (_name, arrange) => {
+      arrange();
+      mocks.ollama.getStatus.mockResolvedValueOnce(running('0.40.14'));
+      expect((await svc.getStatus()).ollama).toMatchObject({
+        latestVersion: '0.40.15', latestVersionSource: 'github', upstreamAheadVersion: null, updateAvailable: true,
+      });
+    });
+
+    const upgrade = async (before, after) => {
+      cp.execFile = (_cmd, _args, _opts, cb) => cb(null, { stdout: 'ok', stderr: '' });
+      cp.spawn = vi.fn(() => fakeChild({ lines: [] }));
+      mocks.ollama.getStatus.mockResolvedValueOnce({ version: before }).mockResolvedValueOnce({ version: after });
+      return svc.upgradeBackend('ollama');
+    };
+
+    it('counts reaching the newest Homebrew version as success even when GitHub is ahead', async () => {
+      expect(await upgrade('0.40.13', '0.40.14')).toMatchObject({ success: true, note: expect.stringContaining('0.40.13 → 0.40.14') });
+    });
+
+    it('says Homebrew has not published the release when an upgrade changes nothing', async () => {
+      const result = await upgrade('0.40.14', '0.40.14');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/0\.40\.14 is the newest Homebrew has published.*0\.40\.15 is out/);
+    });
+
+    it('still fails when the running version stays behind what Homebrew published', async () => {
+      homebrew.latest = '0.40.15';
+      const result = await upgrade('0.40.13', '0.40.14');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/still running 0\.40\.14.*available release is 0\.40\.15/);
     });
   });
 

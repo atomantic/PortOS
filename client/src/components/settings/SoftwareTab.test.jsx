@@ -51,6 +51,15 @@ describe('Settings › Software', () => {
     expect(await screen.findByText('Codex CLI')).toBeInTheDocument();
   });
 
+  it('does not point a current row at an older cached latest', async () => {
+    getSoftwareInventory.mockResolvedValue({ groups: ['Local AI'], checkedAt: null, components: [
+      { id: 'ollama', name: 'Ollama', group: 'Local AI', state: 'current', version: '0.40.15', latest: '0.40.14' },
+    ] });
+    renderTab();
+    expect(await screen.findByText('0.40.15')).toBeInTheDocument();
+    expect(screen.queryByText('0.40.14')).toBeNull();
+  });
+
   it('runs updates through the component homes, arming the restart watch only for restarting ones', async () => {
     updateYtDlp.mockResolvedValue({ success: true, version: '2026.02.01' });
     updateNodeRuntime.mockResolvedValue({ started: true });

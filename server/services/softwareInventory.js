@@ -115,12 +115,20 @@ function browserRow(status, arch = process.arch) {
   });
 }
 
+/** Who supplies a Homebrew copy, and the upstream release Homebrew has not published yet. */
+function homebrewSummary(channel, upstream, aheadVersion) {
+  const lag = aheadVersion ? ` ${upstream} has ${aheadVersion}; it can be installed once Homebrew publishes it.` : '';
+  return `Homebrew ${channel.kind} ${channel.name}.${lag}`;
+}
+
 function harnessRows(harnesses) {
   return harnesses.map((harness) => entry({
     id: `harness:${harness.id}`, name: harness.label, group: 'Agent harnesses', home: HOMES.harnesses,
     installed: harness.installed === true, version: harness.version || null, latest: harness.latestVersion || null,
     state: harness.installed !== true ? 'missing' : harness.updateAvailable ? 'update' : harness.version ? 'current' : 'unknown',
-    summary: harness.package ? `npm ${harness.package}` : null,
+    summary: harness.latestVersionSource === 'homebrew' && harness.installChannel
+      ? homebrewSummary(harness.installChannel, 'npm', harness.npmAheadVersion)
+      : harness.package ? `npm ${harness.package}` : null,
   }));
 }
 
@@ -142,7 +150,10 @@ function localLlmRows(status) {
       id: 'ollama', name: 'Ollama', group: 'Local AI', home: HOMES.localLlm,
       installed: Boolean(ollama.installed), version: ollama.version, latest: ollama.latestVersion,
       state: !ollama.installed ? 'missing' : ollama.updateAvailable ? 'update' : ollama.version ? 'current' : 'unknown',
-      summary: !ollama.installed ? null : ollama.available ? `${ollama.modelCount || 0} models.` : 'Installed but not running, so its version is unknown.',
+      summary: !ollama.installed ? null : [
+        ollama.available ? `${ollama.modelCount || 0} models.` : 'Installed but not running, so its version is unknown.',
+        ollama.latestVersionSource === 'homebrew' && ollama.installChannel && homebrewSummary(ollama.installChannel, 'GitHub', ollama.upstreamAheadVersion),
+      ].filter(Boolean).join(' '),
       action: ollama.updateAvailable && ollama.canUpgrade
         ? { kind: 'ollama-upgrade', label: `Update to ${ollama.latestVersion}`, restarts: false } : null,
     }),
@@ -299,4 +310,4 @@ export async function getSoftwareInventory({ fresh = false, collectors = COLLECT
   return { components, groups: SOFTWARE_GROUPS, checkedAt: new Date().toISOString() };
 }
 
-export const __testing = { nodeRows, browserRow, ytDlpRow, readBlenderVersion, blenderRow, condaRows };
+export const __testing = { nodeRows, browserRow, harnessRows, localLlmRows, ytDlpRow, readBlenderVersion, blenderRow, condaRows };

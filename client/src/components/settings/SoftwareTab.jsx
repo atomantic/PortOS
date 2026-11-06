@@ -56,7 +56,8 @@ const rank = (row) => STATE_ORDER.indexOf(row.state);
 
 function Versions({ row }) {
   if (!row.version && !row.latest) return null;
-  const differs = row.latest && row.version && row.latest !== row.version;
+  // A current row can be ahead of a cached latest (just upgraded), which is no update.
+  const differs = row.latest && row.version && row.latest !== row.version && row.state !== 'current';
   return (
     <span className="font-mono text-xs text-gray-300">
       {row.version || '—'}

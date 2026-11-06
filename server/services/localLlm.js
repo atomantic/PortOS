@@ -50,6 +50,8 @@ import { captureSystemCapabilities, withHardwareCompatibility } from '../lib/sys
 // no import cycle: the store deliberately does not import this module.
 import { getMeasuredFits } from './localModelAssessmentStore.js'
 import { commandExists } from '../lib/commandExists.js'
+import { fetchHomebrewLatestVersion, homebrewPackageFor } from '../lib/homebrewPackage.js'
+import { whichFirst } from '../lib/processEnv.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
@@ -329,6 +331,53 @@ export async function getLatestOllamaVersion() {
   return version
 }
 
+// Homebrew's API is a CDN with no rate limit, so it can be read more often, and an
+// update Homebrew just published should not wait out the GitHub TTL to appear.
+const HOMEBREW_VERSION_TTL_MS = 60 * 60 * 1000
+let homebrewOllamaCache = { version: null, fetchedAt: 0 }
+
+async function getHomebrewOllamaVersion(channel) {
+  const age = Date.now() - homebrewOllamaCache.fetchedAt
+  if (homebrewOllamaCache.version && age < HOMEBREW_VERSION_TTL_MS) return homebrewOllamaCache.version
+  if (!homebrewOllamaCache.version && homebrewOllamaCache.fetchedAt && age < LATEST_VERSION_ERROR_TTL_MS) return null
+  const version = await fetchHomebrewLatestVersion(channel).catch(() => null)
+  homebrewOllamaCache = { version, fetchedAt: Date.now() }
+  return version
+}
+
+/**
+ * The Homebrew package upgradeBackend would upgrade, or null when it would take
+ * another route. Mirrors its routing: Linux runs the official script and a present
+ * Ollama.app is replaced from GitHub, even for the `ollama-app` cask. A third-party
+ * tap can share its name with an unrelated homebrew-core formula, so it is not asked.
+ */
+async function getOllamaHomebrewChannel() {
+  if (process.platform !== 'darwin' || await pathExists(macAppPath('ollama'))) return null
+  const channel = homebrewPackageFor(await whichFirst('ollama').catch(() => null))
+  return channel && !channel.thirdPartyTap ? channel : null
+}
+
+/**
+ * The newest version this copy's updater can install. A Homebrew copy compares
+ * against Homebrew, because `brew upgrade` cannot deliver a GitHub release Homebrew
+ * has not published. GitHub stays the answer when Homebrew cannot say.
+ */
+async function resolveLatestOllamaVersion() {
+  const [upstream, channel] = await Promise.all([
+    // Cached — never blocks the steady-state UI on a GitHub round-trip.
+    getLatestOllamaVersion().catch(() => null),
+    getOllamaHomebrewChannel().catch(() => null),
+  ])
+  const brew = channel ? await getHomebrewOllamaVersion(channel) : null
+  if (!brew) return { latestVersion: upstream, latestVersionSource: upstream ? 'github' : null, upstreamAheadVersion: null, installChannel: channel }
+  return {
+    latestVersion: brew,
+    latestVersionSource: 'homebrew',
+    upstreamAheadVersion: upstream && compareSemver(upstream, brew) > 0 ? upstream : null,
+    installChannel: channel,
+  }
+}
+
 /**
  * Pre-upgrade Ollama version (best-effort — returns null if Ollama isn't running
  * or isn't responding). Used to verify an upgrade actually moved the version.
@@ -601,7 +650,12 @@ export async function upgradeBackend(backend, onProgress = () => {}, signal) {
     return { success: false, error: `Homebrew not found — install it from https://brew.sh first, or ${downloadHint.toLowerCase()}` }
   }
   const before = backend === 'ollama' ? await readOllamaVersion() : null
-  const target = backend === 'ollama' ? await getLatestOllamaVersion() : null
+  // Homebrew is the verification target, read past its cache: `brew update` below
+  // can only make the answer newer, and a stale one would under-report an upgrade.
+  if (backend === 'ollama') homebrewOllamaCache = { version: null, fetchedAt: 0 }
+  const { latestVersion: target, upstreamAheadVersion: upstreamAhead } = backend === 'ollama'
+    ? await resolveLatestOllamaVersion()
+    : { latestVersion: null, upstreamAheadVersion: null }
   emit('Refreshing Homebrew package metadata…')
   const refresh = await runStreaming('brew', ['update'], emit, BACKEND_INSTALL_TIMEOUT_MS)
   if (!refresh.success) return { success: false, error: `Homebrew refresh failed: ${refresh.error}` }
@@ -620,7 +674,17 @@ export async function upgradeBackend(backend, onProgress = () => {}, signal) {
     }
     const after = await waitForOllamaVersion()
     if (!after) return { success: false, backend, error: 'Could not verify the Ollama upgrade: the service did not come back online within 30s.' }
-    if ((target && compareSemver(target, after) > 0) || (!target && (!before || compareSemver(after, before) <= 0))) {
+    const moved = Boolean(before) && compareSemver(after, before) > 0
+    // Already on Homebrew's newest with a newer release out: this run delivered
+    // nothing, and the caller may need that release (a model pull's 412 upgrade).
+    if (!moved && upstreamAhead && compareSemver(upstreamAhead, after) > 0) {
+      return {
+        success: false,
+        backend,
+        error: `Ollama ${after} is the newest Homebrew has published. Ollama ${upstreamAhead} is out, and Homebrew can install it once it is packaged. Retry then, or install the official app from ${DOWNLOAD_URL.ollama}.`
+      }
+    }
+    if ((target && compareSemver(target, after) > 0) || (!target && !moved)) {
       return {
         success: false,
         backend,
@@ -782,15 +846,14 @@ export async function listManagedBackendModels(backend, forceRefresh = false) {
  * Combined status for both backends plus the active marker.
  */
 export async function getStatus() {
-  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels, latestOllamaVersion, settings, measuredOllama, measuredLmStudio] = await Promise.all([
+  const [ollamaStatus, ollamaCli, lmStudioStatus, lmsCli, lmStudioModels, latestOllama, settings, measuredOllama, measuredLmStudio] = await Promise.all([
     ollamaManager.getStatus(true),
     commandExists('ollama', ['--version']),
     lmStudioManager.getStatus(),
     commandExists('lms', ['version']),
     // forceRefresh: status/refresh path bypasses the list cache.
     listModels('lmstudio', true).catch(() => []),
-    // Cached (6h) — never blocks the steady-state UI on a GitHub round-trip.
-    getLatestOllamaVersion().catch(() => null),
+    resolveLatestOllamaVersion(),
     getSettings(),
     // Measured evidence, so the editorial pick can prefer a model that PROVABLY
     // runs here over one whose name merely looks right. Disk-only; a status poll
@@ -802,9 +865,10 @@ export async function getStatus() {
   const ollamaModels = normalizeModels('ollama', ollamaStatus.models)
   const lmStudioRecommendation = recommendEditorialModel(lmStudioModels, { measured: measuredLmStudio })
   // An update is "available" only when we know BOTH the installed version (Ollama
-  // must be running for /api/version to answer) and the latest, and latest is
-  // newer. canUpgrade (canAutoUpgrade) gates the in-app updater to the platforms
+  // must be running for /api/version to answer) and the newest its updater can
+  // install, and that is newer. canUpgrade (canAutoUpgrade) gates the in-app updater to the platforms
   // where upgradeBackend can actually drive an Ollama upgrade.
+  const { latestVersion: latestOllamaVersion, latestVersionSource, upstreamAheadVersion, installChannel } = latestOllama
   const ollamaUpdateAvailable = Boolean(
     ollamaStatus.version && latestOllamaVersion && compareSemver(latestOllamaVersion, ollamaStatus.version) > 0
   )
@@ -816,6 +880,10 @@ export async function getStatus() {
       available: ollamaStatus.available,
       version: ollamaStatus.version,
       latestVersion: latestOllamaVersion,
+      latestVersionSource,
+      upstreamAheadVersion,
+      // Kind and name only, never the resolved path.
+      installChannel,
       updateAvailable: ollamaUpdateAvailable,
       canUpgrade: canAutoUpgrade('ollama'),
       baseUrl: ollamaStatus.baseUrl,
