@@ -182,7 +182,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
-    const actual = backend === VIDEO_GEN_MODE.GROK ? (params.castReferences || []).map((ref) => basename(ref.path))
+    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).map((ref) => basename(ref.path))
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
         .map((path) => basename(path));
     if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {

@@ -231,7 +231,7 @@ export default function SceneCard({
   // an unknown Local model and required performance/audio-reactive inputs for the server to validate.
   const songAudioState = cardRequest.songAudio.state;
   const silentHostedCutaway = !performance && songAudioState === 'unavailable'
-    && ['grok', 'fal', 'runway'].includes(renderSettings?.backend);
+    && ['grok', 'fal', 'runway', 'gemini'].includes(renderSettings?.backend);
   const songAudioField = songAudioState === 'on' || songAudioState === 'off' || silentHostedCutaway
     ? { songAudio: songAudioState === 'on' } : {};
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;

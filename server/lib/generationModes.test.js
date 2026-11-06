@@ -25,9 +25,10 @@ describe('generation mode alphabets', () => {
   it('keeps the video backend alphabet in the image discriminator namespace, plus reactor as a video-only extra', () => {
     expect(VIDEO_GEN_MODE).toEqual({
       LOCAL: IMAGE_GEN_MODE.LOCAL, GROK: IMAGE_GEN_MODE.GROK, FAL: IMAGE_GEN_MODE.FAL, REACTOR: 'reactor', RUNWAY: 'runway',
+      GEMINI: 'gemini',
     });
-    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok', 'fal', 'reactor', 'runway']);
-    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok', 'fal', 'reactor', 'runway']);
+    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini']);
+    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok', 'fal', 'reactor', 'runway', 'gemini']);
     expect([VIDEO_GEN_MODE, VIDEO_GEN_MODES, CLOUD_VIDEO_GEN_MODES].every(Object.isFrozen)).toBe(true);
   });
 });

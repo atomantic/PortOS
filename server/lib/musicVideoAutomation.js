@@ -32,6 +32,7 @@ const VIDEO_TOOL_LABELS = {
   [VIDEO_GEN_MODE.FAL]: 'fal.ai video',
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor video',
   [VIDEO_GEN_MODE.RUNWAY]: 'Runway video',
+  [VIDEO_GEN_MODE.GEMINI]: 'Gemini Omni video',
 };
 
 // Metered = spends money or remote quota (the cloud lists); the budget cap is

@@ -233,6 +233,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [VIDEO_GEN_MODE.FAL]: () => import('../videoGen/fal.js'),
       [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
       [VIDEO_GEN_MODE.RUNWAY]: () => import('../videoGen/runway.js'),
+      [VIDEO_GEN_MODE.GEMINI]: () => import('../videoGen/geminiWeb.js'),
       default: () => import('../videoGen/local.js'),
     },
     invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),

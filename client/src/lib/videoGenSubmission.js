@@ -65,7 +65,7 @@ export function videoPromptAdditions({ prompt, negativePrompt, stylePreset, sele
   ];
 }
 
-// Hosted lanes (Grok, fal, reactor, Runway) take only text or image mode, and the
+// Hosted lanes (Grok, fal, reactor, Runway, Gemini) take only text or image mode, and the
 // source pair is meaningful only in image mode. '' is the wire value otherwise.
 const hostedImageFields = (mode, sourceImageFile, sourceImageUpload) => {
   const isImage = mode === 'image';
@@ -112,6 +112,16 @@ function falVideoSubmission({
     falModelId: falModelId || undefined,
     ...(falResolution ? { falResolution } : {}),
     ...(falGenerateAudio ? { falGenerateAudio: true } : {}),
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
+
+// Gemini's web composer has no length control and only two aspect ratios, which the size picks between.
+function geminiVideoSubmission({ composed, width, height, mode, sourceImageFile, sourceImageUpload }) {
+  return {
+    backend: 'gemini',
+    prompt: composed.prompt,
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
   };
@@ -364,6 +374,7 @@ const HOSTED_VIDEO_SUBMISSIONS = {
   fal: falVideoSubmission,
   reactor: reactorVideoSubmission,
   runway: runwayVideoSubmission,
+  gemini: geminiVideoSubmission,
 };
 
 export function buildVideoGenSubmission(args) {

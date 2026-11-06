@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   unlink: vi.fn(async () => {}),
   musicVideoClipCastReferences: vi.fn(async () => []),
   musicVideoClipReferences: vi.fn(async () => []),
+  musicVideoClipReferences: vi.fn(async () => []),
 }));
 
 vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
@@ -179,6 +180,21 @@ describe('submitVideoGenJob', () => {
     await submitVideoGenJob({ prompt: 'a subject steps into view', backend: 'grok', mode: 'image', sourceImageFile: 'still.png', musicVideo: tag }, {});
     expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag);
     expect(mocks.enqueueJob.mock.calls[0][0].params).toEqual(expect.objectContaining({ castReferences: cast, sourceImagePath: '/example/still.png' }));
+  });
+
+  it('sends a Music Video shot its clip references with its Gemini still, at the project aspect', async () => {
+    const cast = [{ path: '/example/guest.png', label: 'Guest — cast sheet' }];
+    mocks.musicVideoClipReferences.mockResolvedValueOnce(cast);
+    mocks.prepareVideoGenParams.mockResolvedValue({
+      backend: 'gemini', cleanupStaged: vi.fn(async () => {}),
+      sourceImagePath: '/example/still.png', uploadedTempPath: null,
+    });
+    const tag = { projectId: 'mv-1', sceneId: 'shot-example' };
+    await submitVideoGenJob({ prompt: 'a subject steps into view', backend: 'gemini', mode: 'image', sourceImageFile: 'still.png', musicVideo: tag }, {});
+    expect(mocks.musicVideoClipReferences).toHaveBeenCalledWith(tag, 7);
+    expect(mocks.enqueueJob.mock.calls[0][0].params).toEqual(expect.objectContaining({
+      mode: 'gemini', modelId: 'gemini-omni-1.2-flash', castReferences: cast, sourceImagePath: '/example/still.png',
+    }));
   });
 
   it('submits a local job with the effective model response contract', async () => {

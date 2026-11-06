@@ -1,4 +1,5 @@
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
+import { GEMINI_OMNI_WEB_MODEL } from '../../../../server/lib/geminiWebVideo.js';
 import RenderPoolPicker from './RenderPoolPicker.jsx';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
@@ -85,6 +86,8 @@ export default function VideoRenderSettings({ videoSettings, generating, project
         <option value="fal">fal.ai video</option>
         {/* Runway is image-to-video only, so like Grok it renders cutaways. */}
         <option value="runway">Runway video (cutaway only)</option>
+        {/* Drives the Gemini web app in the PortOS Browser; no audio, so cutaways only. */}
+        <option value="gemini">{GEMINI_OMNI_WEB_MODEL.label} (cutaway only, PortOS Browser)</option>
       </select>
       {settings.backend === 'local' && (
         <>
@@ -181,6 +184,11 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             </>
           )}
         </>
+      )}
+      {settings.backend === 'gemini' && (
+        <span className="text-xs text-port-text-muted">
+          {GEMINI_OMNI_WEB_MODEL.clipSeconds}s clips through the PortOS Browser, trimmed to each shot
+        </span>
       )}
       {settings.backend === 'grok' && (
         <>

@@ -5,6 +5,7 @@ import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
 import { musicVideoCameoReferences } from './musicVideoCameos.js';
+import { GEMINI_WEB_CLIP_REFERENCE_LIMIT } from './geminiWebVideo.js';
 
 /**
  * Browser-safe reference selection shared by the board and production lanes.
@@ -23,6 +24,7 @@ export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
 /** Extra image slots beside the selected source frame for a video render. */
 export function musicVideoClipReferenceCapacity(backend, model = null) {
   if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT;
+  if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;
     return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));
