@@ -35,6 +35,7 @@ vi.mock('../lib/portosEnv.js', async (importOriginal) => {
 });
 
 const { __testing, startNodeUpdate } = await import('./nodeRuntime.js');
+const { resolvePinnedNodeInterpreter } = await import('../lib/nodeInterpreterPin.js');
 
 const running = process.version;
 const [major, minor, patch] = running.slice(1).split('.').map(Number);
@@ -67,6 +68,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.PORTOS_NODE_INTERPRETER;
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -90,6 +92,25 @@ describe.skipIf(process.platform === 'win32')('startNodeUpdate', () => {
     expect(install[1].slice(-2)).toEqual(['install', NEXT]);
     expect(readPin()).toContain(`PORTOS_NODE_INTERPRETER=${nodeBinary}`);
     expect(mocks.startPortosSelfUpdate).toHaveBeenCalledWith(expect.objectContaining({ mode: 'refresh', preflightAlreadyRun: true }));
+  });
+
+  // pm2 exports the pin into a pinned server's env, and an exported pin beats
+  // .env, so every update after the first used to restart on the old Node.
+  it('launches the restart on the new pin when the server already has an older one exported', async () => {
+    const oldBinary = join(NVM_DIR, 'versions', 'node', running, 'bin', 'node');
+    mkdirSync(dirname(oldBinary), { recursive: true });
+    writeFileSync(oldBinary, '');
+    process.env.PORTOS_NODE_INTERPRETER = oldBinary;
+    let pinAtLaunch = null;
+    mocks.startPortosSelfUpdate.mockImplementation(async () => {
+      pinAtLaunch = resolvePinnedNodeInterpreter({ envPath: ENV_PATH });
+      return { started: true };
+    });
+
+    await startNodeUpdate({ version: NEXT, io });
+    await vi.waitFor(() => expect(mocks.startPortosSelfUpdate).toHaveBeenCalled());
+
+    expect(pinAtLaunch).toBe(nodeBinary);
   });
 
   it('refuses a version that is not on offer before running anything', async () => {
@@ -118,5 +139,23 @@ describe.skipIf(process.platform === 'win32')('startNodeUpdate', () => {
 
     expect(readPin()).not.toContain(nodeBinary);
     expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.objectContaining({ message: 'Update already in progress' }));
+  });
+
+  it('puts the exported pin back when the restart is refused', async () => {
+    const oldBinary = join(NVM_DIR, 'versions', 'node', running, 'bin', 'node');
+    process.env.PORTOS_NODE_INTERPRETER = oldBinary;
+    mocks.startPortosSelfUpdate.mockRejectedValue(new Error('Update already in progress'));
+    await startNodeUpdate({ version: NEXT, io });
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.anything()));
+
+    expect(process.env.PORTOS_NODE_INTERPRETER).toBe(oldBinary);
+  });
+
+  it('leaves the pin unexported after a refused restart when none was exported before', async () => {
+    mocks.startPortosSelfUpdate.mockRejectedValue(new Error('Update already in progress'));
+    await startNodeUpdate({ version: NEXT, io });
+    await vi.waitFor(() => expect(io.emit).toHaveBeenCalledWith('portos:update:error', expect.anything()));
+
+    expect(process.env.PORTOS_NODE_INTERPRETER).toBeUndefined();
   });
 });

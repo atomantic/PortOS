@@ -436,9 +436,15 @@ const nodeVersionOf = (nodeBinary) => nodeBinary.match(/(v\d+\.\d+\.\d+)/)?.[1] 
 async function pinAndRestart({ io, emit, nodeBinary, acknowledgeBusy = false }) {
   await assertIdleForRestart({ acknowledgeBusy });
   const previous = readPortosEnvValue(NODE_INTERPRETER_ENV_KEY);
+  const previousExported = process.env[NODE_INTERPRETER_ENV_KEY];
   if (nodeBinary) {
     emit('node-pin', 'running', 'Pinning PortOS to the new Node…');
     await upsertPortosEnvLine(NODE_INTERPRETER_ENV_KEY, nodeBinary);
+    // pm2 copies the launching shell's env into every app, so a pinned server
+    // already has the OLD pin exported, and an exported pin beats .env. Without
+    // this the restart resolves the old Node all over again: the script, the
+    // daemon check and ecosystem.config.cjs all read the value launchUpdate exports.
+    process.env[NODE_INTERPRETER_ENV_KEY] = nodeBinary;
     emit('node-pin', 'done', `PortOS will run ${nodeBinary}`);
   }
   // Best effort: a stale boot script only matters at the next login, and the
@@ -452,7 +458,11 @@ async function pinAndRestart({ io, emit, nodeBinary, acknowledgeBusy = false }) 
   // A refused launch puts the pin and the boot script back together, so boot
   // never starts a Node PortOS is not running on.
   await startPortosSelfUpdate({ io, acknowledgeFork: true, preflightAlreadyRun: true, mode: 'refresh' }).catch(async (error) => {
-    if (nodeBinary) await upsertPortosEnvLine(NODE_INTERPRETER_ENV_KEY, previous ?? '');
+    if (nodeBinary) {
+      await upsertPortosEnvLine(NODE_INTERPRETER_ENV_KEY, previous ?? '');
+      if (previousExported === undefined) delete process.env[NODE_INTERPRETER_ENV_KEY];
+      else process.env[NODE_INTERPRETER_ENV_KEY] = previousExported;
+    }
     await undoStartup?.().catch((undoError) => console.warn(`⚠️ Could not restore the pm2 LaunchAgent: ${undoError.message}`));
     throw error;
   });
