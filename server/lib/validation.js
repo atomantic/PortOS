@@ -1689,6 +1689,8 @@ const isoDay = z.string()
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, { message: 'Not a valid calendar date' });
 
+export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
+
 /**
  * Query params for GET /api/usage — either a preset period or an explicit
  * from/to date range (inclusive, YYYY-MM-DD). Explicit dates win over period.

@@ -5,10 +5,11 @@ import { PROVIDER_FAMILIES } from '../lib/providerFamilies.js';
 /** Read-only migration evidence. Account history and local run attribution are
  * overlapping, differently scoped views, never additive accounting inputs.
  */
-export async function getNativeUsageCoverage() {
+export async function getNativeUsageCoverage({ family: selectedFamily } = {}) {
+  const notScanned = { status: 'not-scanned', source: 'provider-native-transcripts', completeness: 'unknown', reason: 'Select this provider to read its retained native history.' };
   const { getCodexAccountUsage } = await import('./codexAppServer.js');
   const attemptedAt = new Date().toISOString();
-  const native = await getCodexAccountUsage().then(history => ({
+  const native = selectedFamily && selectedFamily !== 'codex' ? notScanned : await getCodexAccountUsage().then(history => ({
     status: 'available',
     source: 'codex:account/usage/read',
     scope: 'currently-signed-in-account',
@@ -27,6 +28,7 @@ export async function getNativeUsageCoverage() {
     attemptedAt,
     reason: 'The installed Codex could not provide valid account history. Existing usage is unchanged.',
   }));
+  const transcript = selectedFamily && selectedFamily !== 'codex' ? await import('./nativeTranscriptCoverage.js').then(({ getNativeTranscriptCoverage }) => getNativeTranscriptCoverage(selectedFamily)) : null;
   const configured = await getAllProviders();
   const providers = Array.isArray(configured) ? configured : configured?.providers ?? [];
   const ledger = getUsage();
@@ -41,12 +43,7 @@ export async function getNativeUsageCoverage() {
       const rows = report.providers.filter(row => row.family === family);
       return {
         family, label,
-        native: family === 'codex' ? native : {
-          status: 'not-integrated',
-          source: 'provider-native-transcripts',
-          completeness: 'unknown',
-          reason: 'A validated native history projection is not connected yet.',
-        },
+        native: family === 'codex' ? native : family === selectedFamily ? transcript : notScanned,
         legacy: {
           source: 'portos-ledger', scope: 'this-instance',
           observedAt: ledger.lastUpdated ?? null,
