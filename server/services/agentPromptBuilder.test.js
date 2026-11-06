@@ -3073,6 +3073,7 @@ describe('buildAgentPrompt — provider type routing', () => {
         reviewLoopPROwner: 'o',
         reviewLoopPRRepo: 'r',
         sourceTaskId: 'task-src-1',
+        useAutoMerge: false,
       }}),
       {},
       '/r',
@@ -3092,6 +3093,31 @@ describe('buildAgentPrompt — provider type routing', () => {
     // its cleanup runs with skipMerge, and a clean run makes no commit at all.
     expect(prompt).not.toMatch(/automatically merged back to the source branch/);
     expect(prompt).toMatch(/Follow the follow-up section above/);
+  });
+
+  it('review-loop follow-up enables GitHub auto-merge only under the app or task Use auto-merge choice', async () => {
+    const followUp = (metadata) => buildAgentPrompt(
+      makeTask({ metadata: {
+        reviewLoopFollowUp: true,
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+        reviewLoopPRBranch: 'b',
+        reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o',
+        reviewLoopPRRepo: 'r',
+        ...metadata,
+      }}),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, { providerType: 'api' });
+    // An unconfigured non-PortOS app defaults off; PortOS itself defaults on.
+    expect(await followUp({ app: 'example-unregistered-app' })).not.toContain('## Use auto-merge');
+    const portos = await followUp({});
+    expect(portos).toContain('## Use auto-merge');
+    expect(portos).toMatch(/gh pr merge <PR_URL> --auto --merge --match-head-commit <reviewed-head>/);
+    expect(portos).toContain('--disable-auto');
+    // A per-task choice overrides the app default either way.
+    expect(await followUp({ useAutoMerge: false })).not.toContain('## Use auto-merge');
+    expect(await followUp({ app: 'example-unregistered-app', useAutoMerge: true })).toContain('## Use auto-merge');
+    // Leave-open handoffs never merge, so they never get the section.
+    expect(await followUp({ useAutoMerge: true, reviewLoopLeaveOpen: true })).not.toContain('## Use auto-merge');
   });
 });
 

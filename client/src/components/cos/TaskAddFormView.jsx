@@ -1,4 +1,4 @@
-import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
+import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitMerge, GitPullRequest, Wand2 } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import AppContextPicker from '../AppContextPicker';
@@ -13,7 +13,7 @@ import {
   isOpencodeLocalProvider,
   providerModeSelectionPolicy,
 } from '../../utils/providers';
-import { PR_COMPLETION_OPTIONS, prCompletionOption } from './constants';
+import { PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption } from './constants';
 import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 
@@ -552,6 +552,21 @@ function TaskCompletionFields({ form }) {
                 >
                   {PR_COMPLETION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
+              </label>
+            )}
+            {state.openPR && prCompletionMerges(state.prCompletion) && (
+              <label htmlFor="task-use-auto-merge" className="flex items-center gap-2 cursor-pointer py-1" title="Turn on GitHub auto-merge once reviews pass, so the PR merges when CI finishes. The agent still watches CI and fixes failures.">
+                <input
+                  id="task-use-auto-merge"
+                  type="checkbox"
+                  checked={state.useAutoMerge}
+                  onChange={(event) => setField('useAutoMerge', event.target.checked)}
+                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                />
+                <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <GitMerge size={14} className="text-purple-400" />
+                  Auto-merge
+                </span>
               </label>
             )}
             {state.openPR && state.prCompletion === 'review-then-merge' && (
