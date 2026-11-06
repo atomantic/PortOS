@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CastSetsStage from './stages/CastSetsStage.jsx';
-import { listCatalogIngredientMedia } from '../../services/apiCatalog.js';
+import { detachCatalogIngredientMedia, listCatalogIngredientMedia } from '../../services/apiCatalog.js';
 
-vi.mock('../../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: vi.fn() }));
+vi.mock('../../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: vi.fn(), detachCatalogIngredientMedia: vi.fn() }));
 vi.mock('./CastAndSetsCheckin.jsx', () => ({ default: () => <p>Approved sheet</p> }));
 vi.mock('./DevArtifactsPanel.jsx', () => ({ default: () => null }));
 vi.mock('./LookReferencesPanel.jsx', () => ({ default: () => null }));
@@ -52,7 +53,7 @@ describe('linked object references on the Look step', () => {
     expect(save).not.toHaveBeenCalled();
     expect(project.castAndSets.images.character.imageId).toBe('approved.png');
 
-    const red = region.getByText('Red cruiser').closest('li');
+    const red = region.getByText('Red cruiser').closest('[role=listitem]');
     fireEvent.load(within(red).getByRole('img'));
     await act(async () => fireEvent.click(within(red).getByRole('button', { name: /^Add Bike image [0-9]+ to look references$/ })));
     expect(save).toHaveBeenCalledWith({ references: [project.visualSpec.references[0], expect.objectContaining({
@@ -88,20 +89,20 @@ describe('linked object references on the Look step', () => {
     let finishSave;
     const save = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
     const { rerender } = show(project, save);
-    const first = (await screen.findByText('First')).closest('li');
-    const second = screen.getByText('Second').closest('li');
+    const first = (await screen.findByText('First')).closest('[role=listitem]');
+    const second = screen.getByText('Second').closest('[role=listitem]');
     fireEvent.load(within(first).getByRole('img'));
     fireEvent.load(within(second).getByRole('img'));
-    fireEvent.click(within(first).getByRole('button'));
-    expect(within(second).getByRole('button')).toBeDisabled();
+    fireEvent.click(within(first).getByRole('button', { name: /Add Bike/ }));
+    expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeDisabled();
     const references = save.mock.calls[0][0].references;
     const updated = { ...project, visualSpec: { references } };
     const board = { project: updated, saveVisualSpec: save, locked: false, castSets: { busy: false }, kickoff: { running: false }, devArtifacts: { busy: false } };
     rerender(<MemoryRouter><CastSetsStage board={board} /></MemoryRouter>);
-    expect(within(second).getByRole('button')).toBeDisabled();
+    expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeDisabled();
     await act(async () => finishSave());
-    await waitFor(() => expect(within(second).getByRole('button')).toBeEnabled());
-    await act(async () => fireEvent.click(within(second).getByRole('button')));
+    await waitFor(() => expect(within(second).getByRole('button', { name: /Add Bike/ })).toBeEnabled());
+    await act(async () => fireEvent.click(within(second).getByRole('button', { name: /Add Bike/ })));
     expect(save.mock.calls[1][0].references.map((ref) => ref.imageId)).toEqual(['shared.png', 'one.png', 'two.png']);
   });
 
@@ -137,6 +138,111 @@ describe('linked object references on the Look step', () => {
     show(project);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByAltText('Bike reference 1')).toBeInTheDocument();
+  });
+
+  it('persists Look removal through the board save and supports adding the retained catalog image again', async () => {
+    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'shared.png' }]);
+    let saved = makeProject();
+    saved.concept.subjects = [saved.concept.subjects[0]];
+    saved.visualSpec.references.push({ id: 'keep', imageId: 'keep.png' });
+    saved.scenes = [{ sceneId: 'scene', frameReferenceIds: ['original'] }];
+    function Board() {
+      const [project, setProject] = useState(saved);
+      const saveVisualSpec = async (patch) => {
+        saved = { ...project, visualSpec: { ...project.visualSpec, ...patch } };
+        setProject(saved);
+        return saved;
+      };
+      return <CastSetsStage board={{ project, saveVisualSpec, locked: false, castSets: {}, kickoff: {}, devArtifacts: {} }} />;
+    }
+    const view = render(<MemoryRouter><Board /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Bike/ }));
+    await screen.findByRole('button', { name: /Add Bike/ });
+    expect(saved.visualSpec.references.map(ref => ref.imageId)).toEqual(['keep.png']);
+    expect(saved.scenes[0].frameReferenceIds).toEqual(['original']);
+    view.unmount();
+    render(<MemoryRouter><Board /></MemoryRouter>);
+    const add = await screen.findByRole('button', { name: /Add Bike/ });
+    fireEvent.load(screen.getByAltText('Bike reference 1'));
+    fireEvent.click(add);
+    await screen.findByRole('button', { name: /Remove Bike/ });
+    expect(saved.visualSpec.references.map(ref => ref.imageId)).toEqual(['keep.png', 'shared.png']);
+  });
+
+  it('removes only the selected look reference, guards repeated clicks, and restores controls after failure', async () => {
+    listCatalogIngredientMedia.mockResolvedValue([{ kind: 'portrait', mediaKey: 'shared.png' }]);
+    const project = makeProject();
+    project.concept.subjects = [project.concept.subjects[0]];
+    project.visualSpec.references.push({ id: 'keep', imageId: 'keep.png' });
+    let rejectSave;
+    const save = vi.fn().mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; })).mockResolvedValue(undefined);
+    show(project, save);
+    const remove = await screen.findByRole('button', { name: /Remove Bike/ });
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith({ references: [project.visualSpec.references[1]] });
+    await act(async () => rejectSave(new Error('Save failed')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Save failed');
+    expect(remove).toBeEnabled();
+    expect(project.visualSpec.references).toHaveLength(2);
+    await act(async () => fireEvent.click(remove));
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it('confirms unlinking all image associations, preserves look references, and keeps the detach after remount', async () => {
+    let rows = [
+      { kind: 'portrait', mediaKey: 'shared.png' },
+      { kind: 'reference', mediaKey: 'shared.png' },
+      { kind: 'reference', mediaKey: 'keep.png' },
+    ];
+    listCatalogIngredientMedia.mockImplementation(async () => rows);
+    let finish;
+    detachCatalogIngredientMedia.mockImplementationOnce(() => new Promise((resolve) => { finish = () => { rows = rows.filter(row => row.kind !== 'portrait'); resolve(); }; }))
+      .mockImplementationOnce(async (_, { kind, mediaKey }) => { rows = rows.filter(row => row.kind !== kind || row.mediaKey !== mediaKey); });
+    const project = makeProject();
+    project.concept.subjects = [project.concept.subjects[0]];
+    const { save, unmount } = show(project);
+    fireEvent.click(await screen.findByRole('button', { name: /Unlink Bike image 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(detachCatalogIngredientMedia).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Unlink Bike image 1/ }));
+    expect(screen.getByText(/object and image file are kept/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    await waitFor(() => expect(detachCatalogIngredientMedia).toHaveBeenCalledTimes(1));
+    await act(async () => finish());
+    await waitFor(() => expect(screen.queryByText('Already in look references')).toBeNull());
+    expect(detachCatalogIngredientMedia.mock.calls).toEqual([
+      ['cat-bike', { mediaKey: 'shared.png', kind: 'portrait' }, { silent: true }],
+      ['cat-bike', { mediaKey: 'shared.png', kind: 'reference' }, { silent: true }],
+    ]);
+    expect(save).not.toHaveBeenCalled();
+    expect(project.visualSpec.references[0].imageId).toBe('shared.png');
+    unmount();
+    show(project);
+    expect(await screen.findByAltText('Bike reference 1')).toHaveAttribute('src', '/data/images/keep.png');
+  });
+
+  it('retains failed associations and retries without repeating successful detaches', async () => {
+    listCatalogIngredientMedia.mockResolvedValue([
+      { kind: 'portrait', mediaKey: 'shared.png' }, { kind: 'reference', mediaKey: 'shared.png' },
+    ]);
+    detachCatalogIngredientMedia.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('Cannot unlink')).mockResolvedValueOnce(undefined);
+    const project = makeProject();
+    project.concept.subjects = [project.concept.subjects[0]];
+    show(project);
+    fireEvent.click(await screen.findByRole('button', { name: /Unlink Bike image 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Cannot unlink');
+    expect(screen.getByAltText('Bike reference 1')).toBeInTheDocument();
+    const list = screen.getByRole('list');
+    screen.getByRole('button', { name: 'Confirm unlink' }).focus();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    await screen.findByText('No usable images for this look.');
+    expect(screen.getByRole('list')).toBe(list);
+    expect(list).toHaveFocus();
+    expect(detachCatalogIngredientMedia.mock.calls.map(([, body]) => body.kind)).toEqual(['portrait', 'reference', 'reference']);
   });
 
   it('does not show a prior project’s images when a late request completes', async () => {
