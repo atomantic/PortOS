@@ -99,6 +99,13 @@ describe('renderOnGeminiWeb', () => {
     expect(sends(fake.log)).toBe(1);
   });
 
+  it('stops on an error that stays on screen while the page still looks busy', async () => {
+    const stuck = { responded: true, videoUrl: null, text: 'Something went wrong. Please try again later.', finished: false };
+    const fake = fakeGemini({ answers: [{ ...stuck }, { ...stuck }, { ...stuck }] });
+    await expect(render(fake)).rejects.toMatchObject({ code: 'GEMINI_WEB_REFUSED', message: expect.stringContaining('Something went wrong') });
+    expect(sends(fake.log)).toBe(1);
+  });
+
   it('keeps the chat open when the deadline passes after sending', async () => {
     const fake = fakeGemini();
     await expect(render(fake, { deadline: Date.now() - 1 })).rejects.toMatchObject({ code: 'GEMINI_WEB_TIMEOUT' });

@@ -25,6 +25,9 @@ const CONSENT_TITLE = /Creating content from images and files/i;
 // Gemini answers in the chat when it will not render. Only short answers count, so a longer reply quoting these words does not.
 const REFUSAL = /\b(limit|can.?t|cannot|couldn.?t|could not|unable|not able|try again|something went wrong|upgrade)\b/i;
 const REFUSAL_MAX_CHARS = 600;
+// "Something went wrong" can sit there with Stop response still showing and no feedback row
+// (seen 2026-11-05), so a refusal is whatever stays put for this many polls, finished or not.
+const REFUSAL_STABLE_POLLS = 3;
 
 const fail = (code, message, status = 502, context = {}) => new ServerError(message, { status, code, context });
 
@@ -102,14 +105,19 @@ const readLatestResponse = (page) => page.evaluate(() => {
   };
 });
 
-/** Wait for the sent prompt's clip. A finished answer with no video is Gemini's refusal, reported in its own words. */
+/** Wait for the sent prompt's clip. A short answer with no video that reads as a refusal is reported in Gemini's own words. */
 async function waitForClip(page, { deadline, signal, onWait }) {
+  let refusal = null;
+  let refusalPolls = 0;
   for (;;) {
     if (signal?.aborted) throw fail('GEMINI_WEB_CANCELED', 'Canceled', 499);
     const state = await readLatestResponse(page);
     if (state.videoUrl) return state.videoUrl;
-    if (state.responded && state.finished && state.text.length <= REFUSAL_MAX_CHARS && REFUSAL.test(state.text)) {
-      throw fail('GEMINI_WEB_REFUSED', `Gemini did not render this clip: ${state.text}`, 502);
+    const refused = state.responded && state.text.length <= REFUSAL_MAX_CHARS && REFUSAL.test(state.text) ? state.text : null;
+    refusalPolls = refused && refused === refusal ? refusalPolls + 1 : 1;
+    refusal = refused;
+    if (refused && (state.finished || refusalPolls >= REFUSAL_STABLE_POLLS)) {
+      throw fail('GEMINI_WEB_REFUSED', `Gemini did not render this clip: ${refused.replace(/^Gemini said\s*/i, '')}`, 502);
     }
     if (Date.now() > deadline) {
       throw fail('GEMINI_WEB_TIMEOUT', 'Gemini did not deliver a video in time. The chat is still open in the PortOS Browser, so it may yet finish there.', 504);

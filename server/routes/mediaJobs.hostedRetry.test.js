@@ -52,6 +52,7 @@ const HOSTED_JOB_PARAMS = {
   grok: { prompt: 'a fox', mode: 'grok', videoMode: 'text', grokPath: '/bin/grok', aspectRatio: '16:9', width: 1280, height: 720, duration: 6 },
   fal: { prompt: 'a fox', mode: 'fal', videoMode: 'text', modelId: 'fal-ai/provider-model', aspectRatio: '16:9', width: 1280, height: 720, duration: 5 },
   reactor: { prompt: 'a fox', mode: 'reactor', videoMode: 'text', seconds: 4, seed: 7, aspect: '16:9' },
+  gemini: { prompt: 'a fox', mode: 'gemini', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gemini-omni-1.2-flash', width: 1280, height: 720 },
   runway: { prompt: 'a fox', mode: 'runway', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gen4.5', width: 1280, height: 720, duration: 5 },
 };
 const seedJob = (id, params) => jobStore.set(id, { id, kind: 'video', owner: null, status: 'failed', params });
