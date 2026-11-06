@@ -341,6 +341,18 @@ describe('catalog sheet routes', () => {
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
   });
 
+  // Catches a prop sheet with no true size, so the bike in a shot comes out toy- or truck-sized.
+  it('states an object\'s and a place\'s real-world size on its sheet, with a scale panel sized to it', async () => {
+    mocks.getIngredient.mockResolvedValue({ ...object, payload: { ...object.payload, size: '14 in tall, 8 in wide' } });
+    const prop = (await request(app).post('/api/catalog/ingredients/cat-obj-1/sheets/preview').send({})).body.preview.sentPrompt;
+    expect(prop).toContain('Real-world size: 14 in tall, 8 in wide.');
+    expect(prop).toContain('door frame, drawn at true relative size so it reads as 14 in tall, 8 in wide');
+    expect(prop).toContain('no guide, ruler or dimension line touches or crosses it');
+    mocks.getIngredient.mockResolvedValue({ ...place, payload: { ...place.payload, size: 'pier rail 3 ft 6 in high' } });
+    const set = (await request(app).post('/api/catalog/ingredients/cat-plc-1/sheets/preview').send({})).body.preview.sentPrompt;
+    expect(set).toContain('Real-world sizes, true in every panel: pier rail 3 ft 6 in high.');
+  });
+
   // A preview writes nothing, so the lock never hides it; only the render is refused.
   it('previews a locked record but refuses to render it, for catalog-only and universe-delegated sheets', async () => {
     mocks.getIngredient.mockResolvedValue({ ...object, payload: { ...object.payload, locked: true } });
@@ -809,6 +821,10 @@ describe('catalog sheet routes', () => {
       expect(typical).not.toContain('5 ft 9 in');
       expect(await sheet([{ ...aged.payload.forms[0], height: '3 ft 8 in' }])).toContain('Height: 3 ft 8 in');
       expect(await sheet(aged.payload.forms, 'photographic')).toContain('Height: about 4 ft (122 cm).');
+      // The standing views carry that height as a ruler / height chart mark, so the sheet shows scale.
+      expect(await sheet(aged.payload.forms)).toContain('ONE measuring stick for the whole row, at its far left edge, marked in feet and centimeters with the 4 ft (122 cm) mark level with the top of the head, standing apart in the margin with clear space between it and the figure, never touching or crossing the body');
+      expect(await sheet(aged.payload.forms, 'blueprint')).toContain('ONE measuring stick for the whole zone, at its far left edge, labeled "4 ft (122 cm)" from floor level to head level, standing apart');
+      expect(await sheet(aged.payload.forms, 'photographic')).toContain('no other photograph gets a ruler.');
     });
 
     // Catches an age or look editing the present-day portrait (a 7-year-old

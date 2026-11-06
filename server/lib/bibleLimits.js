@@ -175,6 +175,8 @@ export const BIBLE_LIMITS = Object.freeze({
   // Objects
   OBJECT_DESCRIPTION_MAX: 2000,
   SIGNIFICANCE_MAX: 1000,
+  // A place's or object's real-world size ("4 ft chain-link fence"): the scale cue renders lack.
+  SIZE_MAX: 300,
   // Structured object↔character attachment links (#1288). The legacy prose
   // `significance` field above stays; `attachments[]` is additive. Each link
   // ties an object to ONE character and captures the emotion/significance/origin

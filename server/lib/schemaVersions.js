@@ -105,7 +105,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v20 = canon places may carry a `photoreal` look, mirrored like the greybox
   // (v15). A <=v19 peer's `sanitizePlace` would strip it on an unrelated Universe
   // edit and LWW the loss back. The catalog gate stays put, as for v15.
-  universes: 20,
+  // v21 = canon places and objects may carry a real-world `size` (scale cue for
+  // renders). A <=v20 sanitizer strips it and would LWW the loss back.
+  universes: 21,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -508,7 +510,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Older normalizers strip it and would send a left-out collage again.
   // v16 = bible `forms[]` entries may carry a `height` (scale cue for renders).
   // A <=v15 sanitizer strips it and whole-row LWW would send the loss back.
-  catalog: 16,
+  // v17 = place and object payloads may carry a real-world `size`. A <=v16
+  // sanitizer strips it and whole-row LWW would send the loss back.
+  catalog: 17,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

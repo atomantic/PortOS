@@ -118,6 +118,7 @@ const PLACE_SECTIONS = [
     fields: [
       ['slugline', 'Slugline', 'text'],
       ['era',      'Era',      'text'],
+      ['size',     'Real-world size', 'size'],
       ['intExt',   'Interior / exterior', 'intExt'],
       ['timeOfDay', 'Time of day', 'timeOfDay'],
       ['weather',  'Weather',  'text'],
@@ -144,6 +145,7 @@ const OBJECT_SECTIONS = [
     title: 'Identity',
     fields: [
       ['description',  'Description',  'textarea'],
+      ['size',         'Real-world size', 'size'],
     ],
   },
   {

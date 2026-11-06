@@ -27,6 +27,7 @@ import { promptAddition } from '../lib/modelInput.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from './catalogFamily.js';
 import { characterSheetEditBase, characterSheetReferenceCandidates, resolveCharacterSheetReferences } from '../lib/characterSheetReferences.js';
 import { characterHeightStat } from '../lib/catalogAppearance.js';
+import { formatHeight, resolveHeight } from '../lib/characterHeight.js';
 import { runwayImagePreservesSourceFrame } from '../lib/runwayImageModels.js';
 import { enqueueJob, getJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
@@ -148,6 +149,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     statsLine, paletteLine, wardrobeLine, propsLine, expressionsLine, gesturesLine,
   } = extractCharacterPromptCommon(character);
 
+  const standing = resolveHeight(characterHeightStat(character), age);
   const headerBits = [
     `Name: ${name}.`,
     aliases ? `Alias: ${aliases}.` : '',
@@ -169,7 +171,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     `Character header (top of sheet): ${headerBits}`,
     physical ? `Physical description: ${physical}` : '',
     statsLine ? `Stats panel (small table, left side of header): ${statsLine}.` : '',
-    `Main identity + scale sheet (large left zone): four full-body views of ${name} side by side at consistent scale — FRONT view, 3/4 view, SIDE view, BACK view — standing in a neutral pose with a small height-scale ruler in the margin. All four views must read as the same character with consistent proportions, clothing, color, and silhouette.`,
+    `Main identity + scale sheet (large left zone): four full-body views of ${name} side by side at consistent scale — FRONT view, 3/4 view, SIDE view, BACK view — standing in a neutral pose with ${heightRuler(standing)}. All four views must read as the same character with consistent proportions, clothing, color, and silhouette.`,
     silhouette ? `Silhouette notes panel (right of the scale sheet): ${silhouette}` : '',
     posture ? `Posture notes panel: ${posture}` : '',
     special ? `Special traits panel: ${special}` : '',
@@ -245,10 +247,11 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   const styleBits = universeAestheticLine(universe);
 
   const {
-    name, role, physical, silhouette, special, visualNotes,
+    name, role, age, physical, silhouette, special, visualNotes,
     wardrobeLine, propsLine, paletteLine,
   } = extractCharacterPromptCommon(character);
   const { accent, base } = pickBlueprintColors(character.colorPalette);
+  const mark = heightMark(resolveHeight(characterHeightStat(character), age));
 
   const subject = role ? `${name} — ${role}` : name;
   // Concrete label strings (vs abstract "annotations"): gpt-image-2 renders
@@ -266,7 +269,7 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
     `A character concept sheet of ${subject}, featuring detailed front, back, and side views, along with close-up sketches of facial features, costume details, and accessories. Annotated design notes and clearly labeled components are arranged across the layout, rendered in a refined blueprint style with glowing ${accent} accents and a structured ${base} base design, presented on a clean white background with a polished professional character design presentation.`,
     styleBits || DEFAULT_CHARACTER_SHEET_STYLE,
     `Header banner across the top of the sheet reads, in bold legible typography: "${name.toUpperCase()}${role ? ` — ${role.toUpperCase()}` : ''}".`,
-    `Main turnaround zone (large, fills the left two-thirds of the sheet): four full-body views of ${name} at consistent scale — FRONT, 3/4, SIDE, BACK — all fully illustrated in the universe's color palette. Each view sits over a small caption strip; the four caption strips read, left to right: ${turnaroundLabels}.`,
+    `Main turnaround zone (large, fills the left two-thirds of the sheet): four full-body views of ${name} at consistent scale — FRONT, 3/4, SIDE, BACK — all fully illustrated in the universe's color palette. Each view sits over a small caption strip; the four caption strips read, left to right: ${turnaroundLabels}.${mark ? ` ONE measuring stick for the whole zone, at its far left edge, labeled "${mark}" from floor level to head level, ${APART}; no other view gets a ruler.` : ''}`,
     physical ? `Physical description (annotation paragraph next to the turnaround): ${physical}` : '',
     visualNotes ? `Visual notes annotation: ${visualNotes}` : '',
     silhouette ? `Silhouette annotation: ${silhouette}` : '',
@@ -298,6 +301,19 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   };
 }
 
+// The standing views carry the person's height, so a sheet used as a shot
+// reference shows how tall they are against the sets and props they meet.
+// Only a parseable height becomes a mark; "tall" stays in the header alone.
+// Guides stay off the subject: a line through a figure reads as part of its design.
+const APART = 'standing apart in the margin with clear space between it and the figure, never touching or crossing the body or clothing';
+const heightMark = (height) => (height?.cm ? formatHeight(height.cm) : '');
+const heightRuler = (height) => (heightMark(height)
+  ? `ONE measuring stick for the whole row, at its far left edge, marked in feet and centimeters with the ${heightMark(height)} mark level with the top of the head, ${APART}; no other view gets a ruler`
+  : 'a small height-scale ruler in the margin');
+const heightChart = (height) => (heightMark(height)
+  ? ` ONE measuring stick for the whole row, at its far left edge, marked in feet and centimeters with the ${heightMark(height)} mark level with the top of the head, ${APART}; no other photograph gets a ruler.`
+  : '');
+
 /**
  * Photographic variant — a photographed turnaround and expression reference
  * of a real person on a plain studio backdrop, for photoreal universes. It
@@ -318,10 +334,10 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     wardrobeLine, propsLine, expressionsLine,
   } = extractCharacterPromptCommon(character);
 
-  const height = characterHeightStat(character);
+  const height = resolveHeight(characterHeightStat(character), age);
   const headerBits = [
     age ? `Age: ${age}.` : '',
-    height ? `Height: ${height}.` : '',
+    height ? `Height: ${height.text}.` : '',
     pronouns ? `Pronouns: ${pronouns}.` : '',
     visualNotes ? `Visual notes: ${visualNotes}.` : '',
   ].filter(Boolean).join(' ');
@@ -331,7 +347,7 @@ function buildCharacterPhotographicSheetPrompt(universe, character) {
     styleBits || DEFAULT_PHOTOGRAPHIC_SHEET_STYLE,
     headerBits,
     physical ? `Physical description: ${physical}` : '',
-    `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.`,
+    `Turnaround row (top half): four full-body photographs of ${name} at the same camera height, distance and focal length — FRONT, 3/4, SIDE profile, BACK — standing relaxed with arms slightly away from the body so build, proportions and clothing read clearly.${heightChart(height)}`,
     `Expression row (bottom half): exactly seven head-and-shoulders portrait photographs of the same person facing the camera. Choose from this complete expression list: ${expressionsLine}. If fewer than seven are supplied, show each supplied expression and add variations to fill the row; if more, choose seven without adding frames.`,
     silhouette ? `Silhouette: ${silhouette}` : '',
     posture ? `Posture: ${posture}` : '',

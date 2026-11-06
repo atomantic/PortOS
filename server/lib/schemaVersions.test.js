@@ -30,7 +30,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // v18 adds an optional `height` on canon forms.
     // v19 adds the film look weave/flicker speed a visual profile can carry.
     // v20 adds an optional place `photoreal` look (#14946).
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(20);
+    // v21 adds an optional real-world `size` on places and objects.
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(21);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -60,7 +61,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // v11 adds the ref/relation/media tombstone-revival guard (#8347).
     // v15 adds the per-image likeness opt-out on media library rows.
     // v16 adds an optional `height` on bible forms.
-    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(16);
+    // v17 adds an optional real-world `size` on places and objects.
+    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(17);
   });
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {
@@ -134,14 +136,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(20);
+    expect(meta.schemaVersions.universes).toBe(21);
     expect(meta.schemaVersions.pipelineIssues).toBe(6);
     expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(20);
+    expect(meta.schemaVersions.universes).toBe(21);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

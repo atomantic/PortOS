@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
+import { formatHeight, typicalHeightCm } from '../../../../server/lib/characterHeight.js';
+import { characterHeightStat } from '../../../../server/lib/catalogAppearance.js';
 // Shared narrative-framework definitions (#2175, #6417) — one source of truth
 // with the server store/schema and the Writers Room cast editor. An
 // unrecognized arc type is coerced to null server-side, so `''` = unset.
@@ -109,6 +111,22 @@ const SECTIONS = Object.freeze([
     ],
   },
 ]);
+
+// Height lives in the character's "Height" stat (what sheets and renders read);
+// this field edits that stat directly so it is not buried in the Stats list.
+const HEIGHT_FIELD = Object.freeze({ name: 'height', label: 'Height', max: L.STAT_VALUE_MAX, type: 'input' });
+const heightPlaceholder = (age) => {
+  const cm = typicalHeightCm(age);
+  return cm ? `${formatHeight(cm)}, typical at this age` : '5 ft 7 in (170 cm)';
+};
+function withHeightStat(stats, value) {
+  const list = Array.isArray(stats) ? stats : [];
+  const text = String(value || '').trim();
+  const at = list.findIndex((stat) => /^\s*height\s*$/i.test(String(stat?.label || '')));
+  if (!text) return at < 0 ? list : list.filter((_, i) => i !== at);
+  if (at < 0) return [...list, { label: 'Height', value: text }];
+  return list.map((stat, i) => (i === at ? { ...stat, value: text } : stat));
+}
 
 // Opposing-force axes (#1287) stay local: tagging a link as an opposing force
 // is Universe-editor-only, so the Writers Room row editor has no use for them.
@@ -1477,7 +1495,10 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
                 {(disabled || saveHint) && <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>}
               </div>
               {identityControls}
-              {renderFields([...SECTIONS[0].fields.slice(0, 3), SECTIONS[0].fields.find(field => field.name === 'role')])}
+              {renderFields([...SECTIONS[0].fields.slice(0, 2)])}
+              <DraftField field={{ ...HEIGHT_FIELD, placeholder: heightPlaceholder(entry.age) }} value={characterHeightStat(entry)}
+                onCommit={(value) => patchField('stats', withHeightStat(entry.stats, value))} disabled={disabled} idPrefix={entry.id} />
+              {renderFields([SECTIONS[0].fields[2], SECTIONS[0].fields.find(field => field.name === 'role')])}
             </div>
           </div>
           {listSection('stats')}

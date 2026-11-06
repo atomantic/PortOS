@@ -461,9 +461,12 @@ const ADDITIVE_OBJECT_FIELD_VERSIONS = Object.freeze({
   // v7 — structured object↔character attachments (#1288).
   attachments: 7,
   forms: 14,
+  // v21 — real-world size, the scale cue renders lack.
+  size: 21,
 });
 const ADDITIVE_PLACE_FIELD_VERSIONS = Object.freeze({
   forms: 14,
+  size: 21,
 });
 
 // v18 — a form's `height`. A behind sender keeps the form but its sanitizer
@@ -1092,6 +1095,12 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   };
 }
 
+// Absent stays absent so entries without a size keep their shape.
+function realWorldSize(raw) {
+  const size = trimTo(raw.size, BIBLE_LIMITS.SIZE_MAX);
+  return size ? { size } : {};
+}
+
 export function sanitizePlace(raw, { idPrefix = DEFAULT_ID_PREFIX.place, preserveTimestamps = true } = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
@@ -1115,6 +1124,7 @@ export function sanitizePlace(raw, { idPrefix = DEFAULT_ID_PREFIX.place, preserv
     intExt: trimEnum(raw.intExt, PLACE_INT_EXT_SET),
     timeOfDay: trimEnum(raw.timeOfDay, PLACE_TIME_OF_DAY_SET),
     recurringDetails: trimTo(raw.recurringDetails, BIBLE_LIMITS.RECURRING_DETAILS_MAX),
+    ...realWorldSize(raw),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
     imageRefs,
     // A4: clean-plate / canonical location render pinned for downstream.
@@ -1145,6 +1155,7 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
     aliases: cleanStringArray(raw.aliases, BIBLE_LIMITS.ALIAS_MAX, BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX),
     description: trimTo(raw.description, BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX),
     significance: trimTo(raw.significance, BIBLE_LIMITS.SIGNIFICANCE_MAX),
+    ...realWorldSize(raw),
     // Structured object↔character attachment links (#1288). Additive to the
     // legacy prose `significance` field above. Empty array stays the legacy
     // shape — every existing object keeps round-tripping unchanged.
