@@ -13,6 +13,7 @@ import { formatCount } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import CatalogForkSeedPicker from './CatalogForkSeedPicker';
 import Modal from '../ui/Modal';
+import { CATALOG_REDESIGN_FIELDS } from '../../../../server/lib/catalogRedesign.js';
 
 const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character': 'Character canon', 'canon-place': 'Environment canon',
   'canon-object': 'Object canon', cast: 'Cast', set: 'Set', prop: 'Prop', reference: 'Reference', mentioned: 'Mentioned' }[role] || role.replaceAll('-', ' '));
@@ -35,6 +36,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const [loadError, setLoadError] = useState(false);
   const [target, setTarget] = useState('');
   const [forkName, setForkName] = useState(ingredient.name);
+  const [forkFields, setForkFields] = useState({});
   const [seeds, setSeeds] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const operation = useRef(null);
@@ -84,8 +86,9 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   };
   const fork = async () => {
     if (forkBlocked || busy || unsaved || !target || !forkName.trim()) return;
+    const fields = { ...redesignFields, ...forkFields };
     const body = { universeId: target, name: forkName.trim(),
-      ...(seeds.size ? { seedImages: [...seeds].sort() } : {}), ...(redesignFields ? { fields: redesignFields } : {}) };
+      ...(seeds.size ? { seedImages: [...seeds].sort() } : {}), ...(Object.keys(fields).length ? { fields } : {}) };
     const submission = JSON.stringify(body);
     if (operation.current?.submission !== submission) operation.current = { submission, key: uuidv4() };
     setBusy(true);
@@ -122,6 +125,7 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const closeFork = () => {
     if (busy) return;
     setOpen(false);
+    setForkFields({});
     redesign?.clear?.();
   };
   const closeDetails = () => {
@@ -132,6 +136,11 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const ownerSummary = owner ? owner.refName || owner.refId : context?.status === 'conflict' ? 'Conflicting owners' : 'Needs review';
   return (
     <>
+    <button type="button" onClick={() => { setDetailsOpen(true); setOpen(true); }} aria-haspopup="dialog"
+      disabled={forkBlocked} title="Create a new identity with modifications; keep the original unchanged"
+      className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-port-accent px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-40">
+      <Copy size={14} aria-hidden="true" /> Fork
+    </button>
     <button type="button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog" aria-expanded={detailsOpen} aria-label={`Universe: ${ownerSummary}`} title={`Universe: ${ownerSummary}`}
       className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 py-2 text-sm text-gray-300 hover:border-port-accent/40 hover:text-white sm:w-auto sm:max-w-56 sm:px-3">
       <Globe size={14} className="shrink-0" aria-hidden="true" />
@@ -186,6 +195,17 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
             <span>The fork gets the redesigned {Object.keys(redesignFields).map((key) => key.replace(/([A-Z])/g, ' $1').toLowerCase()).join(', ')}. {ingredient.name} keeps its own.</span>
             <button type="button" onClick={() => redesign?.clear?.()} disabled={busy} className="min-h-9 px-2 text-port-accent hover:underline">Leave out</button>
           </div>}
+          {CATALOG_REDESIGN_FIELDS[ingredient.type] && <fieldset className="space-y-3" disabled={busy}>
+            <legend className="text-sm font-semibold text-white">Modify the new {ingredient.type}</legend>
+            <p className="text-xs text-gray-400">Edit the descriptions for your new version. The original stays unchanged. These edits do not generate images or call an AI provider.</p>
+            {Object.entries(CATALOG_REDESIGN_FIELDS[ingredient.type]).map(([key, limit]) => <div key={key}>
+              <label htmlFor={`${fieldId}-fork-${key}`} className="block text-xs capitalize text-gray-400 mb-1">{key.replace(/([A-Z])/g, ' $1').toLowerCase()}</label>
+              <textarea id={`${fieldId}-fork-${key}`} rows={3} maxLength={limit}
+                value={forkFields[key] ?? redesignFields?.[key] ?? ingredient.payload?.[key] ?? ''}
+                onChange={(event) => setForkFields((previous) => ({ ...previous, [key]: event.target.value }))}
+                className="w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white" />
+            </div>)}
+          </fieldset>}
           {seed && <CatalogForkSeedPicker candidates={seed.candidates} forms={seed.forms} selected={seeds} onChange={setSeeds} disabled={busy}
             loading={!seed.ready && !seed.error} error={seed.error || ''} onRetry={seed.load} />}
           <p className="text-xs text-gray-500">A fork gets a new identity and provenance. Production uses, character links, voice bindings and approvals stay with the original. Image files stay in the library when a reference is removed.</p>
