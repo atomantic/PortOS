@@ -26,6 +26,11 @@ const LABELS = {
   gemini_omni_flash: 'Gemini Omni Flash', 'gemini_omni_flash_1.1': 'Gemini Omni Flash 1.1',
   grok_imagine_1_5: 'Grok Imagine Video 1.5', grok_imagine_1_5_lite: 'Grok Imagine Video 1.5 Lite',
 };
+// Image counts Runway documents for unpositioned `promptImage` entries (their
+// text_to_video `references` caps), start frame included. The snapshot's
+// maxReferences column only reads the image lane's `referenceImages` field, so
+// it reports 0 for these. The prompt name is Seedance's own, as on fal.
+const REFERENCE_IMAGE_MAX = { seedance2: 9, seedance2_fast: 9, seedance2_mini: 9, seedance2_5: 30 };
 function sizeRule(row, textOnly) {
   if (row.resolutions.length) return {
     param: 'resolution', required: true, byResolution: Object.fromEntries(row.resolutions.map((r) => [r, null])),
@@ -54,6 +59,7 @@ export const RUNWAY_VIDEO_MODELS = Object.freeze(RUNWAY_CATALOG_SNAPSHOT.image_t
     endImage: row.endImage, duration, size: sizeRule(row, false), audio: row.audio, seed: row.seed, negativePrompt: row.negativePromptMax > 0, negativePromptMaxChars: row.negativePromptMax,
     ...(text ? { textToVideo: { ratios: text.ratios.filter((r) => /^\d+:\d+$/.test(r)), size: sizeRule(text, true), promptRequired: text.promptRequired } } : {}),
     pricing: { perSecond: PRICES[row.id] ?? null },
+    ...(REFERENCE_IMAGE_MAX[row.id] ? { referenceImages: { max: REFERENCE_IMAGE_MAX[row.id], promptName: '@Image1' } } : {}),
   });
 }));
 
@@ -167,7 +173,7 @@ export function describeRunwayVideoRate(modelId, resolution) {
 
 /**
  * Build the Runway request for a curated model: `/v1/image_to_video` with a
- * start frame, `/v1/text_to_video` without one (a model with a `textToVideo`
+ * start frame (and any `referenceImageUris` on a model that takes them), `/v1/text_to_video` without one (a model with a `textToVideo`
  * rule). Returns `{ endpoint, body, model, seconds, resolution,
  * estimatedCostUsd }`. A missing required input, an
  * input the model cannot take, an uncurated model, or an over-cap prompt throws
@@ -176,7 +182,7 @@ export function describeRunwayVideoRate(modelId, resolution) {
  */
 export function buildRunwayVideoRequest({
   modelId, prompt = '', negativePrompt = '', seconds, aspectRatio, width, height, resolution,
-  imageUri = null, endImageUri = null, seed,
+  imageUri = null, endImageUri = null, referenceImageUris = [], seed,
 } = {}) {
   const refuse = (message) => Object.assign(new Error(message), { code: 'RUNWAY_MODEL_INPUT' });
   const model = getRunwayVideoModel(modelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
@@ -198,12 +204,20 @@ export function buildRunwayVideoRequest({
   if (textOnly && !runwayModelTakesText(model)) throw refuse(`${model.label} renders from a start frame. Supply a source image.`);
   if (textOnly && endImageUri) throw refuse('An end frame needs a start frame. Supply a source image.');
   if (endImageUri && !model.endImage) throw refuse(`${model.label} takes no end frame; choose a model that does`);
+  if (referenceImageUris.length) {
+    if (!model.referenceImages) throw refuse(`${model.label} takes no reference images; choose a model that does`);
+    if (textOnly) throw refuse('Reference images need a start frame. Supply a source image.');
+    // Runway's keyframe and reference modes cannot be mixed on one request.
+    if (endImageUri) throw refuse('Runway cannot combine an end frame with reference images. Turn one of them off.');
+    if (referenceImageUris.length + 1 > model.referenceImages.max) throw refuse(`${model.label} takes at most ${model.referenceImages.max} reference images, the start frame included.`);
+  }
 
   const body = { model: model.id };
   if (!textOnly) {
-    body.promptImage = endImageUri
-      ? [{ uri: imageUri, position: 'first' }, { uri: endImageUri, position: 'last' }]
-      : imageUri;
+    // Unpositioned entries are references, so the start frame guides the clip instead of pinning its opening.
+    body.promptImage = referenceImageUris.length ? [imageUri, ...referenceImageUris].map((uri) => ({ uri }))
+      : endImageUri ? [{ uri: imageUri, position: 'first' }, { uri: endImageUri, position: 'last' }]
+        : imageUri;
   }
   if (sent) body.promptText = sent;
   if (model.negativePrompt && avoid) body.negativePrompt = avoid;

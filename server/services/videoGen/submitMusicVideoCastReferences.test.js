@@ -153,6 +153,25 @@ describe('Music Video cast references at video submission', () => {
     });
   });
 
+  it('queues a Runway Seedance clip with its frame and the selected reference images', async () => {
+    m.settings.videoGen.runway = { apiKey: 'test-key' };
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/rider.png', label: 'Rider' }]);
+    await submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'seedance2_5', runwayDuration: 5 }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, 16, { excludePath: '/mock/images/still.png' });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+      sourceImagePath: '/mock/images/still.png',
+      referenceImagePaths: ['/mock/images/rider.png'],
+      clipReferenceLabels: [{ label: 'Rider' }],
+    });
+  });
+
+  it('sends no references on a Runway model that takes none', async () => {
+    m.settings.videoGen.runway = { apiKey: 'test-key' };
+    await submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'gen4.5', runwayDuration: 5 }), {});
+    expect(m.hostedReferences).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
+  });
+
   it('does not claim extra references for a fal model that cannot accept them', async () => {
     await submitVideoGenJob(body({ backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 6 }), {});
     expect(m.hostedReferences).not.toHaveBeenCalled();

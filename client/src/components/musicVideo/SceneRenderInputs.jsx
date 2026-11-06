@@ -69,8 +69,8 @@ export function shotCardRenderRequest({
   const clipReferences = falModel?.referenceImages && scene?.referenceImageId
     ? falClipReferenceAddition(falModel, musicVideoClipConditioningReferences(project, scene, castMedia,
       { limit: musicVideoClipReferenceCapacity('fal', falModel) }), { hasImage: true, prompt: composedPrompt }) : null;
-  const prompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
-  const promptAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
+  const falPrompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
+  const falAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
   let endFrame = null;
   if (sceneActiveEndImageId(scene)) {
@@ -79,6 +79,13 @@ export function shotCardRenderRequest({
     // The card says why under Render on (its end-frame line), so no note repeats it here.
     else endFrame = { state: 'unavailable', note: null };
   }
+
+  // Runway cannot mix keyframes with references, so an end frame sends none.
+  const runwayReferences = runwayModel?.referenceImages && scene?.referenceImageId && endFrame?.state !== 'on'
+    ? musicVideoClipConditioningReferences(project, scene, castMedia, { limit: musicVideoClipReferenceCapacity('runway', runwayModel) }) : [];
+  const runwayAddition = runwayReferences.length ? falClipReferenceAddition(runwayModel, runwayReferences, { hasImage: true, prompt: composedPrompt }) : null;
+  const prompt = runwayAddition ? [falPrompt, runwayAddition.text].filter(Boolean).join('\n') : falPrompt;
+  const promptAdditions = runwayAddition ? [...falAdditions, runwayAddition] : falAdditions;
 
   // A performance take can hear the whole lyric line the shot sits in, so the
   // clip can play the full line or be cut down to the shot.

@@ -13,6 +13,20 @@ const scene = (over = {}) => ({ sceneId: 's1', startSec: 64.2, endSec: 69.8, pro
 
 // Adam: the card's Render sends only what the card shows, with the inputs he picks.
 describe('shotCardRenderRequest', () => {
+  it('previews the reference names a Runway Seedance clip sends, and none when an end frame holds them back', () => {
+    const project = { visualSpec: { references: [{ id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider' }] } };
+    const settings = { backend: 'runway', runwayModelId: 'seedance2_5' };
+    const selected = scene({ clipReferenceIds: ['rider'] });
+    const request = shotCardRenderRequest({ project, scene: selected, settings });
+    expect(request.prompt).toContain('Use @Image1 as the opening view. @Image2 is the reference for Rider.');
+    expect(request.promptAdditions.map((addition) => addition.id)).toContain('clip-references');
+    const keyframed = shotCardRenderRequest({ project, scene: { ...selected, endImageId: 'end.png' }, settings, endFramePlan: { used: true } });
+    expect(keyframed.endFrame.state).toBe('on');
+    expect(keyframed.prompt).not.toContain('@Image');
+    const gen45 = shotCardRenderRequest({ project, scene: selected, settings: { backend: 'runway', runwayModelId: 'gen4.5' } });
+    expect(gen45.prompt).not.toContain('@Image');
+  });
+
   it('sends the typed prompt and the card camera move, nothing else', () => {
     const request = shotCardRenderRequest({ scene: scene({ camera: { move: 'slow-dolly-in' } }), settings: { backend: 'local', modelId: 'wan_example' }, models });
     expect(request.prompt).toMatch(/^She shakes her head\nCamera movement: /);

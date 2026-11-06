@@ -58,6 +58,24 @@ describe('buildRunwayVideoRequest — per-family wire bodies', () => {
   });
 });
 
+describe('buildRunwayVideoRequest — reference images', () => {
+  const REF = 'data:image/png;base64,REF';
+  it('Seedance 2.5 sends the frame and references as unpositioned images', () => {
+    expect(build('seedance2_5', { seconds: 7, referenceImageUris: [REF], width: 1920, height: 1080 }).body.promptImage).toEqual([{ uri: FRAME }, { uri: REF }]);
+  });
+  it('Seedance 2.5 without references keeps pinning its start frame', () => {
+    expect(build('seedance2_5', { seconds: 7 }).body.promptImage).toBe(FRAME);
+  });
+  it('refuses what Runway would reject, before anything is paid for', () => {
+    const inputError = expect.objectContaining({ code: 'RUNWAY_MODEL_INPUT' });
+    const thrown = (fn) => { try { fn(); } catch (err) { return err; } return null; };
+    expect(thrown(() => build('gen4.5', { referenceImageUris: [REF] }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2_5', { referenceImageUris: [REF], endImageUri: END }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2', { referenceImageUris: Array(9).fill(REF) }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2_5', { imageUri: null, referenceImageUris: [REF] }))).toEqual(inputError);
+  });
+});
+
 describe('buildRunwayVideoRequest — text-to-video', () => {
   it('Gen-4.5 with no start frame: /v1/text_to_video body, ratio matched to the shape, priced, Avoid folded in', () => {
     const portrait = buildRunwayVideoRequest({

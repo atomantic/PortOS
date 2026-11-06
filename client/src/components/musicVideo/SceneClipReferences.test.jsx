@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SceneClipReferences from './SceneClipReferences.jsx';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
+import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 
 const project = { visualSpec: { references: [
   { id: 'person', imageId: 'person.png', role: 'character', label: 'Rider', condition: true },
@@ -10,6 +11,18 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1', referenceImageId: 'start.png', frameReferenceIds: ['person'] };
 
 describe('clip references', () => {
+  it('offers references on Runway Seedance and warns they unpin the opening frame', () => {
+    render(<SceneClipReferences project={project} scene={scene} backend="runway" model={getRunwayVideoModel('seedance2_5')} onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
+    expect(screen.getByText(/can send up to 16 additional image references/)).toBeTruthy();
+    expect(screen.getByText(/start frame is a guide/)).toBeTruthy();
+    expect(screen.getByText(/Remove every reference to pin the opening frame/)).toBeTruthy();
+  });
+
+  it('says a Runway end frame holds the references back', () => {
+    render(<SceneClipReferences project={project} scene={scene} backend="runway" model={getRunwayVideoModel('seedance2_5')} capacityOverride={0} endFrameBlocksReferences onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
+    expect(screen.getByText(/cannot combine an end frame with image references/)).toBeTruthy();
+  });
+
   it('lets the director add a prop to a clip without editing its frame choices', async () => {
     const onSave = vi.fn().mockResolvedValue(true);
     const onSaveState = vi.fn();

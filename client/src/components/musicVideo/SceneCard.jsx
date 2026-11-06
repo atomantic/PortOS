@@ -29,7 +29,8 @@ import SceneFrames from './SceneFrames.jsx';
 import SceneClipReferences from './SceneClipReferences.jsx';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideoConditioning.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
-import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
@@ -243,7 +244,8 @@ export default function SceneCard({
   const referenceBackend = peerPool ? 'remote' : renderSettings?.backend || renderLane;
   const referenceModel = referenceBackend === 'fal'
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
-    : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
+    : referenceBackend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
+      : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
@@ -252,7 +254,9 @@ export default function SceneCard({
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
   const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  // Runway cannot mix keyframes with references, so an end frame sends none.
+  const endFrameBlocksReferences = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on' && !!referenceModel?.referenceImages;
+  const referenceCapacity = useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
@@ -701,7 +705,7 @@ export default function SceneCard({
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : undefined} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : endFrameBlocksReferences ? 0 : undefined} endFrameBlocksReferences={endFrameBlocksReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (

@@ -17,14 +17,15 @@
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
 import { writeFile, unlink } from 'fs/promises';
-import { join, relative, resolve, isAbsolute } from 'path';
+import { basename, join, relative, resolve, isAbsolute } from 'path';
 import sharp from 'sharp';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, buildRunwayVideoRequest } from '../../lib/runwayVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, buildRunwayVideoRequest, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { falClipReferenceAddition } from '../../lib/storyboardGuidance.js';
 import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
 import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 import { probeVideoGeometry } from '../../lib/ffmpeg.js';
@@ -93,12 +94,18 @@ export const cancelAll = () => {
  * the plan and the record of the text Runway receives (#11317); the Video Gen
  * form's preview calls it with the same inputs.
  */
-export function runwayVideoSentPrompt({ hasImage = false, hasEndImage = false, hasVideo = false, hasCharacterVideo = false, promptAdditions = [], ...spec }) {
+export function runwayVideoSentPrompt({ hasImage = false, hasEndImage = false, hasVideo = false, hasCharacterVideo = false, clipReferenceLabels = [], promptAdditions = [], ...spec }) {
+  // Named after the director's text, in the order the images are sent.
+  const clipReferences = clipReferenceLabels.length
+    ? falClipReferenceAddition(getRunwayVideoModel(spec.modelId), clipReferenceLabels, { hasImage, prompt: spec.prompt || '' }) : null;
+  const prompt = clipReferences ? [spec.prompt?.trim(), clipReferences.text].filter(Boolean).join('\n') : spec.prompt;
   let planned;
   try {
     const build = getRunwaySpecialVideoModel(spec.modelId) ? buildRunwaySpecialVideoRequest : buildRunwayVideoRequest;
     planned = build({
       ...spec,
+      prompt,
+      referenceImageUris: clipReferenceLabels.map((_, index) => `pending:reference-${index + 1}`),
       videoUri: hasVideo ? 'pending:video' : null,
       characterVideoUri: hasCharacterVideo ? 'pending:character-video' : null,
       imageUri: hasImage ? 'pending:image' : null,
@@ -112,9 +119,9 @@ export function runwayVideoSentPrompt({ hasImage = false, hasEndImage = false, h
     sentPrompt: planned.body.promptText ?? '',
     sentNegativePrompt: planned.body.negativePrompt ?? null,
     carried: carriedPromptAdditions({ promptAdditions }),
-    added: [planned.model.negativePrompt ? null : promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', spec.negativePrompt)],
+    added: [clipReferences, planned.model.negativePrompt ? null : promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', spec.negativePrompt)],
   });
-  return { planned, record };
+  return { planned, record, prompt };
 }
 
 /**
@@ -143,7 +150,7 @@ export const generateVideo = (params) => preparations.run(params, generateVideoP
 async function generateVideoPrepared({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height,
-  sourceImagePath = null, lastImagePath = null, jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], clipReferenceLabels = [], jobId: providedJobId = null,
   uploadedTempPath = null, uploadedTempPaths = [], audioFilePath = null,
   resolution = null, seed, frameAspect = null, shotInstruction = null, promptAdditions = [],
   videoMode, runwayVideoPath = null, runwayCharacterVideoPath = null, targetAspectRatio, ratio, bodyControl, expressionIntensity,
@@ -167,9 +174,10 @@ async function generateVideoPrepared({
     videoMode, targetAspectRatio, ratio, bodyControl, expressionIntensity,
     ...(Number.isInteger(seed) ? { seed } : {}),
   };
-  const { planned, record: sentRecord } = runwayVideoSentPrompt({
-    ...requestSpec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasVideo: !!runwayVideoPath, hasCharacterVideo: !!runwayCharacterVideoPath,
+  const { planned, record: sentRecord, prompt: sentPrompt } = runwayVideoSentPrompt({
+    ...requestSpec, promptAdditions, clipReferenceLabels, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, hasVideo: !!runwayVideoPath, hasCharacterVideo: !!runwayCharacterVideoPath,
   });
+  requestSpec.prompt = sentPrompt;
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.mp4`;
@@ -185,6 +193,7 @@ async function generateVideoPrepared({
     // What PortOS expected this render to cost at Runway's list price.
     estimatedCostUsd: planned.estimatedCostUsd,
     ...sentRecord,
+    ...(referenceImagePaths.length ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
     filename,
     createdAt: new Date().toISOString(),
     mode: special?.mode || (sourceImagePath ? 'image' : 'text'),
@@ -200,7 +209,7 @@ async function generateVideoPrepared({
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Runway…');
 
   runRunwayVideo(job, jobId, {
-    apiKey, requestSpec, sourceImagePath, lastImagePath, outputPath, filename, meta,
+    apiKey, requestSpec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
     uploadedTempPath, uploadedTempPaths, frameAspect,
     runwayVideoPath, runwayCharacterVideoPath,
   }).catch((err) => {
@@ -229,7 +238,7 @@ async function downloadRunwayOutput(url, signal) {
 }
 
 async function runRunwayVideo(job, jobId, {
-  apiKey, requestSpec, sourceImagePath, lastImagePath, outputPath, filename, meta,
+  apiKey, requestSpec, sourceImagePath, lastImagePath, referenceImagePaths = [], outputPath, filename, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
   runwayVideoPath = null, runwayCharacterVideoPath = null,
 }) {
@@ -274,10 +283,12 @@ async function runRunwayVideo(job, jobId, {
     if (frame?.conformed || endFrame?.conformed) {
       meta.frameConformed = { aspect: frameAspect, ...(frame?.conformed ? { start: frame.conformed } : {}), ...(endFrame?.conformed ? { end: endFrame.conformed } : {}) };
     }
+    // A reference keeps its own framing: only the shot's frames conform to the project aspect.
+    const references = await Promise.all(referenceImagePaths.map((path) => runwayFrameDataUri(path, null)));
     const videoUri = runwayVideoPath ? await uploadRunwayVideo({ apiKey, filePath: runwayVideoPath, signal: entry.controller.signal }) : null;
     const characterVideoUri = runwayCharacterVideoPath ? await uploadRunwayVideo({ apiKey, filePath: runwayCharacterVideoPath, signal: entry.controller.signal }) : null;
     const build = special ? buildRunwaySpecialVideoRequest : buildRunwayVideoRequest;
-    const { body, endpoint } = build({ ...requestSpec, videoUri, characterVideoUri, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null });
+    const { body, endpoint } = build({ ...requestSpec, videoUri, characterVideoUri, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null, referenceImageUris: references.map((ref) => ref.dataUri) });
     if (entry.aborted) return finishFailure('Canceled');
     entry.taskId = await submitRunwayTask({ apiKey, endpoint, body, signal: entry.controller.signal });
 
