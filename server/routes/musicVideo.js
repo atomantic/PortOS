@@ -41,6 +41,7 @@ import {
   musicVideoLyricCutSchema,
   musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
+  musicVideoSceneEndSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoTranscribeMidiRequestSchema,
@@ -140,6 +141,7 @@ import {
   mergeProjectNextScene,
   mergeProjectPreviousScene,
   moveProjectSceneStart,
+  moveProjectSceneEnd,
   setProjectMidiTranscription,
   appendSceneTakes,
   appendTakesAcrossScenes,
@@ -1841,6 +1843,12 @@ router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res)
 router.post('/:id/scenes/:sceneId/start', asyncHandler(async (req, res) => {
   const { startSec } = validateRequest(musicVideoSceneStartSchema, req.body ?? {});
   res.json(await moveProjectSceneStart(req.params.id, req.params.sceneId, { startSec }));
+}));
+
+// Move a shot's end; the next shot starts at the same time, so it grows or shrinks to meet it.
+router.post('/:id/scenes/:sceneId/end', asyncHandler(async (req, res) => {
+  const { endSec } = validateRequest(musicVideoSceneEndSchema, req.body ?? {});
+  res.json(await moveProjectSceneEnd(req.params.id, req.params.sceneId, { endSec }));
 }));
 
 // --- Scene takes (#8965) ---
