@@ -3,6 +3,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import RealRouteMapsPanel from './RouteMapsPanel.jsx';
 
+const greyboxPlaces = vi.hoisted(() => ({ current: {} }));
+vi.mock('../../hooks/useMusicVideoGreyboxPlaces.js', () => ({ default: () => greyboxPlaces.current }));
+
 const RouteMapsPanel = (props) => <MemoryRouter><RealRouteMapsPanel {...props} /></MemoryRouter>;
 
 const places = [
@@ -48,5 +51,20 @@ describe('RouteMapsPanel', () => {
     expect(screen.getByRole('link', { name: 'Environment' })).toHaveAttribute('href', '/environments/cat-plc-1');
     fireEvent.change(screen.getByLabelText('Opening ride direction of travel'), { target: { value: 'west' } });
     expect(board.saveProjectFields).toHaveBeenCalledWith({ routeMaps: [{ ...routeMaps[0], heading: 'west' }] });
+  });
+
+  // Catches a stretch's side streets or look-back camera not reaching the saved stop.
+  it('adds a side street on the left and picks the place camera that looks back', () => {
+    greyboxPlaces.current = { 'cat-plc-1': { ingredient: { id: 'cat-plc-1', type: 'place', payload: { greybox: { shots: [{ id: 'ahead', label: 'Up the street' }, { id: 'behind', label: 'Down the street' }] } } }, media: [] } };
+    const routeMaps = [{ id: 'r', name: 'Opening ride', stops: [{ id: 'a', subjectId: 'p-curve' }, { id: 'b', subjectId: 'p-brick' }] }];
+    const board = boardFor({ routeMaps });
+    render(<RouteMapsPanel board={board} />);
+    fireEvent.click(screen.getByText('Route maps'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Side street' })[0]);
+    const [{ routeMaps: withStreet }] = board.saveProjectFields.mock.calls.at(-1);
+    expect(withStreet[0].stops[0].features).toEqual([expect.objectContaining({ kind: 'side-street', side: 'left' })]);
+    fireEvent.change(screen.getByLabelText('Stop 1 looking back camera'), { target: { value: 'behind' } });
+    expect(board.saveProjectFields.mock.calls.at(-1)[0].routeMaps[0].stops[0].views).toEqual({ back: 'behind' });
+    greyboxPlaces.current = {};
   });
 });
