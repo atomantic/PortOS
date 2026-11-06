@@ -12,7 +12,7 @@ import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { RELEASE_SYNC_POLICY_KEYS, RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS,
-  effectiveReleaseSynchronization, isInlineReleaseOwner, isInlineReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
+  effectiveReleaseSynchronization, inlineSynchronizationLockReason, isInlineReleaseOwner, isInlineReleaseSynchronization, publisherCandidateSeed, publisherCandidateTarget,
   releaseSynchronizationReset, releaseSynchronizationResetSchema, resetReleasesCheckout } from '../lib/releaseSynchronization.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
@@ -568,6 +568,8 @@ export async function recoverReleaseSynchronizationHandoffs(agents) {
         console.log(`🚫 Release checkout retirement retained for ${taskId}: ${error.code || 'retirement-unavailable'}`);
         return null;
       });
+      // The obligation only reports a missing receipt; say why this sweep made none.
+      for (const row of result?.held || []) console.log(`⏸️ Release checkout retained ${row.branch}: ${row.reason}`);
       if (result?.retired?.length) await verifyReleaseSynchronizationTask(taskId, { agents });
     }
   }
@@ -700,6 +702,30 @@ export function retainReleaseSynchronizationReview(release) {
     }
     return true;
   });
+}
+
+/** The same limit for the delivered synchronization checkout: its exact merged
+ * head, its owner's own lock, and processes settled at the destructive boundary. */
+export async function validateLockedSynchronizationRetirement(release) {
+  if (!release.checkoutIdentity || !release.locked) return false;
+  const outbox = await readOutbox();
+  const owned = Object.values(outbox.publications).flatMap(entry => {
+    if (!entry.registeredAt || !isInlineReleaseSynchronization(entry)) return [];
+    const rows = entry.obligations.retirement.evidence?.checkouts || [];
+    return rows.filter(row => ['repoPath', 'path', 'branch', 'head', 'checkoutIdentity'].every(key => row[key] === release[key]))
+      .map(row => ({ entry, row }));
+  });
+  if (owned.length !== 1) return false;
+  const [{ entry, row }] = owned;
+  const delivery = entry.obligations.synchronizationPr;
+  if (release.lockReason !== inlineSynchronizationLockReason(row.agentId)
+    || delivery.status !== 'verified' || delivery.evidence?.branch !== release.branch || delivery.evidence?.headSha !== release.head
+    || entry.obligations.processSettlement.status !== 'verified') return false;
+  const [{ readBranchCompletionPolicies }, { publisherProcessesSettled }] = await Promise.all([
+    import('./branchCompletionPolicy.js'), import('./releaseProcessSettlement.js'),
+  ]);
+  const agents = await readBranchCompletionPolicies({ repairIndex: false });
+  return publisherProcessesSettled(entry, agents, release.path);
 }
 
 /** Locked initialized retirement is limited to an exact, settled publisher.

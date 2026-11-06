@@ -2,7 +2,7 @@
  * retirement service rechecks ownership, review, inventory and daemon authority;
  * this bounded sweep supplies no new deletion authority of its own. */
 import { realpath } from 'node:fs/promises';
-import { isInlineReleaseSynchronization, publisherCandidateTarget, RELEASE_SYNC_OBLIGATIONS, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
+import { inlineSynchronizationLockReason, isInlineReleaseSynchronization, publisherCandidateTarget, RELEASE_SYNC_OBLIGATIONS, releaseSynchronizationReset } from '../lib/releaseSynchronization.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 
 const deliveryReady = entry => entry?.registeredAt && isInlineReleaseSynchronization(entry)
@@ -31,6 +31,7 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
   const allowed = deps.allowed || guard.assertAutomaticRetirementAllowed;
   const retainReview = deps.retainReview || synchronizationService.retainReleaseSynchronizationReview;
   const validateLocked = deps.validateLocked || synchronizationService.validateLockedPublisherRetirement;
+  const validateLockedSync = deps.validateLockedSync || synchronizationService.validateLockedSynchronizationRetirement;
   const app = await readApp(entry.task.metadata.app);
   // Seeds record the canonical repository path; app configuration may name a
   // symlink to it. An unreadable or different repository still grants nothing.
@@ -53,17 +54,20 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
       const outcome = await getOutcome(app.id).catch(() => null);
       const receipts = [...(outcome?.retired || []), ...Object.values(outcome?.retirementReceiptEvidence || {})]
         .filter(receipt => receipt.path === row.path && receipt.branch === row.branch && receipt.head === row.head
-          && receipt.checkoutIdentity === row.checkoutIdentity && receipt.branchDeleted === false && receipt.archiveDir == null
+          && receipt.checkoutIdentity === row.checkoutIdentity && receipt.archiveDir == null
           && Number.isFinite(Date.parse(receipt.retiredAt)) && Date.parse(receipt.retiredAt) >= Date.parse(row.createdAt));
-      const unique = [...new Map(receipts.map(receipt => [receipt.retiredAt, receipt])).values()];
+      // Already fully retired, typically by the branch-reconcile sweep: nothing is held.
+      if (receipts.some(receipt => receipt.branchDeleted === true)) continue;
+      const unique = [...new Map(receipts.filter(receipt => receipt.branchDeleted === false).map(receipt => [receipt.retiredAt, receipt])).values()];
       if (unique.length !== 1) { held.push({ branch: row.branch, reason: 'release-checkout-generation-changed' }); continue; }
       release = { path: row.path, branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity, retiredAt: unique[0].retiredAt };
     } else if (await readIdentity(row.path) !== row.checkoutIdentity) {
       held.push({ branch: row.branch, reason: 'release-checkout-generation-changed' }); continue;
     }
-    // A lock belongs to its holder unless it is the exact release-candidate
-    // lock whose private review and settled owner the service can revalidate.
-    if (tree?.locked && (!publisher || tree.lockReason !== `Active release candidate ${row.branch}`)) {
+    // A lock belongs to its holder unless it is the exact release-candidate or
+    // synchronization lock whose settled owner the service can revalidate.
+    const ownLock = publisher ? `Active release candidate ${row.branch}` : inlineSynchronizationLockReason(row.agentId);
+    if (tree?.locked && tree.lockReason !== ownLock) {
       held.push({ branch: row.branch, reason: 'release-checkout-locked' }); continue;
     }
     if (tree) release = { path: row.path, branch: row.branch, head: row.head, checkoutIdentity: row.checkoutIdentity,
@@ -81,7 +85,7 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
         held.push({ branch: row.branch, reason: 'release-retirement-review-unverified' }); continue;
       }
       if (tree?.locked && (!await retainReview({ ...release, repoPath })
-        || !await validateLocked({ ...release, repoPath }))) {
+        || !await (publisher ? validateLocked : validateLockedSync)({ ...release, repoPath }))) {
         held.push({ branch: row.branch, reason: 'release-locked-owner-unverified' }); continue;
       }
       const result = await retire({ appId: app.id, release, review: { prUrl, digest: review.digest, acceptSuperseded: false } },
