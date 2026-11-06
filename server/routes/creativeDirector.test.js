@@ -459,6 +459,15 @@ describe('creativeDirector routes', () => {
       expect(hook.startCreativeDirectorProject).toHaveBeenCalledWith('cd-1');
     });
 
+    it('leaves a complete project with its final video alone', async () => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'complete', finalVideoId: 'video-1' });
+      const r = await request(app).post('/api/creative-director/cd-1/start');
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+    });
+
     it('logs a rejected background kick to stderr with the project id and stack, and still answers 200', async () => {
       cdService.getProject.mockResolvedValue({ id: 'cd-1', name: 'A', status: 'draft' });
       cdService.updateProject.mockResolvedValue({});
@@ -497,19 +506,40 @@ describe('creativeDirector routes', () => {
   });
 
   describe('POST /:id/pause', () => {
-    it('marks paused', async () => {
-      cdService.updateProject.mockResolvedValue({ id: 'cd-1', status: 'paused' });
+    it('pauses an in-flight project', async () => {
+      cdService.getProject.mockResolvedValueOnce({ id: 'cd-1', status: 'planning' })
+        .mockResolvedValue({ id: 'cd-1', status: 'paused' });
+      cdService.updateProject.mockResolvedValue({});
       const r = await request(app).post('/api/creative-director/cd-1/pause');
       expect(r.status).toBe(200);
-      expect(cdService.updateProject).toHaveBeenCalledWith('cd-1', { status: 'paused' });
+      expect(r.body).toMatchObject({ id: 'cd-1', status: 'paused' });
+      expect(cdService.updateProject).toHaveBeenCalledExactlyOnceWith('cd-1', { status: 'paused' });
+    });
+
+    it.each(['complete', 'failed', 'paused', 'draft'])('refuses to pause a %s project without writing it', async (status) => {
+      // A peer replica proves the refusal also leaves its held run state alone —
+      // any status write would release it (applyProjectPatch).
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status, finalVideoId: 'video-1', peerReplica: true });
+      const r = await request(app).post('/api/creative-director/cd-1/pause');
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('INVALID_STATE');
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+    });
+
+    it('404s a missing project without writing it', async () => {
+      cdService.getProject.mockResolvedValue(null);
+      expect((await request(app).post('/api/creative-director/cd-gone/pause')).status).toBe(404);
+      expect(cdService.updateProject).not.toHaveBeenCalled();
     });
   });
 
   describe('POST /:id/resume', () => {
-    it('rejects when not paused', async () => {
-      cdService.getProject.mockResolvedValue({ id: 'cd-1', status: 'rendering' });
+    it.each(['rendering', 'complete', 'failed'])('refuses to resume a %s project', async (status) => {
+      cdService.getProject.mockResolvedValue({ id: 'cd-1', status });
       const r = await request(app).post('/api/creative-director/cd-1/resume');
-      expect(r.status).toBe(400);
+      expect(r.status).toBe(409);
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
     });
 
     it('flips paused → rendering and triggers the orchestrator', async () => {
