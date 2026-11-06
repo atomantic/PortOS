@@ -599,8 +599,8 @@ export async function revalidatePersistentMindReflection(reflection, enabled) {
   if (!previous) return reflection?.state || 'empty';
   return memoryBackend.peekMemory(previous.id).then(source => (
     source?.sourceAgentId === PERSISTENT_MIND_ID && source.status === 'active'
-      && source.version === previous.version && persistentMindMemoryProtection(source) === 'standard'
-      && !(source.lastReview?.expectedVersion === source.version && source.lastReview?.latestVerdict)
+      && (source.version ?? 1) === (previous.version ?? 1) && persistentMindMemoryProtection(source) === 'standard'
+      && !(source.lastReview?.expectedVersion === (source.version ?? 1) && source.lastReview?.latestVerdict)
       ? 'pending' : 'changed'
   )).catch(() => 'unavailable');
 }

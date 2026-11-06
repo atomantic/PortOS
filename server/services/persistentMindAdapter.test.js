@@ -1272,6 +1272,7 @@ it('sends one intact optional reflection, but removes it after grant revocation,
   const context = assemblePersistentMindContext({ identity: 'Protected identity', reflection });
   expect(context.reflection.state).toBe('pending');
   expect(context.text).toContain(JSON.stringify(source.content));
+  expect(assemblePersistentMindContext({ reflection: { ...reflection, source: { ...source, version: undefined } } }).text).toContain('\"expectedVersion\":1');
   mock.reflectionState = 'pending';
   mock.root.config.persistentMindCapabilities = { manageMind: true };
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({ message: 'Ignored optional reflection.' }) });

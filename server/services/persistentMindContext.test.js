@@ -523,6 +523,8 @@ it('distinguishes disabled, empty, unavailable and stale reflection reads withou
   expect(await readPersistentMindReflection()).toMatchObject({ state: 'disabled' });
   expect(mock.memoryApi.selectMindMemoryForReview).not.toHaveBeenCalled();
   expect(await readPersistentMindReflection({ enabled: true })).toMatchObject({ state: 'pending', source });
+  mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: undefined });
+  expect(await revalidatePersistentMindReflection({ source }, true)).toBe('pending');
   mock.memoryApi.peekMemory.mockResolvedValue({ ...source, version: 2 });
   expect(await revalidatePersistentMindReflection({ source }, true)).toBe('changed');
   mock.history = [{ data: { memoryReview: { memoryId: source.id } } }];

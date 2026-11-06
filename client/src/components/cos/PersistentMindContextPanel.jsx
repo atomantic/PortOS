@@ -342,9 +342,9 @@ function MemoryReflection() {
       {data?.state === 'empty' && sources.length === 0 && <p className="mt-2 text-xs text-port-text-muted">No eligible memory awaiting reflection.</p>}
       {sources.map(source => {
         const review = source.lastReview?.outcomes?.[source.lastReview.latestVerdict];
-        const currentReview = review?.expectedVersion === source.version;
+        const currentReview = review?.expectedVersion === (source.version ?? 1);
         return <div key={source.id} className="mt-3 space-y-2 text-xs text-port-text">
-        <p>{currentReview ? `Settled · ${review.verdict}` : source.status === 'active' && source.protection === 'standard' ? 'Pending · optional' : 'Source changed · no longer eligible'} · version {source.version}</p>
+        <p>{currentReview ? `Settled · ${review.verdict}` : source.status === 'active' && source.protection === 'standard' ? 'Pending · optional' : 'Source changed · no longer eligible'} · version {source.version ?? 1}</p>
         <Link className="text-port-accent underline" to={`/cos/memory/${encodeURIComponent(source.id)}`}>Source memory</Link>
         <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-port-border p-3">{source.content}</pre>
         {review && <div className="space-y-2">

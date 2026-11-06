@@ -474,7 +474,7 @@ export function assemblePersistentMindContext({
   let reflectionBlock = '';
   if (reflectionState === 'pending' && reflection.source) {
     const source = reflection.source;
-    const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version, content: source.content });
+    const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version ?? 1, content: source.content });
     const fence = '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map(match => match[0].length + 1)));
     const invitation = `\n\n# Optional memory reflection\nYou may revisit this fading experience with mind.review-memory (memoryId and expectedVersion below; verdict keep, learn, archive, or defer), or ignore it. A lesson does not authorize archival. No follow-up wake or maintenance quota is requested.\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}json\n${body}\n${fence}`;
     if (body.length <= PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars && text.length + invitation.length <= cap) {
