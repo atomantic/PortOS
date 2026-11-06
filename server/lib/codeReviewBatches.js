@@ -55,7 +55,8 @@ function diffFiles(diff) {
   });
 }
 
-/** One review round, with one shared wall-clock/call budget and immutable input.
+/** One review round, with one shared deadline/call budget and immutable input.
+ * CLI output may renew the deadline; the independent call limit never renews.
  * runBatch MUST return a validated verdict; transport success is insufficient.
  * Optional/required policy and iteration limits remain with the caller.
  */
@@ -93,7 +94,7 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       .catch(() => ({ ok: false, code: 'REVIEW_BATCH_FAILED', error: 'A review batch failed before returning a verdict; review coverage is incomplete.' }));
     identity = { ...identity, ...Object.fromEntries(['backend', 'model', 'effort', 'effortUnsupported'].filter(key => result[key] !== undefined).map(key => [key, result[key]])) };
     const capacity = isReviewContextCapacityFailure(result) || result.code === 'REVIEW_CONTEXT_CAPACITY';
-    batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true });
+    batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true, ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}) });
     if (capacity && batch.files.length > 1) {
       const middle = Math.ceil(batch.files.length / 2);
       queue.unshift(...[batch.files.slice(0, middle), batch.files.slice(middle)].map(parts => ({ files: parts, bytes: parts.reduce((sum, file) => sum + file.bytes, 0) })));
