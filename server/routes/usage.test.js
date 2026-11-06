@@ -3,6 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
+vi.mock('../services/nativeUsageCoverage.js', () => ({ getNativeUsageCoverage: vi.fn(async () => ({ mode: 'read-only', providers: [] })) }));
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock('../services/usageBackfill.js', () => ({
   cancelCodexUsagePreview: vi.fn(async () => ({ status: 'cancelled' }))
 }));
 
+import { getNativeUsageCoverage } from '../services/nativeUsageCoverage.js';
 import * as usage from '../services/usage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
@@ -588,4 +590,16 @@ describe('bounded Codex preview route', () => {
     expect((await request(app).post('/api/usage/backfill/preview/cancel').send({})).status).toBe(400);
     expect((await request(app).post('/api/usage/backfill/preview/cancel').send({ jobId: '12345678-1234-4234-8234-123456789abc' })).status).toBe(200);
   });
+});
+
+it('validates native coverage source selection before scanning and never caches diagnostics', async () => {
+  getNativeUsageCoverage.mockClear();
+  for (const query of ['family=unknown', 'family=claude&family=grok', 'home=/private']) {
+    expect((await request(buildApp()).get(`/api/usage/native-coverage?${query}`)).status).toBe(400);
+  }
+  expect(getNativeUsageCoverage).not.toHaveBeenCalled();
+  const response = await request(buildApp()).get('/api/usage/native-coverage?family=claude');
+  expect(response.status).toBe(200);
+  expect(response.headers['cache-control']).toBe('no-store');
+  expect(getNativeUsageCoverage).toHaveBeenCalledExactlyOnceWith({ family: 'claude' });
 });

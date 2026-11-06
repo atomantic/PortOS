@@ -1,8 +1,10 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
+import TabPills from '../components/ui/TabPills';
+import NativeUsageOverview from '../components/usage/NativeUsageOverview';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3 } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3, History, Fingerprint } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -1412,17 +1414,36 @@ function InternalUsageMetrics({ onBillingSaved }) {
   );
 }
 
-export function UsagePage() {
+export function LegacyUsagePage({ sourceTabs = null }) {
   const [billingRevision, setBillingRevision] = useState(0);
   const onBillingSaved = useCallback(() => setBillingRevision((value) => value + 1), []);
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
+        {sourceTabs}
         <ProviderQuotaSection billingRevision={billingRevision} />
         <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>
     </PageLayout>
   );
+}
+
+export function UsagePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get('view') === 'legacy' ? 'legacy' : 'native';
+  const tabs = <TabPills ariaLabel="Usage source" variant="pills" size="sm" stretch className="sm:max-w-sm" tabs={[
+    { id: 'native', label: 'Native history', icon: Fingerprint },
+    { id: 'legacy', label: 'Legacy analytics', icon: History },
+  ]} activeTab={view} onChange={value => {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'native') next.delete('view');
+    else next.set('view', value);
+    setSearchParams(next);
+  }} />;
+  if (view === 'legacy') return <LegacyUsagePage sourceTabs={tabs} />;
+  return <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
+    <div className="space-y-4">{tabs}<NativeUsageOverview /></div>
+  </PageLayout>;
 }
 
 export default UsagePage;

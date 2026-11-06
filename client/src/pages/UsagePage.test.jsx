@@ -22,7 +22,8 @@ const api = vi.hoisted(() => ({
 vi.mock('../services/api', () => api);
 
 const UsagePageModule = await import('./UsagePage');
-const UsagePage = UsagePageModule.default;
+// Preserve the full legacy analytics contract independently of the native default view.
+const UsagePage = UsagePageModule.LegacyUsagePage;
 const { arrangeQuotaCells } = UsagePageModule;
 
 const usage = {

@@ -42,6 +42,10 @@ const responses = {
   '/instances': { peers: [] },
   '/settings/features': { features: [] },
   '/code-animation/jobs': { items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null },
+  '/usage/native-coverage': { providers: [{ family: 'codex', label: 'Codex', native: {
+    status: 'available', summary: { lifetimeTokens: 104255445839 }, fetchedAt: '2026-11-06T12:00:00Z',
+    latestReportedDay: '2026-11-05', dailyUsageBuckets: [{ startDate: '2026-11-05', tokens: 1234567 }],
+  } }] },
   '/usage': usage,
   '/usage/backfill': { status: 'idle' },
   '/usage/rolling-cost': { windowDays: 30, instanceCount: 1, series: [], points: [] },
@@ -163,7 +167,20 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         if (path === '/code-animation/gallery') await page.getByText('Animations you generate in Fast HTML appear here.').waitFor();
         if (path === '/cos/health') await page.getByText('No issues detected', { exact: true }).waitFor();
         if (path === '/cos/agents') await page.getByRole('heading', { name: 'Active Agents', exact: true }).waitFor();
-        if (path === '/devtools/usage') await page.getByText('Example claude', { exact: true }).first().waitFor();
+        if (path === '/devtools/usage') {
+          await page.getByText('104,255,445,839', { exact: true }).waitFor();
+          await page.getByText('Daily native token history', { exact: true }).click();
+          await page.getByRole('table').waitFor();
+          const nativeGeometry = await page.getByRole('region', { name: 'Codex native history' }).evaluate(card => ({
+            overflow: card.scrollWidth > card.clientWidth + 1,
+            right: card.getBoundingClientRect().right,
+          }));
+          expect(nativeGeometry.overflow).toBe(false);
+          expect(nativeGeometry.right).toBeLessThanOrEqual(width);
+          if (process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS) await page.screenshot({ path: `${process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS}/native-${width}.png` });
+          await page.getByRole('tab', { name: 'Legacy analytics' }).click();
+          await page.getByText('Example claude', { exact: true }).first().waitFor();
+        }
         expect(await page.getByRole('alert').count(), path).toBe(0);
         const geometry = await page.locator('main').evaluate(main => {
           const shell = main.firstElementChild;

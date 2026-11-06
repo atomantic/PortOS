@@ -32,6 +32,33 @@ boundaries have not been matched. Equality between daily and lifetime totals is
 not proof of completeness. Other providers explicitly report not integrated,
 not unsupported or zero.
 
+## Native dashboard and retained-file coverage
+
+The Usage page defaults to native history. Codex account history is read once on
+mount and explicitly refreshed; other providers require a selected read. Legacy
+analytics stays available as a separate view, without adding its counters to the
+native snapshot. Provider dates retain their calendar meaning and absent days
+are not filled with zero. Transport failures label a retained prior snapshot.
+
+`GET /api/usage/native-coverage?family=claude|grok|agy` performs a bounded,
+read-only scan of this instance's native files. No family parameter still reads
+only Codex. Claude honors `CLAUDE_CONFIG_DIR`; roots and limits are not caller
+configurable. Scans skip symlinks, stream bounded records, exclude conflicting
+duplicate identities, and report missing fields, malformed lines, read failures,
+and caps. Retention and account identity remain unknown. Raw conversation data,
+identifiers and paths are not returned or persisted.
+
+Claude's measured retained subset uses unique native assistant message IDs and
+all four disjoint token fields. Antigravity reports measured planner-step
+coverage but no combined token total because input/cache overlap is unverified.
+Grok reports retained turn coverage but no total because per-turn versus
+cumulative semantics are unverified. None of these local subsets is an
+account-wide history or safe to sum across instances. All costs remain unknown.
+
+These reads do not rebuild the ledger, stop existing writers, change peer sync,
+or establish the replacement gates below. Historical rectification remains
+pending matched-account coverage evidence and a validated staged cutover.
+
 ## Remaining provider work
 
 - Claude: native assistant message IDs and usage fields can support a deduplicated

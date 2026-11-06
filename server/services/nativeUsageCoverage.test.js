@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./codexAppServer.js', () => ({ getCodexAccountUsage: vi.fn() }));
+vi.mock('./nativeTranscriptCoverage.js', () => ({ getNativeTranscriptCoverage: vi.fn() }));
 vi.mock('./providers.js', () => ({ getAllProviders: vi.fn() }));
 vi.mock('./usage.js', async importOriginal => ({ ...(await importOriginal()), getUsage: vi.fn() }));
 import { getCodexAccountUsage } from './codexAppServer.js';
 import { getAllProviders } from './providers.js';
 import { getUsage } from './usage.js';
+import { getNativeTranscriptCoverage } from './nativeTranscriptCoverage.js';
 import { getNativeUsageCoverage } from './nativeUsageCoverage.js';
 
 const ledger = {
@@ -30,7 +32,7 @@ describe('native usage coverage report', () => {
     expect(codex.legacy).toMatchObject({ tokens: 17, scope: 'this-instance', provenance: ['mixed'] });
     expect(codex.comparison).toMatchObject({ comparable: false, tokenDelta: null });
     expect(getUsage()).toEqual(ledger);
-    expect(result.providers.filter(row => row.family !== 'codex').every(row => row.native.status === 'not-integrated')).toBe(true);
+    expect(result.providers.filter(row => row.family !== 'codex').every(row => row.native.status === 'not-scanned')).toBe(true);
     expect(getCodexAccountUsage).toHaveBeenCalledTimes(1);
   });
   it('keeps unknown history and unavailable reads distinct from zero, and never exposes raw failures', async () => {
@@ -43,4 +45,16 @@ describe('native usage coverage report', () => {
     expect(JSON.stringify(failed)).not.toContain('private upstream details');
     expect(getUsage()).toEqual(ledger);
   });
+});
+
+it('scans only the explicitly selected native source without refreshing Codex or changing the ledger', async () => {
+  getNativeTranscriptCoverage.mockResolvedValue({ status: 'partial', summary: null });
+  const report = await getNativeUsageCoverage({ family: 'grok' });
+  expect(getNativeTranscriptCoverage).toHaveBeenCalledExactlyOnceWith('grok');
+  expect(getCodexAccountUsage).not.toHaveBeenCalled();
+  expect(report.providers.find(row => row.family === 'codex').native.status).toBe('not-scanned');
+  expect(getUsage()).toEqual(ledger);
+  await getNativeUsageCoverage({ family: 'codex' });
+  expect(getCodexAccountUsage).toHaveBeenCalledTimes(1);
+  expect(getNativeTranscriptCoverage).toHaveBeenCalledTimes(1);
 });

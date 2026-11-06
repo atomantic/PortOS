@@ -5,7 +5,7 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
+import { validateRequest, nativeUsageCoverageQuerySchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -23,8 +23,9 @@ const router = Router();
 
 // Explicit, uncached diagnostic read. Never consumed by fleet aggregation.
 router.get('/native-coverage', asyncHandler(async (req, res) => {
+  const query = validateRequest(nativeUsageCoverageQuerySchema, req.query);
   const { getNativeUsageCoverage } = await import('../services/nativeUsageCoverage.js');
-  res.set('Cache-Control', 'no-store').json(await getNativeUsageCoverage());
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageCoverage(query));
 }));
 
 // GET /api/usage/hourly - Fixed-size local counters, without building cost reports.
