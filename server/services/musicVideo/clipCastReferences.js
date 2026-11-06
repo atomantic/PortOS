@@ -72,7 +72,7 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
   const resolved = [];
   for (const ref of references) {
     if (resolved.length >= limit) break;
-    const path = (ref.castGuide || ref.catalogSubjectId) ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId);
+    const path = (ref.castGuide || ref.linkedCast || ref.catalogSubjectId) ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId);
     if (!path) throw new ServerError(`The clip reference ${ref.label || ref.imageId} is missing. Restore it or select another.`,
       { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
     if (path === excludePath || resolved.some((item) => item.path === path)) continue;

@@ -54,7 +54,7 @@ export default function CastSetsStage({ board }) {
         Concept, song style and cast are on the{' '}
         <button type="button" onClick={() => board.goToStage('story', 'mv-story-direction')} className="min-h-[44px] text-port-accent hover:underline sm:min-h-0">Story step</button>.
       </p>
-      <CatalogLookReferences key={`catalog-${project.id}`} project={project} onSaveSpec={board.saveVisualSpec} onLinked={board.applyCastLinks}
+      <CatalogLookReferences key={`catalog-${project.id}`} project={project} onLinked={board.applyCastLinks}
         checkin={catalog.checkin} catalogOnly={catalogMode} disabled={catalogBusy}>
         {catalogMode ? <div id={CAST_CHECKIN_ANCHOR} style={ANCHOR_STYLE} className="space-y-2" aria-label="Catalog Cast & Sets check-in">
           <p className="text-sm font-medium">Cast &amp; Sets check-in · {catalog.checkin?.approved ? 'Approved' : 'Review catalog links'}</p>

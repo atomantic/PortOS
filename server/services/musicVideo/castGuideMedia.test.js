@@ -15,16 +15,16 @@ describe('loadSceneCastMedia', () => {
   });
 
   // Uniquely catches a picked catalog sheet that shows on the card but is missing from the server's render.
-  it('loads every linked character for a scene that picked a catalog asset', async () => {
+  it('loads every linked character, set and prop for a scene that picked a catalog asset', async () => {
     const listMedia = vi.fn(async (id) => [{ mediaKey: `${id}.png` }]);
     const media = await loadSceneCastMedia({ clipReferenceIds: ['mvr-linked-cat-b.png'] }, { listMedia, project });
-    expect(Object.keys(media)).toEqual(['cat-a', 'cat-b']);
+    expect(Object.keys(media)).toEqual(['cat-a', 'cat-b', 'cat-set']);
   });
 
   it('keeps the members that loaded when another read fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const listMedia = vi.fn(async (id) => { if (id === 'cat-a') throw new Error('down'); return []; });
-    expect(await loadSceneCastMedia({ frameReferenceIds: ['mvr-linked-x.png'] }, { listMedia, project })).toEqual({ 'cat-b': [] });
+    expect(await loadSceneCastMedia({ frameReferenceIds: ['mvr-linked-x.png'] }, { listMedia, project })).toEqual({ 'cat-b': [], 'cat-set': [] });
     warn.mockRestore();
   });
 });

@@ -12,7 +12,6 @@ import { render, screen, waitFor, fireEvent, within, act } from '@testing-librar
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
-import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { createTestPhaseDiagnostics } from '../../../server/test/testPhaseDiagnostics.js';
 
 
@@ -3989,76 +3988,60 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
   });
 });
 
-describe('linked object look references', () => {
+describe('queued look reference saves', () => {
   const project = () => ({
     ...PROJECT_NO_CLIP,
     id: 'mv-object', name: 'Object references',
-    concept: { subjects: [{ id: 'bike', kind: 'object', name: 'Bike', ingredientId: 'cat-bike' }] },
-    visualSpec: { references: [{ id: 'existing', imageId: 'existing.png', label: 'Existing', role: 'prop', condition: false }] },
+    concept: { subjects: [] },
+    visualSpec: { references: [
+      { id: 'first', imageId: 'first.png', label: 'First', role: 'prop', condition: false },
+      { id: 'second', imageId: 'second.png', label: 'Second', role: 'prop', condition: false },
+    ] },
   });
-  const media = [
-    { kind: 'reference', mediaKey: 'one.png', caption: 'First bike' },
-    { kind: 'reference', mediaKey: 'two.png', caption: 'Second bike' },
-  ];
+  const openLook = async () => {
+    await openProject(project(), 'cast-sets');
+    fireEvent.click(await screen.findByText('Mood board & other asset links'));
+    return within(screen.getByRole('region', { name: 'Look references' }));
+  };
 
-  it('keeps later reference edits when an earlier object save resolves', async () => {
-    listCatalogIngredientMedia.mockResolvedValue(media);
+  it('keeps a later reference edit when an earlier save resolves', async () => {
     const saves = [];
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockImplementation((id, patch) => new Promise((resolve) => {
       saves.push(() => resolve({ id, visualSpec: patch.visualSpec }));
     }));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    fireEvent.load(screen.getByAltText('Bike reference 2'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    const look = await openLook();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[0]);
     await waitFor(() => expect(saves).toHaveLength(1));
-    fireEvent.click(screen.getByText('Mood board & other asset links'));
-    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
-    const condition = guidance.getAllByLabelText('Condition frames')[0];
-    fireEvent.click(condition);
-    expect(condition).toBeChecked();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[1]);
     await act(async () => saves[0]());
     await waitFor(() => expect(saves).toHaveLength(2));
-    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Bike image 2 to look references' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 2 to look references' }));
+    expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([true, true]);
     await act(async () => saves[1]());
-    await waitFor(() => expect(saves).toHaveLength(3));
-    const last = updateMusicVideoProject.mock.calls[2][1].visualSpec.references;
-    expect(last.map((ref) => ref.imageId)).toEqual(['existing.png', 'one.png', 'two.png']);
-    expect(last[0].condition).toBe(true);
-    await act(async () => saves[2]());
+    expect(updateMusicVideoProject.mock.calls[1][1].visualSpec.references.map((ref) => ref.condition)).toEqual([true, true]);
   });
 
-  it('rolls back a failed addition so the image can be retried', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
+  it('rolls back a failed edit so it can be retried', async () => {
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockRejectedValueOnce(new Error('Save failed'));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })));
-    expect(await screen.findByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
+    const look = await openLook();
+    await act(async () => fireEvent.click(look.getAllByLabelText('Condition frames')[0]));
+    await waitFor(() => expect(look.getAllByLabelText('Condition frames')[0]).not.toBeChecked());
     expect(toast.error).toHaveBeenCalledWith('Save failed');
   });
 
   it('restores the last saved references when two queued edits both fail', async () => {
-    listCatalogIngredientMedia.mockResolvedValue([media[0]]);
     const failures = [];
     updateMusicVideoProject.mockReset();
     updateMusicVideoProject.mockImplementation(() => new Promise((_, reject) => failures.push(() => reject(new Error('Save failed')))));
-    await openProject(project(), 'cast-sets');
-    fireEvent.load(await screen.findByAltText('Bike reference 1'));
-    fireEvent.click(screen.getByRole('button', { name: 'Add Bike image 1 to look references' }));
+    const look = await openLook();
+    fireEvent.click(look.getAllByLabelText('Condition frames')[0]);
     await waitFor(() => expect(failures).toHaveLength(1));
-    fireEvent.click(screen.getByText('Mood board & other asset links'));
-    const guidance = within(screen.getByRole('region', { name: 'Look references' }));
-    fireEvent.click(guidance.getAllByLabelText('Condition frames')[0]);
+    fireEvent.click(look.getAllByLabelText('Condition frames')[1]);
     await act(async () => failures[0]());
     await waitFor(() => expect(failures).toHaveLength(2));
-    expect(guidance.getAllByLabelText('Condition frames')[0]).toBeChecked();
+    expect(look.getAllByLabelText('Condition frames')[1]).toBeChecked();
     await act(async () => failures[1]());
-    expect(guidance.getByLabelText('Condition frames')).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Add Bike image 1 to look references' })).toBeEnabled();
+    expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([false, false]);
   });
 });
