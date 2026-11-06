@@ -13,9 +13,9 @@ import TabPills from '../ui/TabPills.jsx';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
-import OverflowMenu from '../ui/OverflowMenu.jsx';
+import { useState } from 'react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
@@ -107,9 +107,9 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  * and any but the first `onMergePrevious(sceneId, backend)` (with `prevStartSec`), which keeps this shot and removes the
  * one before; each is hidden when the joined span would exceed that lane's longest take.
  *
- * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
- * timing, lyric line and status — and it opens on tap to the full editor:
- * a "…" menu (move, delete), the linked storyboard panel, then
+ * It fills the shot drawer: a sticky header (frame thumbnail, title, timing,
+ * lyric line, status, previous / next shot and `onClose`) sits outside the
+ * `locked` fieldset so navigation always works; under it the linked storyboard panel, then
  * one picture at a time behind a Still / Clip switch (the still stands in for a
  * clip not made yet), each with its takes, its make / "Swap from unused" /
  * import buttons and its prompt. Swap from unused
@@ -118,14 +118,47 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  * settings sit in ShotEditorGroup groups (Timing, Sound, Transitions & effects,
  * Lyrics, Shot type, Direction), each header naming what is set: beside the
  * picture in a wide drawer and open there, stacked and closed on a phone.
- * Opening or closing it also calls `onSeek(scene)`, so the docked preview
- * jumps to the scene's start.
+ * Move earlier / later and Delete shot sit in the Timing group.
  */
 // #11040: the one owner of whether a video render may start. The server reloads
 // the persisted scene (and its speaker), so an unsaved or failed speaker edit
 // must hold back every video entry point — Generate video and the failure Retry.
 // Returns the refusal reason, or null when the render may go ahead.
 // A clip from the storyboard panel (`needsStill: false`) makes its own first frame.
+// Where the shot sits in the cut: move it a slot earlier or later (the song timing and
+// lyric stay with the slot), or delete it after a confirm.
+function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        {onMove && (
+          <>
+            <button type="button" className={SECONDARY_BUTTON} onClick={() => onMove(index, -1)} disabled={index === 0 || manifestOwnsShots}>
+              <ArrowUp size={12} aria-hidden="true" /> Move earlier
+            </button>
+            <button type="button" className={SECONDARY_BUTTON} onClick={() => onMove(index, 1)} disabled={isLast || manifestOwnsShots}>
+              <ArrowDown size={12} aria-hidden="true" /> Move later
+            </button>
+          </>
+        )}
+        {onDelete && (confirming ? (
+          <ConfirmButtonPair prompt="Delete this shot?" confirmText="Delete shot" confirmIcon={Trash2} className="ml-auto"
+            onConfirm={() => { setConfirming(false); onDelete(); }} onCancel={() => setConfirming(false)} responsiveTouchTargets />
+        ) : (
+          <button type="button" onClick={() => setConfirming(true)}
+            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 sm:min-h-0">
+            <Trash2 size={12} aria-hidden="true" /> Delete shot
+          </button>
+        ))}
+      </div>
+      {manifestOwnsShots && (
+        <p className="text-[11px] text-port-text-muted">Shot order comes from the composition document, so it can&apos;t be reordered here.</p>
+      )}
+    </div>
+  );
+}
+
 function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked, needsStill = true }) {
   if (videoBlockedReason) return videoBlockedReason;
   if (performanceBlocked) return performanceBlocked;
@@ -142,12 +175,10 @@ export default function SceneCard({
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
+  onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
-  const detailsRef = useRef(null);
-
   // Keep playback mounted even when this shot shows a still or performance evidence.
   const clipPlayback = useSceneClipPlayback(scene);
   const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
@@ -395,6 +426,8 @@ export default function SceneCard({
           <SceneShotCuts timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
             span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         )}
+        <SceneOrderActions index={index} isLast={isLast} manifestOwnsShots={manifestOwnsShots}
+          onMove={onMove} onDelete={onDelete ? () => onDelete(scene.sceneId) : null} />
       </ShotEditorGroup>
       {preMusic && (
         <ShotEditorGroup title="Sound" summary={preMusicSoundSummary(scene.preMusic).toLowerCase()} testId="shot-group-sound">
@@ -489,25 +522,15 @@ export default function SceneCard({
   );
   return (
     <div className="min-w-0">
-    <details
-      ref={detailsRef}
-      id={`scene-${scene.sceneId}`}
-      open={expanded != null ? expanded : undefined}
-      onToggle={(e) => {
-        onToggleExpand?.(scene.sceneId, e.currentTarget.open);
-      }}
-      className="group relative rounded-lg border border-port-border bg-port-card"
-    >
-      <summary
-        onClick={() => onSeek?.(scene)}
-        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap sm:group-open:pr-72 [&::-webkit-details-marker]:hidden"
-      >
-        <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
-        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
+    <section id={`scene-${scene.sceneId}`} aria-labelledby={`scene-${scene.sceneId}-title`}>
+      {/* The drawer's header: it stays put while the editor scrolls, and sits outside the
+          locked fieldset so stepping between shots and closing always work. */}
+      <header className="port-opaque-surface sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
+        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
+          <h2 id={`scene-${scene.sceneId}-title`} tabIndex={-1} data-shot-heading className="truncate text-base font-medium text-white focus:outline-hidden">
             {shotName || sceneShotName(scene)}
-          </div>
+          </h2>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
               ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
@@ -527,9 +550,25 @@ export default function SceneCard({
             </ul>
           )}
         </div>
-        {/* Render status wraps under the title on a phone instead of squeezing it. */}
+        {stepShot && (
+          <>
+            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </>
+        )}
+        {onClose && (
+          <button type="button" onClick={onClose} aria-label="Close shot" title="Close shot"
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-port-border/50 hover:text-white">
+            <X size={20} aria-hidden="true" />
+          </button>
+        )}
+        {/* Render status wraps under the title instead of squeezing it. */}
         {(generatingLane || generatingFrame || generatingVideo) && (
-          <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:basis-full max-sm:pl-6">
+          <span className="flex basis-full flex-wrap items-center gap-x-3 gap-y-1">
             {generatingLane && (
               <span className="flex items-center gap-1 text-[11px] text-port-accent">
                 <Activity size={14} className="animate-spin" aria-label="Generating" />
@@ -540,33 +579,8 @@ export default function SceneCard({
             <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
           </span>
         )}
-      </summary>
-      {/* The open card's shot arrows, lock and "…" menu: their own row under the title on a
-          phone, the top-right corner from sm up. A move swaps this shot with its neighbor;
-          the song timing and lyric stay with the slot. */}
-      <div className="flex items-center justify-end gap-1 px-2 pb-2 sm:absolute sm:right-2 sm:top-2 sm:z-10 sm:p-0">
-        {stepShot && (
-          <span className="mr-auto flex items-center gap-1 sm:mr-0">
-            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot"
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
-              <ChevronLeft size={16} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot"
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-          </span>
-        )}
-        <OverflowMenu label="Shot actions" items={[
-          { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || manifestOwnsShots },
-          { id: 'later', label: 'Move later', icon: ArrowDown, onSelect: () => onMove(index, 1), disabled: isLast || manifestOwnsShots },
-          { id: 'delete', label: 'Delete shot', icon: Trash2, tone: 'danger', onSelect: () => onDelete(scene.sceneId) },
-        ]} />
-      </div>
-      <div className="space-y-3 p-3 pt-0">
-        {manifestOwnsShots && (
-          <p className="text-[11px] text-port-text-muted">Shot order comes from the composition document, so it can&apos;t be reordered here.</p>
-        )}
+      </header>
+      <fieldset disabled={locked} className="min-w-0 space-y-3">
         {songChange && !songChange.resolved && songChange.status !== 'kept' && (
           <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
         )}
@@ -704,7 +718,7 @@ export default function SceneCard({
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
               ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
-              grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
+              grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
                 musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
@@ -776,13 +790,13 @@ export default function SceneCard({
         </div>
         </div>
         </div>
-      </div>
+      </fieldset>
       {swapKind && (
         <SceneTakePicker open onClose={() => setSwapKind(null)} projectId={projectId} scene={scene} kind={swapKind}
           shotNumbers={shotNumbers} busy={takeBusy} onPlace={(pick) => onPlacePoolItem?.(scene, pick)}
           onMarked={(result) => onPoolMarked?.(projectId, result)} />
       )}
-    </details>
+    </section>
     {failure && (
       <div className="mt-1 flex items-start gap-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1 text-xs text-port-error">
         <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />

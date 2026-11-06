@@ -316,19 +316,26 @@ describe('move buttons (#10785)', () => {
     const onMove = vi.fn();
     const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
     const { rerender } = render(<SceneCard {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Move later/ }));
     expect(onMove).toHaveBeenCalledWith(1, 1);
     // A Board-sourced document project still reorders; only a manifest-owned one is locked.
     rerender(<SceneCard {...props} documentComposition />);
-    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
     expect(screen.queryByText(/comes from the composition document/)).toBeNull();
     rerender(<SceneCard {...props} documentComposition manifestOwnsShots />);
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
-    expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
+  });
+
+  it('deletes the shot only after the confirm', () => {
+    const onDelete = vi.fn();
+    render(<SceneCard scene={scene} index={0} onDelete={onDelete} onEditLocal={() => {}} onSave={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Delete shot/ }));
+    expect(onDelete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Delete shot/ }));
+    expect(onDelete).toHaveBeenCalledWith('s1');
   });
 });
 

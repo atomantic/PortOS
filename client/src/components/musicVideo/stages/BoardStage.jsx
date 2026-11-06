@@ -139,7 +139,7 @@ export default function BoardStage({ board }) {
     const pending = focusAfterNavigation.current;
     if (!pending) return;
     const target = pending.target === 'thumbnail' ? thumbnailsRef.current.get(pending.sceneId) || thumbnailsRef.current.values().next().value
-      : inspectorRef.current?.querySelector('summary');
+      : inspectorRef.current?.querySelector('[data-shot-heading]');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
   // The open card's Previous / Next shot buttons walk every shot in play order (the cold open
@@ -262,14 +262,19 @@ export default function BoardStage({ board }) {
       <Drawer open={!!activeScene || endingOpen || creditsOpen} size="xl"
         onClose={activeScene ? () => toggleInspector(activeScene.sceneId, false) : closeEnding}
         title={activeScene ? shotName(activeScene) : creditsOpen ? 'Credits' : 'Cutting room floor'}
-        subtitle={activeScene?.lyricText ? `♪ ${activeScene.lyricText}` : undefined}
-        closeLabel={activeScene ? 'Close shot' : 'Close ending'}>
-        <fieldset ref={inspectorRef} disabled={locked} className="min-w-0">
-          {endingOpen && (
-            <EndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
-          )}
-          {creditsOpen && (
-            <CreditsEndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
+        closeLabel={activeScene ? 'Close shot' : 'Close ending'}
+        showHeader={!activeScene}>
+        {/* A shot draws its own header (thumbnail, timing, previous / next, close) and locks only its body. */}
+        <div ref={inspectorRef} className="min-w-0">
+          {(endingOpen || creditsOpen) && (
+            <fieldset disabled={locked} className="min-w-0">
+              {endingOpen && (
+                <EndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
+              )}
+              {creditsOpen && (
+                <CreditsEndingCard project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} onClose={closeEnding} />
+              )}
+            </fieldset>
           )}
           {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
             <SceneCard
@@ -281,8 +286,8 @@ export default function BoardStage({ board }) {
               onStoryboardBoard={setStoryboard}
               onApplyCameos={board.applyCameos}
               onVaryWipes={board.varyWipes}
-              expanded={activeSceneId === scene.sceneId}
-              onToggleExpand={toggleInspector}
+              locked={locked}
+              onClose={() => toggleInspector(scene.sceneId, false)}
               stepShot={stepShot}
               performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
               index={idx}
@@ -324,7 +329,6 @@ export default function BoardStage({ board }) {
               onGenerateVideo={sceneMedia.generateSceneVideo}
               onContinueVideo={sceneMedia.continueSceneVideo}
               onOpenPreview={board.openPreview}
-              onSeek={board.seekToScene}
               takeBusy={takes.busy}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
@@ -347,7 +351,7 @@ export default function BoardStage({ board }) {
               manifestOwnsShots={project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document'}
             />
           ))}
-        </fieldset>
+        </div>
       </Drawer>
     </fieldset>
   );
