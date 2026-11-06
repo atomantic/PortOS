@@ -24,9 +24,9 @@ const usage = (lifetimeTokens, days = [['2026-02-01', lifetimeTokens]]) => ({
   summary: { lifetimeTokens }, dailyUsageBuckets: days.map(([startDate, tokens]) => ({ startDate, tokens })),
 });
 const signedIn = (planType = 'plus') => ({ status: 'read', account: { authMethod: 'chatgpt', planType } });
-const report = (instanceId, codex = {}, capturedAt = '2026-03-01T00:00:00.000Z') => buildNativeUsageReport({
+const report = (instanceId, codex = {}, capturedAt = '2026-03-01T00:00:00.000Z', transcripts = {}) => buildNativeUsageReport({
   instanceId, capturedAt, scanLimits: LIMITS,
-  transcripts: { agy: missingSource, claude: missingSource, grok: missingSource },
+  transcripts: { agy: missingSource, claude: missingSource, grok: missingSource, ...transcripts },
   codexEvidence: { usage: usage(100), failureCode: null, accountBefore: signedIn(), accountAfter: signedIn(), runtimeVersion: '0.166.0', ...codex },
 });
 const key = nativeUsageParticipantKey;
@@ -133,7 +133,7 @@ describe('report and selection integrity', () => {
     const { contentHash: _dropped, ...body } = structuredClone(valid);
     const withPath = { ...body, sourcePath: '/Users/example/.codex' };
     const privateField = { ...withPath, contentHash: createHash('sha256').update(canonicalStringify(withPath)).digest('hex') };
-    const newerContract = { ...structuredClone(valid), contractVersion: 2 };
+    const newerContract = { ...structuredClone(valid), contractVersion: 99 };
     for (const bad of [tampered, privateField, newerContract]) {
       const matrix = buildNativeUsageMatrix({ reports: [bad], selections: [] });
       expect(matrix.participants).toEqual([]);
@@ -179,5 +179,117 @@ describe('reproducible projection', () => {
     const summary = formatNativeUsageMatrixSummary(matrix);
     expect(summary).toContain('codex: refused, no combined total (participant-account-unresolved)');
     expect(summary).not.toContain(key('host-a'));
+  });
+});
+
+const digest = (value) => createHash('sha256').update(canonicalStringify(value)).digest('hex');
+const hashReport = ({ contentHash: _discard, ...body }) => {
+  const updated = { ...body, evidenceHash: digest(body.providers) };
+  return { ...updated, contentHash: digest(updated) };
+};
+const message = (name, values = [10, 20, 3, 5], overrides = {}) => ({
+  recordKey: digest(name), requestKey: digest(`request-${name}`), values,
+  final: true, conflict: false, inconsistent: false, at: '2026-02-01T00:00:00.000Z', ...overrides,
+});
+const retainedReport = (host, records, overrides = {}) => report(host, {}, undefined, { claude: {
+  ...missingSource, status: 'available', summary: { totalTokens: 999999, tokensIn: 999999, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+  coverage: { ...missingSource.coverage, records: records.length, measuredRecords: records.length, missingSource: false, ...overrides.coverage },
+  recordProjection: { version: 1, identityScheme: 'sha256-native-record/1', truncated: false, records, ...overrides.recordProjection },
+} });
+const retainedAccount = (accountLabel, ...hosts) => ({ family: 'claude', accountLabel, historyScope: 'operator-confirmed-retained-history', members: hosts.map(key) });
+const claudeFamily = (matrix) => matrix.families.find(({ family }) => family === 'claude');
+
+describe('versioned retained-history union', () => {
+  it('unions copied messages and compatible stream finals across three participants without summing their aggregates', () => {
+    const reports = [
+      retainedReport('host-a', [message('shared'), message('a', [1, 2, 0, 0])]),
+      retainedReport('host-b', [message('shared', [10, 2, 3, 5], { final: false }), message('b', [4, 5, 0, 0])]),
+      retainedReport('host-c', [message('shared')]),
+    ];
+    const selections = [account('acct-a', 'host-a', 'host-b', 'host-c'), retainedAccount('acct-a', 'host-a', 'host-b', 'host-c')];
+    const matrix = buildNativeUsageMatrix({ reports, selections });
+    expect(codexFamily(matrix).merge).toMatchObject({ status: 'merged', totals: { lifetimeTokens: 100 } });
+    expect(claudeFamily(matrix)).toMatchObject({
+      scope: 'selected-account-retained-records',
+      merge: { status: 'partial', completeness: 'unknown', totals: { totalTokens: 50, tokensIn: 15, tokensOut: 27, cacheReadTokens: 3, cacheWriteTokens: 5 } },
+      accounts: [{ completeness: 'unknown', coverage: { uniqueRecords: 3, measuredRecords: 3, duplicateRecords: 2, excludedRecords: 0 }, cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null } }],
+    });
+    expect(nativeUsageCanonicalJson(buildNativeUsageMatrix({ reports: [...reports].reverse(), selections }))).toBe(nativeUsageCanonicalJson(matrix));
+    expect(formatNativeUsageMatrixSummary(matrix)).toContain('50 retained tokens (completeness unknown)');
+    for (const family of ['agy', 'grok']) expect(matrix.families.find((row) => row.family === family).merge).toMatchObject({ status: 'refused', totals: null });
+  });
+
+  it('preserves conflict tombstones and excludes inconsistent, unfinished, undated and conflicting cross-host records', () => {
+    const first = [message('good'), message('conflict'), message('request'), message('final'), message('bad'), message('unfinished', undefined, { final: false }), message('undated', undefined, { at: null })];
+    const second = [
+      message('conflict', [null, null, null, null], { conflict: true, final: false, requestKey: null }),
+      message('request', undefined, { requestKey: digest('different') }),
+      message('final', [10, 21, 3, 5]), message('bad', undefined, { inconsistent: true }),
+    ];
+    const matrix = buildNativeUsageMatrix({ reports: [retainedReport('host-a', first), retainedReport('host-b', second)], selections: [retainedAccount('acct-a', 'host-a', 'host-b')] });
+    expect(claudeFamily(matrix).accounts[0]).toMatchObject({
+      coverage: { uniqueRecords: 7, measuredRecords: 1, excludedRecords: 6, excluded: { 'conflicting-records': 4, 'unfinalized-records': 1, 'undated-records': 1 } },
+      totals: { totalTokens: 38 }, records: [message('good')],
+    });
+  });
+
+  it('accepts v1 account snapshots but refuses a retained union without projections, including mixed-version members', () => {
+    const legacy = retainedReport('host-a', [message('a')]);
+    legacy.contractVersion = 1;
+    legacy.providers.forEach((provider) => { delete provider.recordProjection; });
+    const matrix = buildNativeUsageMatrix({ reports: [hashReport(legacy), retainedReport('host-b', [message('b')])], selections: [account('acct-a', 'host-a', 'host-b'), retainedAccount('acct-a', 'host-a', 'host-b')] });
+    expect(matrix.participants).toHaveLength(2);
+    expect(codexFamily(matrix).merge.status).toBe('merged');
+    expect(claudeFamily(matrix).merge).toMatchObject({ status: 'refused', reasons: ['record-projection-unavailable'], totals: null });
+    expect(claudeFamily(matrix).accounts[0]).toMatchObject({ status: 'refused', totals: null, records: [] });
+  });
+
+  it('reports capped sources as partial and refuses missing, truncated or ungrouped input rather than inventing zero', () => {
+    const capped = retainedReport('host-a', [message('a')], { coverage: { capped: true, stoppedEarly: true } });
+    const selection = retainedAccount('acct-a', 'host-a');
+    const partial = claudeFamily(buildNativeUsageMatrix({ reports: [capped], selections: [selection] }));
+    expect(partial.merge).toMatchObject({ status: 'partial', completeness: 'unknown', totals: { totalTokens: 38 } });
+    expect(partial.accounts[0].findings).toContain('scan-capped');
+    const cases = [
+      [[capped], [retainedAccount('acct-a', 'host-a', 'host-b')], 'member-report-missing'],
+      [[capped, retainedReport('host-b', [message('b')])], [selection], 'participant-account-unresolved'],
+      [[retainedReport('host-a', [message('a')], { recordProjection: { truncated: true } })], [selection], 'record-projection-truncated'],
+      [[retainedReport('host-a', [])], [selection], 'no-verified-retained-records'],
+    ];
+    for (const [reports, selections, reason] of cases) {
+      const result = claudeFamily(buildNativeUsageMatrix({ reports, selections }));
+      expect(result.merge).toMatchObject({ status: 'refused', totals: null });
+      expect(result.merge.reasons).toContain(reason);
+    }
+  });
+
+  it('keeps separate accounts separate and refuses a record claimed by more than one account', () => {
+    const selections = [retainedAccount('acct-a', 'host-a'), retainedAccount('acct-b', 'host-b')];
+    const distinct = claudeFamily(buildNativeUsageMatrix({ reports: [retainedReport('host-a', [message('a')]), retainedReport('host-b', [message('b')])], selections }));
+    expect(distinct.merge).toMatchObject({ status: 'partial', accountCount: 2, totals: { totalTokens: 76 } });
+    const copied = claudeFamily(buildNativeUsageMatrix({ reports: [retainedReport('host-a', [message('a')]), retainedReport('host-b', [message('a')])], selections }));
+    expect(copied.merge).toMatchObject({ status: 'refused', reasons: ['record-in-multiple-accounts'], totals: null });
+    expect(nativeUsageAccountSelectionsSchema.safeParse([{ family: 'claude', accountLabel: 'acct-a', members: [key('host-a')] }]).success).toBe(false);
+  });
+
+  it('refuses overflow, malformed projected evidence and unsupported identities even when hashes are recomputed', () => {
+    const selections = [retainedAccount('acct-a', 'host-a')];
+    const overflow = retainedReport('host-a', [message('a', [Number.MAX_SAFE_INTEGER, 1, 0, 0])]);
+    expect(claudeFamily(buildNativeUsageMatrix({ reports: [overflow], selections })).merge).toMatchObject({ status: 'refused', totals: null });
+    const mixedOverflow = buildNativeUsageMatrix({ reports: [overflow, retainedReport('host-b', [message('b')])], selections: [...selections, retainedAccount('acct-b', 'host-b')] });
+    expect(claudeFamily(mixedOverflow).merge).toMatchObject({ status: 'refused', reasons: ['counter-overflow'], totals: null });
+    const valid = retainedReport('host-a', [message('a')]);
+    const edits = [
+      (entry) => { entry.recordProjection.records[0].prompt = 'private'; },
+      (entry) => { entry.recordProjection.version = 2; },
+      (entry) => { entry.recordProjection.records.push(entry.recordProjection.records[0]); },
+      (entry) => { entry.recordProjection.records[0].recordKey = 'raw-id'; },
+      (entry) => { entry.recordProjection.records[0].values[0] = Number.MAX_SAFE_INTEGER + 1; },
+    ];
+    for (const edit of edits) {
+      const invalid = structuredClone(valid);
+      edit(invalid.providers.find(({ family }) => family === 'claude'));
+      expect(buildNativeUsageMatrix({ reports: [hashReport(invalid)], selections }).participants).toEqual([]);
+    }
   });
 });

@@ -18,8 +18,9 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { CODEX_ERROR_CODES } from './codexAccount.js';
 import { canonicalStringify } from './objects.js';
+import { nativeUsageRecordProjectionSchema, unionNativeClaudeRecords } from './nativeUsageRecords.js';
 
-export const NATIVE_USAGE_CONTRACT_VERSION = 1;
+export const NATIVE_USAGE_CONTRACT_VERSION = 2;
 export const NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY = 'usageNativeAccountSelections';
 
 const FAMILIES = ['agy', 'claude', 'codex', 'grok'];
@@ -126,8 +127,8 @@ const providerEntrySchema = z.strictObject({
   findings: z.array(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/)).max(32),
 });
 
-export const nativeUsageReportSchema = z.strictObject({
-  contractVersion: z.literal(NATIVE_USAGE_CONTRACT_VERSION),
+const reportSchemaV1 = z.strictObject({
+  contractVersion: z.literal(1),
   kind: z.literal('native-usage-participant-report'),
   participantKey: participantKey.nullable(),
   capturedAt: instant,
@@ -136,28 +137,36 @@ export const nativeUsageReportSchema = z.strictObject({
   contentHash,
 });
 
-/**
- * Operator-selected account grouping, stored machine-local in `data/settings.json`.
- * Labels are the operator's own opaque names: the pattern refuses `@` and `.` so an
- * email or domain cannot be pasted in as one. Only account-scoped sources take a
- * selection, because a machine-local retained subset has no account snapshot to choose.
- */
-export const nativeUsageAccountSelectionsSchema = z.array(z.strictObject({
-  family: z.literal('codex'),
+const providerEntrySchemaV2 = providerEntrySchema.extend({ recordProjection: nativeUsageRecordProjectionSchema.nullable() })
+  .refine(({ family, recordProjection }) => family === 'claude' || recordProjection === null, 'unsupported record projection');
+export const nativeUsageReportSchema = z.discriminatedUnion('contractVersion', [
+  reportSchemaV1,
+  reportSchemaV1.extend({ contractVersion: z.literal(2), providers: z.array(providerEntrySchemaV2).length(FAMILIES.length) }),
+]).refine(({ providers }) => FAMILIES.every((family) => providers.filter((entry) => entry.family === family).length === 1), 'provider family must be unique');
+
+const accountSelection = {
   accountLabel: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
-  authoritativeParticipant: participantKey,
   members: z.array(participantKey).min(1).max(64),
-})).max(64).superRefine((selections, ctx) => {
+};
+/** A selection asserts account membership; equal counters never establish identity.
+ * Claude selections apply to retained history, not merely the currently signed-in account.
+ */
+export const nativeUsageAccountSelectionsSchema = z.array(z.discriminatedUnion('family', [
+  z.strictObject({ family: z.literal('codex'), ...accountSelection, authoritativeParticipant: participantKey }),
+  z.strictObject({ family: z.literal('claude'), ...accountSelection, historyScope: z.literal('operator-confirmed-retained-history') }),
+])).max(64).superRefine((selections, ctx) => {
   const claimed = new Set();
   const labels = new Set();
   for (const [index, selection] of selections.entries()) {
     const refuse = (message) => ctx.addIssue({ code: 'custom', path: [index], message });
-    if (labels.has(selection.accountLabel)) refuse('accountLabel is already selected');
-    labels.add(selection.accountLabel);
-    if (!selection.members.includes(selection.authoritativeParticipant)) refuse('authoritativeParticipant must be a member');
+    const label = `${selection.family}:${selection.accountLabel}`;
+    if (labels.has(label)) refuse('accountLabel is already selected for this provider');
+    labels.add(label);
+    if (selection.family === 'codex' && !selection.members.includes(selection.authoritativeParticipant)) refuse('authoritativeParticipant must be a member');
     for (const member of selection.members) {
-      if (claimed.has(member)) refuse('a participant can belong to only one account');
-      claimed.add(member);
+      const membership = `${selection.family}:${member}`;
+      if (claimed.has(membership)) refuse('a participant can belong to only one account per provider');
+      claimed.add(membership);
     }
   }
 });
@@ -180,7 +189,7 @@ const baseEntry = (family) => {
     scanCaps: null, reproducibility: 'deterministic', duplicates: null, coverage: null, steps: null, cacheOverlap: null,
     tokenFields, totals: null,
     cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: null },
-    attribution: 'excluded', findings: [],
+    attribution: 'excluded', findings: [], recordProjection: null,
   };
 };
 
@@ -274,6 +283,7 @@ function projectTranscriptCoverage(family, scan, scanLimits) {
     steps: coverage.steps,
     cacheOverlap: coverage.cacheOverlap,
     totals: scan.summary,
+    recordProjection: scan.recordProjection ?? null,
     cost: {
       estimatedApiEquivalentUsd: null, actualSpendUsd: null,
       nativeCostSignal: coverage.costTickRecords ? { kind: 'grok-cost-usd-ticks', status: 'unverified-scope', records: coverage.costTickRecords } : null,
@@ -337,7 +347,7 @@ function loadParticipants(reports, refuse) {
     list.sort((a, b) => a.capturedAt.localeCompare(b.capturedAt) || a.contentHash.localeCompare(b.contentHash));
     list.forEach((report, index) => {
       if (!index) return;
-      if (report.capturedAt === list[index - 1].capturedAt) refuse('conflicting-reports', 'codex', key);
+      if (report.capturedAt === list[index - 1].capturedAt) refuse('conflicting-reports', null, key);
       for (const code of accountChangeFindings(codexEntryOf(list[index - 1]), codexEntryOf(report))) refuse(code, 'codex', key);
     });
   }
@@ -384,9 +394,65 @@ function buildMachineFamily(family, latest) {
       const entry = latest.get(key).providers.find((provider) => provider.family === family);
       return { participantKey: key, status: entry.status, freshness: entry.freshness, totals: entry.totals, findings: entry.findings };
     }),
-    // Message and step identities are private and stay on their machine, so disjointness
-    // across instances (a copied or restored history) cannot be established from reports.
+    // Without a supported record projection and account selection, copied or
+    // restored history cannot be safely combined across participants.
     merge: { status: 'refused', reasons: ['machine-subset-disjointness-unverified'], accountCount: null, totals: null },
+  };
+}
+
+function buildClaudeFamily(latest, selections, refusals, refuse) {
+  const sources = buildMachineFamily('claude', latest).sources;
+  if (!selections.length) return buildMachineFamily('claude', latest);
+  const entryFor = (key) => latest.get(key)?.providers.find(({ family }) => family === 'claude');
+  const selected = new Set(selections.flatMap(({ members }) => members));
+  const unresolved = [...latest.keys()].filter((key) => !selected.has(key) && !entryFor(key).coverage?.missingSource).sort();
+  for (const key of unresolved) refuse('participant-account-unresolved', 'claude', key);
+  const recordAccounts = new Map();
+  const accounts = selections.map(({ accountLabel, members, historyScope }) => {
+    const projections = [];
+    const findings = new Set(['retained-history-completeness-unknown']);
+    const missing = [];
+    for (const member of members) {
+      const entry = entryFor(member);
+      if (!entry) {
+        missing.push(member);
+        refuse('member-report-missing', 'claude', member);
+      } else if (!entry.recordProjection || entry.recordProjection.truncated) {
+        refuse(entry.recordProjection ? 'record-projection-truncated' : 'record-projection-unavailable', 'claude', member);
+      } else {
+        projections.push(entry.recordProjection);
+        for (const finding of entry.findings) findings.add(finding);
+        for (const { recordKey } of entry.recordProjection.records) {
+          const owner = recordAccounts.get(recordKey);
+          if (owner && owner !== accountLabel) refuse('record-in-multiple-accounts', 'claude');
+          recordAccounts.set(recordKey, accountLabel);
+        }
+      }
+    }
+    const union = unionNativeClaudeRecords(projections);
+    if (union.findings.includes('counter-overflow')) refuse('counter-overflow', 'claude');
+    for (const finding of union.findings) findings.add(finding);
+    return {
+      accountLabel, identityBasis: 'operator-selection', historyScope,
+      members: [...members].sort(), membersWithoutReport: missing.sort(),
+      status: 'partial', completeness: 'unknown', retention: 'unknown',
+      ...union, findings: [...findings].sort(),
+      cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null }, attribution: 'excluded',
+    };
+  }).sort((a, b) => a.accountLabel.localeCompare(b.accountLabel));
+  const reasons = [...new Set(refusals.filter(({ family }) => !family || family === 'claude').map(({ code }) => code))].sort();
+  const fields = ['totalTokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+  const totals = Object.fromEntries(fields.map((field) => [field, accounts.reduce((sum, account) => sum + (account.totals?.[field] ?? 0), 0)]));
+  if (!Object.values(totals).every(Number.isSafeInteger)) reasons.push('counter-overflow');
+  if (!accounts.some(({ totals: value }) => value)) reasons.push('no-verified-retained-records');
+  if (reasons.length) {
+    // Keep diagnostic counts, but do not publish any account partition as usable
+    // when its requested input set or grouping cannot be established.
+    for (const account of accounts) { account.status = 'refused'; account.totals = null; account.records = []; }
+  }
+  return {
+    family: 'claude', scope: 'selected-account-retained-records', sources, accounts, unresolvedParticipants: unresolved,
+    merge: { status: reasons.length ? 'refused' : 'partial', reasons, accountCount: accounts.length, completeness: 'unknown', totals: reasons.length ? null : totals },
   };
 }
 
@@ -408,7 +474,8 @@ export function buildNativeUsageMatrix({ reports, selections }) {
   const usableSelections = parsedSelections.success ? parsedSelections.data : [];
   const byParticipant = loadParticipants(reports, refuse);
   const latest = new Map([...byParticipant].map(([key, list]) => [key, list.at(-1)]));
-  const codex = buildCodexFamily(latest, usableSelections, refusals, refuse);
+  const codex = buildCodexFamily(latest, usableSelections.filter(({ family }) => family === 'codex'), refusals, refuse);
+  const claude = buildClaudeFamily(latest, usableSelections.filter(({ family }) => family === 'claude'), refusals, refuse);
   const unique = [...new Map(refusals.map((refusal) => [canonicalStringify(refusal), refusal])).entries()]
     .sort(([a], [b]) => a.localeCompare(b)).map(([, refusal]) => refusal);
   return withContentHash({
@@ -419,7 +486,7 @@ export function buildNativeUsageMatrix({ reports, selections }) {
       participantKey: key, capturedAt: latest.get(key).capturedAt, reportHash: latest.get(key).contentHash,
       evidenceHash: latest.get(key).evidenceHash, comparedReports: byParticipant.get(key).length, providers: latest.get(key).providers,
     })),
-    families: [...TRANSCRIPT_FAMILIES.map((family) => buildMachineFamily(family, latest)), codex].sort((a, b) => a.family.localeCompare(b.family)),
+    families: [...['agy', 'grok'].map((family) => buildMachineFamily(family, latest)), claude, codex].sort((a, b) => a.family.localeCompare(b.family)),
     refusals: unique,
   });
 }
@@ -432,10 +499,10 @@ export function formatNativeUsageMatrixSummary(matrix) {
   const short = (key) => key.slice(0, 8);
   const lines = [`Native usage matrix ${matrix.contentHash.slice(0, 16)}: ${matrix.participants.length} participant(s), ${matrix.refusals.length} refusal(s)`];
   for (const family of matrix.families) {
-    const total = family.merge.totals ? `${family.merge.totals.lifetimeTokens} lifetime tokens` : 'no combined total';
+    const total = family.merge.totals ? family.family === 'codex' ? `${family.merge.totals.lifetimeTokens} lifetime tokens` : `${family.merge.totals.totalTokens} retained tokens (completeness unknown)` : 'no combined total';
     lines.push(`${family.family}: ${family.merge.status}, ${total}${family.merge.reasons.length ? ` (${family.merge.reasons.join(', ')})` : ''}`);
     for (const account of family.accounts ?? []) {
-      lines.push(`  ${account.accountLabel}: ${account.status} from ${short(account.authoritativeParticipant)}, ${account.members.length} member(s)`);
+      lines.push(`  ${account.accountLabel}: ${account.status}${account.authoritativeParticipant ? ` from ${short(account.authoritativeParticipant)}` : ''}, ${account.members.length} member(s)`);
     }
     for (const source of family.sources ?? []) lines.push(`  ${short(source.participantKey)}: ${source.status}, ${source.findings.length} finding(s)`);
   }

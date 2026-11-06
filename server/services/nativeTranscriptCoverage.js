@@ -4,11 +4,12 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
+import { canonicalStringify } from '../lib/objects.js';
 
-// Diagnostic reads only. No ledger, reconciliation, estimates, or provider calls.
+// Bounded retained-record reads only. No ledger, estimates, or provider calls.
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
 const roots = { claude: ['.claude', 'projects'], grok: ['.grok', 'sessions'], agy: ['.gemini', 'antigravity-cli', 'brain'] };
-const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const hash = value => createHash('sha256').update(canonicalStringify(value)).digest('hex');
 const identity = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1024;
 const counter = value => Number.isSafeInteger(value) && value >= 0;
 const RUNTIME_VERSION = /^\d+\.\d+\.\d+[0-9A-Za-z.+-]{0,32}$/;
@@ -47,7 +48,7 @@ function project(family, entry, parts) {
     at: date(timestamp), values: ['inputTokens', 'outputTokens', 'cachedReadTokens', 'cacheCreationTokens'].map(key => update.usage?.[key]),
     // Model counters have no validated additive contract either. Include a stable
     // fingerprint so contradictory duplicate emissions cannot look identical.
-    modelUsage: update.usage?.modelUsage ?? null };
+    usageShape: usage ?? null };
 }
 
 /** Claude rewrites one API response as it streams: same message and request, same
@@ -59,15 +60,14 @@ function reconcileStreamed(prior, next, signature) {
   if (!prior.requestId || prior.requestId !== next.requestId || !prior.measured || !next.measured) return false;
   if (![0, 2, 3].every(index => prior.values[index] === next.values[index])) return false;
   if (prior.final && next.final) return false;
-  const adopt = () => { prior.values = next.values; prior.signature = signature; };
-  if (prior.final) return next.values[1] <= prior.values[1];
-  if (next.final) {
-    if (next.values[1] < prior.values[1]) return false;
-    adopt();
-    prior.final = true;
-    return true;
+  if (prior.final && next.values[1] > prior.values[1]) return false;
+  if (next.final && next.values[1] < prior.values[1]) return false;
+  if (next.values[1] > prior.values[1]) {
+    prior.values = next.values;
+    prior.signature = signature;
+    prior.maximumCopies = 1;
   }
-  if (next.values[1] > prior.values[1]) adopt();
+  prior.final ||= next.final === true;
   prior.partialsDiffer = true;
   return true;
 }
@@ -82,7 +82,7 @@ function isTranscript(family, parts) {
  * even after an exhaustive scan of today's files. Internal limits are injectable
  * for synthetic boundary tests; no HTTP parameter can change roots or limits.
  */
-export async function getNativeTranscriptCoverage(family, { home = homedir(), limits: overrides = {} } = {}) {
+export async function getNativeTranscriptCoverage(family, { home = homedir(), limits: overrides = {}, includeRecords = false } = {}) {
   if (!Object.hasOwn(roots, family)) throw new Error('Unsupported native transcript family');
   const limits = { ...LIMITS, ...overrides };
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
@@ -121,21 +121,33 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
     const measured = family === 'grok' ? record.values.slice(0, 2).every(counter) : record.values.every(counter);
     if (!measured) coverage.missingUsageRecords++;
     if (record.inconsistent) coverage.fieldInconsistentRecords++;
-    if (RUNTIME_VERSION.test(record.version ?? '') && versions.size < MAX_RUNTIME_VERSIONS) versions.add(record.version);
+    if (RUNTIME_VERSION.test(record.version ?? '')) {
+      versions.add(record.version);
+      // Keep the same bounded evidence regardless of file enumeration order.
+      if (versions.size > MAX_RUNTIME_VERSIONS) versions.delete([...versions].sort().at(-1));
+    }
     if (!record.key) { coverage.missingIdentityRecords++; return; }
-    const key = hash(record.key);
-    const signature = hash([record.values, record.modelUsage]);
+    const key = hash(['portos-native-record/1', family, record.key]);
+    const signature = hash([record.values, record.usageShape]);
     const prior = records.get(key);
     if (prior) {
       coverage.duplicateRecords++;
-      if (prior.signature === signature) prior.final ||= record.final === true;
-      else if (!prior.conflict) {
-        if (family === 'claude' && reconcileStreamed(prior, { ...record, measured }, signature)) coverage.streamingSupersededRecords++;
-        else { prior.conflict = true; coverage.conflictingRecords++; }
+      prior.copies++;
+      if (record.at && (!prior.at || record.at < prior.at)) prior.at = record.at;
+      prior.inconsistent ||= record.inconsistent === true;
+      prior.costTicks ||= record.costTicks === true;
+      const sameRequest = family !== 'claude' || prior.requestId === record.requestId;
+      if (sameRequest && prior.signature === signature) {
+        prior.final ||= record.final === true;
+        prior.maximumCopies++;
+      } else if (!prior.conflict && !(sameRequest && family === 'claude' && reconcileStreamed(prior, { ...record, measured }, signature))) {
+        prior.conflict = true;
+        coverage.conflictingRecords++;
       }
     } else {
       records.set(key, { signature, values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
-        requestId: record.requestId ?? null, final: record.final === true, partialsDiffer: false, costTicks: record.costTicks === true });
+        requestId: record.requestId ?? null, final: record.final === true, partialsDiffer: false, costTicks: record.costTicks === true,
+        inconsistent: record.inconsistent === true, at: record.at, copies: 1, maximumCopies: 1 });
       if (family === 'agy') { const tally = conversation(parts[0]); if (measured) tally.measured++; else tally.unmeasured++; }
     }
   };
@@ -210,7 +222,9 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
     // Differing partials with no final emission leave the output count unknowable.
     if (record.partialsDiffer && !record.final && !record.conflict) { record.conflict = true; coverage.conflictingRecords++; }
     if (record.costTicks) costTickRecords++;
-    if (!record.measured || record.conflict) continue;
+    // Count copies below the resolved maximum, not traversal-dependent merge events.
+    if (family === 'claude' && !record.conflict) coverage.streamingSupersededRecords += record.copies - record.maximumCopies;
+    if (!record.measured || record.conflict || record.inconsistent) continue;
     coverage.measuredRecords++;
     if (family === 'claude' && !record.final) coverage.unfinalizedRecords++;
     if (family === 'agy') overlap[record.values[2] > record.values[0] ? 'cacheExceedsInputRecords' : 'cacheWithinInputRecords']++;
@@ -248,6 +262,17 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
       totalTokens: family === 'claude' ? totalTokens : null,
       tokensIn: totals[0], tokensOut: totals[1], cacheReadTokens: totals[2], cacheWriteTokens: family === 'agy' ? null : totals[3],
     },
+    ...(includeRecords ? { recordProjection: family === 'claude' ? {
+      version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000,
+      records: [...records].sort(([a], [b]) => a.localeCompare(b)).slice(0, 100000).map(([recordKey, record]) => ({
+        recordKey,
+        requestKey: !record.conflict && record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null,
+        // Retain the identity but no arbitrary winning counters for a conflict.
+        values: record.conflict ? [null, null, null, null] : record.values,
+        final: !record.conflict && record.final,
+        conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
+      })),
+    } : null } : {}),
     coverage, cost: { usd: null, kind: 'unknown' },
     reason: !coverage.records ? unavailableReason : family === 'grok'
       ? 'Turn counters are retained, but per-turn versus cumulative semantics are unvalidated. No authoritative total is calculated.'

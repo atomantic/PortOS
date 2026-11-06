@@ -1105,3 +1105,5 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `greyboxBlender.js` | Environments › Photoreal: `GREYBOX_BLENDER_PY` (PortOS-owned Blender script that rebuilds a greybox at exact scale, adds its cameras, saves a .blend and renders chosen shots), `greyboxBlenderJob(scene, opts)` (its JSON input), `photorealShotRole`/`photorealShotFile`, engine/sample constants. |
 | `photorealLook.js` | Environments › Photoreal look: `photorealLookSchema` (allowlisted material presets per zone/part, lights, haze/world/exposure stored as `payload.photoreal`), `resolvePhotorealLook`, `photorealLookReferenceErrors`, and the "Dress with AI" prompt blocks plus `parsePhotorealLookAnswer`. |
 | `imageInputProvenance.js` | CLI image-input provenance markers and read-time normalization for legacy sidecars. |
+
+| `nativeUsageRecords.js` | Strict privacy-safe retained-record projections and deterministic Claude message union for selected accounts; preserves conflicts and unknown history. |

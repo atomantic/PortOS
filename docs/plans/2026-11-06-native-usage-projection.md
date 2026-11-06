@@ -120,8 +120,64 @@ no values published. Other installs may run other runtime versions.
   detection (`looksCumulative`) is a billing heuristic, not native evidence.
   `costUsdTicks` is counted as an unverified signal, not converted to spend. Its
   billing scope is unconfirmed.
-- All providers: retention is unknown, and machine-scoped subsets cannot be combined
-  because reports do not carry the private identities needed to prove they are disjoint.
+- All providers: retention is unknown. Version 2 can union the measured Claude retained
+  subset as described below. Antigravity and Grok still refuse fleet aggregation.
+
+## Version 2: deduplicated Claude retained records
+
+Capture now emits contract version 2; matrix accepts version 1 for existing Codex
+snapshots, but never upgrades aggregate-only v1 transcript evidence into records.
+The dashboard still uses its bounded aggregate-only scan. Only CLI capture opts
+into a strict Claude record projection, capped at 100,000 identities. A truncated
+projection refuses union, since an omitted conflict could otherwise be resurrected
+by a copy from another participant. Other scan caps remain visible findings on a
+partial retained subset, never proof of historical completeness.
+
+Each projected record contains a SHA-256 domain-separated native message key,
+separately hashed request key, four nullable token counters, final/conflict/field
+consistency flags, and its earliest observed UTC timestamp. The timestamp is
+observation metadata, not proof of a billing-day allocation. No model attribution
+or daily token partition is inferred. Raw IDs, source paths, account names and
+transcript content do not travel. These opaque keys are linkable pseudonyms, not
+anonymization: keep the reports private and do not publish them to an issue.
+
+An operator may select a Claude retained-history account in the existing local
+selection setting, alongside any Codex selections:
+
+```json
+{
+  "family": "claude",
+  "accountLabel": "acct-a",
+  "historyScope": "operator-confirmed-retained-history",
+  "members": ["<participantKey>"]
+}
+```
+
+This asserts that the retained files belong to that account. Current shared
+sign-ins alone cannot establish which account generated older files. If an install
+has mixed-account historical files, do not select it until provenance is resolved.
+The setting remains machine-local; no selection or sync setting is changed by
+capture or matrix. Codex still selects one authoritative account snapshot and
+never sums the other participants' snapshots.
+
+The Claude matrix unions message identities, not participant totals. Copies and
+compatible streaming partials count one final response. Conflicting request IDs,
+inputs or final counters are excluded; a conflict tombstone on any participant
+cannot be overridden by another participant's valid-looking copy. Inconsistent,
+unfinalized, undated and missing-field records are excluded with counts. Unmatched
+participants, missing reports/projections, cross-account duplicate identities and
+unsafe-integer totals refuse the union. Versions and source findings stay attached.
+
+A usable union is always `partial`, labelled `selected-account-retained-records`
+with unknown completeness and retention. It exposes only verified retained tokens,
+not account lifetime, subscription charges, API-equivalent cost or actual spend.
+This is reproducible staged input only: no history writes, cutover, deployment,
+provider inference, new source-root scan or live-account mutation is implemented.
+
+Grok still needs version-specific persisted turn semantics and billing scope
+verified against its native usage command. Antigravity still needs its multiple
+native roots and transcript versions validated, including the distinction between
+per-step usage and cumulative session results. Neither is added up by this change.
 
 ## Validation gates before replacement
 
