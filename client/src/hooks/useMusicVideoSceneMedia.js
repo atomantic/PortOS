@@ -51,6 +51,14 @@ function ltxReferenceFrames(scene, target) {
   return frames <= FRAME_OPTIONS.at(-1) ? frames : null;
 }
 
+// The provider a clip render runs on, as its placeholder take names it ("Rendering grok…").
+// A pool that may pick either this machine or a peer names neither.
+function videoRenderLabel(settings) {
+  if (settings?.renderPool?.mode === 'peers') return 'peer';
+  if (settings?.renderPool?.mode === 'both') return null;
+  return settings?.backend || 'local';
+}
+
 /** The project-wide palette and camera rules, shared with the server's composers. */
 export { visualDirection };
 
@@ -248,7 +256,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
     const projectId = project.id;
-    frameLane.startScene(scene.sceneId);
+    const renderKey = frameLane.startScene(scene.sceneId);
     return generateImage({
       prompt,
       ...musicVideoFrameGenSize(project),
@@ -270,9 +278,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           // (and the durable scene-image event lands the generated frame). trackJob
           // reconciles a terminal event that raced ahead of this .then (fast fail).
           const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { frameLane.clearScene(scene.sceneId); return { ok: false }; } // no id to track → don't strand the button
+          if (!jobId) { frameLane.clearScene(scene.sceneId, renderKey); return { ok: false }; } // no id to track → don't strand the button
           onJob?.(jobId);
-          frameLane.trackJob(jobId, scene.sceneId);
+          frameLane.trackJob(jobId, scene.sceneId, renderKey);
           return { ok: true, jobId };
         }
         const filename = res?.filename;
@@ -287,7 +295,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           // Only queued renders chain into a clip (musicVideoSceneImageHook); this lane answered inline.
           if (thenClip) toast.info('Still ready. Render its clip from the shot card.');
         }
-        frameLane.clearScene(scene.sceneId);
+        frameLane.clearScene(scene.sceneId, renderKey);
         return { ok: true };
       })
       .catch((err) => {
@@ -296,7 +304,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         } else {
           toast.error(err?.message || 'Frame generation failed');
         }
-        frameLane.clearScene(scene.sceneId);
+        frameLane.clearScene(scene.sceneId, renderKey);
         return { ok: false };
       });
   };
@@ -321,7 +329,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const conditioning = conditioningReferences(project, scene, castMedia, greybox);
     const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
     const castInputs = submittedCastInputs(scene, conditioning, references);
-    endFrameLane.startScene(scene.sceneId);
+    const renderKey = endFrameLane.startScene(scene.sceneId);
     return generateImage({
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
       prompt: refining ? refine.trim() : endPrompt,
@@ -338,8 +346,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((res) => {
         if (res?.status === 'queued' || res?.status === 'running') {
           const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { endFrameLane.clearScene(scene.sceneId); return { ok: false }; }
-          endFrameLane.trackJob(jobId, scene.sceneId);
+          if (!jobId) { endFrameLane.clearScene(scene.sceneId, renderKey); return { ok: false }; }
+          endFrameLane.trackJob(jobId, scene.sceneId, renderKey);
           return { ok: true, jobId };
         }
         if (res?.filename) {
@@ -351,14 +359,14 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             }))
             .catch((err) => toast.error(err?.message || 'Failed to attach end frame'));
         }
-        endFrameLane.clearScene(scene.sceneId);
+        endFrameLane.clearScene(scene.sceneId, renderKey);
         return { ok: true };
       })
       .catch((err) => {
         toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
           ? `The current image backend can't render from the start frame: ${err.message}. Switch the image backend to one that takes a reference image.`
           : err?.message || 'End frame generation failed');
-        endFrameLane.clearScene(scene.sceneId);
+        endFrameLane.clearScene(scene.sceneId, renderKey);
         return { ok: false };
       });
   };
@@ -367,17 +375,18 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // the response carried no id to track. trackJob reconciles a terminal event
   // that raced ahead of this .then. Resolves `{ ok }` — see generateFrame's
   // doc comment for why the caller never sees a rejection.
-  const trackVideoJob = (res, sceneId, onJob) => {
+  // `key` is the render startScene lit, so a shot rendering on two providers settles each on its own.
+  const trackVideoJob = (res, sceneId, key, onJob) => {
     const jobId = res?.jobId || res?.generationId;
-    if (!jobId) { videoLane.clearScene(sceneId); return { ok: false }; }
+    if (!jobId) { videoLane.clearScene(sceneId, key); return { ok: false }; }
     onJob?.(jobId);
-    videoLane.trackJob(jobId, sceneId);
+    videoLane.trackJob(jobId, sceneId, key);
     return { ok: true, jobId };
   };
 
-  const handleVideoError = (err, sceneId, fallbackMessage) => {
+  const handleVideoError = (err, sceneId, key, fallbackMessage) => {
     toast.error(err?.message || fallbackMessage);
-    videoLane.clearScene(sceneId);
+    videoLane.clearScene(sceneId, key);
     return { ok: false };
   };
 
@@ -435,7 +444,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       : null;
     // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
     const disableAudio = !preMusicClipSound(scene);
-    videoLane.startScene(scene.sceneId);
+    const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
     return generateVideo({
       prompt,
       ...(settings.backend ? { backend: settings.backend } : {}),
@@ -488,8 +497,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
       }),
     })
-      .then((res) => trackVideoJob(res, scene.sceneId, onJob))
-      .catch((err) => handleVideoError(err, scene.sceneId, 'Scene video generation failed'));
+      .then((res) => trackVideoJob(res, scene.sceneId, renderKey, onJob))
+      .catch((err) => handleVideoError(err, scene.sceneId, renderKey, 'Scene video generation failed'));
   };
 
   /**
@@ -507,7 +516,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       return;
     }
     if (videoBlockedReason) { toast.error(videoBlockedReason); return; }
-    videoLane.startScene(scene.sceneId);
+    const renderKey = videoLane.startScene(scene.sceneId, { label: 'local' });
     generateVideo({
       prompt: authoredShotPrompt(scene),
       backend: 'local',
@@ -518,8 +527,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       sourceImageFile: scene.referenceImageId,
       musicVideo: JSON.stringify({ projectId: project.id, sceneId: scene.sceneId, compose: true, catalogBasis: project.castAndSets?.catalogCheckin?.basis }),
     })
-      .then((res) => trackVideoJob(res, scene.sceneId))
-      .catch((err) => handleVideoError(err, scene.sceneId, 'Shot continuation failed'));
+      .then((res) => trackVideoJob(res, scene.sceneId, renderKey))
+      .catch((err) => handleVideoError(err, scene.sceneId, renderKey, 'Shot continuation failed'));
   };
 
   const scenes = project?.scenes || [];
@@ -583,6 +592,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     genEndFrameScenes: endFrameLane.genScenes,
     sceneProgress: frameLane.sceneProgress,
     videoSceneProgress: videoLane.sceneProgress,
+    videoSceneJobs: videoLane.sceneJobs,
     frameBatch,
     videoBatch,
     conditioning,

@@ -301,3 +301,28 @@ it('binds shot render inputs to the catalog basis the board displayed', async ()
   expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ catalogBasis });
   cleanup();
 });
+
+// Uniquely catches a second clip render on one shot clearing (or being blocked by) the first:
+// each provider's render keeps its own placeholder until its own job settles (#15128).
+it('tracks a local and a grok clip render on the same shot side by side', async () => {
+  const { generateVideo } = await import('../services/apiImageVideo.js');
+  const shot = { sceneId: 's1', order: 0, prompt: 'a rider', referenceImageId: 'start.png', takes: [], startSec: 0, endSec: 4 };
+  const project = { id: 'p-parallel', scenes: [shot] };
+  getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+  const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: { backend: 'local' } }, applyScenePatch: vi.fn() }));
+  generateVideo.mockResolvedValueOnce({ jobId: 'job-local', status: 'queued' });
+  await act(async () => { await result.current.generateSceneVideo(shot); });
+  generateVideo.mockResolvedValueOnce({ jobId: 'job-grok', status: 'queued' });
+  await act(async () => { await result.current.generateSceneVideo(shot, { target: { backend: 'grok' } }); });
+  const jobs = () => (result.current.videoSceneJobs.s1 || []).map((job) => [job.jobId, job.label, job.running]);
+  expect(jobs()).toEqual([['job-local', 'local', false], ['job-grok', 'grok', false]]);
+  act(() => handlers.get('video-gen:progress')({ generationId: 'job-grok', progress: 0.5 }));
+  expect(jobs()).toEqual([['job-local', 'local', false], ['job-grok', 'grok', true]]);
+  act(() => handlers.get('video-gen:completed')({ generationId: 'job-local' }));
+  expect(jobs()).toEqual([['job-grok', 'grok', true]]);
+  expect(result.current.genVideoScenes.s1).toBe(true);
+  act(() => handlers.get('video-gen:completed')({ generationId: 'job-grok' }));
+  expect(result.current.videoSceneJobs.s1).toBeUndefined();
+  expect(result.current.genVideoScenes.s1).toBeUndefined();
+  cleanup();
+});

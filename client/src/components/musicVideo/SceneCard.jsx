@@ -159,18 +159,18 @@ function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete 
   );
 }
 
-function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked, needsStill = true }) {
+// A clip already rendering never blocks another (#15128): a shot can render locally and on grok at once.
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, videoBlockedReason, performanceBlocked, needsStill = true }) {
   if (videoBlockedReason) return videoBlockedReason;
   if (performanceBlocked) return performanceBlocked;
   if (speakerUnsaved) return 'Save the speaker / singer edit first';
   if (settingsSaving) return 'Saving settings…';
   if (needsStill && !referenceImageId) return 'Generate a reference frame first';
-  if (generatingVideo) return 'A video is already generating';
   return null;
 }
 
 export default function SceneCard({
-  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
+  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
@@ -224,7 +224,13 @@ export default function SceneCard({
   // #10152: what needs the director's attention, visible without opening the card.
   const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
-  const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
+  // Every clip in flight for this shot, each with where it renders. A render whose
+  // request is still on its way has no job yet: Render waits for it, so a double tap
+  // can't send the same (possibly paid) render twice.
+  const clipJobs = Array.isArray(videoJobs) ? videoJobs : generatingVideo ? [{ key: 'clip', label: null, running: !!videoProgress, progress: videoProgress?.progress ?? null }] : [];
+  const sendingClip = clipJobs.some((job) => job.key !== 'clip' && !job.jobId);
+  const clipLane = clipJobs.length > 1 ? `${clipJobs.length} clips` : 'Clip';
+  const generatingLane = generatingFrame && generatingVideo ? `Frame + ${clipLane.toLowerCase()}` : generatingFrame ? 'Frame' : generatingVideo ? clipLane : null;
   // #10154: the server-persisted failure of the last render, shown until a
   // retry is in flight (or lands a take, which clears it server-side).
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
@@ -268,7 +274,7 @@ export default function SceneCard({
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;
   const refusalInputs = {
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
-    referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked,
+    referenceImageId: scene.referenceImageId, performanceBlocked,
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
   };
   const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
@@ -294,7 +300,7 @@ export default function SceneCard({
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
-  const renderBlocked = !!videoRefusal;
+  const renderBlocked = !!videoRefusal || sendingClip;
   const generateVideo = () => {
     if (renderBlocked) return;
     sendRender();
@@ -576,7 +582,10 @@ export default function SceneCard({
               </span>
             )}
             <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
-            <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
+            {clipJobs.map((job) => (
+              <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
+                progress={job.running ? { progress: job.progress } : null} />
+            ))}
           </span>
         )}
       </header>
@@ -660,7 +669,7 @@ export default function SceneCard({
               <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{scene.referenceImageId ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}
-          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid
+          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
@@ -674,12 +683,12 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
               options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
-              saved={falVideoSettings || {}} disabled={!!generatingVideo} minFrames={useLtxReferences ? 121 : null} />
+              saved={falVideoSettings || {}} minFrames={useLtxReferences ? 121 : null} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
           {layer === 'footage' && canUseLtxReferences && (
             <label className="flex items-center gap-2 text-xs text-port-text-muted">
-              <input type="checkbox" checked={useLtxReferences} disabled={!!generatingVideo || ltxReferencesGreyboxBlocked}
+              <input type="checkbox" checked={useLtxReferences} disabled={ltxReferencesGreyboxBlocked}
                 onChange={(event) => setRenderInputs((prev) => ({ ...prev, ltxReferences: event.target.checked,
                   ...(event.target.checked ? { songAudio: false, endFrame: false } : {}) }))} />
               Use LTX reference images (requires Ingredients adapter; at least 121 frames)
@@ -721,8 +730,8 @@ export default function SceneCard({
               className={PRIMARY_BUTTON}
               title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
                   : "Render this shot's clip from its still")}>
-              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-              {generatingVideo ? 'Rendering…' : `Render${scene.videoHistoryId ? ' again' : ''}`}
+              {sendingClip ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+              {sendingClip ? 'Sending…' : `Render${scene.videoHistoryId || clipJobs.length ? ' again' : ''}`}
             </button>}
             {onPlacePoolItem && (
               <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy} className={SECONDARY_BUTTON}
@@ -748,7 +757,7 @@ export default function SceneCard({
             )}
           </div>
           {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
+          {videoRefusal && videoRefusal !== performanceBlocked && layer === 'footage' && !storyboardDefault && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
               <span>{videoRefusal}</span>
             </div>

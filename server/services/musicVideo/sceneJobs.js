@@ -11,8 +11,17 @@
  */
 
 import { listJobs } from '../mediaJobQueue/index.js';
+import { isRemoteMediaJob } from '../mediaJobQueue/remoteMediaJob.js';
+import { mediaJobExecutionLane } from '../../lib/generationModes.js';
 
 const LANE_BY_KIND = Object.freeze({ image: 'image', video: 'video' });
+
+// Where a clip renders, for the shot's "Rendering grok…" placeholder take: the cloud
+// provider's mode, a federated peer, or this machine's GPU.
+function videoJobLabel(job) {
+  if (isRemoteMediaJob(job)) return 'peer';
+  return mediaJobExecutionLane({ kind: job.kind, mode: job.params?.mode }) === 'cloud' ? job.params.mode : 'local';
+}
 
 export function listInFlightSceneJobs(projectId) {
   const out = [];
@@ -21,13 +30,14 @@ export function listInFlightSceneJobs(projectId) {
     const lane = LANE_BY_KIND[job.kind];
     const tag = job.params?.musicVideo;
     if (!lane || tag?.projectId !== projectId) continue;
+    const label = lane === 'video' ? { label: videoJobLabel(job) } : {};
     // One sequence clip (#14241) is in flight on every scene it covers.
     if (!tag.sceneId) {
-      for (const span of tag.sequence?.spans || []) out.push({ jobId: job.id, lane, sceneId: span.sceneId, status: job.status });
+      for (const span of tag.sequence?.spans || []) out.push({ jobId: job.id, lane, sceneId: span.sceneId, status: job.status, ...label });
       continue;
     }
     // An end-frame render (#11173) restores into the board's end-frame lane.
-    out.push({ jobId: job.id, lane: lane === 'image' && tag.slot === 'end' ? 'endImage' : lane, sceneId: tag.sceneId, status: job.status });
+    out.push({ jobId: job.id, lane: lane === 'image' && tag.slot === 'end' ? 'endImage' : lane, sceneId: tag.sceneId, status: job.status, ...label });
   }
   return out;
 }

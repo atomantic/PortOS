@@ -1654,6 +1654,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/music-video/:id/media-pool/search', 'Searches stored media for the pool; the trace reaches the local image backend whole through a namespace import, while the handler reads only its gallery records.'],
   ['GET /api/music-video/:id/publish/drafts', 'Checks whether each publish draft the operator opened through the gated prepare route is still a tab in the managed browser (a CDP target lookup); opens, fills or submits nothing.'],
   ['GET /api/music-video/:id/render-cleanup', MUSIC_VIDEO_PLAN_READ],
+  ['GET /api/music-video/:id/scene-jobs', JOB_TABLE],
   ['GET /api/music-video/:id/shot-renders', MUSIC_VIDEO_PLAN_READ],
   ['GET /api/music-video/:id/shot-renders/:name', 'Streams an already-rendered shot segment file by its content-hash name; the ffmpeg the trace reaches through the shot-segment module renders only from the gated shot-render routes (#13156).'],
   ['GET /api/music/supercollider/status', RUNTIME_STATUS],
