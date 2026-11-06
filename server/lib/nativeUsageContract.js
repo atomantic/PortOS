@@ -207,7 +207,7 @@ function codexAccountContext({ accountBefore, accountAfter }) {
 }
 
 /** Project the bracketed Codex read. Fails closed when the account moved mid-capture. */
-export function projectCodexEvidence(evidence, capturedAt) {
+function projectCodexEvidence(evidence, capturedAt) {
   const entry = baseEntry('codex');
   entry.reproducibility = 'live-account-read';
   if (evidence.runtimeVersion) entry.runtime = { status: 'observed', versions: [evidence.runtimeVersion] };
@@ -259,7 +259,7 @@ function transcriptFindings(family, coverage) {
 }
 
 /** Project a retained-transcript scan. Scan timing and absolute paths never survive this. */
-export function projectTranscriptCoverage(family, scan, scanLimits) {
+function projectTranscriptCoverage(family, scan, scanLimits) {
   const { coverage } = scan;
   const pick = (source, keys) => Object.fromEntries(keys.map((key) => [key, source[key]]));
   return {
