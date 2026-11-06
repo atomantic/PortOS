@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,8 +46,9 @@ vi.mock('../lib/peerHttpClient.js', async () => ({
   },
 }));
 
-const scratch = mkdtempSync(join(tmpdir(), 'portos-usage-cutover-'));
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+let scratch;
+beforeAll(() => { scratch = mkdtempSync(join(tmpdir(), 'portos-usage-cutover-')); });
+afterAll(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }); });
 
 let dirCounter = 0;
 const EPOCH = 'native-2026-11';
