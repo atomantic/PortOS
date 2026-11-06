@@ -126,7 +126,8 @@ describe('musicVideoLocalReferencePaths', () => {
 });
 
 
-it('rechecks live catalog approval for a supplied snapshot before resolving clip images', async () => {
+// Uniquely catches a changed (unapproved) catalog check-in refusing a render, or a stale snapshot's images being sent.
+it('resolves the live catalog for a supplied snapshot, refusing only links that cannot resolve', async () => {
   const { resolveCatalogCheckin } = await import('./catalogCheckin.js');
   const p = { id: 'mv-1', concept: { subjects: [{ id: 'lead', ingredientId: 'catalog-lead', kind: 'character' }] },
     castAndSets: { source: 'catalog', status: 'approved' }, scenes: [{ sceneId: 's1', prompt: 'Lead walks' }] };
@@ -138,8 +139,8 @@ it('rechecks live catalog approval for a supplied snapshot before resolving clip
     .toEqual([{ path: '/inputs/guide-refs.png', label: 'Lead' }]);
   p.castAndSets.catalogCheckin = { ...approved, approved: true };
   catalog.listMediaForIngredient.mockResolvedValue([{ kind: 'portrait', mediaKey: 'new-guide.png' }]);
-  await expect(musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
-    .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_APPROVAL_REQUIRED' });
+  expect(await musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
+    .toEqual([{ path: '/gallery/new-guide.png', label: 'Lead' }]);
   catalog.getIngredient.mockResolvedValue(null);
   await expect(musicVideoClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 8, { project: p }))
     .rejects.toMatchObject({ code: 'CAST_SETS_CATALOG_UNRESOLVED' });

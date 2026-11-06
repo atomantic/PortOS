@@ -246,14 +246,14 @@ describe('Image Gen Routes', () => {
   });
 
   it('refuses synchronous image dispatch if the catalog changes after preparation', async () => {
-    const project = { scenes: [{ sceneId: 's1' }], castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [] } } };
+    const project = { scenes: [{ sceneId: 's1' }], castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'original' } } };
     catalogDispatch.getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);
     catalogDispatch.hydrate.mockResolvedValueOnce(project).mockResolvedValueOnce({ ...project,
-      castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [] } } });
+      castAndSets: { source: 'catalog', catalogCheckin: { approved: false, problems: [], basis: 'changed' } } });
     const response = await request(app).post('/api/image-gen/generate').send({ mode: 'external', prompt: 'A synthetic scene',
       musicVideo: { projectId: 'mv-example', sceneId: 's1' } });
     expect(response.status).toBe(409);
-    expect(response.body.code).toBe('CAST_SETS_CATALOG_APPROVAL_REQUIRED');
+    expect(response.body.code).toBe('CAST_SETS_CATALOG_REFERENCE_CHANGED');
     expect(imageGen.generateImage).not.toHaveBeenCalled();
     expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
   });
