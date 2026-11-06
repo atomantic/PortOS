@@ -699,11 +699,11 @@ async function harvestGeneratedImage(sessionId, jobPrompt, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let selection = null;
   while (Date.now() < deadline) {
-    const fileNames = await generatedImageNames(sessionId);
-    // A lone file is the normal render and needs no log. Any other count consults
-    // it: several files need matching, and some builds keep bytes only in the log.
-    const records = fileNames.length === 1 ? [] : await sessionImageRecords(sessionId);
-    selection = selectJobImage({ fileNames, records, jobPrompt });
+    selection = selectJobImage({
+      fileNames: await generatedImageNames(sessionId),
+      records: await sessionImageRecords(sessionId),
+      jobPrompt,
+    });
     // An unmatched session keeps polling: its log entries may still be flushing.
     if (selection && !selection.unmatchedImages) return selection;
     await sleep(250);

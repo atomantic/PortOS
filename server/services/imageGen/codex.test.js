@@ -686,6 +686,24 @@ describe('codex provider — image harvest', () => {
       expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
     });
 
+    it('picks the real render kept only in the log over a lone stray file on disk', async () => {
+      const sessionId = '99999999-9999-4999-8999-999999999999';
+      const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(join(codexDir, 'exec-stray.png'), png('stray dashboard'));
+      await writeSessionLog(sessionId, [
+        imageItem({ revisedPrompt: JOB_PROMPT, result: png('real render').toString('base64') }),
+        imageItem({ revisedPrompt: STRAY_PROMPT, savedPath: join(codexDir, 'exec-stray.png') }),
+      ]);
+      const completed = vi.fn();
+      imageGenEvents.on('completed', completed);
+
+      const job = await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+    });
+
     it('fails with a clear reason and saves nothing when no image matches the prompt', async () => {
       const sessionId = '77777777-7777-4777-8777-777777777777';
       const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);

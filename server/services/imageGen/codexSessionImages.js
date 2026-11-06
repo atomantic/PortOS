@@ -19,13 +19,18 @@ export const IMAGE_GEN_ITEM_KIND = 'image_gen.generation';
 // keeps almost none.
 const MIN_PROMPT_COVERAGE = 0.5;
 
-const normalizePrompt = (text) => text.trim().replace(/\s+/g, ' ').toLowerCase();
-const promptWords = (text) => new Set(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []);
+// Words this short ("a", "on") would let an unrelated prompt clear the cutoff.
+const MIN_COUNTED_WORD_LENGTH = 3;
+
+const promptWords = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+// Same words in the same order, whatever the spacing, case or punctuation.
+const promptKey = (text) => promptWords(text).join(' ');
+const countedWords = (text) => new Set(promptWords(text).filter((word) => word.length >= MIN_COUNTED_WORD_LENGTH));
 
 const promptCoverage = (jobPrompt, prompt) => {
-  const jobWords = promptWords(jobPrompt);
+  const jobWords = countedWords(jobPrompt);
   if (!jobWords.size) return 0;
-  const words = promptWords(prompt);
+  const words = countedWords(prompt);
   let shared = 0;
   for (const word of jobWords) if (words.has(word)) shared += 1;
   return shared / jobWords.size;
@@ -71,13 +76,14 @@ export function parseSessionImageRecords(logText) {
 }
 
 const matchJobPrompt = (candidates, jobPrompt) => {
-  const job = normalizePrompt(jobPrompt ?? '');
-  const close = candidates.filter(({ prompt }) => prompt && promptCoverage(job, prompt) >= MIN_PROMPT_COVERAGE);
-  const exact = close.filter(({ prompt }) => normalizePrompt(prompt) === job);
-  const pool = exact.length ? exact : close;
+  const job = promptKey(jobPrompt ?? '');
+  if (!job) return null;
+  const prompted = candidates.filter(({ prompt }) => prompt);
+  const exact = prompted.filter(({ prompt }) => promptKey(prompt) === job);
+  const pool = exact.length ? exact : prompted.filter(({ prompt }) => promptCoverage(job, prompt) >= MIN_PROMPT_COVERAGE);
   // The same prompt sent twice is a retry: both were made from it, and Codex
   // kept going past the first for a reason. Two different prompts are a guess.
-  return new Set(pool.map(({ prompt }) => normalizePrompt(prompt))).size === 1 ? pool.at(-1) : null;
+  return new Set(pool.map(({ prompt }) => promptKey(prompt))).size === 1 ? pool.at(-1) : null;
 };
 
 /**
