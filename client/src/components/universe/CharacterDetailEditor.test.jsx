@@ -539,6 +539,26 @@ it('links directly from character design to the shared voice studio with its cas
     .toHaveAttribute('href', '/voices?universeId=example-universe&characterId=chr-aria');
 });
 
+// Catches the height renders read hiding in the Stats list (Hold Still: figures sized by guesswork).
+it('edits the Height stat from its own field, with the typical height for a child age as the hint', async () => {
+  const { useState } = await import('react');
+  let draft;
+  function Harness() {
+    const [entry, setEntry] = useState({ id: 'example-kid', name: 'Example kid', age: '7', stats: [{ id: 'stat-eyes', label: 'Eyes', value: 'green' }] });
+    draft = entry;
+    return <CharacterDetailEditor entry={entry} draftMode="change" onPatch={patch => setEntry(previous => ({ ...previous, ...patch }))} />;
+  }
+  render(<Harness />);
+  const height = screen.getByLabelText('Height');
+  expect(height).toHaveAttribute('placeholder', '4 ft (122 cm), typical at this age');
+  fireEvent.change(height, { target: { value: '4 ft 2 in' } });
+  fireEvent.blur(height);
+  expect(draft.stats).toEqual([{ id: 'stat-eyes', label: 'Eyes', value: 'green' }, { label: 'Height', value: '4 ft 2 in' }]);
+  fireEvent.change(screen.getByLabelText('Height'), { target: { value: '' } });
+  fireEvent.blur(screen.getByLabelText('Height'));
+  expect(draft.stats).toEqual([{ id: 'stat-eyes', label: 'Eyes', value: 'green' }]);
+});
+
 it('keeps parent-owned text, row promotion and voice punctuation editable through compact page navigation', async () => {
   const { useState } = await import('react');
   let draft;

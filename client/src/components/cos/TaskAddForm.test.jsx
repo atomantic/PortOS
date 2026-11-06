@@ -131,6 +131,21 @@ describe('TaskAddForm responsive layout', () => {
     expect(api.addCosTask).toHaveBeenCalledTimes(1);
   });
 
+  it('defaults the Auto-merge toggle from the app and submits the per-task choice', async () => {
+    localStorage.clear();
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[{ id: 'example-app', name: 'Example App', useAutoMerge: true }]} defaultApp="example-app" onTaskAdded={vi.fn()} />);
+
+    const toggle = await screen.findByLabelText('Auto-merge');
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect the example app');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ useAutoMerge: false }), { silent: true });
+  });
+
   it('does not submit twice while the first request is pending', async () => {
     localStorage.clear();
     let resolveTask;

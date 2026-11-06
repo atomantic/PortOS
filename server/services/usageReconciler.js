@@ -555,7 +555,18 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
   const inventory = await readCodexAccountingSources({ home, modifiedSince: from });
   // Unknown/conflicting copies can overlap otherwise valid sessions.
   assertCodexInventoryComplete(inventory);
+  // Parse everything, then claim in one synchronous step: an overlapping run never
+  // sees a claim from a read that a later load fails. Records are dropped per session.
+  const overlapping = [];
   for (const session of inventory.sessions) {
+    if (!cwdMatches(session.cwd, workspacePath)) continue;
+    const records = await session.loadRecords();
+    // Require the run's own window to overlap this rollout at all, so a
+    // rollout from an unrelated period isn't attributed to this run.
+    if (totalTranscriptTokens(parseCodexRollout(records, { from, to })) === 0) continue;
+    overlapping.push({ session, absolute: parseCodexRollout(records, { to }) });
+  }
+  for (const { session, absolute } of overlapping) {
     // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
     // not enough: a rollout that GROWS between two overlapping runs presents
     // a later snapshot under a different key, and its delta (measured from a
@@ -575,12 +586,6 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
     //     grew would bill growth generated after its own window and advance
     //     the watermark past it, leaving the run that actually produced those
     //     tokens with nothing (measured: early run billed 250, late run 0).
-    const absolute = parseCodexRollout(session.records, { to });
-    if (!cwdMatches(session.cwd, workspacePath)) continue;
-    // Require the run's own window to overlap this rollout at all, so a
-    // rollout from an unrelated period isn't attributed to this run.
-    if (totalTranscriptTokens(parseCodexRollout(session.records, { from, to })) === 0) continue;
-
     const path = codexSessionClaimKey(session.id);
     const previous = codexHighWater.get(path);
     // Old snapshots used a raw source path. Adopt an extant alias or the

@@ -56,6 +56,16 @@ vi.mock('../services/usageBackfill.js', () => ({
   cancelCodexUsagePreview: vi.fn(async () => ({ status: 'cancelled' }))
 }));
 
+vi.mock('../services/usageCutoverBarrier.js', () => ({
+  getUsageCutoverStatus: vi.fn(async () => ({ state: 'idle', holdReasons: [] })),
+  acquireUsageCutover: vi.fn(async () => ({ state: 'fenced' })),
+  verifyUsageCutover: vi.fn(async () => ({ state: 'fenced', holdReasons: [] })),
+  activateUsageCutover: vi.fn(async () => ({ state: 'activated' })),
+  rollbackUsageCutover: vi.fn(async () => ({ state: 'rolling-back' })),
+  releaseUsageCutover: vi.fn(async () => ({ state: 'idle' })),
+}));
+
+import { acquireUsageCutover, rollbackUsageCutover } from '../services/usageCutoverBarrier.js';
 import { getNativeUsageCoverage } from '../services/nativeUsageCoverage.js';
 import * as usage from '../services/usage.js';
 import { getAllProviders } from '../services/providers.js';
@@ -512,6 +522,47 @@ describe('usage routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ sessionNumber: 42 });
     expect(usage.recordSession).toHaveBeenCalledWith('anthropic', 'Anthropic', 'opus');
+  });
+
+  it('POST /api/usage/session reports a write the cutover fence retained', async () => {
+    usage.recordSession.mockResolvedValueOnce({ deferred: true });
+    const res = await request(buildApp())
+      .post('/api/usage/session')
+      .send({ providerId: 'provider-a', providerName: 'Provider A', model: 'model-a' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ sessionNumber: null, deferred: true });
+  });
+
+  it('GET /api/usage/cutover serves read-only status', async () => {
+    const res = await request(buildApp()).get('/api/usage/cutover');
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('idle');
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('POST /api/usage/cutover/acquire binds an explicit epoch and participant set', async () => {
+    const res = await request(buildApp()).post('/api/usage/cutover/acquire').send({ migrationEpoch: 'native-2026', participants: ['inst-a'] });
+    expect(res.status).toBe(200);
+    expect(acquireUsageCutover).toHaveBeenCalledWith({ migrationEpoch: 'native-2026', participants: ['inst-a'] });
+  });
+
+  it.each([
+    [{ participants: ['inst-a'] }],
+    [{ migrationEpoch: 'native-2026', participants: [] }],
+    [{ migrationEpoch: '../escape', participants: ['inst-a'] }],
+    [{ migrationEpoch: 'native-2026', participants: ['inst-a'], force: true }],
+  ])('POST /api/usage/cutover/acquire rejects %j', async (body) => {
+    acquireUsageCutover.mockClear();
+    const res = await request(buildApp()).post('/api/usage/cutover/acquire').send(body);
+    expect(res.status).toBe(400);
+    expect(acquireUsageCutover).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/usage/cutover/rollback requires a reason', async () => {
+    rollbackUsageCutover.mockClear();
+    const res = await request(buildApp()).post('/api/usage/cutover/rollback').send({ migrationEpoch: 'native-2026' });
+    expect(res.status).toBe(400);
+    expect(rollbackUsageCutover).not.toHaveBeenCalled();
   });
 
   it('POST /api/usage/messages records messages and returns success', async () => {

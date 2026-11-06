@@ -30,6 +30,7 @@ import {
   setInteractiveScanState
 } from './usage.js';
 import { grokTurnRepairId } from './grokUsageRepair.js';
+import { isUsageCutoverFenced } from './usageCutoverBarrier.js';
 import { diffRunRecord } from '../lib/agentRunReconcile.js';
 
 /**
@@ -113,8 +114,37 @@ function splitByUtcDay(from, to) {
   return out;
 }
 
+/**
+ * What PortOS durably recorded about a run whose `metadata.json` never closed.
+ * Three sources can prove the process is over, none of them a clock or a guess:
+ * a ledger verdict; a ledger pause (pause stops the process); the run's own agent
+ * record, because resuming or retiring an agent completes it without closing the
+ * run, and the ledger then reads `running` for good.
+ *
+ * `running` only labels the hold for the UI. Both answers stay excluded and
+ * deferred. Absence from an in-memory registry after restart does not establish
+ * when a run ended, so `isRunActive` may confirm a live run but never ends one.
+ */
+async function observeOpenRun(metadata, runId, start, projection) {
+  const { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } = await import('./cosAgentLifecycle.js');
+  const read = metadata.agentId ? await readAgentRecordOrUnreadable(metadata.agentId) : null;
+  // An agent with no run id recorded is the crash between run creation and the
+  // agent update; the run still names it. A different run id is a different life.
+  const agent = read && read !== AGENT_RECORD_UNREADABLE && read.id === metadata.agentId && (read.metadata?.runId ?? runId) === runId ? read : null;
+  const diff = diffRunRecord(projection, metadata);
+  const end = [
+    diff?.finding === 'record-open' ? diff.detail.ledgerEndedAt : null,
+    projection?.status === 'paused' ? projection.lastEventAt : null,
+    ['paused', 'completed'].includes(agent?.status) ? agent.pausedAt ?? agent.completedAt : null
+  ].map((at) => Date.parse(at || '')).find((at) => at >= start);
+  if (end !== undefined) return { end };
+  if (agent) return { running: isLiveAgentRecord(agent) };
+  const { isRunActive } = await import('./runner.js');
+  return { running: await isRunActive(runId).catch(() => false) };
+}
+
 /** Every PortOS run's `[start, end]` (slack applied) by workspace, for runs touching `[from, now]`. */
-async function loadRunWindows(runsDir, from, now, pick = () => true, projections = new Map(), unresolved = [], observed = new Set()) {
+async function loadRunWindows(runsDir, from, now, pick = () => true, projections = null, unresolved = [], observed = new Set()) {
   const byCwd = new Map();
   for (const name of await listSubdirs(runsDir)) {
     const dir = join(runsDir, name);
@@ -126,14 +156,12 @@ async function loadRunWindows(runsDir, from, now, pick = () => true, projections
     const start = Date.parse(metadata?.startTime || '');
     if (!metadata?.workspacePath || Number.isNaN(start) || !pick(metadata)) continue;
     observed.add(metadata.id || name);
-    // Only a lifecycle observation can bound a missing endTime. Absence from
-    // an in-memory registry after restart does not establish when a run ended.
     let end = Date.parse(metadata.endTime || '');
-    if (Number.isNaN(end)) {
-      const diff = diffRunRecord(projections.get(metadata.id || name), metadata);
-      const observedEnd = Date.parse(diff?.finding === 'record-open' ? diff.detail.ledgerEndedAt : '');
-      if (Number.isFinite(observedEnd) && observedEnd >= start) end = observedEnd;
-      else unresolved.push({ runId: metadata.id || name, workspacePath: metadata.workspacePath, from: start - WINDOW_SLACK_MS, to: now });
+    if (Number.isNaN(end) && projections) {
+      const runId = metadata.id || name;
+      const open = await observeOpenRun(metadata, runId, start, projections.get(runId));
+      if (open.end !== undefined) end = open.end;
+      else unresolved.push({ runId, workspacePath: metadata.workspacePath, from: start - WINDOW_SLACK_MS, to: now, lifecycle: open.running ? 'running' : 'unknown' });
     }
     if (Number.isFinite(end) && end + WINDOW_SLACK_MS < from) continue;
     const window = [start - WINDOW_SLACK_MS, (Number.isNaN(end) ? now : end) + WINDOW_SLACK_MS];
@@ -183,7 +211,7 @@ async function listSessions(family, home, from) {
   } else if (family === 'codex') {
     const inventory = await readCodexAccountingSources({ home, modifiedSince: from });
     assertCodexInventoryComplete(inventory);
-    for (const session of inventory.sessions) sessions.push({ cwd: session.cwd, entries: session.records });
+    for (const session of inventory.sessions) sessions.push({ cwd: session.cwd, loadEntries: session.loadRecords });
   } else if (family === 'grok') {
     const root = join(home, '.grok', 'sessions');
     for (const dirName of await listSubdirs(root)) {
@@ -250,17 +278,17 @@ function parseSlice(family, entries, slice, seen) {
 
 /** One session file's billed buckets per `{ day, model }` inside `[from, to]`, minus run windows. */
 async function parseSession(family, session, from, to, byCwd, seen, regionsOf = (lo, hi, cwd) => subtractWindows(lo, hi, windowsFor(byCwd, cwd))) {
-  const text = session.entries ? null : await tryReadFile(session.path);
-  if (!session.entries && !text) return [];
+  const text = session.loadEntries ? null : await tryReadFile(session.path);
+  if (!session.loadEntries && !text) return [];
   // Parsed once and windowed per day slice: re-splitting a multi-MB file per
   // slice would cost ~35 parses of it on a first scan.
-  const entries = session.entries ?? parseJsonLines(text);
+  const entries = session.loadEntries ? await session.loadEntries() : parseJsonLines(text);
   const cwd = session.cwd ?? cwdFromEntries(family, entries);
   // A file cannot hold anything before it existed or after it was last written.
   // A birth time AFTER the last write means the file was copied or restored, so
   // it says nothing about when its content began — read from the window start.
-  const lo = !session.entries && session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
-  const hi = session.entries ? to : Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
+  const lo = !session.loadEntries && session.birthMs <= session.mtimeMs ? Math.max(from, session.birthMs - DAY_MS) : from;
+  const hi = session.loadEntries ? to : Math.min(to, session.mtimeMs + WINDOW_SLACK_MS);
   const results = [];
   for (const [a, b] of regionsOf(lo, hi, cwd)) {
     for (const slice of splitByUtcDay(a, b)) {
@@ -339,8 +367,10 @@ async function repairSettledSidechains({ home, runsDir, providerList, now, cutof
 /**
  * An incomplete inventory is durable state the usage UI shows, not a line per scan:
  * it logs when its set of reasons changes. A live rollout appended to mid-read is
- * retried by the next scan, so that alone records nothing.
+ * retried by the next scan, so that alone records nothing. Indexing a backlog is
+ * expected work that converges across scans, so it is progress rather than a warning.
  */
+const EXPECTED_HOLD_REASONS = new Set(['source_changed', 'indexing_pending']);
 async function recordCodexHold(current, err, now, snapshot) {
   const reasons = Object.keys(err.issues);
   if (reasons.every((reason) => reason === 'source_changed')) {
@@ -352,9 +382,12 @@ async function recordCodexHold(current, err, now, snapshot) {
     since: current?.since ?? new Date(now).toISOString(),
     checkedAt: new Date(now).toISOString(),
     issues: err.issues,
-    sources: err.problemSources
+    sources: err.problemSources,
+    progress: err.progress
   };
-  if (signature(current?.issues) !== signature(err.issues)) console.warn(`⚠️ Interactive usage holding Codex: ${err.message}`);
+  const expected = reasons.every((reason) => EXPECTED_HOLD_REASONS.has(reason));
+  if (expected) console.log(`⏭️ Interactive usage holding Codex: ${err.message}`);
+  else if (signature(current?.issues) !== signature(err.issues)) console.warn(`⚠️ Interactive usage holding Codex: ${err.message}`);
   await setInteractiveScanState({ ...snapshot(), codexCoverage: next });
   return next;
 }
@@ -397,7 +430,7 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       if (observed.has(old.runId)) continue;
       const key = JSON.stringify([old.runId, old.workspacePath]);
       const previous = missing.get(key);
-      missing.set(key, { ...old, from: Math.min(old.from, previous?.from ?? old.from), to: now });
+      missing.set(key, { ...old, from: Math.min(old.from, previous?.from ?? old.from), to: now, lifecycle: 'unknown' });
     }
     for (const window of missing.values()) {
       unresolved.push(window);
@@ -453,9 +486,22 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
         grouped.get(key).intervals.push([window.from, window.to]);
       }
 
-      let familySessions;
+      const perDay = new Map();
+      const seen = new Set();
       try {
-        familySessions = await listSessions(family, home, scanFrom);
+        for (const session of await listSessions(family, home, scanFrom)) {
+          for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, scanFrom, to, byCwd, seen, regionsOf)) {
+            if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [], sources: new Set() });
+            const dayTotals = perDay.get(day);
+            addBuckets(dayTotals, buckets);
+            dayTotals.byModel[model] ??= {};
+            addBuckets(dayTotals.byModel[model], buckets);
+            if (repairIds?.length) dayTotals.repairIds.push(...repairIds);
+            if (source) dayTotals.sources.add(source);
+          }
+          // A first scan parses many multi-MB files back to back; let the server breathe.
+          await yieldToEventLoop();
+        }
       } catch (err) {
         if (err.code !== 'CODEX_SOURCES_INCOMPLETE') throw err;
         // Hold only this family's watermark so the region is billed once the
@@ -467,22 +513,6 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
       if (family === 'codex' && codexCoverage) {
         console.log('✅ Codex source inventory is complete again; interactive usage resumed');
         codexCoverage = null;
-      }
-
-      const perDay = new Map();
-      const seen = new Set();
-      for (const session of familySessions) {
-        for (const { day, model, buckets, repairIds, source } of await parseSession(family, session, scanFrom, to, byCwd, seen, regionsOf)) {
-          if (!perDay.has(day)) perDay.set(day, { byModel: {}, repairIds: [], sources: new Set() });
-          const dayTotals = perDay.get(day);
-          addBuckets(dayTotals, buckets);
-          dayTotals.byModel[model] ??= {};
-          addBuckets(dayTotals.byModel[model], buckets);
-          if (repairIds?.length) dayTotals.repairIds.push(...repairIds);
-          if (source) dayTotals.sources.add(source);
-        }
-        // A first scan parses many multi-MB files back to back; let the server breathe.
-        await yieldToEventLoop();
       }
 
       const corrections = [];
@@ -527,6 +557,7 @@ export const refreshInteractiveUsage = ({ home = homedir(), runsDir = PATHS.runs
 
 export function startInteractiveUsageRefresh({ intervalMs = 30 * 60_000, firstDelayMs = 90_000 } = {}) {
   const run = () => refreshInteractiveUsage().catch((err) => {
+    if (isUsageCutoverFenced(err)) return console.log(`⏸️ Interactive usage scan held: ${err.message}`);
     console.error(`❌ Interactive usage scan failed: ${err.message}`);
   });
   setTimeout(run, firstDelayMs).unref();

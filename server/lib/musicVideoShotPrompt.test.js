@@ -58,6 +58,25 @@ describe('musicVideoFrameModelInput', () => {
     expect(ids(musicVideoFrameModelInput(cast, scene, { panel, fromFrame: true }))).not.toContain('storyboard-shot');
   });
 
+  // Uniquely catches a still rendered with no size cue, so a figure towers over a 4 ft fence and a 7 ft sign alike (Hold Still shot 89).
+  it('states the shot subjects\' real-world sizes as their own chip, only for subjects in frame', () => {
+    const cast = { ...project, concept: { ...project.concept, subjects: [
+      { id: 'a', kind: 'character', name: 'Example Renee', ingredientId: 'cat-a', castForm: { id: 'form-12345678', label: 'Age 12', age: 12 } },
+      { id: 'b', kind: 'character', name: 'Example Frank', ingredientId: 'cat-b' },
+      { id: 'f', kind: 'place', name: 'Example fence line', ingredientId: 'cat-f' },
+    ] } };
+    const sizes = { a: 'about 4 ft 11 in (150 cm)', b: '6 ft 1 in', f: 'chain-link fence 4 ft tall; No Outlet sign 7 ft to its top' };
+    const input = musicVideoFrameModelInput(cast, scene, { sizes });
+    const chip = input.promptAdditions.find((item) => item.id === 'real-world-scale');
+    expect(chip.label).toBe('Real-world scale');
+    expect(chip.text).toBe('Real-world sizes: keep every person, object and set feature in the frame at these true sizes against each other: Example Renee (age 12): about 4 ft 11 in (150 cm) tall; Example Frank: 6 ft 1 in tall; Example fence line: chain-link fence 4 ft tall; No Outlet sign 7 ft to its top.');
+    expect(input.prompt).toContain(chip.text);
+    const panel = { action: 'Renee climbs through', castIds: ['cat-a'], environmentIds: ['cat-f'] };
+    const panelled = musicVideoFrameModelInput(cast, { sceneId: 's2' }, { panel, sizes });
+    expect(panelled.promptAdditions.find((item) => item.id === 'real-world-scale').text).not.toContain('Example Frank');
+    expect(ids(musicVideoFrameModelInput(cast, scene, { sizes: {} }))).not.toContain('real-world-scale');
+  });
+
   it('adds the rework line for a picked frame and the run\'s repair notes', () => {
     const input = musicVideoFrameModelInput(project, scene, { fromFrame: true, repairs: ['hand: six fingers', 'hand: six fingers'], fixes: 'too dark' });
     expect(input.prompt).toContain('\nStart from the first reference image and rework it to match this prompt.');

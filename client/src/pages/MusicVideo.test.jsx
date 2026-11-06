@@ -2749,8 +2749,10 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
-    expect(screen.getByText(/A refine or end frame counts its frame first/)).toBeTruthy();
     await showFrames();
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
+    expect(screen.getByRole('tooltip').textContent).toContain('A refine or end frame counts its frame first');
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
@@ -3860,9 +3862,9 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
       </MemoryRouter>
     );
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    const details = document.getElementById('scene-s1');
-    expect(details).toBeInTheDocument();
-    expect(details.open).toBe(true);
+    const shot = document.getElementById('scene-s1');
+    expect(shot).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toContainElement(shot);
   });
 
   it('routes /music-video/:projectId/scene/:sceneId directly to board stage with scene expanded', async () => {
@@ -3873,9 +3875,9 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
       </MemoryRouter>
     );
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
-    const details = document.getElementById('scene-s1');
-    expect(details).toBeInTheDocument();
-    expect(details.open).toBe(true);
+    const shot = document.getElementById('scene-s1');
+    expect(shot).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toContainElement(shot);
   });
 
   it('opens create project drawer via ?new=project and autonomous drawer via ?new=autonomous', async () => {
@@ -3910,15 +3912,10 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     expect(document.getElementById('scene-s1')).toBeNull();
     const thumbnail = screen.getByRole('button', { name: /^Open (Shot 1|Scene 1)/ });
     await act(async () => fireEvent.click(thumbnail));
-    const details = document.getElementById('scene-s1');
-    expect(details).toBeInTheDocument();
+    expect(document.getElementById('scene-s1')).toBeInTheDocument();
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/produce/scene/s1`);
 
-    details.querySelector('summary').focus();
-    await act(async () => {
-      details.open = false;
-      fireEvent(details, new Event('toggle'));
-    });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close shot' })));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/produce`);
     expect(document.getElementById('scene-s1')).toBeNull();
     expect(thumbnail).toHaveFocus();
@@ -3931,17 +3928,17 @@ describe('MusicVideo deep-linking and drawer URL routing (#10168)', () => {
     render(<MemoryRouter initialEntries={[`/music-video/${PROJECT_WITH_CLIP.id}/produce/scene/s1`]}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     // The heading can land a commit before the inspector; wait for the scene the keys act on.
-    await waitFor(() => expect(document.querySelector('#scene-s1 summary')).not.toBeNull());
-    document.querySelector('#scene-s1 summary').focus();
+    await waitFor(() => expect(document.querySelector('#scene-s1 [data-shot-heading]')).not.toBeNull());
+    document.querySelector('#scene-s1 [data-shot-heading]').focus();
     await act(async () => fireEvent.keyDown(document.activeElement, { key: 'j' }));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/produce/scene/s2`);
     expect(document.querySelector('#scene-s1')).toBeNull();
-    expect(document.querySelector('#scene-s2 summary')).toHaveFocus();
+    expect(document.querySelector('#scene-s2 [data-shot-heading]')).toHaveFocus();
     expect(document.querySelectorAll('video[src^="/data/videos/"]')).toHaveLength(1);
     await act(async () => fireEvent.keyDown(document.activeElement, { key: 'k' }));
     expect(screen.getByTestId('loc')).toHaveTextContent(`/music-video/${PROJECT_WITH_CLIP.id}/produce/scene/s1`);
     expect(document.querySelector('#scene-s2')).toBeNull();
-    expect(document.querySelector('#scene-s1 summary')).toHaveFocus();
+    expect(document.querySelector('#scene-s1 [data-shot-heading]')).toHaveFocus();
   });
 
   it('closes open drawer on back navigation', async () => {

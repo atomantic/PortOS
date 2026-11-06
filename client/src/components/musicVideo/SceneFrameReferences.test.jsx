@@ -31,6 +31,14 @@ describe('a shot\'s References row', () => {
     expect(screen.queryByRole('list', { name: 'References to add' })).toBeNull();
   });
 
+  // Uniquely catches the renderer-limit note returning to the working surface instead of the info icon.
+  it('keeps the reference-order note behind a tap on the References info icon', () => {
+    render(<SceneFrameReferences project={project} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/each render attaches/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
+    expect(screen.getByRole('tooltip').textContent).toContain('each render attaches');
+  });
+
   it('holds a saved catalog pick and the row until its cast media loads', () => {
     const onSave = vi.fn();
     const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };

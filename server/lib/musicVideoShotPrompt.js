@@ -19,6 +19,7 @@ import { productionMediumAddition } from './musicVideoProductionMedium.js';
 import { peopleLightLine } from './musicVideoSnapshotLight.js';
 import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 import { storyboardPanelShotText } from './storyboardRecipe.js';
+import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -183,10 +184,13 @@ const storyboardSketchNote = (position) => `Reference image ${position} is the s
  * the place of its sketch among the references (`panelReference`, 1-based,
  * 0 when not sent) lead the prompt, and the bible names only the subjects it
  * puts in frame.
+ *
+ * `sizes` is `{ [subjectId]: text }` (loadMusicVideoSubjectSizes): the real-world
+ * heights and sizes of the shot's subjects, stated as their own addition.
  */
 function composeFrameModelInput(project, scene, {
   slot = 'start', authored = authoredFramePromptText(scene, slot), fromFrame = false, refine = false,
-  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references = [],
+  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references = [], sizes = null,
 } = {}) {
   const others = otherReferences > 0 ? addition('other-references', 'Character references', MUSIC_VIDEO_OTHER_REFERENCES_NOTE) : null;
   const text = typeof authored === 'string' ? authored.trim() : '';
@@ -212,6 +216,7 @@ function composeFrameModelInput(project, scene, {
     addition('reference-map', 'Reference images', musicVideoReferenceMapText(references)),
     addition('project-style', 'Project style', project?.concept?.style),
     addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project) })),
+    addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
     productionMediumAddition(project),

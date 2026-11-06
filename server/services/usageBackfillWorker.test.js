@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { __resetUsageClaims, readMeasuredUsage, snapshotUsageClaims } from './usageReconciler.js';
-import { scanHistoricalUsage } from './usageBackfillWorker.js';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-worker-' });
+vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+afterAll(cleanup);
+const { __resetUsageClaims, readMeasuredUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
+const { scanHistoricalUsage } = await import('./usageBackfillWorker.js');
 
 let root;
 let home;

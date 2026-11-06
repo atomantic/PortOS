@@ -234,6 +234,15 @@ reset times and the publishing instance's name; no prompts, no transcripts, no
 PII. The peer payload is rebuilt to the wire shape on arrival for the same
 recursion-depth reason the usage digest is.
 
+## Addendum: the cutover barrier is independent of the category map
+
+`syncEnabled: false` and `fullSync` both leave `usage` on by the rules above, so
+neither can pause it for a migration. The [usage cutover barrier](../USAGE_CUTOVER_BARRIER.md)
+is a separate machine-local gate at the write and apply boundaries, evaluated after the
+category map. With no barrier the wire is unchanged. During one, `instances` is empty
+and any epoch data rides inside a `cutover` stamp, so an older peer has nothing it could
+merge. The category default and the per-peer toggles keep their meaning.
+
 ## Addendum: Claude Code transcript token history (per model, per day)
 
 The `usage` category also carries an optional `claudeCode` field per instance: a

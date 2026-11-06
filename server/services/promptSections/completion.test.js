@@ -206,3 +206,13 @@ describe('pending-merge handoff instructions (#12247)', () => {
     }
   });
 });
+
+describe('claim flow Use auto-merge', () => {
+  it('enables GitHub auto-merge after reviews only when the claim merges its own PR', () => {
+    const merging = buildClaimFlowCompletionSection({ agentId: 'example-claim', autoMerge: true });
+    expect(merging).toContain('## Use auto-merge');
+    expect(merging).toContain('Keep watching CI on that head until the PR reports MERGED');
+    expect(buildClaimFlowCompletionSection({ agentId: 'example-claim' })).not.toContain('## Use auto-merge');
+    expect(buildClaimFlowCompletionSection({ agentId: 'example-claim', autoMerge: true, prStaysOpen: true })).not.toContain('## Use auto-merge');
+  });
+});

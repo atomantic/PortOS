@@ -139,8 +139,10 @@ export async function reconcileAgentRunDelivery(agent) {
  * failed its PR-claim verification as the failure it is. Without it the run
  * history would keep saying "success" for exactly the run the agent record and
  * the task status now agree did NOT land its deliverable.
+ * `endedAt` closes an already-stopped execution at its stop time and derives
+ * duration from the run start, keeping usage out of the paused interval.
  */
-export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null, successOverride = null, delivery = null) {
+export async function completeAgentRun(runId, output, exitCode, duration, errorAnalysis = null, successOverride = null, delivery = null, { endedAt = null } = {}) {
   if (!runId) return; // Skip if no runId (e.g., agent recovered after restart)
 
   const runDir = join(RUNS_DIR, runId);
@@ -152,7 +154,14 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   if (!metadata) return;
   if (metadata.endTime) return;
 
-  metadata.endTime = new Date().toISOString();
+  const stoppedAt = Date.parse(endedAt);
+  const startedAt = Date.parse(metadata.startTime);
+  const completionTime = Number.isFinite(stoppedAt)
+    ? Math.max(stoppedAt, Number.isFinite(startedAt) ? startedAt : stoppedAt) : Date.now();
+  metadata.endTime = new Date(completionTime).toISOString();
+  if (Number.isFinite(stoppedAt) && Number.isFinite(startedAt)) {
+    duration = completionTime - startedAt;
+  }
   metadata.duration = duration;
   metadata.exitCode = exitCode;
 
@@ -162,10 +171,10 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // opens at the run's own startTime, so commits another agent pushed before
   // this run began don't launder it into a success.
   const refused = ['content-refusal', 'content-filtered'].includes(errorAnalysis?.category);
-  if (refused) metadata.executionInterruption ||= { category: errorAnalysis.category, source: errorAnalysis.origin || 'provider', at: metadata.endTime };
+  if (refused || errorAnalysis?.category === 'interrupted') metadata.executionInterruption ||= { category: errorAnalysis.category, source: errorAnalysis.origin || 'provider', at: metadata.endTime };
   let success = exitCode === 0;
   const runStartedAt = Date.parse(metadata.startTime);
-  if (!success && !refused && metadata.taskId && metadata.workspacePath) {
+  if (!success && successOverride !== false && !refused && metadata.taskId && metadata.workspacePath) {
     if (await committedDuringRun(metadata.workspacePath, runStartedAt)) {
       console.log(`⚠️ Agent ${metadata.agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${metadata.taskId}`);
       success = true;

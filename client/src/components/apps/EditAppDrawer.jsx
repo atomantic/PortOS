@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { BarChart3, Brain, GitBranch, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
+import { BarChart3, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
@@ -13,7 +13,7 @@ import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
-import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge } from '../cos/constants';
 import {
   APP_FEATURES,
   APP_FEATURE_IDS,
@@ -77,6 +77,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     forgeAccount: typeof app.forgeAccount === 'string' ? app.forgeAccount : '',
     defaultOpenPR: app.defaultOpenPR || false,
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
+    // Unset means ON for PortOS itself and OFF for every other app.
+    useAutoMerge: resolveUseAutoMerge(app),
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     // Unset means ON server-side, so an app that has never been saved shows checked.
     verifyRepoStateOnCompletion: app.verifyRepoStateOnCompletion !== false,
@@ -280,6 +282,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
+      useAutoMerge: formData.useAutoMerge,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
       publishQualitySnapshot: formData.publishQualitySnapshot,
     };
@@ -716,9 +719,24 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                 </select>
                 <p className="mt-1 text-xs text-gray-500">
                   {prCompletionOption(formData.defaultPrCompletion)?.description}
-                  {' Automatic merging is managed by PortOS, not GitHub native auto-merge. Per-run choices override this default.'}
+                  {' Per-run choices override this default.'}
                 </p>
               </div>
+              <label htmlFor="edit-app-use-auto-merge" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-use-auto-merge"
+                  type="checkbox"
+                  checked={formData.useAutoMerge}
+                  onChange={e => setFormData(prev => ({ ...prev, useAutoMerge: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <GitMerge size={14} className="text-purple-400" />
+                <span className="text-sm text-white">Use auto-merge</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                Agents turn on GitHub auto-merge once review requirements pass, so the PR merges as soon as CI finishes. They still watch CI and fix failures. Leave-open and draft PRs are never auto-merged.
+                {!prCompletionMerges(formData.defaultPrCompletion) && formData.useAutoMerge ? ' The default PR completion above leaves PRs open, so this applies only to runs that choose a merging completion.' : ''}
+              </p>
               <label htmlFor="edit-app-verify-repo-state" className="flex items-center gap-2 cursor-pointer">
                 <input
                   id="edit-app-verify-repo-state"

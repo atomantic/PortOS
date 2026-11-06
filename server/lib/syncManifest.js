@@ -41,6 +41,12 @@ import { compareNewerWins } from './lwwTimestamp.js';
  */
 export const MAX_MANIFEST_SLOTS = 128;
 
+/**
+ * The slot map of a manifest's `data`. During a usage cutover it lives inside the
+ * epoch stamp, leaving `instances` empty for a runtime that cannot read the stamp.
+ */
+export const manifestSlotMap = (data) => (isPlainObject(data?.cutover?.instances) ? data.cutover.instances : data?.instances);
+
 /** True when `value` is a usable `{ data: { instances }, checksum }` envelope. */
 export function isManifestEnvelope(value) {
   return typeof value?.checksum === 'string'

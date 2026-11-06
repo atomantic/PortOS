@@ -176,13 +176,15 @@ function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fr
 async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount }) {
   const tag = data.musicVideo;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
-  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia] = await Promise.all([
+  const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia, subjectScale] = await Promise.all([
     import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
     tag.compose ? import('../musicVideo/castGuideMedia.js') : null,
+    tag.compose ? import('../musicVideo/subjectScale.js') : null,
   ]);
-  const [greybox, panel, castMedia] = await Promise.all([
+  const [greybox, panel, castMedia, sizes] = await Promise.all([
     loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
     castGuideMedia?.loadSceneCastMedia(scene, { project }),
+    subjectScale?.loadMusicVideoSubjectSizes(project),
   ]);
   if (greybox) {
     placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
@@ -230,7 +232,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
       fromFrame: tag.fromFrame === true, refine: tag.refine === true,
       // The picked frame comes first; any reference after it is the shot's character or set reference.
       otherReferences: Math.max(0, sentInitCount + sentFiles.length + referenceUploads.length - 1),
-      panel, panelReference: panelIndex >= 0 ? sentInitCount + panelIndex + 1 : 0,
+      panel, panelReference: panelIndex >= 0 ? sentInitCount + panelIndex + 1 : 0, sizes,
       // An init image or picked frame occupies a slot without being a character sheet.
       references: [...Array(sentInitCount).fill(null), ...sentFiles.map((file, index) =>
         !sentInitCount && index === 0 && (tag.fromFrame || tag.refine) ? null : known.find((ref) => ref?.imageId === file) || null)],

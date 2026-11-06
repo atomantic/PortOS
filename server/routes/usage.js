@@ -5,12 +5,13 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, nativeUsageCoverageQuerySchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
+import { validateRequest, nativeUsageCoverageQuerySchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
+import { acquireUsageCutover, activateUsageCutover, getUsageCutoverStatus, releaseUsageCutover, rollbackUsageCutover, verifyUsageCutover } from '../services/usageCutoverBarrier.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import {
   getHistoricalUsageBackfillStatus,
@@ -214,6 +215,31 @@ router.post('/backfill/preview/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelCodexUsagePreview(jobId));
 }));
 
+// Read-only: participants, acknowledgments, outstanding work and why cutover is held.
+router.get('/cutover', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store').json(await getUsageCutoverStatus());
+}));
+
+router.post('/cutover/acquire', asyncHandler(async (req, res) => {
+  res.json(await acquireUsageCutover(validateRequest(usageCutoverAcquireSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/verify', asyncHandler(async (req, res) => {
+  res.json(await verifyUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/activate', asyncHandler(async (req, res) => {
+  res.json(await activateUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/rollback', asyncHandler(async (req, res) => {
+  res.json(await rollbackUsageCutover(validateRequest(usageCutoverRollbackSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/release', asyncHandler(async (req, res) => {
+  res.json(await releaseUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
 router.post('/backfill', asyncHandler(async (req, res) => {
   res.status(202).json(await startHistoricalUsageBackfill());
 }));
@@ -221,8 +247,8 @@ router.post('/backfill', asyncHandler(async (req, res) => {
 // POST /api/usage/session - Record a session
 router.post('/session', asyncHandler(async (req, res) => {
   const { providerId, providerName, model } = validateRequest(usageSessionSchema, req.body);
-  const sessionNumber = await usage.recordSession(providerId, providerName, model);
-  res.json({ sessionNumber });
+  const recorded = await usage.recordSession(providerId, providerName, model);
+  res.json(recorded?.deferred ? { sessionNumber: null, deferred: true } : { sessionNumber: recorded });
 }));
 
 // POST /api/usage/messages - Record messages

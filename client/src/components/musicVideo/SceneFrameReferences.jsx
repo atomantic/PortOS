@@ -5,12 +5,14 @@ import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicV
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
+import InfoTooltip from '../ui/InfoTooltip';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
 const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
 const LONG_PRESS_MS = 450;
 const thumb = (ref) => <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} fallbackSrc={`/data/image-refs/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
+const BACK_TO_AUTO_HINT = 'Drops your hand-picked list and goes back to the automatic one (the main character, the section\'s set and anyone the prompt names). Nothing renders and no images are deleted; you can pick again any time.';
 const PICKER_HINT = 'Each render sends the shot\'s references in order, up to its renderer\'s limit (Codex 5).';
 
 /**
@@ -18,9 +20,10 @@ const PICKER_HINT = 'Each render sends the shot\'s references in order, up to it
  * end and both refines), shown as chips. Until the director changes them it is
  * the automatic set (the main character, the section's set and anyone the
  * prompt names); a change is kept on the shot (`frameReferenceIds`), and Auto
- * puts the automatic set back. A shot naming a Casting cast member
- * (`characterVariant`, #12763) leads with that member's guides, from `castMedia`,
- * and Add also offers the approved assets of every character linked from the catalog.
+ * puts the automatic set back. Add offers the approved assets (sheets per age
+ * or look, portraits, guides) of every character linked from the catalog. An
+ * older shot that saved a Casting cast member (`characterVariant`, #12763) still
+ * leads with that member's guides, from `castMedia`; no picker sets it any more.
  */
 export default function SceneFrameReferences({ project, scene, castMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
@@ -89,8 +92,14 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
     <div role="group" aria-label="References selected for the frames" className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-port-text-muted">
         <span className="font-medium text-port-text">References</span>
+        <InfoTooltip label="How references are sent" placement="below" align="start" width={300}>
+          In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.
+        </InfoTooltip>
         {auto ? <span>Auto: from the prompt</span> : (
-          <button type="button" onClick={() => set(null)} disabled={locked} className="min-h-[44px] underline sm:min-h-0">Back to auto</button>
+          <span className="inline-flex items-center">
+            <button type="button" onClick={() => set(null)} disabled={locked} title={BACK_TO_AUTO_HINT} className="min-h-[44px] underline sm:min-h-0">Back to auto</button>
+            <InfoTooltip label="What Back to auto does" placement="below" align="start" width={260}>{BACK_TO_AUTO_HINT}</InfoTooltip>
+          </span>
         )}
       </div>
       <ul className="flex flex-wrap gap-1">
@@ -116,7 +125,6 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
       </ul>
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
-      {chosen.length > 0 && <p className="text-[11px] text-port-text-muted">In this order, each render attaches as many references as its image renderer takes (Codex 5, Qwen Image 2.1 and FLUX.3 10, FLUX.2 4). A refine or end frame counts its frame first; automatic storyboard art keeps a spare slot. Codex attachments do not confirm that its image tool received them.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}
       <SceneReferencePicker open={adding && !full} references={others} label="References to add" hint={PICKER_HINT} onClose={() => setAdding(false)}
         tileProps={(ref) => ({ disabled: locked, onClick: unlessLongPress(() => { set([...ids, ref.id]); setAdding(false); setPreview(null); }), ...previewProps(ref) })}>

@@ -2,6 +2,7 @@ import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import TabPills from '../components/ui/TabPills';
 import NativeUsageOverview from '../components/usage/NativeUsageOverview';
+import UsageHeldRunsNotice from '../components/usage/UsageHeldRunsNotice';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3, History, Fingerprint } from 'lucide-react';
@@ -1138,6 +1139,8 @@ function InternalUsageMetrics({ onBillingSaved }) {
           {backfill?.mode === 'preview' && ['running', 'cancelling'].includes(backfill?.status) ? 'Preview in progress' : backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
         </button>
       </div>
+
+      <UsageHeldRunsNotice held={usage.heldRunCoverage} />
 
       <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} coverage={usage.codexCoverage} />
 

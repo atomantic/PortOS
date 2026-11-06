@@ -68,6 +68,7 @@ export default function Drawer({
   closeLabel = 'Close settings',
   portalClassName = '',  // re-applies a page-scoped theming class inside the portal
   headerActions = null,  // buttons beside Close (e.g. previous / next record)
+  showHeader = true,     // false: the child draws its own header, Close included (the shot editor)
 }) {
   useScrollLock(open);
 
@@ -112,6 +113,7 @@ export default function Drawer({
         aria-label={title}
         className={`port-opaque-surface fixed inset-y-0 right-0 z-50 w-full max-w-full ${resolvedWidth} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
       >
+        {showHeader && (
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
           <div className="min-w-0 flex-1 pr-2">
             <h2 className="text-base font-medium text-white truncate">{title}</h2>
@@ -127,6 +129,7 @@ export default function Drawer({
             <X className="w-5 h-5" />
           </button>
         </header>
+        )}
         {hasTabs && (
           // Element ids below assume one drawer is open at a time — true by the
           // modal contract (backdrop + scroll-lock), and a closed drawer renders

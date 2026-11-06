@@ -186,3 +186,23 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   expect(onEditLocal).not.toHaveBeenCalled();
   expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('');
 });
+
+it('Use end frame off hides the end frame and keeps its selection for switching back on', () => {
+  const onSave = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(scene);
+    return <SceneFrames scene={draft} index={0} endFrames endFrameToggle onSave={onSave}
+      onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
+  }
+  render(<Harness />);
+  const toggle = screen.getByRole('checkbox', { name: 'Use end frame' });
+  expect(toggle.checked).toBe(true);
+  fireEvent.click(toggle);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: true });
+  expect(screen.queryByRole('textbox', { name: 'End frame prompt' })).toBeNull();
+  expect(screen.queryByRole('group', { name: 'Start and end frames' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Use end frame' }));
+  expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null });
+  expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
+});

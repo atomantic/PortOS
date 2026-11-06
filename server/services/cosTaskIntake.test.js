@@ -54,6 +54,7 @@ const METADATA_SAMPLES = {
   planOnly: true,
   openPR: true,
   prCompletion: PR_COMPLETIONS.LEAVE_OPEN,
+  useAutoMerge: true,
   simplify: true,
   worktreeChangesExpected: false,
   reviewLoop: true,

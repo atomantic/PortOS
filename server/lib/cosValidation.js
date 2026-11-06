@@ -270,6 +270,11 @@ export const createCosTaskSchema = z.object({
     z.boolean().optional()
   ),
   prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
+  // Absent inherits the app's `useAutoMerge` (resolveUseAutoMerge).
+  useAutoMerge: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
   simplify: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()

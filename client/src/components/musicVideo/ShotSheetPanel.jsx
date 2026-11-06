@@ -127,19 +127,18 @@ function CameraList({ project, disabled, onChange }) {
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-1.5">
       <legend className="text-xs font-medium">Cameras in this video</legend>
-      <p className="text-xs text-port-text-muted">Name each camera the story has, and whether it shoots photos or video. An in-world camera has an owner and can be borrowed or set down; an observer isn’t in their world, so nobody ever looks at it.</p>
       {cameras.map((camera) => (
         <div key={camera.id} className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
           <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
             onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
           <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
-            <option value="in-world">In their world</option>
+            <option value="in-world">In world</option>
             <option value="observer">Observer</option>
           </select>
           <select aria-label={`${camera.name} shoots`} value={camera.output || ''} className={inputCls} onChange={(event) => patch(camera.id, { output: event.target.value || null })}>
-            <option value="">Photo or video</option>
-            <option value="image">Photos only</option>
-            <option value="video">Video only</option>
+            <option value="">Photo/Video</option>
+            <option value="video">Video</option>
+            <option value="image">Photo</option>
           </select>
           <input key={`o-${camera.owner || ''}`} aria-label={`${camera.name} owner`} placeholder="Owner" defaultValue={camera.owner || ''} maxLength={120} className={inputCls}
             onBlur={(event) => { if (event.target.value.trim() !== (camera.owner || '')) patch(camera.id, { owner: event.target.value.trim() }); }} />
@@ -324,7 +323,6 @@ export default function ShotSheetPanel({ board }) {
         </button>
       )}
       <BulkFill rows={listed} disabled={locked} onApply={saveSheets} />
-      <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Done when the shot is finished. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
       ))}

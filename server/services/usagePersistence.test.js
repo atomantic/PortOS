@@ -44,7 +44,14 @@ const writeRollout = async () => {
   ].map(line => JSON.stringify(line)).join('\n'));
 };
 
-const failRename = () => rename.mockRejectedValueOnce(Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' }));
+// The ledger write only: the same pass also stores a Codex projection through this primitive.
+const { rename: actualRename } = await vi.importActual('fs/promises');
+const failNextLedgerRename = (fail) => rename.mockImplementation((from, to) => {
+  if (to !== USAGE_FILE) return actualRename(from, to);
+  rename.mockImplementation(actualRename);
+  return fail();
+});
+const failRename = () => failNextLedgerRename(() => Promise.reject(Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' })));
 
 describe('usage commit failure recovery', () => {
   it('releases a failed completion claim and persists its explicit same-process retry exactly once', async () => {
@@ -71,7 +78,7 @@ describe('usage commit failure recovery', () => {
     const before = await disk();
     let rejectWrite;
     const entered = Promise.withResolvers();
-    rename.mockImplementationOnce(() => {
+    failNextLedgerRename(() => {
       entered.resolve();
       return new Promise((_, reject) => { rejectWrite = reject; });
     });
@@ -95,7 +102,7 @@ describe('usage commit failure recovery', () => {
     await writeRollout();
     let rejectWrite;
     const entered = Promise.withResolvers();
-    rename.mockImplementationOnce(() => {
+    failNextLedgerRename(() => {
       entered.resolve();
       return new Promise((_, reject) => { rejectWrite = reject; });
     });
