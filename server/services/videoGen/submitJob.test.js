@@ -282,6 +282,21 @@ describe('submitVideoGenJob', () => {
       expect(mocks.enqueueJob).not.toHaveBeenCalled();
     });
 
+    // Uniquely catches a supplied-audio project refusing a local model that cannot hear the song.
+    it('renders a cutaway without its song window on a local model that cannot hear audio', async () => {
+      const omni = { id: 'omni-example', name: 'Omni Example', runtime: 'fastvideo', supportedModes: ['image'] };
+      mocks.resolveVideoModelSelection.mockResolvedValue({ model: omni, modelId: omni.id });
+      mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ effectiveModel: omni, mode: 'image', sourceImagePath: '/example/uploads/frame.png' }));
+      mocks.getMusicVideoProject.mockResolvedValue(project);
+      mocks.enqueueJob.mockResolvedValue(queued);
+
+      await expect(submitVideoGenJob({ prompt: 'skyline', backend: 'local', modelId: omni.id, mode: 'a2v', fps: 24,
+        _suppliedAudio: true, musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1' } }, {})).resolves.toMatchObject({ jobId: queued.jobId });
+      expect(mocks.prepareVideoGenParams.mock.calls[0][0].body).toMatchObject({ mode: 'image', _suppliedAudio: false });
+      expect(mocks.prepareSourceAudioWindow).not.toHaveBeenCalled();
+      expect(mocks.enqueueJob.mock.calls[0][0].params.disableAudio).toBe(true);
+    });
+
     it('a hosted performance shot releases its staged frame and sliced song excerpt', async () => {
       const failure = new Error('project store unavailable');
       const slice = '/example/uploads/mv-performance-1.wav';

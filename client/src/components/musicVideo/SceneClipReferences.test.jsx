@@ -31,4 +31,13 @@ describe('clip references', () => {
     expect(screen.getByText(/does not pin the opening frame/)).toBeTruthy();
     expect(screen.queryByText('Rider · not sent')).toBeNull();
   });
+
+  it('notes that a local model without audio conditioning renders without the song', () => {
+    const songProject = { ...project, videoSettings: { generationMode: 'suppliedAudio' } };
+    const props = { project: songProject, scene, onEditLocal: vi.fn(), onSave: vi.fn(), onSaveState: vi.fn() };
+    const { rerender } = render(<SceneClipReferences {...props} backend="local" model={{ id: 'omni', runtime: 'fastvideo', fastvideoFamily: 'fasth3omni' }} />);
+    expect(screen.getByText(/does not hear the song/)).toBeTruthy();
+    rerender(<SceneClipReferences {...props} backend="local" model={{ id: 'ltx', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }} />);
+    expect(screen.queryByText(/does not hear the song/)).toBeNull();
+  });
 });
