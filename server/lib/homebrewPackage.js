@@ -43,10 +43,10 @@ function isThirdPartyFormula(kegDir) {
 
 /**
  * The newest version homebrew-core or homebrew-cask has published, or `null`
- * when that is not known, including for a third-party tap the API does not cover.
+ * when that is not known. The API covers homebrew-core and homebrew-cask only, so
+ * a caller holding a `thirdPartyTap` package must not ask it.
  */
-export async function fetchHomebrewLatestVersion({ kind, name, thirdPartyTap = false }, { fetchImpl = fetchWithTimeout } = {}) {
-  if (thirdPartyTap) return null;
+export async function fetchHomebrewLatestVersion({ kind, name }, { fetchImpl = fetchWithTimeout } = {}) {
   const url = `https://formulae.brew.sh/api/${kind === 'cask' ? 'cask' : 'formula'}/${encodeURIComponent(name)}.json`;
   const response = await fetchImpl(url, { headers: { accept: 'application/json' }, redirect: 'error' }, API_TIMEOUT_MS);
   if (!response.ok) { await response.body?.cancel(); return null; }

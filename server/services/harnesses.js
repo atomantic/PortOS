@@ -115,7 +115,9 @@ export async function getLatestPublishedVersion(packageName, { fresh = false, ru
 async function resolveLatestVersion(runtime, status, { fresh, run, fetchImpl }) {
   const npm = await getLatestPublishedVersion(runtime.npmPackage, { fresh, run });
   const channel = status.installChannel;
-  if (!channel) return { latestVersion: npm, latestVersionSource: 'npm', npmAheadVersion: null };
+  // Decided before the cache: its key is the package name, which a tap's formula
+  // can share with an unrelated homebrew-core one.
+  if (!channel || channel.thirdPartyTap) return { latestVersion: npm, latestVersionSource: 'npm', npmAheadVersion: null };
   const brew = await latestVersions.read(`homebrew:${channel.kind}:${channel.name}`, async () => {
     const version = await fetchHomebrewLatestVersion(channel, { fetchImpl });
     if (!version) throw new Error(`Homebrew has no version for ${channel.name}`);

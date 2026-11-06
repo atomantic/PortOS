@@ -16,7 +16,7 @@ describe('homebrewPackageFor', () => {
 describe('a formula from a third-party tap', () => {
   // homebrew-core can publish a different formula under the same name, so its
   // version says nothing about what the tap's copy can upgrade to.
-  it('is marked and never read from the core API', async () => {
+  it('is marked', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-brew-'));
     try {
       const keg = join(root, 'Cellar', 'opencode', '1.2.3');
@@ -25,7 +25,6 @@ describe('a formula from a third-party tap', () => {
       writeFileSync(join(keg, 'INSTALL_RECEIPT.json'), JSON.stringify({ source: { tap: 'example/tap' } }));
       const pkg = homebrewPackageFor(join(keg, 'bin', 'opencode'));
       expect(pkg.thirdPartyTap).toBe(true);
-      expect(await fetchHomebrewLatestVersion(pkg, { fetchImpl: () => { throw new Error('fetched'); } })).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
