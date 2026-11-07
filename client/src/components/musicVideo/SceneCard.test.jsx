@@ -1250,6 +1250,27 @@ it('passes the selected LTX character references and prompt labels from the shot
   }) }));
 });
 
+// Uniquely catches a local reference model's card listing more cast than the server sends beside the greybox plate (409 CLIP_REFERENCES_CHANGED).
+it('keeps a slot for the greybox plate when listing a local reference model\'s clip references', () => {
+  const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [],
+    clipReferenceIds: ['rider', 'guest'], setReference: { subjectId: 'rink', greyboxShotId: 'wide' } };
+  const project = { id: 'mv-reference', scenes: [scene], concept: { subjects: [{ id: 'rink', kind: 'place', name: 'Rink', ingredientId: 'cat-rink' }] },
+    visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+      { id: 'guest', imageId: 'guest.png', role: 'character', label: 'Guest', condition: true },
+    ] } };
+  const greyboxPlaces = { 'cat-rink': { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } },
+    media: [{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }] } };
+  // maxReferenceTotal counts the frame: 2 extra images in all, the plate takes one.
+  const models = [{ id: 'omni_example', name: 'Omni', runtime: 'fastvideo', supportedModes: ['image'], maxReferenceImages: 4, maxReferenceTotal: 3 }];
+  const onGenerateVideo = vi.fn();
+  render(<SceneCard scene={scene} project={project} greyboxPlaces={greyboxPlaces} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+    onGenerateVideo={onGenerateVideo} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'omni_example' }} />);
+  show('Clip');
+  fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+  expect(onGenerateVideo.mock.calls[0][1].card.expectedClipReferenceFiles).toEqual(['rider.png']);
+});
+
 describe('LTX reference box default', () => {
   const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
   const project = (scene) => ({ id: 'mv-reference', scenes: [scene], visualSpec: { references: [

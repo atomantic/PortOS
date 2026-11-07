@@ -773,16 +773,25 @@ async function prepareVideoReferences({
   // The backend and capability-dependent model are already resolved here, and
   // hosted/peer submissions have taken their own lanes. Add cast sheets only
   // when they cannot displace caller-provided references or break a chain.
-  const hasRequestedReferences = body.referenceImageFiles?.length || body.referenceVideoIds?.length
+  // The shot's greybox plate (renderPool.js) is the render's own input, not a caller
+  // pick: it keeps the clip references and leads them, taking one slot of each limit.
+  const platePick = body.musicVideo?.greyboxPlateFile;
+  const onlyGreyboxPlate = Boolean(platePick) && body.referenceImageFiles?.length === 1 && body.referenceImageFiles[0] === platePick;
+  const hasRequestedReferences = (body.referenceImageFiles?.length && !onlyGreyboxPlate) || body.referenceVideoIds?.length
     || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]);
+  const plateSlot = onlyGreyboxPlate ? 1 : 0;
   let referenceImagePaths = null;
+  let castReferencePaths = [];
   if (body.musicVideo?.sceneId && !body.musicVideo.clipReferencesDisabled && sourceImagePath && !hasRequestedReferences && !(Number(body.chunks) > 1)) {
     const totalLimit = Number(effectiveModel?.maxReferenceTotal) || Infinity;
-    const limit = Math.min(extraReferenceImageLimit(effectiveModel), totalLimit - 1);
+    const limit = Math.min(extraReferenceImageLimit(effectiveModel), totalLimit - 1) - plateSlot;
     if (limit > 0) {
       const { musicVideoLocalReferencePaths } = await import('../musicVideo/clipCastReferences.js');
       const paths = await musicVideoLocalReferencePaths(body.musicVideo, limit, { excludePath: sourceImagePath });
-      if (paths.length) referenceImagePaths = paths;
+      if (paths.length) {
+        if (onlyGreyboxPlate) castReferencePaths = paths;
+        else referenceImagePaths = paths;
+      }
     }
   }
   // Extra reference stills for a reference-to-video model. Rejected up-front on
@@ -808,6 +817,7 @@ async function prepareVideoReferences({
       }
       referenceImagePaths.push(path);
     }
+    referenceImagePaths.push(...castReferencePaths.filter((path) => !referenceImagePaths.includes(path)));
   }
 
   // Ordered clip and voice references, after the same per-model ceilings as the

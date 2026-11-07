@@ -27,5 +27,8 @@ export async function withMusicVideoGreyboxInput(body, project) {
   if (!body.musicVideo?.sceneId) return body;
   const scene = project?.scenes?.find((s) => s.sceneId === body.musicVideo.sceneId);
   const greybox = await loadMusicVideoGreybox(project, scene);
-  return greybox ? { ...body, referenceImageFiles: [...new Set([greybox.reference.imageId, ...(body.referenceImageFiles || [])])] } : body;
+  // `greyboxPlateFile` is server-only (the route schema strips it): it lets a local
+  // reference model tell its own plate apart from a caller's pick (prepareParams.js).
+  return greybox ? { ...body, musicVideo: { ...body.musicVideo, greyboxPlateFile: greybox.reference.imageId },
+    referenceImageFiles: [...new Set([greybox.reference.imageId, ...(body.referenceImageFiles || [])])] } : body;
 }

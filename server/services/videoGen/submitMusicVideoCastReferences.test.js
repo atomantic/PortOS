@@ -113,6 +113,24 @@ describe('Music Video cast references at video submission', () => {
     expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/image-refs/guide.png']);
   });
 
+  // Uniquely catches a greybox plate displacing the cast on a local reference model, which made the card's list disagree with the job.
+  it('queues a local reference shot with its greybox plate first and the cast after it', async () => {
+    m.renderPool.mockImplementation((request) => ({ ...request, referenceImageFiles: ['layout.png'],
+      musicVideo: { ...request.musicVideo, greyboxPlateFile: 'layout.png' } }));
+    await expect(submitVideoGenJob(body({ backend: 'local' }), {})).resolves.toMatchObject({ mode: 'local', model: 'omni' });
+    // Omni takes 2 extra images in all (maxReferenceTotal 3 counts the frame); the plate takes one.
+    expect(m.localReferences).toHaveBeenCalledWith(expect.objectContaining(tag), 1, { excludePath: '/mock/images/still.png' });
+    expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/images/layout.png', '/mock/images/lead.png']);
+  });
+
+  it('keeps a caller pick beside the plate without adding cast sheets', async () => {
+    m.renderPool.mockImplementation((request) => ({ ...request, referenceImageFiles: ['layout.png', 'chosen.png'],
+      musicVideo: { ...request.musicVideo, greyboxPlateFile: 'layout.png' } }));
+    await submitVideoGenJob(body({ backend: 'local' }), {});
+    expect(m.localReferences).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params.referenceImagePaths).toEqual(['/mock/images/layout.png', '/mock/images/chosen.png']);
+  });
+
   it('keeps an inherited Grok route even when the local default accepts cast sheets', async () => {
     m.settings.videoGen.mode = 'grok';
     await expect(submitVideoGenJob(body(), {})).resolves.toMatchObject({ mode: 'grok' });

@@ -195,10 +195,10 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
-    // The greybox plate leads a Grok or Gemini clip's references; the picker lists only the rest.
+    // The greybox plate leads a clip's references on Grok, Gemini and local models; the picker lists only the rest.
     const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).filter((ref) => !ref.greybox).map((ref) => basename(ref.path))
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
-        .map((path) => basename(path));
+        .map((path) => basename(path)).filter((file, i) => !(i === 0 && file === musicVideo.greyboxPlateFile));
     if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
       refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed or could not be loaded. Review them and render again.');
     }

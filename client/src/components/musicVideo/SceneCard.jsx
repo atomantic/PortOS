@@ -263,8 +263,9 @@ export default function SceneCard({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  // A Grok or Gemini clip sends the greybox plate first (clipCastReferences.js), so it takes one slot.
-  const greyboxSlot = greybox?.reference && ['grok', 'gemini'].includes(referenceBackend) ? 1 : 0;
+  // A Grok, Gemini or local reference clip sends the greybox plate first (clipCastReferences.js,
+  // prepareParams.js), so it takes one slot. A local model with no reference capacity has none to take.
+  const greyboxSlot = greybox?.reference && ['grok', 'gemini', 'local'].includes(referenceBackend) ? 1 : 0;
   const referenceCapacity = useLtxReferences ? 8
     : Math.max(0, musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn }) - greyboxSlot);
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ project: null, references: vi.fn(), hydrate: vi.fn() }));
+const m = vi.hoisted(() => ({ project: null, references: vi.fn(), hydrate: vi.fn(), greybox: null }));
 vi.mock('./projects.js', () => ({ getProject: async () => m.project }));
 vi.mock('./clipCastReferences.js', async (original) => ({ ...(await original()), musicVideoClipReferences: (...args) => m.references(...args) }));
 vi.mock('./catalogCheckin.js', async (original) => ({ ...(await original()), withCatalogCheckin: (...args) => m.hydrate(...args) }));
-vi.mock('./greyboxReferences.js', () => ({ loadMusicVideoGreybox: async () => null }));
+vi.mock('./greyboxReferences.js', () => ({ loadMusicVideoGreybox: async () => m.greybox }));
 
 import { applyMusicVideoSubmissionGuards } from './submissionGuards.js';
 
@@ -16,6 +16,7 @@ const request = () => ({
 });
 
 beforeEach(() => {
+  m.greybox = null;
   m.project = { id: 'project', scenes: [{ sceneId: 'shot', referenceImageId: 'start.png',
     clipReferenceIds: ['ref-a'], prompt: 'A rider turns' }],
   visualSpec: { references: [{ id: 'ref-a', imageId: 'a.png', role: 'character' }, { id: 'ref-b', imageId: 'b.png', role: 'character' }] } };
@@ -59,6 +60,25 @@ describe('LTX clip reference snapshot', () => {
   });
 });
 
+describe('local reference model with a greybox plate', () => {
+  const localRequest = (paths, tagExtra = {}) => ({
+    body: { mode: 'image', musicVideo: { projectId: 'project', sceneId: 'shot', promptAsTyped: true,
+      greyboxPlateFile: 'layout.png', expectedClipReferenceFiles: ['a.png'], ...tagExtra } },
+    backend: 'local', performance: null,
+    params: { prompt: 'A rider turns', referenceImagePaths: paths },
+    prepared: { sourceImagePath: '/gallery/start.png' },
+  });
+
+  // Uniquely catches the card's cast-only list being compared with the plate the local job leads with.
+  it('compares the cast list without the leading plate and still requires the plate itself', async () => {
+    m.greybox = { reference: { imageId: 'layout.png' }, path: '/gallery/layout.png', promptAdditions: [] };
+    await expect(applyMusicVideoSubmissionGuards(localRequest(['/gallery/layout.png', '/gallery/a.png']))).resolves.toBeDefined();
+    await expect(applyMusicVideoSubmissionGuards(localRequest(['/gallery/layout.png', '/gallery/b.png'])))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+    await expect(applyMusicVideoSubmissionGuards(localRequest(['/gallery/a.png'])))
+      .rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_CHANGED' });
+  });
+});
 
 it('rechecks catalog readiness at final video dispatch and rejects old files without a client reference snapshot', async () => {
   const input = request();
