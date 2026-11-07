@@ -66,9 +66,9 @@ export function shotCardRenderRequest({
     audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
   // The server sends music-video fal takes with provider expansion disabled (fal.js).
-  // The greybox plate leads a hosted clip's references and takes one slot (clipCastReferences.js).
+  // The greybox plate leads a hosted clip's references and takes one slot (clipCastReferences.js), unless it is the start frame.
   const hostedClipReferences = (limit) => {
-    const plate = limit > 0 && greybox?.reference ? [greybox.reference] : [];
+    const plate = limit > 0 && greybox?.reference && greybox.reference.imageId !== scene?.referenceImageId ? [greybox.reference] : [];
     return [...plate, ...musicVideoClipConditioningReferences(project, scene, castMedia, { limit: limit - plate.length, excludeImageId: plate[0]?.imageId })];
   };
   const clipReferences = falModel?.referenceImages && scene?.referenceImageId

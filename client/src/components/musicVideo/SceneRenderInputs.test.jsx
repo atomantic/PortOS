@@ -63,6 +63,9 @@ describe('shotCardRenderRequest', () => {
     expect(fal.prompt).toContain('Image 1 is the reference for Rink · Wide. Image 2 is the reference for Rider.');
     const runway = shotCardRenderRequest({ project, greybox, scene: selected, settings: { backend: 'runway', runwayModelId: 'seedance2_5' } });
     expect(runway.prompt).toMatch(/is the reference for Rink · Wide\. \S+( \d+)? is the reference for Rider\./);
+    // A plate chosen as the start frame is not also named as a reference.
+    const asStart = shotCardRenderRequest({ project, greybox, scene: { ...selected, referenceImageId: 'layout.png' }, settings: { backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video' } });
+    expect(asStart.prompt).toContain('Image 1 is the reference for Rider.');
   });
 
   it('offers song audio for a cutaway on an LTX-2 model, off unless toggled, and drops the end frame with it', () => {

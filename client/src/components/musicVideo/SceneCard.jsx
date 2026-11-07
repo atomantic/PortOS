@@ -263,8 +263,8 @@ export default function SceneCard({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  // A hosted clip sends the greybox plate first (clipCastReferences.js), so it takes one slot.
-  const greyboxSlot = greybox?.reference && ['grok', 'gemini', 'fal', 'runway'].includes(referenceBackend) ? 1 : 0;
+  // A hosted clip sends the greybox plate first (clipCastReferences.js), so it takes one slot, unless it is the start frame.
+  const greyboxSlot = greybox?.reference && greybox.reference.imageId !== scene.referenceImageId && ['grok', 'gemini', 'fal', 'runway'].includes(referenceBackend) ? 1 : 0;
   const laneReferenceCapacity = musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const referenceCapacity = useLtxReferences ? 8 : Math.max(0, laneReferenceCapacity - greyboxSlot);
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);

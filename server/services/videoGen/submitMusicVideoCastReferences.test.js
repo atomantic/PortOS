@@ -215,6 +215,10 @@ describe('Music Video cast references at video submission', () => {
       expect(m.enqueue).not.toHaveBeenCalled();
     });
 
+    it('does not refuse a model without references when the plate is the start frame', async () => {
+      await expect(submitVideoGenJob(body({ sourceImageFile: 'layout.png', backend: 'runway', runwayModelId: 'gen4.5', runwayDuration: 5 }), {})).resolves.toMatchObject({ mode: 'runway' });
+    });
+
     // Uniquely catches blaming the greybox for files that are not its plate, or fal silently dropping them.
     it('treats reference files that are not the plate as ordinary picks', async () => {
       m.shotGreybox.mockResolvedValue(null);

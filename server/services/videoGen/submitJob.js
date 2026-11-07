@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
 /**
  * Submit a validated video-generation request to its federated, hosted, or local
@@ -411,7 +412,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     if (backend === VIDEO_GEN_MODE.FAL && body.referenceImageFiles.some((file) => file !== plate)) {
       throw new ServerError('A fal shot clip takes its references from the shot, not from reference image picks.', { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
     }
-    if (clipReferenceLimit < 1 && body.referenceImageFiles.includes(plate)) {
+    if (clipReferenceLimit < 1 && body.referenceImageFiles.includes(plate) && !(sourceImagePath && basename(sourceImagePath) === plate)) {
       throw new ServerError(prepared.lastImagePath && clipReferenceModel.referenceImages
         ? `${clipReferenceModel.label} cannot combine an end frame with this shot's greybox reference. Turn off the end frame, clear the greybox reference, or pick another model.`
         : `${clipReferenceModel.label} takes no reference images, so it cannot use this shot's greybox reference. Clear the greybox reference or pick a model that takes references.`,

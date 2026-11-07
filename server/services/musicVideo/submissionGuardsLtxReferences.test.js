@@ -99,6 +99,13 @@ describe('greybox plate on a Runway clip', () => {
     await expect(applyMusicVideoSubmissionGuards(runway(['/inputs/layout.png', '/gallery/a.png']))).resolves.toBeDefined();
   });
 
+  // Uniquely catches "the greybox changed" on a shot whose start frame is the plate.
+  it('accepts a plate sent as the start frame', async () => {
+    const input = runway(['/gallery/a.png']);
+    input.prepared.sourceImagePath = '/gallery/layout.png';
+    await expect(applyMusicVideoSubmissionGuards(input)).resolves.toBeDefined();
+  });
+
   it('still refuses a changed pick, and a clip that lost the plate', async () => {
     await expect(applyMusicVideoSubmissionGuards(runway(['/inputs/layout.png', '/gallery/b.png']))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
     await expect(applyMusicVideoSubmissionGuards(runway(['/gallery/a.png']))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_CHANGED' });

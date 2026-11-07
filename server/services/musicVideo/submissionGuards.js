@@ -216,7 +216,8 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_STORYBOARD_STALE', 'The storyboard still or shot layer changed — submit the clip again');
   }
   assertShotActionContract(scene);
-  const sentImages = [...(params.referenceImagePaths || []), ...(params.castReferences || []).map((ref) => ref.path)];
+  // A plate chosen as the shot's start frame is already sent, and takes no reference slot.
+  const sentImages = [prepared.sourceImagePath, ...(params.referenceImagePaths || []), ...(params.castReferences || []).map((ref) => ref.path)].filter(Boolean);
   if (greybox && !sentImages.some((p) => basename(p) === greybox.reference.imageId)) {
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
   }
