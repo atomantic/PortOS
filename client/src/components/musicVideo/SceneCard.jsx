@@ -263,10 +263,7 @@ export default function SceneCard({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  // A Grok or Gemini clip sends the greybox plate first (clipCastReferences.js), so it takes one slot.
-  const greyboxSlot = greybox?.reference && ['grok', 'gemini'].includes(referenceBackend) ? 1 : 0;
-  const referenceCapacity = useLtxReferences ? 8
-    : Math.max(0, musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn }) - greyboxSlot);
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
   const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
@@ -726,7 +723,7 @@ export default function SceneCard({
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn || greyboxSlot ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (

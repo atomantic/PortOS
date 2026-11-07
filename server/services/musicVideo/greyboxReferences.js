@@ -22,9 +22,14 @@ export async function loadMusicVideoGreybox(project, scene, deps = {}) {
   return { ...result, path };
 }
 
-/** Add the selected layout before other plates; unsupported video backends refuse the input. */
+/**
+ * A clip animating its start frame never takes the plate: the frame already holds the
+ * set, and a clip sends only that frame and the references picked for it. A clip with
+ * no start frame gets the selected layout before other plates; unsupported video
+ * backends refuse it.
+ */
 export async function withMusicVideoGreyboxInput(body, project) {
-  if (!body.musicVideo?.sceneId) return body;
+  if (!body.musicVideo?.sceneId || body.sourceImageFile) return body;
   const scene = project?.scenes?.find((s) => s.sceneId === body.musicVideo.sceneId);
   const greybox = await loadMusicVideoGreybox(project, scene);
   return greybox ? { ...body, referenceImageFiles: [...new Set([greybox.reference.imageId, ...(body.referenceImageFiles || [])])] } : body;
