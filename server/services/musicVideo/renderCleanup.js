@@ -201,15 +201,15 @@ export async function getRenderCleanup(projectId, options) {
   return { finals, segments: await getSegmentCleanup(projectId, options) };
 }
 
-export async function cleanupRenders(projectId, { unusedLooks = false } = {}) {
+export async function cleanupRenders(projectId, { unusedLooks = false } = {}, options) {
   return withRenderCleanupReservation(projectId, async () => {
     const { isProjectRenderActive } = await import('./render.js');
     const { cleanupShotSegments, assertSegmentCleanupIdle } = await import('./shotSegments.js');
     if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before cleanup.', { status: 409, code: 'RENDER_IN_PROGRESS' });
     assertSegmentCleanupIdle(projectId);
     await cleanupSupersededFinals(projectId, { reserved: true });
-    await cleanupShotSegments(projectId, { unusedLooks, reserved: true });
+    await cleanupShotSegments(projectId, { unusedLooks, reserved: true }, options);
     musicVideoEvents.emit('render-cleanup', { projectId });
-    return getRenderCleanup(projectId);
+    return getRenderCleanup(projectId, options);
   });
 }

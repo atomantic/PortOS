@@ -558,11 +558,11 @@ export async function getSegmentCleanup(projectId, options) {
   return { available: true, error: null, stale, unusedLooks: variants };
 }
 
-export async function cleanupShotSegments(projectId, { unusedLooks = false, reserved = false } = {}) {
+export async function cleanupShotSegments(projectId, { unusedLooks = false, reserved = false } = {}, options) {
   const { withProjectMediaMutation } = await import('./projects.js');
   const cleanup = () => withProjectMediaMutation(async () => {
     assertSegmentCleanupIdle(projectId);
-    const { project, plan: planned } = await planForLooks(projectId);
+    const { project, plan: planned } = await planForLooks(projectId, options);
     const plan = planned || { project, dir: shotSegmentDir(projectId), segments: [], outro: null };
     if (plan.error) return;
     await pruneSegments(plan, { unusedLooks, previews: true, reserved: true });
@@ -814,18 +814,18 @@ export async function listFilmLooks(projectId, options) {
 }
 
 /** Delete one cached look's files over the current takes, and forget it. */
-export async function deleteFilmLook(projectId, lookId) {
+export async function deleteFilmLook(projectId, lookId, options) {
   return withRenderCleanupReservation(projectId, async () => {
     const { isProjectRenderActive } = await import('./render.js');
     if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before deleting a look.', { status: 409, code: 'RENDER_IN_PROGRESS' });
     assertSegmentCleanupIdle(projectId);
-    return deleteFilmLookFiles(projectId, lookId);
+    return deleteFilmLookFiles(projectId, lookId, options);
   });
 }
 
-async function deleteFilmLookFiles(projectId, lookId) {
+async function deleteFilmLookFiles(projectId, lookId, options) {
   if (typeof lookId !== 'string' || !/^[0-9a-f]{32}$/.test(lookId)) throw new ServerError('Invalid film look id', { status: 400, code: 'VALIDATION_ERROR' });
-  const { project, plan } = await planForLooks(projectId);
+  const { project, plan } = await planForLooks(projectId, options);
   if (!plan || plan.error) throw new ServerError('This video has no shot renders to delete', { status: 409, code: 'NO_SHOT_RENDERS' });
   if ([...inFlight.keys()].some((path) => path.startsWith(plan.dir))) {
     throw new ServerError('Shots of this video are rendering. Delete the look after they finish, or stop the render', { status: 409, code: 'SHOT_RENDER_ACTIVE' });
@@ -845,7 +845,7 @@ async function deleteFilmLookFiles(projectId, lookId) {
     return true;
   });
   if (removed) console.log(`🗑️ Music-video film look [${projectId.slice(0, 8)}] deleted: ${removed} shot files`);
-  return listFilmLooks(projectId);
+  return listFilmLooks(projectId, options);
 }
 
 // ── Rendered so far ────────────────────────────────────────────────────────
