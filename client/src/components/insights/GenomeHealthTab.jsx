@@ -71,7 +71,7 @@ function CategorySection({ category }) {
         onClick={() => setExpanded(prev => !prev)}
         className="w-full flex items-center justify-between px-4 py-3 bg-port-card hover:bg-port-border/20 transition-colors"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 text-left">
           <Icon size={18} className={COLOR_CLASS_MAP[category.color] ?? 'text-port-accent'} />
           <span className="text-sm font-semibold text-white">{category.label}</span>
           <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
@@ -83,7 +83,7 @@ function CategorySection({ category }) {
             </span>
           )}
         </div>
-        {expanded ? <ChevronDown size={16} className="text-gray-500" /> : <ChevronRight size={16} className="text-gray-500" />}
+        {expanded ? <ChevronDown size={16} className="shrink-0 text-gray-500" /> : <ChevronRight size={16} className="shrink-0 text-gray-500" />}
       </button>
 
       {expanded && (
