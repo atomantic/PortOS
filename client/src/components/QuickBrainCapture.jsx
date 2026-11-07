@@ -198,14 +198,14 @@ export default function QuickBrainCapture() {
   const toggleOption = (key) => setIngestOpts((prev) => ({ ...prev, [key]: !prev[key] }));
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-white">Quick Capture</h3>
         <Link to="/brain/inbox" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
           Brain &rarr;
         </Link>
       </div>
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="flex flex-wrap gap-2">
         <label htmlFor="quick-brain-input" className="sr-only">Capture a thought or URL</label>
         <input
           id="quick-brain-input"
@@ -218,7 +218,7 @@ export default function QuickBrainCapture() {
             setInput(value);
             if (!parseBareUrl(value)) setLinkNote('');
           }}
-          className="flex-1 min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+          className="min-w-0 grow basis-full @sm:basis-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
         />
         <button
           type="button"
