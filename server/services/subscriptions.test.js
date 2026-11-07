@@ -236,4 +236,35 @@ describe('setSubscriptionEnabled', () => {
     expect(providerRecords[0].enabled).toBe(true);
     expect(providerRecords[1].enabled).toBe(false);
   });
+
+  it('keeps each family’s restore record when two family toggles overlap', async () => {
+    // Regression: each toggle wrote its own stale copy of the whole toggle map,
+    // so the second write dropped the first family's entry. Re-enabling that
+    // family then fell back to enabling everything, including a user-disabled provider.
+    providerRecords = [claudeCli, { ...codexCli, enabled: true }, { ...codexCli, id: 'codex-2', enabled: true }];
+    await Promise.all([
+      setSubscriptionEnabled('claude', false),
+      setSubscriptionEnabled('codex', false),
+    ]);
+    expect(providerRecords.filter((p) => p.enabled)).toEqual([]);
+
+    const claudeOn = await setSubscriptionEnabled('claude', true);
+    expect(claudeOn.changed).toEqual(['claude-code']);
+    expect(providerRecords.find((p) => p.id === 'codex-cli').enabled).toBe(false);
+    expect(providerRecords.find((p) => p.id === 'codex-2').enabled).toBe(false);
+  });
+
+  it('keeps the first toggle-off record when the family is turned off again', async () => {
+    // Regression: a repeat off finds nothing left enabled and overwrote the
+    // record with [], so the next on restored nothing yet reported enabled.
+    providerRecords = [claudeCli, claudeAlt];
+    providerRecords[1] = { ...claudeAlt, enabled: true };
+    await setSubscriptionEnabled('claude', false);
+    const repeat = await setSubscriptionEnabled('claude', false);
+    expect(repeat.changed).toEqual([]);
+
+    const result = await setSubscriptionEnabled('claude', true);
+    expect(result.changed).toEqual(['claude-code', 'claude-code-alt']);
+    expect(providerRecords.every((p) => p.enabled)).toBe(true);
+  });
 });

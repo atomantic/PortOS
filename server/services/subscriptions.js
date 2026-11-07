@@ -146,11 +146,11 @@ export async function getSubscriptionOverview() {
 export async function setSubscriptionEnabled(family, enabled) {
   const members = groupProvidersByFamily(await listProviders()).get(family) || [];
   const changed = [];
-  const settings = await getSettings();
-  const toggleState = settings?.[FAMILY_TOGGLE_STATE] || {};
 
   if (enabled === false) {
-    // Toggling OFF: record which providers this toggle disables (not already-disabled ones)
+    // Record only what this toggle disables. The record write happens inside the
+    // settings queue and touches only this family's key, so overlapping families
+    // never clobber each other's entries.
     const disabledByThisToggle = [];
     for (const provider of members) {
       if (provider.enabled === true) {
@@ -159,32 +159,32 @@ export async function setSubscriptionEnabled(family, enabled) {
         disabledByThisToggle.push(provider.id);
       }
     }
-    // Store which providers this toggle disabled, so we can restore only those when toggling on
-    toggleState[family] = disabledByThisToggle;
-    await updateSettingsWith((current) => ({
-      ...current,
-      [FAMILY_TOGGLE_STATE]: toggleState,
-    }));
+    await updateSettingsWith((current) => {
+      const toggleState = current[FAMILY_TOGGLE_STATE] || {};
+      // Union, not replace: a repeat off must keep the list from the first off.
+      const record = [...new Set([...(toggleState[family] || []), ...disabledByThisToggle])];
+      return { ...current, [FAMILY_TOGGLE_STATE]: { ...toggleState, [family]: record } };
+    });
   } else {
-    // Toggling ON: if toggle state exists, restore only providers disabled by that toggle.
-    // If no toggle state, enable all currently-disabled providers (backward compatibility).
-    const disabledByToggle = toggleState[family];
+    // Read and clear the record in one serialized step, so a concurrent off cannot
+    // land between the read and the clear.
+    let disabledByToggle;
+    await updateSettingsWith((current) => {
+      const toggleState = { ...(current[FAMILY_TOGGLE_STATE] || {}) };
+      disabledByToggle = toggleState[family];
+      delete toggleState[family];
+      return { ...current, [FAMILY_TOGGLE_STATE]: toggleState };
+    });
     if (disabledByToggle) {
-      // We have toggle state: restore only providers that toggle disabled
+      // Restore only providers that the toggle disabled.
       for (const provider of members) {
         if (disabledByToggle.includes(provider.id) && provider.enabled !== true) {
           await updateProvider(provider.id, { enabled: true });
           changed.push(provider.id);
         }
       }
-      // Clear the toggle state for this family
-      delete toggleState[family];
-      await updateSettingsWith((current) => ({
-        ...current,
-        [FAMILY_TOGGLE_STATE]: toggleState,
-      }));
     } else {
-      // No toggle state: enable all currently-disabled providers (original behavior)
+      // No toggle state: enable all currently-disabled providers (original behavior).
       for (const provider of members) {
         if (provider.enabled !== true) {
           await updateProvider(provider.id, { enabled: true });
