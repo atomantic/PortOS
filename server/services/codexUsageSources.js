@@ -48,7 +48,9 @@ const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,
 const LINE_PREFIX_BYTES = 256;
 const isNonAccountingLine = bytes => NON_ACCOUNTING_LINE.test(bytes.latin1Slice(0, Math.min(bytes.length, LINE_PREFIX_BYTES)));
 const PROBLEM_SOURCE_SAMPLE = 5;
-const COUNTERS = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
+// `cache_write_input_tokens` (a few 0.145-era CLIs only) is a separate part of
+// `input_tokens`, disjoint from the cached read; `total_tokens` stays input + output.
+const COUNTERS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
 const emptyTotals = () => ({ messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 const problem = code => Object.assign(new Error(code), { code });
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -105,7 +107,7 @@ function accountingRecord(entry, ids, lineage) {
       if (!Number.isSafeInteger(value) || value < 0) throw problem('malformed');
       usage[key] = value;
     }
-    if (usage.cached_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
+    if (usage.cached_input_tokens + usage.cache_write_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
     return usage;
   };
   const last = payload.info.last_token_usage;

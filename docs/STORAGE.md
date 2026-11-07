@@ -1480,7 +1480,9 @@ Each coding app's own session records are rolled up into one machine-local
 `data/agy-native-usage.json` (`services/nativeUsageDayStore.js`). The apps prune
 their files, so the store keeps every day it has seen; a rescan keeps the larger
 count per field and never shrinks a day. `coverageStart` is the first day the
-store holds completely. These are regenerable caches of on-disk app records, not
+store holds completely. A store's `scanVersion` moves when its reader starts
+finding counts it missed (Antigravity's conversation DB, #15278); the next
+refresh then rescans everything once instead of only the last few days. These are regenerable caches of on-disk app records, not
 synced records: peers receive them only as part of the usage digest, after the
 overlay in `server/lib/nativeUsageOverlay.js` has been applied. No migration or
 seed; a missing file is a first full scan.

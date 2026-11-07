@@ -1,6 +1,8 @@
-import { readdir, stat } from 'fs/promises';
-import { homedir } from 'os';
+import { copyFile, mkdtemp, readdir, rm, stat } from 'fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { decodeMessage } from '../lib/protobufWire.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { UNKNOWN_MODEL, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/providerTranscriptUsage.js';
 import { claudeNativeUsageStore } from './claudeCodeTranscriptUsage.js';
@@ -19,7 +21,11 @@ import { familyForProvider, familyLabel } from '../lib/providerFamilies.js';
  *   claude — `~/.claude/projects/**\/*.jsonl` (claudeCodeTranscriptUsage.js)
  *   codex  — `~/.codex/sessions` + `archived_sessions`, plain or `.zst`
  *            (codexUsageSources.js handles forks, copies and compression)
- *   grok   — `~/.grok/sessions/<cwd>/<session>/updates.jsonl` turn usage
+ *   grok   — `~/.grok/sessions/<cwd>/<session>/updates.jsonl` turn usage; a
+ *            subagent is its own session folder (the parent's
+ *            `subagents/<id>/meta.json` only links it and carries no usage)
+ *   agy    — `~/.gemini/antigravity-cli/conversations/<id>.db` step metadata,
+ *            else the conversation's `brain/<id>` transcript
  *
  * Every store keeps the same `input/output/cacheRead/cacheWrite` counters
  * (`input` excludes cache reads, as each tier is priced separately); Grok also
@@ -169,10 +175,12 @@ async function scanCodex({ from, home = homedir() }) {
     for (const call of session.calls) {
       if (call.ms < floor || parent?.has(call.signature)) continue;
       const cached = call.usage.cached_input_tokens || 0;
-      // Codex's input includes the cached read; each tier is priced on its own.
+      const cacheWrite = call.usage.cache_write_input_tokens || 0;
+      // Codex's input includes the cached read and any cache write (two disjoint
+      // parts); each tier is priced on its own.
       addBuckets(days, dayOf(call.ms), call.model || UNKNOWN_MODEL, {
-        messages: 1, tokensIn: Math.max(0, (call.usage.input_tokens || 0) - cached), tokensOut: call.usage.output_tokens || 0,
-        cacheReadTokens: cached, cacheWriteTokens: 0,
+        messages: 1, tokensIn: Math.max(0, (call.usage.input_tokens || 0) - cached - cacheWrite), tokensOut: call.usage.output_tokens || 0,
+        cacheReadTokens: cached, cacheWriteTokens: cacheWrite,
       });
     }
   }
@@ -207,19 +215,102 @@ async function scanGrok({ from, home = homedir() }) {
   return { days, filesScanned };
 }
 
+// Antigravity CLI conversation DB `steps.metadata`: 1 = created (Timestamp),
+// 9 = usage. Usage input excludes the cache read; output includes thinking.
+// The DB's `gen_metadata` table repeats the same totals with no dates, and
+// misses checkpoint steps, so it is not read.
+const AGY_STEP_METADATA = {
+  created: { no: 1, type: 'message', schema: { seconds: { no: 1, type: 'varint' } } },
+  usage: { no: 9, type: 'message', schema: {
+    input: { no: 2, type: 'varint' }, output: { no: 3, type: 'varint' },
+    cacheWrite: { no: 4, type: 'varint' }, cacheRead: { no: 5, type: 'varint' },
+  } },
+};
+const AGY_MAX_METADATA_BYTES = 1024 * 1024;
+
 /**
- * Antigravity records measured tokens on each `PLANNER_RESPONSE` step of a
- * conversation's transcript (input excludes the cache read), from mid-October
- * 2026 on; older steps carry none and stay on the PortOS ledger's estimate. The
- * transcript names no model. Its conversation database holds more history but
- * no step dates, so it cannot place tokens on a day.
+ * Dated usage steps from one conversation DB, read from a private copy so a
+ * live conversation is never locked or given new WAL/SHM files.
+ */
+async function readAgySteps(path, scratch) {
+  const copy = join(scratch, 'conversation.db');
+  await Promise.all(['', '-wal', '-shm'].map((suffix) => rm(`${copy}${suffix}`, { force: true })));
+  await copyFile(path, copy);
+  await copyFile(`${path}-wal`, `${copy}-wal`).catch((err) => { if (err.code !== 'ENOENT') throw err; });
+  const db = new DatabaseSync(copy);
+  let rows;
+  try {
+    rows = db.prepare('SELECT metadata FROM steps WHERE length(metadata) <= ? ORDER BY idx').all(AGY_MAX_METADATA_BYTES);
+  } finally {
+    db.close();
+  }
+  const steps = [];
+  for (const { metadata } of rows) {
+    if (!metadata) continue;
+    const { created, usage } = decodeMessage(AGY_STEP_METADATA, metadata);
+    const ms = Number(created?.seconds) * 1000;
+    if (usage && Number.isFinite(ms)) steps.push({ ms, usage });
+  }
+  return steps;
+}
+
+/** Latest mtime of a SQLite file and its WAL, or null when the file is gone. */
+async function databaseMtime(path) {
+  const [main, wal] = await Promise.all([path, `${path}-wal`].map((file) => stat(file).then((info) => info.mtimeMs, () => null)));
+  return main == null ? null : Math.max(main, wal ?? main);
+}
+
+/**
+ * Antigravity's conversation DB records measured tokens on every planner and
+ * checkpoint step, with its date, from September 2026 on. The transcript's
+ * `PLANNER_RESPONSE` steps hold the same counts only from mid-October, so it
+ * is read only for a conversation without a readable DB. Neither names a model.
  */
 async function scanAgy({ from, home = homedir() }) {
-  const brain = join(home, '.gemini', 'antigravity-cli', 'brain');
+  const root = join(home, '.gemini', 'antigravity-cli');
   const floor = from ? dayStartMs(from) : null;
   const days = {};
   let filesScanned = 0;
+  const add = (ms, { input, output, cacheRead, cacheWrite }) => {
+    if (!Number.isFinite(ms) || (floor != null && ms < floor)) return;
+    addBuckets(days, dayOf(ms), UNKNOWN_MODEL, {
+      messages: 1, tokensIn: Math.max(0, input || 0), tokensOut: Math.max(0, output || 0),
+      cacheReadTokens: Math.max(0, cacheRead || 0), cacheWriteTokens: Math.max(0, cacheWrite || 0),
+    });
+  };
+
+  // Conversations a DB answers for, read or unchanged since `from`.
+  const fromDatabase = new Set();
+  const databases = join(root, 'conversations');
+  const names = (await readdir(databases).catch(() => [])).filter((name) => name.endsWith('.db'));
+  let scratch = null;
+  try {
+    for (const name of names) {
+      const path = join(databases, name);
+      const conversation = name.slice(0, -3);
+      const mtime = await databaseMtime(path);
+      if (mtime == null) continue;
+      if (floor != null && mtime < floor) { fromDatabase.add(conversation); continue; }
+      scratch ??= await mkdtemp(join(tmpdir(), 'portos-agy-usage-'));
+      // A copy torn by a live write fails to open or decode; that conversation
+      // falls back to its transcript and the next pass reads the DB again.
+      const steps = await readAgySteps(path, scratch).catch((err) => {
+        console.log(`⏭️ Antigravity conversation DB unreadable (${err.code ?? 'unknown'}); using its transcript`);
+        return null;
+      });
+      if (!steps) continue;
+      fromDatabase.add(conversation);
+      filesScanned += 1;
+      for (const { ms, usage } of steps) add(ms, usage);
+      await yieldToEventLoop();
+    }
+  } finally {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
+  }
+
+  const brain = join(root, 'brain');
   for (const conversation of await listSubdirs(brain)) {
+    if (fromDatabase.has(conversation)) continue;
     const path = join(brain, conversation, '.system_generated', 'logs', 'transcript.jsonl');
     const info = await stat(path).catch(() => null);
     if (!info || (floor != null && info.mtimeMs < floor)) continue;
@@ -232,12 +323,7 @@ async function scanAgy({ from, home = homedir() }) {
       const key = Number.isFinite(step.step_index) ? step.step_index : `#${index}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const ms = Date.parse(step.created_at);
-      if (!Number.isFinite(ms) || (floor != null && ms < floor)) continue;
-      addBuckets(days, dayOf(ms), UNKNOWN_MODEL, {
-        messages: 1, tokensIn: Math.max(0, step.input_tokens || 0), tokensOut: Math.max(0, step.output_tokens || 0),
-        cacheReadTokens: Math.max(0, step.cache_read_tokens || 0), cacheWriteTokens: 0,
-      });
+      add(Date.parse(step.created_at), { input: step.input_tokens, output: step.output_tokens, cacheRead: step.cache_read_tokens });
     }
     await yieldToEventLoop();
   }
@@ -253,7 +339,8 @@ export const NATIVE_USAGE_STORES = Object.freeze({
     family: 'grok', file: join(PATHS.data, 'grok-native-usage.json'), fields: [...BASE_FIELDS, ...LONG_FIELDS], scan: scanGrok,
   }),
   agy: createNativeUsageStore({
-    family: 'agy', file: join(PATHS.data, 'agy-native-usage.json'), fields: BASE_FIELDS, scan: scanAgy,
+    // 2: the conversation DB, which dates tokens the transcript never recorded.
+    family: 'agy', file: join(PATHS.data, 'agy-native-usage.json'), fields: BASE_FIELDS, scan: scanAgy, scanVersion: 2,
   }),
 });
 
