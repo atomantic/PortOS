@@ -22,10 +22,17 @@ import {
 
 const router = Router();
 
+router.get('/native-report/v2', asyncHandler(async (req, res) => {
+  const { challenge } = validateRequest(nativeUsagePeerReportQuerySchema, req.query);
+  const { getNativeUsagePeerReport } = await import('../services/nativeUsagePeer.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge, 2));
+}));
+
+// Keeps answering v4 record lists for peers that have not upgraded yet.
 router.get('/native-report/v1', asyncHandler(async (req, res) => {
   const { challenge } = validateRequest(nativeUsagePeerReportQuerySchema, req.query);
   const { getNativeUsagePeerReport } = await import('../services/nativeUsagePeer.js');
-  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge));
+  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge, 1));
 }));
 
 // Machine-local configuration only: no provider reads, captures or peer requests.

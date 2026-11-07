@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { GROK_USAGE_FIELDS, GROK_USAGE_RECORD_LIMIT, unionNativeGrokRecords } from '../lib/nativeGrokUsageRecords.js';
+import { buildNativeUsageRollup, grokModelEvidence, joinModelEvidence } from '../lib/nativeUsageRollups.js';
 
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
 const counter = value => Number.isSafeInteger(value) && value >= 0;
@@ -22,10 +23,8 @@ const validCounters = record => {
  * auth, updates.jsonl, model inference, billing conversion or legacy ledger reads.
  * Runtime version of historical records and deleted/custom-root history are unknown.
  */
-export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity } = {}) {
+export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity, modelLimits } = {}) {
   const limits = { ...LIMITS, ...overrides };
-  // Bound in-memory observations too, including arbitrarily many copied files.
-  limits.records = Math.min(limits.records, GROK_USAGE_RECORD_LIMIT + 1);
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
     duplicateRecords: 0, conflictingRecords: 0, invalidLines: 0, undatedRecords: 0, unreadableFiles: 0,
     skippedLinks: 0, missingSource: false, capped: false, stoppedEarly: false, oversizedLines: 0, streamingSupersededRecords: 0,
@@ -33,6 +32,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     firstObservedAt: null, lastObservedAt: null, retention: 'unknown' };
   const nativeUsageCoverage = { validSnapshots: 0, invalidSnapshots: 0, sessionsWithoutUsage: 0 };
   const projections = [];
+  const modelEvidence = new Map();
   const started = Date.now();
   let bytes = 0;
   let entries = 0;
@@ -69,6 +69,9 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
         if (!coverage.lastObservedAt || at > coverage.lastObservedAt) coverage.lastObservedAt = at;
       }
       const recordKey = hash(['portos-grok-session-turn/1', snapshot.sessionId, turn.turnNumber]);
+      const prior = modelEvidence.get(recordKey);
+      modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, grokModelEvidence(turn, modelLimits)),
+        incomplete: prior?.incomplete === true || turn.usageIsIncomplete === true });
       projections.push({ records: [{ recordKey, values, at, costUsdTicks: counter(turn.costUsdTicks) ? turn.costUsdTicks : null,
         costConflict: false, conflict: false, inconsistent: !valid }] });
     }
@@ -139,5 +142,6 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     recordProjection: { version: 1, identityScheme: 'sha256-grok-session-turn/1', truncated: coverage.records > GROK_USAGE_RECORD_LIMIT,
       records: records.slice(0, GROK_USAGE_RECORD_LIMIT) },
     cost: union.cost, findings: union.findings,
+    rollup: buildNativeUsageRollup('grok', union.records.map(({ recordKey, values, at }) => ({ at, values, ...modelEvidence.get(recordKey) })), modelLimits),
   };
 }

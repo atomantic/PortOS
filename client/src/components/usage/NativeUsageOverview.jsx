@@ -140,21 +140,46 @@ function PeerCollection({ snapshot }) {
   </section>;
 }
 
+const MODEL_REASONS = {
+  'model-missing': 'Model not recorded', 'model-sentinel': 'Placeholder, not a model', 'model-unverified': 'Model not verified',
+  'report-without-model-capability': 'Peer report has no model data', 'model-conflict': 'Conflicting model labels',
+  'model-label-invalid': 'Unusable model label', 'model-label-limit': 'Past the model label limit',
+  'model-rows-invalid': 'Invalid per-model rows', 'model-sum-mismatch': 'Per-model rows do not match the total',
+};
+
+function ModelTotals({ rows }) {
+  if (!rows?.length) return null;
+  return <details className="min-w-0 text-xs">
+    <summary className="cursor-pointer text-gray-400">Tokens by model</summary>
+    <div className="mt-2 overflow-x-auto"><table className="w-full">
+      <thead><tr className="border-b border-port-border text-gray-400"><th scope="col" className="py-1 text-left">Model</th><th scope="col" className="py-1 text-right">Total</th><th scope="col" className="py-1 text-right">Input</th><th scope="col" className="py-1 text-right">Output</th></tr></thead>
+      <tbody>{rows.map(({ kind, key, counters, incompleteRecords }) => <tr key={`${kind}:${key}`} className="border-b border-port-border/50 text-gray-300">
+        <td className="break-all py-1">{kind === 'model' ? key : MODEL_REASONS[key] ?? key}{incompleteRecords > 0 && <span className="text-port-warning"> · {formatCount(incompleteRecords)} lower bounds</span>}</td>
+        <td className="py-1 text-right tabular-nums">{unknownCount(counters.totalTokens)}</td>
+        <td className="py-1 text-right tabular-nums">{unknownCount(counters.tokensIn)}</td>
+        <td className="py-1 text-right tabular-nums">{unknownCount(counters.tokensOut)}</td>
+      </tr>)}</tbody>
+    </table></div>
+  </details>;
+}
+
 function AccountUnion({ matrix, family, fleet, collectionStatus }) {
+  const codex = family === 'codex';
   return <div className="space-y-2 border-t border-port-border pt-3">
-    <h3 className="text-sm font-semibold text-white">Selected account union</h3>
+    <h3 className="text-sm font-semibold text-white">{codex ? 'Selected account' : 'Sum of machine totals'}</h3>
     <p className="text-xs text-gray-400">{matrix?.merge?.status ?? 'Unknown'} · {fleet ? `Configured-peer collection: ${collectionStatus ?? 'Unknown'}.` : 'Peer reports are not collected by this local read.'} This is not a fleet-complete total.</p>
     <Findings findings={matrix?.merge?.reasons} />
     {['merged', 'partial'].includes(matrix?.merge?.status) && <Counters totals={matrix.merge.totals} family={family} />}
-    {!matrix?.accounts?.length && <p className="text-xs text-gray-400">No usable account selection. Local measurements above remain separate.</p>}
+    <ModelTotals rows={matrix?.merge?.modelTotals} />
+    {codex && !matrix?.accounts?.length && <p className="text-xs text-gray-400">No usable account selection. Local measurements above remain separate.</p>}
     {matrix?.accounts?.map(account => <div key={account.accountLabel} className="space-y-2 rounded border border-port-border p-2">
       <h4 className="break-words text-sm text-white">{account.accountLabel} · {account.status}</h4>
       <p className="text-xs text-gray-400">{unknownCount(account.members?.length)} selected members · {unknownCount(account.membersWithoutReport?.length)} members without reports</p>
       {account.membersWithoutReport?.length > 0 && <p className="text-xs text-port-warning">Missing peer reports prevent a complete selected-account view.</p>}
       {account.status !== 'refused' && account.totals && <Counters totals={account.totals} family={family} />}
+      <ModelTotals rows={account.modelTotals} />
       <Cost cost={account.cost} />
       <Findings findings={account.findings} />
-      <details className="text-xs"><summary className="cursor-pointer text-gray-400">Account coverage</summary><dl><Evidence label="Coverage" value={account.coverage} /></dl></details>
     </div>)}
     {matrix?.unresolvedParticipants?.length > 0 && <p className="text-xs text-port-warning">{formatCount(matrix.unresolvedParticipants.length)} participants have unresolved account selection.</p>}
   </div>;
@@ -215,7 +240,10 @@ function NativeUsageRead({ scope, onScopeChange, onSnapshot, acceptsRevision, bl
   }, [beginRequest, scope, onSnapshot, acceptsRevision, blocked]);
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="max-w-3xl text-sm text-gray-400">Read-only native history for all four providers. {fleet ? 'A bounded read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged.</p>
+      <div className="max-w-3xl space-y-1 text-sm text-gray-400">
+        <p>Read-only native history for all four providers. {fleet ? 'A read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged.</p>
+        <p>Totals add each machine's own retained files. A transcript copied to two machines counts twice, and Claude cloud sessions that were never teleported to a machine may be missing.</p>
+      </div>
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <label htmlFor="native-usage-scope" className="text-sm text-gray-400">Native history scope</label>
         <select id="native-usage-scope" value={scope} onChange={event => onScopeChange(event.target.value)} className="min-w-0 max-w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">

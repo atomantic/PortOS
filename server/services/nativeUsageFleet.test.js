@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalStringify } from '../lib/objects.js';
-import { buildNativeUsageReport, nativeUsageParticipantKey, nativeUsageReportSchema, nativeUsageSelectionRevision } from '../lib/nativeUsageContract.js';
+import { buildNativeUsageReport, buildNativeUsageRollupReport, nativeUsageParticipantKey, nativeUsageReportSchema, nativeUsageSelectionRevision } from '../lib/nativeUsageContract.js';
+import { buildNativeUsageRollup, claudeModelEvidence } from '../lib/nativeUsageRollups.js';
 
 vi.mock('./settings.js', async () => ({ settingsEvents: new (await import('node:events')).EventEmitter() }));
 import { settingsEvents } from './settings.js';
@@ -32,14 +33,25 @@ const coverage = {
   fieldInconsistentRecords: 0, runtimeVersions: [], steps: null, cacheOverlap: null, costTickRecords: null,
   firstObservedAt: NOW, lastObservedAt: NOW,
 };
-function report(instanceId, identity = 'a', conflict = false) {
-  const base = buildNativeUsageReport({ instanceId, capturedAt: NOW,
-    codexEvidence: { accountBefore: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } },
-      accountAfter: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } },
-      usage: { summary: { lifetimeTokens: 100 }, dailyUsageBuckets: [{ startDate: '2026-11-05', tokens: 100 }] } },
-    transcripts: Object.fromEntries(['claude', 'grok', 'agy'].map(name => [name, { coverage, status: 'partial', summary: null }])),
-    scanLimits: { bytes: 1000, lineBytes: 1000, entries: 100, records: 100, milliseconds: 1000, depth: 8 },
-  });
+const reportInput = (instanceId, transcripts) => ({ instanceId, capturedAt: NOW,
+  codexEvidence: { accountBefore: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } },
+    accountAfter: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } },
+    usage: { summary: { lifetimeTokens: 100 }, dailyUsageBuckets: [{ startDate: '2026-11-05', tokens: 100 }] } },
+  transcripts, scanLimits: { bytes: 1000, lineBytes: 1000, entries: 100, records: 100, milliseconds: 1000, depth: 8 },
+});
+const report = instanceId => buildNativeUsageRollupReport(reportInput(instanceId, {
+  claude: { coverage, status: 'partial', rollup: buildNativeUsageRollup('claude', [{ at: NOW, values: [10, 5, 3, 2], evidence: claudeModelEvidence('example-model') }]) },
+  grok: { coverage, status: 'partial', rollup: buildNativeUsageRollup('grok', [{ at: NOW, values: [10, 5, 3, 0, 2, 15, 1], evidence: { kind: 'attributed', rows: [['example-model', 10, 5, 3, 0, 2, 15, 1]] } }]) },
+  agy: { coverage, status: 'partial', rollup: buildNativeUsageRollup('agy', [{ at: NOW, values: [10, 5, 30, 0, 3, 2] }]) },
+}));
+// What a peer that has not upgraded sends: machine totals and record lists, with no models.
+function olderPeerReport(instanceId, identity = 'a', conflict = false) {
+  const claudeTotals = { totalTokens: 20, tokensIn: 10, tokensOut: 5, cacheReadTokens: 3, cacheWriteTokens: 2 };
+  const base = buildNativeUsageReport(reportInput(instanceId, {
+    claude: { coverage, status: 'partial', summary: claudeTotals },
+    grok: { coverage, status: 'partial', summary: { ...claudeTotals, totalTokens: 15, cacheWriteTokens: 0 } },
+    agy: { coverage, status: 'partial', summary: { totalTokens: null, tokensIn: 10, tokensOut: 5, cacheReadTokens: 30, cacheWriteTokens: 0, thinkingOutputTokens: 3, responseOutputTokens: 2 } },
+  }));
   const providers = base.providers.map(provider => {
     const recordKey = identity.repeat(64);
     if (provider.family === 'claude') return { ...provider, recordProjection: { version: 1, identityScheme: 'sha256-native-record/1', truncated: false,
@@ -84,7 +96,7 @@ describe('explicit fleet native matrix', () => {
     expect(family(matrix, 'codex').accounts[0].accountLabel).toBe('new-selection');
   });
 
-  it('deduplicates shared retained records across three participants and selects Codex once without exposing record identities', async () => {
+  it('adds machine totals across three participants and selects Codex once without exposing record identities', async () => {
     loadData.mockResolvedValue({ peers: [peer('peer'), peer('other')] });
     getNativeUsageAccountSelections.mockResolvedValue(selected(['local', 'peer', 'other']));
     const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
@@ -92,30 +104,46 @@ describe('explicit fleet native matrix', () => {
       peerCollection: { status: 'complete', requested: 2, received: 2 } });
     expect(matrix.participants).toHaveLength(3);
     expect(family(matrix, 'codex').merge).toMatchObject({ status: 'merged', totals: { lifetimeTokens: 100 } });
-    for (const [name, total] of [['claude', 20], ['grok', 15], ['agy', null]]) {
-      expect(family(matrix, name)).toMatchObject({ merge: { status: 'partial', totals: { totalTokens: total } },
-        accounts: [{ coverage: { uniqueRecords: 1, duplicateRecords: 2 } }] });
+    for (const [name, total] of [['claude', 60], ['grok', 45], ['agy', null]]) {
+      expect(family(matrix, name)).toMatchObject({ scope: 'machine-rollups', merge: { status: 'partial', totals: { totalTokens: total } },
+        accounts: [{ totals: { totalTokens: total }, membersWithoutReport: [] }] });
     }
-    expect(family(matrix, 'agy').merge.totals).toMatchObject({ tokensIn: 10, tokensOut: 5, cacheReadTokens: 30, thinkingOutputTokens: 3, responseOutputTokens: 2 });
+    expect(family(matrix, 'agy').merge.totals).toMatchObject({ tokensIn: 30, tokensOut: 15, cacheReadTokens: 90, thinkingOutputTokens: 9, responseOutputTokens: 6 });
+    expect(family(matrix, 'claude').merge.modelTotals).toEqual([{ kind: 'model', key: 'example-model', incompleteRecords: 0,
+      counters: { tokensIn: 30, tokensOut: 15, cacheReadTokens: 9, cacheWriteTokens: 6, totalTokens: 60 } }]);
+    expect(family(matrix, 'agy').merge.modelTotals).toMatchObject([{ kind: 'unknown', key: 'model-unverified' }]);
     const text = JSON.stringify(matrix);
     for (const forbidden of ['private-', 'recordProjection', 'recordKey', 'requestKey', 'responseKeys', 'projectedRecords', 'a'.repeat(64)]) expect(text).not.toContain(forbidden);
     expect(readNativeUsagePeerReport).toHaveBeenCalledTimes(2);
     expect(revalidateNativeUsagePeerReport).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps native conflicts and cross-account copied identities refused rather than adding machine totals', async () => {
-    readNativeUsagePeerReport.mockResolvedValueOnce(report('peer', 'a', true));
+  it('keeps showing a v4 peer\'s totals, with its model attribution unknown', async () => {
+    readNativeUsagePeerReport.mockResolvedValueOnce(olderPeerReport('peer'));
+    const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(matrix.contractVersion).toBe(5);
+    expect(family(matrix, 'claude').merge).toMatchObject({ status: 'partial', totals: { totalTokens: 40, tokensIn: 20 } });
+    expect(family(matrix, 'claude').merge.modelTotals.map(({ kind, key, counters }) => [kind, key, counters.totalTokens])).toEqual([
+      ['model', 'example-model', 20], ['unknown', 'report-without-model-capability', 20]]);
+    // A field the older report lacks is unknown for the sum, never counted as its zero.
+    expect(family(matrix, 'grok').merge.totals).toEqual({ totalTokens: 30, tokensIn: 20, tokensOut: 10, cacheReadTokens: 6, cacheWriteTokens: 0 });
+    expect(JSON.stringify(matrix)).not.toContain('recordKey');
+  });
+
+  it('does not reconcile records between machines: selected accounts sum their own members', async () => {
+    readNativeUsagePeerReport.mockResolvedValueOnce(olderPeerReport('peer', 'a', true));
     const conflict = await getNativeUsageMatrix({ scope: 'fleet' });
-    for (const name of ['claude', 'grok', 'agy']) {
-      expect(family(conflict, name).merge.totals).toBeNull();
-      expect(family(conflict, name).accounts[0].coverage.excludedRecords).toBe(1);
-    }
+    for (const name of ['claude', 'grok']) expect(family(conflict, name).merge.status).toBe('partial');
     const separate = selected(['local']).concat(selected(['peer']).map(value => ({ ...value, accountLabel: 'second',
       ...(value.family === 'codex' ? { authoritativeParticipant: key('peer') } : {}) })));
     getNativeUsageAccountSelections.mockResolvedValueOnce(separate);
     const accounts = await getNativeUsageMatrix({ scope: 'fleet' });
     expect(family(accounts, 'codex').merge.totals.lifetimeTokens).toBe(200);
-    for (const name of ['claude', 'grok', 'agy']) expect(family(accounts, name).merge).toMatchObject({ status: 'refused', totals: null, reasons: expect.arrayContaining(['record-in-multiple-accounts']) });
+    for (const [name, total] of [['claude', 40], ['grok', 30]]) {
+      const row = family(accounts, name);
+      expect(row.merge).toMatchObject({ status: 'partial', accountCount: 2, totals: { totalTokens: total } });
+      expect(row.accounts.map(account => [account.accountLabel, account.totals.totalTokens])).toEqual([['second', total / 2], ['subscription', total / 2]]);
+    }
   });
 
   it('distinguishes failed, stale, oversized and unverified peers without retaining prior successes or leaking errors', async () => {
@@ -124,7 +152,9 @@ describe('explicit fleet native matrix', () => {
       readNativeUsagePeerReport.mockRejectedValueOnce(Object.assign(new Error('private-peer-token'), { code }));
       const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
       expect(matrix.peerCollection).toMatchObject({ status: 'partial', received: 0, peers: [{ status, capturedAt: null }] });
-      expect(family(matrix, 'claude')).toMatchObject({ merge: { status: 'refused', totals: null }, accounts: [{ membersWithoutReport: [key('peer')] }] });
+      // Local machines still count; a missing report is named and never treated as zero.
+      expect(family(matrix, 'claude')).toMatchObject({ merge: { status: 'partial', totals: { totalTokens: 20 } },
+        accounts: [{ membersWithoutReport: [key('peer')], findings: expect.arrayContaining(['member-report-missing']) }] });
       expect(JSON.stringify(matrix)).not.toContain('private-peer-token');
     }
     const recovered = await getNativeUsageMatrix({ scope: 'fleet' });
@@ -132,7 +162,7 @@ describe('explicit fleet native matrix', () => {
     revalidateNativeUsagePeerReport.mockRejectedValueOnce(Object.assign(new Error('private revocation'), { code: 'NATIVE_USAGE_PEER_FORBIDDEN' }));
     const revoked = await getNativeUsageMatrix({ scope: 'fleet' });
     expect(revoked.peerCollection).toMatchObject({ received: 0, peers: [{ status: 'forbidden' }] });
-    expect(family(revoked, 'grok').merge.totals).toBeNull();
+    expect(family(revoked, 'grok').merge.totals.totalTokens).toBe(15);
   });
 
   it('never contacts disabled, unpaired, inbound-only or category-disabled peers and rejects duplicate identities', async () => {
@@ -142,7 +172,7 @@ describe('explicit fleet native matrix', () => {
     const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
     expect(readNativeUsagePeerReport).not.toHaveBeenCalled();
     expect(matrix.peerCollection.peers.map(row => row.status)).toEqual(expect.arrayContaining(['disabled', 'unpaired', 'usage-disabled', 'duplicate-identity', 'identity-unknown', 'not-configured']));
-    expect(family(matrix, 'claude').merge.totals).toBeNull();
+    expect(family(matrix, 'claude').merge.totals.totalTokens).toBe(20);
     loadData.mockRejectedValueOnce(new Error('private registry path'));
     expect((await getNativeUsageMatrix({ scope: 'fleet' })).peerCollection).toMatchObject({ status: 'unavailable', findings: ['peer-inventory-unavailable'] });
   });
@@ -158,7 +188,7 @@ describe('explicit fleet native matrix', () => {
     const matrix = await pending;
     expect(matrix.participants).toHaveLength(1);
     expect(matrix.peerCollection).toMatchObject({ status: 'partial', received: 0, peers: [{ status: 'forbidden' }] });
-    expect(family(matrix, 'claude').merge.totals).toBeNull();
+    expect(family(matrix, 'claude').merge.totals.totalTokens).toBe(20);
   });
 
   it('refuses an old settings read that settles after a newer selection event', async () => {
@@ -182,7 +212,7 @@ describe('explicit fleet native matrix', () => {
     releaseSettings(selected());
     const matrix = await pending;
     expect(matrix.peerCollection).toMatchObject({ received: 0, peers: [{ status: 'forbidden' }] });
-    expect(family(matrix, 'claude').merge.totals).toBeNull();
+    expect(family(matrix, 'claude').merge.totals.totalTokens).toBe(20);
   });
 
   it('caps peer fanout and concurrency, coalesces one scope only, and reads current selections after collection', async () => {

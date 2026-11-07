@@ -1,6 +1,6 @@
 {
   "fixtureVersion": 1,
-  "status": "proposal-not-production",
+  "status": "rollups-in-production-projection-v2-proposed",
   "syntheticOnly": true,
   "decisionRecord": "docs/plans/2026-11-07-native-usage-model-attribution.md",
   "labelPattern": "^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9._:+-]*(?:@(?:[0-9]{8}|default))?$",

@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { canonicalStringify } from '../lib/objects.js';
 import { parseNativeAgyMetadata } from '../lib/nativeAgyMetadata.js';
 import { AGY_USAGE_FIELDS, AGY_USAGE_RECORD_LIMIT, unionNativeAgyRecords } from '../lib/nativeAgyUsageRecords.js';
+import { buildNativeUsageRollup } from '../lib/nativeUsageRollups.js';
 
 const LIMITS = { bytes: 128 * 1024 ** 2, lineBytes: 1024 ** 2, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
 const MAX_DATABASE_BYTES = 256 * 1024 ** 2;
@@ -37,7 +38,6 @@ const schemaMatches = db => db.prepare('PRAGMA user_version').get().user_version
  */
 export async function getNativeAgyUsageCoverage({ home, cliConversationsRoot, legacyBrainRoot, appConversationsRoot, ideConversationsRoot, limits: overrides = {}, deadline = Infinity } = {}) {
   const limits = { ...LIMITS, ...overrides };
-  limits.records = Math.min(limits.records, AGY_USAGE_RECORD_LIMIT + 1);
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
     duplicateRecords: 0, conflictingRecords: 0, invalidLines: 0, undatedRecords: 0, unreadableFiles: 0,
     skippedLinks: 0, missingSource: false, capped: false, stoppedEarly: false, oversizedLines: 0, streamingSupersededRecords: 0,
@@ -212,6 +212,7 @@ export async function getNativeAgyUsageCoverage({ home, cliConversationsRoot, le
   return {
     status: coverage.records ? 'partial' : 'unavailable', source: 'agy:cli-sqlite-metadata', validator: 'agy-cli-sqlite-v1/1',
     summary: union.totals, coverage, nativeAgyCoverage, findings: [...findings].sort(),
+    rollup: buildNativeUsageRollup('agy', union.records),
     recordProjection: { version: 1, identityScheme: 'sha256-agy-message-response/1', truncated,
       records: union.projectedRecords.slice(0, AGY_USAGE_RECORD_LIMIT).map(record => ({ ...record, responseKeys: record.responseKeys.slice(0, 100) })) },
   };

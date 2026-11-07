@@ -159,12 +159,27 @@ describe('native usage default view', () => {
       accounts: [{ accountLabel: 'example-subscription', status: 'partial', totals, members: ['local'], membersWithoutReport: [], findings: ['retained-history-completeness-unknown'] }] }];
     api.getNativeUsageMatrix.mockResolvedValueOnce(response);
     show(); read(); await screen.findByText('123,456');
-    const union = within(card('Antigravity')).getByText('Selected account union').parentElement;
+    const union = within(card('Antigravity')).getByText('Sum of machine totals').parentElement;
     expect(union).toHaveTextContent('partial');
     expect(union).toHaveTextContent('not a fleet-complete total');
     expect(within(union).getAllByText('Input tokens').map(label => label.nextElementSibling.textContent)).toEqual(['80', '80']);
     expect(within(union).getAllByText('Measured retained tokens').map(label => label.nextElementSibling.textContent)).toEqual(['Unknown', 'Unknown']);
     expect(within(card('Antigravity')).getAllByText('Input tokens')[0].nextElementSibling).toHaveTextContent('40');
+  });
+
+  it('states what summing machines can miss and splits tokens by model, naming tokens with no model', async () => {
+    const response = snapshot();
+    response.families = [{ family: 'claude', merge: { status: 'partial', reasons: [], totals: { totalTokens: 30, tokensIn: 20, tokensOut: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      modelTotals: [{ kind: 'model', key: 'example-model', incompleteRecords: 0, counters: { totalTokens: 12, tokensIn: 8, tokensOut: 4 } },
+        { kind: 'unknown', key: 'report-without-model-capability', incompleteRecords: 0, counters: { totalTokens: 18, tokensIn: 12, tokensOut: 6 } }] }, accounts: [] }];
+    api.getNativeUsageMatrix.mockResolvedValueOnce(response);
+    show();
+    expect(screen.getByText(/A transcript copied to two machines counts twice/)).toHaveTextContent(/cloud sessions .* may be missing/);
+    read(); await screen.findByText('123,456');
+    const claude = within(card('Claude Code'));
+    expect(claude.getByRole('row', { name: 'example-model 12 8 4' })).toBeInTheDocument();
+    expect(claude.getByRole('row', { name: 'Peer report has no model data 18 12 6' })).toBeInTheDocument();
+    expect(claude.queryByText('No usable account selection. Local measurements above remain separate.')).not.toBeInTheDocument();
   });
 
   it('guards repeated clicks and ignores an old response after leaving and re-entering the view', async () => {

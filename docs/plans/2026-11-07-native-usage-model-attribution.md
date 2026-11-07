@@ -4,9 +4,10 @@
 
 Decision record for #15230, a parallel research increment of #15031. The v4 native
 reports accept Claude and Grok token records but carry no model. This record says
-what the sources support, what the eventual extension must do, and which synthetic
-corpus proves it. **Nothing here changes production:** no reader, schema, report,
-route or chart moves until the #15031 integration adopts it.
+what the sources support, what the extension must do, and which synthetic corpus
+proves it. #15252 adopted the peer rollup below as report version 5 in
+`server/lib/nativeUsageRollups.js`. The projection v2 form stays a proposal, because
+it applies only if #15031 keeps a record union.
 
 Model attribution partitions tokens that are already accepted. It never adds,
 removes or re-totals them, and it establishes neither API-equivalent cost nor actual
@@ -143,17 +144,20 @@ modelUsage = { version: 1, buckets: [{ day, kind, key, counters, incompleteRecor
   incompleteRecords   Grok only: how many records in this bucket are lower bounds
 ```
 
+Antigravity entries carry the same block with the reason `model-unverified`, because its
+numeric model enums have no validated labels, and with no combined total.
+
 Buckets are unique, sorted by day, kind and key, and sum exactly to the provider total.
 Size follows days times labels rather than records: a year across ten labels is under
 1 MiB. `aggregate.json` pins accepted and refused examples.
 
-**What limits the data today (#15252).** These are PortOS's own settings, not technical
-limits, and this proposal does not depend on them:
+**What limited the data (#15252).** These were PortOS's own settings, not technical
+limits, and #15252 removed both:
 
-- The dashboard and peer read budget stops at 128 MiB of file bytes. On one real install
-  that was 999 of 33,709 Claude records, in 0.2 seconds. Without it, the whole history
-  read in about 3 seconds as an 8.76 MiB record list.
-- The 16 MiB peer limit refuses a whole report, at about 61,000 Claude records.
+- The dashboard and peer read budget stopped at 128 MiB of file bytes. On one real
+  install that was 999 of 33,709 Claude records, in 0.2 seconds. Without it, the whole
+  history read in about 3 seconds as an 8.76 MiB record list.
+- The 16 MiB peer limit refused a whole report, at about 61,000 Claude records.
 
 **Which machines to ask.** Codex's account-level read needs only one machine. Claude,
 Antigravity and Grok are per-machine files holding that machine's own usage, so each
@@ -210,10 +214,10 @@ cross-machine check; it is a test digest, not a new report field.
   `report-without-model-capability`, with totals unchanged.
 - A copy from an old report adds no evidence and no tokens beside a new copy of the
   same identity.
-- `nativeUsagePeer.js` and `scripts/lib/nativeUsageSources.js` require exactly
-  `contractVersion` 4 today, so bumping the constant alone would refuse every peer
-  during upgrade skew. Keep `/api/usage/native-report/v1` answering v4 with model fields
-  absent, add `/v2` for v5, and fall back to `/v1` on 404.
+- `scripts/lib/nativeUsageSources.js` requires exactly `contractVersion` 4, so the
+  standalone capture stays v4. `/api/usage/native-report/v1` keeps answering v4 with
+  model fields absent, `/v2` answers v5, and a collector falls back to `/v1` on 404, or
+  on 403 from an older peer whose password gate refuses the unknown path.
 - Staged partitions keep their recorded report versions and are not rewritten to gain
   labels. `attribution: 'excluded'` keeps meaning PortOS run linkage and is unrelated.
 
@@ -227,25 +231,20 @@ scenario in every copy order, proves the buckets partition the provider total, a
 each outcome up into a valid peer block. It imports no native usage module, so it cannot
 constrain the active #15031 work.
 
-The accepted totals, refusal findings and record keys were also checked once against
-the current production readers and unions by writing each scenario to a temporary home.
-That comparison should become a permanent test once the integration lands.
+`server/services/nativeUsageAttribution.test.js` writes each scenario to a temporary
+home and compares the production readers' rollups with the hand-authored outcomes.
+`server/lib/nativeUsageRollups.test.js` runs `aggregate.json` through the production
+refusal check. Scenarios mixing report capabilities describe a union across machines,
+which the Usage view no longer performs, so only the reference resolver covers them.
 
 ## Handoff
 
-Files that will need the extension, all owned by #15031 and untouched here:
+#15252 extended the readers, contract, transport and Usage presentation for rollups.
+If #15031 keeps a record union, these still need projection v2:
 
-- **Readers:** `server/services/nativeTranscriptCoverage.js`,
-  `server/services/nativeGrokUsageCoverage.js`
 - **Projections and unions:** `server/lib/nativeUsageRecords.js`,
   `server/lib/nativeGrokUsageRecords.js`
-- **Contract:** `server/lib/nativeUsageContract.js`
-- **Transport and capture:** `server/services/nativeUsagePeer.js`,
-  `server/routes/usage.js`, `server/services/nativeUsageReport.js`,
-  `server/services/nativeUsageFleet.js`, `server/services/nativeUsageMatrix.js`,
-  `server/lib/nativeUsageStaging.js`, `scripts/lib/nativeUsageSources.js`
-- **Presentation:** `client/src/components/usage/NativeUsageOverview.jsx`,
-  `client/src/pages/UsagePage.jsx`
+- **Staging:** `server/lib/nativeUsageStaging.js`, `scripts/lib/nativeUsageSources.js`
 
 Unresolved source limitations:
 
