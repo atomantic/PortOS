@@ -134,7 +134,10 @@ export function groupQuotaCards(quotas) {
       routingOverridden: cards.some((card) => card.origin?.self !== false && card.routingOverridden),
       // Image backends expose observations, not queryable quota. Never sum
       // render counts or let a later empty ledger erase an observed refusal.
-      ...(selected.family === 'imagegen' ? { imageRefusals: [...refusals.entries()] } : {}),
+      ...(selected.family === 'imagegen' ? {
+        imageRefusals: [...refusals.entries()],
+        imageObservations: cards.filter((card) => card.metrics?.length),
+      } : {}),
     };
   });
 }
