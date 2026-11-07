@@ -18,3 +18,23 @@ describe('code review batch exceptions', () => {
     expect(JSON.stringify(result)).not.toContain('/private/preparation');
   });
 });
+
+// #15260: the sibling list handed to each batch reviewer stays bounded however many files the diff has.
+describe('code review batch siblings', () => {
+  it('bounds the sibling file list and reports the rest as omitted', async () => {
+    const section = name => `diff --git a/${name} b/${name}\n+${'x'.repeat(300)}\n`;
+    const diff = Array.from({ length: 150 }, (_, i) => section(`f${i}.js`)).join('');
+    const seen = [];
+    const result = await runCodeReviewBatches({ diff, budgetMs: 1000, maxBatchBytes: 1024, maxBatches: 64,
+      runBatch: async (_input, remainingMs, budget, siblings) => {
+        takeCodeReviewCallBudget(budget, remainingMs);
+        seen.push(siblings);
+        return { ok: true, verdict: 'clean', findings: 'No findings.' };
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(seen[0]).toMatchObject({ batchFiles: 3, totalFiles: 150, omittedFiles: 47 });
+    expect(seen[0].otherFiles).toHaveLength(100);
+    expect(seen[0].otherFiles).not.toContain('a/f0.js b/f0.js');
+  });
+});
