@@ -69,7 +69,7 @@ export async function startHistoricalUsageBackfill({
   WorkerClass = Worker,
   providers = null
 } = {}) {
-  if (job.status === 'running' || job.status === 'cancelling') return publicJob();
+  if (job.status === 'running') return publicJob();
 
   const id = randomUUID();
   job = {
