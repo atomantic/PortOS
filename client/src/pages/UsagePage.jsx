@@ -128,6 +128,13 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshErro
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Image providers do not report a quota meter.</p>
           {quota.imageRefusals.map(([key, refusal]) => <p key={key} className="text-xs text-port-warning break-words">{refusal.label || key}: refusal observed · {refusal.fetchedAt ? `reported ${timeAgo(refusal.fetchedAt, 'time unavailable')}` : 'report time unavailable'}; current availability may have changed.</p>)}
+          {quota.imageObservations?.length > 0 && <p className="text-xs text-gray-500">Render counts are observations from each instance, not account-wide totals.</p>}
+          {quota.imageObservations?.map((observation) => (
+            <section key={observation.origin?.instanceId || 'self'} aria-label={`Image activity reported by ${observation.origin?.name || 'This instance'}`}>
+              <p className="text-xs text-gray-400 mb-1 break-words">{observation.origin?.name || 'This instance'}{observation.fetchedAt ? ` · reported ${timeAgo(observation.fetchedAt, 'time unavailable')}` : ' · report time unavailable'}</p>
+              <ProviderQuotaBody quota={{ ...observation, limits: [], error: undefined }} showActivity={false} showNote={false} showSource={false} />
+            </section>
+          ))}
         </div>
       ) : (
         <>
