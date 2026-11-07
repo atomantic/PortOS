@@ -834,9 +834,9 @@ jobs:
           PORTOS_NATIVE_SQL_LIVE: '1'
         run: cd server && node node_modules/vitest/vitest.mjs run --configLoader runner ../scripts/native-usage-sql-rehearsal.live.test.js
 
-      # A real pg_dump from the service's pinned image, restored into a scratch
-      # database through the restore's admission and replay preparation, then
-      # the startup maintenance-schema probe. Outside the memo, so a missing
+      # A real pg_dump from the service's pinned image, checked by
+      # inspectDatabaseDump, prepared by prepareDatabaseReplay and replayed into
+      # a scratch database, then the startup maintenance-schema probe. Outside the memo, so a missing
       # Docker engine, image or psql fails instead of becoming a cached pass.
       - name: Restore a real pg_dump into a scratch database
         timeout-minutes: 5

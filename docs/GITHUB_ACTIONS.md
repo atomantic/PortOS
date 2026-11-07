@@ -570,10 +570,10 @@ The selected work is split across parallel jobs:
   the serial DB suite when database-sensitive files changed. Before it, outside
   the test memo, `server/services/backupDatabaseDump.restore.live.test.js`
   (`PORTOS_DB_RESTORE_LIVE=1`) makes a real `pg_dump` with the snapshot
-  backup's flags in the pinned `pgvector/pgvector` image, restores it into a
-  `scripts/rehearsal-scratch-db.js` scratch database through the restore's
-  admission and replay preparation, and checks the startup maintenance-schema
-  probe. A missing Docker engine, image or `psql` fails the step.
+  backup's flags in the pinned `pgvector/pgvector` image, checks it with
+  `inspectDatabaseDump`, prepares it with `prepareDatabaseReplay`, replays it
+  into a `scripts/rehearsal-scratch-db.js` scratch database, and checks the
+  startup maintenance-schema probe. A missing Docker engine, image or `psql` fails the step.
 - **Browser suites** (their own `browser` job, beside DB tests) — the exact
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
   Server unit runs exclude that registry whenever `PORTOS_CI_BROWSER_OWNER=unit`

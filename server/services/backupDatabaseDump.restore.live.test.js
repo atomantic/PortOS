@@ -1,9 +1,11 @@
 /**
  * Live restore of a real pg_dump (#15280). The pinned image dumps the shipped
  * base schema plus a second schema, a function and a trigger, using the
- * snapshot backup's own flags. The dump then goes through the restore's
- * admission and replay preparation into a scratch database, and the startup
- * maintenance-schema probe must pass on the result.
+ * snapshot backup's own flags. The dump then goes through the restore's dump
+ * checks (inspectDatabaseDump) and prepareDatabaseReplay, and psql replays it
+ * into a scratch database, where the startup maintenance-schema probe must
+ * pass. The live-pool restore lock (withDatabaseRestoreAdmission) and the full
+ * restorePostgres workflow are covered against portos_test by backup.db.test.js.
  *
  * The hosted DB job runs this explicitly, outside the test memo, so a missing
  * Docker engine, image or psql fails rather than skipping into a cached pass:
