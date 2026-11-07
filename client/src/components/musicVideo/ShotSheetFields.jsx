@@ -41,7 +41,7 @@ export default function ShotSheetFields({ project, scene, disabled = false, onCh
     <fieldset className="min-w-0 space-y-1.5" aria-label="Shot details">
       <div className="grid min-w-0 gap-1.5 sm:grid-cols-2">
         <div className="min-w-0">
-          <label htmlFor={id('camera')} className={labelCls}>Camera</label>
+          <label htmlFor={id('camera')} className={labelCls}>Capture camera</label>
           <select id={id('camera')} value={sheet.cameraId || ''} disabled={disabled} className={inputCls}
             onChange={(e) => {
               const next = cameras.find((entry) => entry.id === e.target.value);

@@ -30,6 +30,14 @@ describe('sheet-built stills', () => {
     expect(noGeneral.prompt.startsWith('Camera:')).toBe(true);
     expect(noGeneral.prompt).not.toContain('they laugh');
   });
+  // Catches the details not reaching the clip, or a detail-built clip borrowing the still's general prompt.
+  it('adds the same details to the clip after its motion text', () => {
+    const clip = musicVideoShotModelInput(sheetProject, built, { asTyped: true });
+    expect(clip.prompt.startsWith('they laugh\nCamera: Snapshot camera, held by Renee.')).toBe(true);
+    expect(ids(clip)).toContain('shot-sheet-emotion');
+    expect(authoredShotPrompt({ ...built, prompt: '' })).toBe('');
+    expect(musicVideoShotModelInput(sheetProject, { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } }, { asTyped: true }).prompt).not.toContain('Camera:');
+  });
   // Catches an observer camera reading as held, and the details leaking into an end frame.
   it('names an observer camera as unheld and keeps details off the end frame', () => {
     const observed = musicVideoFrameModelInput(sheetProject, { ...built, shotSheet: { promptFromSheet: true, cameraId: 'eye' } });

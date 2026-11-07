@@ -11,9 +11,7 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
 import SceneResearchSeed from './SceneResearchSeed.jsx';
-import ShotSheetFields from './ShotSheetFields.jsx';
-import ShotStillText from './ShotStillText.jsx';
-import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetStillText } from '../../../../server/lib/musicVideoShotSheet.js';
+import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
@@ -41,7 +39,7 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
 
 // The frame prompt and the Clip tab's motion prompt read alike, so each box names the model it feeds.
 const FRAME_PROMPT_HELP = 'What this still image shows. The image model renders the frame from this text plus the additions listed under it. How the shot moves is the motion prompt on the Clip tab.';
-const GENERAL_PROMPT_HELP = 'Anything the shot details below don\'t cover. The still\'s prompt is built from this text and the details, shown in full under them; how the shot moves is the motion prompt on the Clip tab.';
+const GENERAL_PROMPT_HELP = 'Anything the shot details don\'t cover. The still\'s prompt is this text plus each shot detail, listed under it as its own part; how the shot moves is the motion prompt on the Clip tab.';
 
 function FramePrompt({ id, label, value, help = FRAME_PROMPT_HELP, ...props }) {
   return (
@@ -83,9 +81,8 @@ export default function SceneFrames({
 }) {
   const endFrameOff = endFrameToggle && scene.endFrameOff === true;
   const endFrames = endFramesAllowed && !endFrameOff;
-  // A sheet-built still: its frame prompt is the general prompt and the shot details are composed in.
+  // A detail-built shot: its frame prompt is the still's general prompt and the shot details are composed in.
   const fromSheet = shotSheetDrivesPrompt(scene);
-  const setFromSheet = (on) => { const patch = { shotSheet: normalizeShotSheet({ ...scene.shotSheet, promptFromSheet: on }) }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const setEndFrameOn = (on) => { const patch = { endFrameOff: on ? null : true }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
@@ -129,19 +126,11 @@ export default function SceneFrames({
       <div key={which} className="min-w-0 space-y-1.5">
         <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
-        {start && (
-          <label htmlFor={id('from-sheet')} className="flex items-center gap-1 text-[11px] text-port-text-muted min-h-[44px] sm:min-h-0">
-            <input id={id('from-sheet')} type="checkbox" checked={fromSheet} onChange={(e) => setFromSheet(e.target.checked)} />
-            Build from shot details
-          </label>
-        )}
-        <FramePrompt id={id(`${which}-prompt`)} label={start ? (fromSheet ? 'General prompt' : endFrames ? 'Start frame prompt' : 'Still prompt') : 'End frame prompt'} value={scene[field] || ''}
+        <FramePrompt id={id(`${which}-prompt`)} label={start ? (fromSheet ? 'General still prompt' : endFrames ? 'Start frame prompt' : 'Still prompt') : 'End frame prompt'} value={scene[field] || ''}
           help={start && fromSheet ? GENERAL_PROMPT_HELP : FRAME_PROMPT_HELP}
           onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
-          placeholder={start ? (fromSheet ? 'Anything the details below don\'t cover' : 'What the still shows (empty: uses the motion prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
-        {start && fromSheet && <ShotSheetFields project={project} scene={scene} onChange={(patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); }} />}
-        {start && fromSheet && <ShotStillText text={shotSheetStillText(project, scene)} />}
+          placeholder={start ? (fromSheet ? 'Anything the shot details don\'t cover' : 'What the still shows (empty: uses the motion prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* A greybox, a storyboard panel or the shot details add to the still's prompt, so its full input shows here. */}
         {project && (greybox?.reference || scene.panelId || (start && fromSheet)) && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}

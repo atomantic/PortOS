@@ -5,10 +5,10 @@ import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
  * meant to be: which camera we look through and who holds it, the view, where
  * and when it is, who is in it, what they do and what they feel. The project's
  * `cameras` list says which cameras exist in this video. A shot whose sheet
- * has `promptFromSheet` builds its still from the sheet: the frame prompt is
- * then its general prompt, and shotSheetPromptLines are the ingredients the
- * still's composer adds after it (musicVideoShotPrompt.js). Otherwise the sheet
- * is the director's plan beside the prompts and reaches no model.
+ * has `promptFromSheet` builds its prompts from the sheet: its frame and motion
+ * prompts are then general prompts, and shotSheetPromptLines are the details
+ * the still and clip composers add after them (musicVideoShotPrompt.js).
+ * Otherwise the sheet is the director's plan beside the prompts and reaches no model.
  */
 import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
 
@@ -54,18 +54,7 @@ function selectedFrameOutdated(project, scene) {
   return parts.some((part) => !take.prompt.includes(part));
 }
 
-/**
- * A sheet-built still's own text as its composer starts it: the general prompt,
- * then one line per ingredient. The look, references and other labeled
- * additions follow at render time. '' for a shot not built from its sheet.
- */
-export function shotSheetStillText(project, scene) {
-  if (!shotSheetDrivesPrompt(scene)) return '';
-  const general = typeof scene.framePrompt === 'string' ? scene.framePrompt.trim() : '';
-  return [general, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean).join('\n');
-}
-
-/** Whether a shot's still is built from its sheet (the frame prompt is then its general prompt). */
+/** Whether a shot's prompts are built from its sheet (its frame and motion prompts are then general prompts). */
 export const shotSheetDrivesPrompt = (scene) => scene?.shotSheet?.promptFromSheet === true;
 
 const sheetText = (value) => (typeof value === 'string' ? value.trim() : '');

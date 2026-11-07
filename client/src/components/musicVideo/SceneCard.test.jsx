@@ -1378,3 +1378,28 @@ describe('clip renders in flight', () => {
     expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
   });
 });
+
+describe('shot details', () => {
+  // Catches the sheet's details being unreachable from the shot editor, an edit not saving to the shared record,
+  // the switch not saving, or the details not landing in the clip prompt.
+  it('edits the shot sheet details in place and adds them to the clip prompt when switched on', () => {
+    const onSave = vi.fn();
+    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Renee' }] } };
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, prompt: 'they laugh', takes: [], shotSheet: { emotion: 'Playful' } });
+      return <SceneCard scene={scene} project={{ ...project, scenes: [scene] }} index={0} expanded
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const group = screen.getByTestId('shot-group-details');
+    expect(within(group).getByRole('combobox', { name: 'Emotion' })).toHaveValue('Playful');
+    fireEvent.change(within(group).getByLabelText('Capture camera'), { target: { value: 'snap' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { emotion: 'Playful', cameraId: 'snap' } });
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'Use these details in the prompts' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { emotion: 'Playful', cameraId: 'snap', promptFromSheet: true } });
+    show('Clip');
+    const inputs = screen.getByTestId('render-inputs');
+    expect(within(inputs).getByRole('button', { name: '+ Emotion' })).toBeInTheDocument();
+    expect(within(inputs).getByRole('button', { name: '+ Camera' })).toBeInTheDocument();
+  });
+});

@@ -49,7 +49,9 @@ export const storyboardShotDirection = (scene) => (scene?.panelId ? scene?.visua
  * storyboard panel's direction (read live, so it follows panel edits), else
  * its frame prompt.
  */
-export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene) || scene?.framePrompt?.trim() || '';
+export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene)
+  // A detail-built shot's frame prompt is the still's general prompt, so its clip never borrows it.
+  || (shotSheetDrivesPrompt(scene) ? '' : scene?.framePrompt?.trim()) || '';
 
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
@@ -110,10 +112,12 @@ function composeShotModelInput(project, scene, {
       addition('repair-notes', 'Repair notes', fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''),
     ];
 
+  // A detail-built shot's details follow the director's motion text, each its own labeled part.
+  const sheet = shotSheetPromptLines(project, scene);
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
-  const body = [firstLine, camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
+  const body = [firstLine, ...sheet.map((item) => item.text), camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
   const prompt = [body, ...tail.filter(Boolean).map((item) => item.text)].filter(Boolean).join('. ');
-  return { prompt, promptAdditions: [...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
+  return { prompt, promptAdditions: [...sheet, ...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
 }
 
 /** A refine edit's wrapper around the director's instruction ("[instruction]" marks where it goes). */
