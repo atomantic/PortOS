@@ -853,6 +853,8 @@ function ProjectWorkspace({
     project: selected,
     videoSettings,
     applyScenePatch: patchScene,
+    // Renders that finished while the socket was down missed their attach events.
+    onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
   const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject });
   // Selective section revision (#8987): regenerate only a draft's flagged

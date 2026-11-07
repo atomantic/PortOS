@@ -95,7 +95,7 @@ export const isOutsideReference = isOutsideMusicVideoReference;
  * fills an unselected slot — so a late render never replaces the frame or clip
  * the director chose.
  */
-export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch } = {}) {
+export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch, onReconciled } = {}) {
   const frameBatch = useSceneBatch();
   const videoBatch = useSceneBatch();
   // Latest scenes for the failure toasts' scene names, read lazily (a lane
@@ -160,22 +160,36 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // keeps rendering — restore them from the server so the batch actions skip
   // those scenes and no duplicate (possibly paid) render is submitted (#10154).
   const projectId = project?.id;
-  const { restoreJobs: restoreFrameJobs } = frameLane;
-  const { restoreJobs: restoreVideoJobs } = videoLane;
-  const { restoreJobs: restoreEndFrameJobs } = endFrameLane;
+  const { restoreJobs: restoreFrameJobs, reconcileJobs: reconcileFrameJobs } = frameLane;
+  const { restoreJobs: restoreVideoJobs, reconcileJobs: reconcileVideoJobs } = videoLane;
+  const { restoreJobs: restoreEndFrameJobs, reconcileJobs: reconcileEndFrameJobs } = endFrameLane;
+  const onReconciledRef = useRef(onReconciled);
+  onReconciledRef.current = onReconciled;
   useEffect(() => {
     if (!projectId) return undefined;
     let live = true;
-    getMusicVideoSceneJobs(projectId, { silent: true })
-      .then(({ jobs }) => {
+    const load = (reconnected) => getMusicVideoSceneJobs(projectId, { silent: true })
+      .then(async ({ jobs }) => {
         if (!live || !Array.isArray(jobs)) return;
         restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
         restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
         restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
+        if (!reconnected) return;
+        // Terminal events fired while the socket was down are never replayed: settle the
+        // tracked jobs the server no longer lists, then reload so their finished takes land.
+        const activeIds = jobs.map((j) => j.jobId);
+        const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs].map((reconcile) => reconcile(activeIds)));
+        if (live && counts.some((n) => n > 0)) onReconciledRef.current?.(projectId);
       })
       .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
-    return () => { live = false; };
-  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
+    load(false);
+    const onConnect = () => load(true);
+    socket.on('connect', onConnect);
+    return () => {
+      live = false;
+      socket.off('connect', onConnect);
+    };
+  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs, reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs]);
   // The Casting media of every character linked from the catalog and every cast member
   // a shot names in its `characterVariant` (#12763), keyed by ingredient id: an array once loaded, null when the first load
   // failed, absent while pending. A shot's frames lead with that member's guides;

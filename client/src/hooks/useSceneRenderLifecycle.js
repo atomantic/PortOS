@@ -71,7 +71,7 @@ function failureToastMessage(failMessage, failures) {
  *                        land within a short window (a batch) collapse into ONE
  *                        summary toast instead of one identical toast per scene.
  *
- * Returns `{ genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs }`
+ * Returns `{ genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs, reconcileJobs }`
  * (`sceneProgress`: sceneId → `{ progress }` once a job reports running; a scene
  * in `genScenes` with no entry is still queued;
  * `sceneJobs`: sceneId → every render in flight for it, `{ key, jobId, label, running, progress }`,
@@ -88,6 +88,11 @@ function failureToastMessage(failMessage, failures) {
  *   - `restoreJobs([{ jobId, sceneId }])` — after a reload, re-light the
  *     spinners for renders the server's queue still has in flight (#10154) and
  *     correlate their jobs so the terminal events clear them as usual.
+ *   - `reconcileJobs(activeJobIds)` — after a socket reconnect, settle every tracked
+ *     job the server no longer lists as in flight: its terminal event may have
+ *     fired in the disconnect gap and Socket.IO does not replay it. Each such job's
+ *     status is read once; only a terminal one settles (through the same path as the
+ *     live event, so a late live event is a no-op). Resolves to how many it settled.
  */
 export default function useSceneRenderLifecycle({
   attachEvent,
@@ -142,6 +147,8 @@ export default function useSceneRenderLifecycle({
   // Failures waiting for the batch window to close, and that window's timer.
   const failuresRef = useRef([]);
   const flushTimerRef = useRef(null);
+  // The socket effect's `settle`, so a reconnect reconcile settles through the same idempotent path.
+  const settleRef = useRef(null);
 
   // Queue one confirmed failure; the toast fires once the window closes so a
   // batch of failures reads as one summary rather than N identical toasts.
@@ -227,6 +234,29 @@ export default function useSceneRenderLifecycle({
     }
   }, [bindJob, editJobs]);
 
+  // Socket.IO replays nothing after a reconnect, so a job that finished in the gap
+  // never reaches `settle`. `activeJobIds` is the server's current in-flight list.
+  const reconcileJobs = useCallback(async (activeJobIds) => {
+    const active = new Set(activeJobIds);
+    const stale = [...pendingRef.current.keys()].filter((jobId) => !active.has(jobId));
+    const jobs = await Promise.all(stale.map((jobId) => getMediaJob(jobId).catch(() => null)));
+    let settled = 0;
+    stale.forEach((jobId, i) => {
+      const job = jobs[i];
+      const outcome = job?.status === 'error' ? 'failed' : job?.status;
+      if (!['completed', 'failed', 'canceled'].includes(outcome)) return; // still live or unreadable: leave it
+      const sceneId = pendingRef.current.get(jobId);
+      if (!sceneId) return; // the live event settled it while we were fetching
+      settleRef.current?.({ jobId, error: job.error }, false, outcome);
+      if (outcome === 'failed') {
+        markFailed(sceneId, true);
+        reportFailure(sceneId, job.error);
+      }
+      settled += 1;
+    });
+    return settled;
+  }, [markFailed, reportFailure]);
+
   useEffect(() => {
     const onAttach = (data) => cfgRef.current.apply(data);
     // jobId → pending error-toast timer (running-cancel deferral; see onFailed).
@@ -258,6 +288,7 @@ export default function useSceneRenderLifecycle({
       }
       cfgRef.current.onSettled?.({ jobId, sceneId, outcome });
     };
+    settleRef.current = settle;
     const onCompleted = (data) => settle(data, false, 'completed');
     // started / progress: a tracked job is running; keep the fraction for its card.
     const onRunning = (data) => {
@@ -348,10 +379,11 @@ export default function useSceneRenderLifecycle({
       socket.off(failedEvent, onFailed);
       socket.off(canceledEvent, onCanceled);
       mounted = false;
+      settleRef.current = null;
       for (const t of failTimers.values()) clearTimeout(t);
       failTimers.clear();
     };
   }, [attachEvent, completedEvent, failedEvent, canceledEvent, startedEvent, progressEvent, settleJob, editJobs, markFailed, reportFailure]);
 
-  return { genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs };
+  return { genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs, reconcileJobs };
 }
