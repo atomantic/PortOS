@@ -31,7 +31,7 @@ describe('database image is pinned to a manifest digest', () => {
   });
 });
 
-it('requires the real isolated SQL rehearsal in the hosted DB job without a memo or availability skip', () => {
+it('requires the real isolated SQL/schema rehearsal in the hosted DB job without a memo or availability skip', () => {
   const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
-  expect(workflow).toMatch(/name: Rehearse isolated SQL restore\n\s+timeout-minutes: 5\n\s+env:\n\s+PORTOS_NATIVE_SQL_LIVE: '1'\n\s+run: cd server && node node_modules\/vitest\/vitest.mjs run --configLoader runner \.\.\/scripts\/native-usage-sql-rehearsal.live.test.js/);
+  expect(workflow).toMatch(/name: Rehearse isolated SQL and schema restore\n\s+timeout-minutes: 8\n\s+env:\n\s+PORTOS_NATIVE_SQL_LIVE: '1'\n\s+run: cd server && node node_modules\/vitest\/vitest.mjs run --configLoader runner \.\.\/scripts\/native-usage-sql-rehearsal.live.test.js/);
 });

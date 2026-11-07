@@ -1095,3 +1095,5 @@ export * from './nativeUsageSources.js';
 export * from './nativeUsageStaging.js';
 
 export * from './nativeUsageRehearsal.js';
+
+export * from './databaseMaintenanceSchema.js';

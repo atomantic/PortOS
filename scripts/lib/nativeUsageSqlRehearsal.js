@@ -1,16 +1,19 @@
 /** Disposable Linux Docker SQL replay. No install connections or runtime imports. */
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { DATABASE_MAINTENANCE_SCHEMA_CONTRACT, DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from '../../server/lib/databaseMaintenanceSchema.js';
+import { nativeUsageCanonicalJson } from '../../server/lib/nativeUsageContract.js';
 import { refuseNativeUsageRehearsal as refuse } from '../../server/lib/nativeUsageRehearsal.js';
 import { prepareDatabaseReplay } from '../../server/services/backupDatabaseDump.js';
 import { newScratchDbName } from '../rehearsal-scratch-db.js';
-import { NATIVE_USAGE_SNAPSHOT_TABLES, spoolNativeUsageSnapshotDatabase, verifyNativeUsageSnapshot } from './nativeUsageSnapshot.js';
+import { assertNativeUsageMigrationIds, verifyNativeUsageCode } from './nativeUsageCodeBinding.js';
+import { NATIVE_USAGE_SNAPSHOT_TABLES, readNativeUsageSnapshotMigrations, spoolNativeUsageSnapshotDatabase, verifyNativeUsageSnapshot } from './nativeUsageSnapshot.js';
 
 export const NATIVE_USAGE_SQL_IMAGE = 'pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d';
 const MAX_SQL_BYTES = 256 * 1024 * 1024;
@@ -73,7 +76,7 @@ function countRows(value) {
   return rows;
 }
 
-async function replayInContainer(config, replayPath, signal) {
+async function replayInContainer(config, replayPath, signal, code) {
   const name = `portos-native-rehearsal-${randomBytes(12).toString('hex')}`;
   const database = newScratchDbName();
   const adminPassword = randomBytes(32).toString('hex');
@@ -96,6 +99,7 @@ async function replayInContainer(config, replayPath, signal) {
     'sh', '-c', AUTH_SHELL, 'sh', ...PSQL, '-U', user, '-d', target, ...args,
   ], { phase, sql: true, input: authenticated(password, content), timeout: 15 * 60 * 1000 });
   let rows;
+  let schemaProbe;
   let created = false;
   try {
     // Mark before the request: a disconnected create can still have succeeded.
@@ -126,6 +130,27 @@ async function replayInContainer(config, replayPath, signal) {
     const tables = await psql('verify-tables', REPLAY, restorePassword, database, '', ['-At', '-c', tableSql]);
     if (tables !== String(NATIVE_USAGE_SNAPSHOT_TABLES.length)) refuse('sql-rehearsal-table-check-failed');
     rows = countRows(await psql('count-rows', REPLAY, restorePassword, database, '', ['-At', '-c', rowCountSql]));
+    if (code) {
+      // The same SELECT and predicate used before the application graph is
+      // imported by server/start.js. Only these recorded probes are claimed.
+      const readOnly = sql => `BEGIN READ ONLY; SET LOCAL search_path = pg_catalog; SET LOCAL row_security = off; ${sql}; ROLLBACK;`;
+      const value = await psql('maintenance-schema', REPLAY, restorePassword, database, '', ['-qAt', '-c',
+        readOnly(`SELECT pg_catalog.row_to_json(probe) FROM (${DATABASE_MAINTENANCE_SCHEMA_SQL}) probe`)]);
+      let health;
+      try { health = JSON.parse(value); } catch { refuse('maintenance-schema-probe-invalid'); }
+      if (health?.database !== database || health?.user !== REPLAY || !databaseMaintenanceSchemaHealthy(health)) refuse('maintenance-schema-probe-mismatch');
+      const recorded = await psql('migration-inventory', REPLAY, restorePassword, database, '', ['-qAt', '-c',
+        readOnly(`SELECT COALESCE(pg_catalog.json_agg(id ORDER BY id), '[]'::json) FROM (SELECT id FROM public.schema_migrations LIMIT ${code.databaseMigrationIds.length + 1}) recorded`)]);
+      let ids;
+      try { ids = JSON.parse(recorded); } catch { refuse('database-migration-inventory-invalid'); }
+      assertNativeUsageMigrationIds(ids, code.databaseMigrationIds, 'database');
+      schemaProbe = { contract: DATABASE_MAINTENANCE_SCHEMA_CONTRACT,
+        querySha256: createHash('sha256').update(DATABASE_MAINTENANCE_SCHEMA_SQL).digest('hex'),
+        scope: 'memory-catalog-presence-and-memory-sync-column', verified: true, readOnly: true,
+        fullSchemaVerified: false, applicationReadersVerified: false,
+        databaseMigrationInventoryMatched: true, recordedDatabaseMigrations: ids.length, migrationEffectsVerified: false };
+    }
+
   } finally {
     if (created) {
       // Cleanup owns a fresh budget even after interruption/timeout. Success
@@ -136,13 +161,15 @@ async function replayInContainer(config, replayPath, signal) {
       if (remaining.code !== 0 || remaining.stdout) refuse('sql-rehearsal-cleanup-unverified');
     }
   }
-  return { rowCounts: rows, containerRemoved: true };
+  return { rowCounts: rows, containerRemoved: true, ...(schemaProbe ? { schemaProbe } : {}) };
 }
 
 /** One detached snapshot, no arbitrary target or executable configuration. */
-export async function rehearseNativeUsageSql(stage, backup, directory) {
+export async function rehearseNativeUsageSql(stage, backup, directory, { verifySchema = false } = {}) {
   if (process.platform !== 'linux') refuse('sql-rehearsal-requires-isolated-linux-docker');
+  const code = verifySchema ? await verifyNativeUsageCode(backup.request.codeCommit) : null;
   const snapshot = await verifyNativeUsageSnapshot(stage, backup, directory);
+  if (code) assertNativeUsageMigrationIds(await readNativeUsageSnapshotMigrations(directory, snapshot.fileMigrations), code.fileMigrationIds, 'file');
   if (snapshot.database.bytes > MAX_SQL_BYTES) refuse('sql-rehearsal-dump-too-large');
   const scratch = await mkdtemp(join(tmpdir(), 'native-usage-sql-'));
   const abort = new AbortController();
@@ -154,9 +181,17 @@ export async function rehearseNativeUsageSql(stage, backup, directory) {
     const spool = join(scratch, 'dump.sql');
     const checked = await spoolNativeUsageSnapshotDatabase(directory, snapshot.database, spool);
     const replay = await prepareDatabaseReplay(spool, checked.extensionMetadata);
-    const restored = await replayInContainer(scratch, replay, abort.signal);
+    const restored = await replayInContainer(scratch, replay, abort.signal, code);
+    if (code) {
+      const after = await verifyNativeUsageCode(backup.request.codeCommit);
+      if (nativeUsageCanonicalJson(after) !== nativeUsageCanonicalJson(code)) refuse('code-input-changed');
+      assertNativeUsageMigrationIds(await readNativeUsageSnapshotMigrations(directory, snapshot.fileMigrations), code.fileMigrationIds, 'file');
+    }
     return {
-      ...snapshot, kind: 'native-usage-sql-rehearsal',
+      ...snapshot, kind: code ? 'native-usage-schema-rehearsal' : 'native-usage-sql-rehearsal',
+      ...(code ? { code: code.manifest, schemaProbe: restored.schemaProbe,
+        fileMigrations: { ...snapshot.fileMigrations, matchedToCode: true, inventoryMatched: true,
+          recordedMigrations: code.fileMigrationIds.length, migrationEffectsVerified: false } } : {}),
       database: { ...snapshot.database, restoreVerified: true,
         restoreScope: 'disposable-container-sql-replay', requiredTablesQueryable: true,
         restoredRowCounts: restored.rowCounts, sourceRowCountsMatched: false,

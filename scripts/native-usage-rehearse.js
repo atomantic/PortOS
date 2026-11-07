@@ -17,7 +17,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const STORES = ['usageLedger', 'peerDigests'];
-const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot> | sql-restore <stage.json> <backup.json> <detached-standard-snapshot> | sources-backup <stage.json> <request.json> <detached-source-directory> <new-backup-directory> | sources-restore <stage.json> <source-backup-directory> <new-restore-directory>';
+const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot> | sql-restore <stage.json> <backup.json> <detached-standard-snapshot> | schema-restore <stage.json> <backup.json> <detached-standard-snapshot> | sources-backup <stage.json> <request.json> <detached-source-directory> <new-backup-directory> | sources-restore <stage.json> <source-backup-directory> <new-restore-directory>';
 const same = (a, b) => nativeUsageCanonicalJson(a) === nativeUsageCanonicalJson(b);
 
 // A growing/replaced file is not a frozen snapshot. The read has a hard byte cap;
@@ -135,10 +135,12 @@ export async function runNativeUsageRehearsalCli(argv, { stdout = text => proces
     stdout(nativeUsageCanonicalJson({ status: 'isolated-byte-restore-verified', directoryName: result.directoryName, receipt: result.receipt }));
     return 0;
   }
-  if (['snapshot-preflight', 'sql-restore'].includes(command) && args.length === 3) {
+  if (['snapshot-preflight', 'sql-restore', 'schema-restore'].includes(command) && args.length === 3) {
     const stage = verifyNativeUsageStage(await readJson(args[0]));
     const backup = verifyNativeUsageBackup(stage, await readJson(args[1]));
-    stdout(nativeUsageCanonicalJson(await (command === 'sql-restore' ? rehearseNativeUsageSql : verifyNativeUsageSnapshot)(stage, backup, args[2])));
+    const result = command === 'snapshot-preflight' ? await verifyNativeUsageSnapshot(stage, backup, args[2])
+      : await rehearseNativeUsageSql(stage, backup, args[2], { verifySchema: command === 'schema-restore' });
+    stdout(nativeUsageCanonicalJson(result));
     return 3;
   }
   if (command === 'preflight' && args.length >= 3 && args.length <= 129 && args.length % 2 === 1) {

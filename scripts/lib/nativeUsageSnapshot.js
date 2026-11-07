@@ -226,3 +226,25 @@ export async function spoolNativeUsageSnapshotDatabase(directory, expected, spoo
     || !result.complete || result.missingTables.length || !result.replayScanSafe) refuse('snapshot-database-replay-mismatch');
   return result;
 }
+
+/** Re-read the selected, already hashed migration ledger without discovery/repair. */
+export async function readNativeUsageSnapshotMigrations(directory, evidence) {
+  if (!(await lstat(directory)).isDirectory()) refuse('snapshot-directory-invalid');
+  if (evidence.status !== 'present-in-snapshot' || !['current', 'legacy'].includes(evidence.selected)) refuse('file-migration-ledger-missing');
+  if (evidence.selected === 'legacy') {
+    const currentExists = await lstat(join(directory, 'data', 'migrations.applied.json')).then(() => true, error => {
+      if (error.code !== 'ENOENT') throw error;
+      return false;
+    });
+    if (currentExists) refuse('snapshot-migration-ledger-changed');
+  }
+  const parts = evidence.selected === 'current' ? ['migrations.applied.json'] : ['migrations', '.applied.json'];
+  for (let length = 0; length < parts.length; length++) {
+    if (!(await lstat(join(directory, 'data', ...parts.slice(0, length)))).isDirectory()) refuse('snapshot-directory-invalid');
+  }
+  const result = await inspectRegular(join(directory, 'data', ...parts), {
+    collect: true, budget: { bytes: MAX_JSON_BYTES, deadline: Date.now() + MAX_MILLISECONDS },
+  });
+  if (result.sha256 !== evidence.sha256) refuse('snapshot-migration-ledger-changed');
+  return parseJson(result.bytes);
+}

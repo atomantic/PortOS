@@ -37,6 +37,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `retiredLoraTraining.js` | Retirement refusal and short-lived admission for retained training data access/removal. |
 | `backupSharedAdmission.js` | Durable cross-process backup cuts and publication leases, with fail-closed owner recovery. |
 | `runtimeFilePublication.js` | Admitted runtime recording updates with rollback of the prior file pair on failure. |
+| `databaseMaintenanceSchema.js` | Shared read-only maintenance-target memory/catalog presence query; not complete runtime/schema compatibility. |
 | `maintenanceJournal.js` | Dependency-free shared journal transactions for server admission and offline update bootstrap. |
 | `providerCallActivity.js` | Live direct-provider call count, including text calls outside the run toolkit. |
 | `maintenanceDeferredUpdate.js` | Automatic/manual update ownership, stop-first shutdown and process settlement in the shared journal. |

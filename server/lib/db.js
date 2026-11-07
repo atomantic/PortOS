@@ -12,6 +12,7 @@ import { assertDatabaseAdmission, createDatabaseMaintenanceJournal } from './dat
 import { assertDatabasePoolAuthority } from './databaseAuthority.js';
 import { createDatabaseRestoreRecovery, databaseRestoreRecoveryError } from './databaseRestoreRecovery.js';
 import { normalizePgParams } from './pgJson.js';
+import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from './databaseMaintenanceSchema.js';
 
 const { Pool } = pg;
 
@@ -444,17 +445,10 @@ export async function verifyDatabaseMaintenanceTarget(id) {
   let discard = false;
   try {
     await client.query({ text: 'BEGIN READ ONLY', query_timeout: 10_000 });
-    const { rows } = await client.query({ text: `
-      SELECT current_database() AS database, current_user AS "user",
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories') AS has_memories,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memory_links') AS has_links,
-        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'catalog_ingredients') AS has_catalog,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'catalog_scraps') AS has_catalog_scraps
-    `, query_timeout: 10_000 });
+    const { rows } = await client.query({ text: DATABASE_MAINTENANCE_SCHEMA_SQL, query_timeout: 10_000 });
     const health = rows?.[0];
     if (health?.database !== operation.target.database || health?.user !== operation.target.user
-      || !['has_memories', 'has_links', 'has_sync', 'has_catalog', 'has_catalog_scraps'].every(key => health[key] === true)) throw refuse();
+      || !databaseMaintenanceSchemaHealthy(health)) throw refuse();
     // A query completing after journal damage/removal/replacement is not proof
     // for that new state. Preserve exactly the operation and stage we read.
     if (JSON.stringify(readTarget()) !== JSON.stringify(operation)) throw refuse();

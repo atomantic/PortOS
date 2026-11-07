@@ -828,8 +828,8 @@ jobs:
       # The service above pulls the exact image used here. The rehearsal itself
       # never pulls or uses that service: it owns a network-none, tmpfs container.
       # Run outside the memo so missing Docker/image cannot become a cached pass.
-      - name: Rehearse isolated SQL restore
-        timeout-minutes: 5
+      - name: Rehearse isolated SQL and schema restore
+        timeout-minutes: 8
         env:
           PORTOS_NATIVE_SQL_LIVE: '1'
         run: cd server && node node_modules/vitest/vitest.mjs run --configLoader runner ../scripts/native-usage-sql-rehearsal.live.test.js
