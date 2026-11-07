@@ -13,7 +13,7 @@ vi.mock('../../lib/pathSafety.js', () => ({
   resolveImageInputPath: (file) => (file === 'gone.png' ? null : file === 'guide-refs.png' ? `/inputs/${file}` : `/gallery/${file}`),
 }));
 
-const { musicVideoClipReferences, musicVideoClipCastReferences, musicVideoLocalReferencePaths } = await import('./clipCastReferences.js');
+const { musicVideoClipReferences, musicVideoHostedClipReferences, musicVideoLocalReferencePaths } = await import('./clipCastReferences.js');
 
 const project = (scene, references) => ({
   id: 'mv-1',
@@ -28,13 +28,13 @@ const REFS = [
   { id: 'mvr-cs-cast-guest', imageId: 'guest.png', role: 'character', label: 'Guest — cast sheet' },
 ];
 
-describe('musicVideoClipCastReferences', () => {
+describe('musicVideoHostedClipReferences', () => {
   beforeEach(() => { getProject.mockReset(); loadSceneCastMedia.mockReset().mockResolvedValue(null); });
 
   it('returns the lead and the named cast sheets, never the set plate', async () => {
     const scene = { sceneId: 'shot-example', sectionIndex: 0, prompt: 'Guest steps into view' };
     getProject.mockResolvedValue(project(scene, REFS));
-    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 'shot-example' })).toEqual([
+    expect(await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 'shot-example' })).toEqual([
       { path: '/gallery/lead.png', label: 'Lead — character sheet' },
       { path: '/gallery/guest.png', label: 'Guest — cast sheet' },
     ]);
@@ -43,20 +43,20 @@ describe('musicVideoClipCastReferences', () => {
   it('refuses a clip instead of silently dropping a missing sheet', async () => {
     const scene = { sceneId: 's1', sectionIndex: 0, prompt: 'Guest walks past' };
     getProject.mockResolvedValue(project(scene, REFS.map((ref) => (ref.id === 'mvr-cs-cast-guest' ? { ...ref, imageId: 'gone.png' } : ref))));
-    await expect(musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' }))
+    await expect(musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' }))
       .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
   });
 
   it('uses independent clip selections, including a set, without changing the frame picks', async () => {
     const scene = { sceneId: 's1', frameReferenceIds: ['mvr-cs-character'], clipReferenceIds: ['mvr-cs-set-plaza', 'mvr-cs-cast-guest'] };
     getProject.mockResolvedValue(project(scene, REFS));
-    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([
+    expect(await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([
       { path: '/gallery/plaza.png', label: 'Plaza', role: 'set' },
       { path: '/gallery/guest.png', label: 'Guest — cast sheet' },
     ]);
     expect(await musicVideoLocalReferencePaths({ projectId: 'mv-1', sceneId: 's1' }, 1)).toEqual(['/gallery/plaza.png']);
     scene.clipReferenceIds = [];
-    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([]);
+    expect(await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' })).toEqual([]);
     expect(scene.frameReferenceIds).toEqual(['mvr-cs-character']);
   });
 
@@ -71,14 +71,27 @@ describe('musicVideoClipCastReferences', () => {
 
   it('refuses a deleted explicit selection', async () => {
     getProject.mockResolvedValue(project({ sceneId: 's1', clipReferenceIds: ['removed-ref'] }, REFS));
-    await expect(musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 's1' }))
+    await expect(musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' }))
       .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
   });
 
+  // Uniquely catches a Grok or Gemini clip dropping the shot's greybox camera plate, or letting it push the cap.
+  it('leads with the shot greybox plate as its set reference within the limit', async () => {
+    const setReference = { subjectId: 'set-rink', greyboxShotId: 'wide' };
+    const scene = { sceneId: 's1', clipReferenceIds: ['mvr-cs-character', 'mvr-cs-cast-guest'], setReference };
+    getProject.mockResolvedValue({ ...project(scene, REFS), concept: { subjects: [{ id: 'set-rink', kind: 'place', name: 'Example Rink', ingredientId: 'cat-rink' }] } });
+    catalog.getIngredient.mockResolvedValue({ id: 'cat-rink', type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide camera' }] } } });
+    catalog.listMediaForIngredient.mockResolvedValue([{ mediaKey: 'layout.png', kind: 'reference', role: 'greybox-shot:wide' }]);
+    expect(await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 2)).toEqual([
+      { path: '/gallery/layout.png', label: 'Example Rink · Wide camera', role: 'set', greybox: true },
+      { path: '/gallery/lead.png', label: 'Lead — character sheet' },
+    ]);
+  });
+
   it('returns none for an untagged clip or a scene that is gone', async () => {
-    expect(await musicVideoClipCastReferences({})).toEqual([]);
+    expect(await musicVideoHostedClipReferences({})).toEqual([]);
     getProject.mockResolvedValue(project({ sceneId: 'other' }, REFS));
-    expect(await musicVideoClipCastReferences({ projectId: 'mv-1', sceneId: 'shot-example' })).toEqual([]);
+    expect(await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 'shot-example' })).toEqual([]);
   });
 });
 

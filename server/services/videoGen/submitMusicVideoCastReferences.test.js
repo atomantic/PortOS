@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   enqueue: vi.fn(),
   localReferences: vi.fn(),
   hostedReferences: vi.fn(async () => []),
+  renderPool: vi.fn((body) => body),
   copy: vi.fn(async () => {}),
   unlink: vi.fn(async () => {}),
 }));
@@ -33,10 +34,10 @@ vi.mock('../../lib/fileUtils.js', async (load) => ({
   unlinkGuarded: m.unlink,
   assertFileNotMediaManifest: async () => {},
 }));
-vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (body) => body }));
+vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (body) => m.renderPool(body) }));
 vi.mock('../musicVideo/clipCastReferences.js', () => ({
   musicVideoLocalReferencePaths: m.localReferences,
-  musicVideoClipCastReferences: m.hostedReferences,
+  musicVideoHostedClipReferences: m.hostedReferences,
   musicVideoClipReferences: m.hostedReferences,
 }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: async () => null }));
@@ -56,6 +57,7 @@ beforeEach(() => {
   m.localReferences.mockImplementation(async (_tag, limit, { excludePath } = {}) => ['/mock/images/still.png', '/mock/images/lead.png', '/mock/images/guest.png']
     .filter((path) => path !== excludePath).slice(0, limit));
   m.hostedReferences.mockResolvedValue([]);
+  m.renderPool.mockImplementation((body) => body);
   m.enqueue.mockResolvedValue({ jobId: 'job', status: 'queued', position: 1 });
 });
 
@@ -115,8 +117,18 @@ describe('Music Video cast references at video submission', () => {
     m.settings.videoGen.mode = 'grok';
     await expect(submitVideoGenJob(body(), {})).resolves.toMatchObject({ mode: 'grok' });
     expect(m.localReferences).not.toHaveBeenCalled();
-    expect(m.hostedReferences).toHaveBeenCalledWith(tag);
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, 7, { excludePath: '/mock/images/still.png' });
     expect(m.enqueue.mock.calls[0][0].params.mode).toBe('grok');
+  });
+
+  // Uniquely catches the hosted-reference guard refusing a Gemini shot whose greybox plate the render pool adds.
+  it('queues a Gemini shot with its greybox plate leading the clip references', async () => {
+    m.settings.videoGen.gemini = { enabled: true };
+    m.renderPool.mockImplementation((request) => ({ ...request, referenceImageFiles: ['layout.png'] }));
+    const refs = [{ path: '/mock/images/layout.png', label: 'Rink · Wide', role: 'set', greybox: true }, { path: '/mock/images/lead.png', label: 'Lead' }];
+    m.hostedReferences.mockResolvedValue(refs);
+    await expect(submitVideoGenJob(body({ backend: 'gemini' }), {})).resolves.toMatchObject({ mode: 'gemini' });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({ mode: 'gemini', castReferences: refs, sourceImagePath: '/mock/images/still.png' });
   });
 
   it('appends caller-uploaded reference images after the Music Video sheets on a Grok render', async () => {

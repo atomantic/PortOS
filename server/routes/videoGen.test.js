@@ -111,7 +111,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   getProject: vi.fn(),
 }));
 const clipCastReferences = vi.hoisted(() => vi.fn(async () => []));
-vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoClipCastReferences: clipCastReferences, musicVideoClipReferences: clipCastReferences }));
+vi.mock('../services/musicVideo/clipCastReferences.js', () => ({ musicVideoHostedClipReferences: clipCastReferences, musicVideoClipReferences: clipCastReferences }));
 
 vi.mock('../services/tracks/index.js', () => ({
   getTrack: vi.fn(),
