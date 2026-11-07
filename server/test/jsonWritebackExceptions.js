@@ -58,10 +58,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Cache-only: source bytes and the explicit keying/framing request rebuild the prepared image metadata."
   },
   {
-    "key": "imessageSync.js :: stateFilePath ( )",
-    "reason": "Rebuildable cursor: losing it re-reads recent messages, and the imsg:<guid> dedupe key makes the replay idempotent."
-  },
-  {
     "key": "insightsService.js :: NARRATIVE_FILE",
     "reason": "No non-strict write-back: display getter is tolerant; narrative refresh reads strictly before retaining prior text and timestamp."
   },
@@ -134,14 +130,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "sharing/manifest.js :: join ( bucketPath , \"manifests\" , filename )",
     "reason": "No write-back cycle: transport manifests are input-only; exports build new manifests from authoritative records."
-  },
-  {
-    "key": "signalSync.js :: stateFilePath ( )",
-    "reason": "Rebuildable cursor: losing it re-reads recent messages, and the signal:<messageId> dedupe key makes the replay idempotent."
-  },
-  {
-    "key": "spotifySync.js :: stateFilePath ( )",
-    "reason": "Rebuildable cursor: losing it re-polls the recently-played window, and the spotify:<played_at>:<trackId> dedupe key makes the replay idempotent."
   },
   {
     "key": "sprites/reference.js :: join ( candidatesDir , `${ name . replace ( /\\.png$/ , \"\" ) }.generation.json` )",
