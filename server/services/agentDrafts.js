@@ -10,15 +10,29 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
 import { isTopLevelEntryName } from '../lib/pathSafety.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+
+// Serializes each load→modify→save per agent so overlapping saves can't clobber each other.
+const draftQueue = createKeyCachedQueue();
 
 const DRAFTS_DIR = join(PATHS.agentPersonalities, 'drafts');
 
-async function getDraftsPath(agentId) {
+function assertValidAgentId(agentId) {
   // agentId comes straight from a query string / body; it names the file, so it
   // must be a single path segment (no `../` walk out of the drafts directory).
   if (!isTopLevelEntryName(agentId)) {
     throw new ServerError('Invalid agentId', { status: 400, code: 'VALIDATION_ERROR' });
   }
+}
+
+// Validate before queueing so a bad id is refused without touching the queue.
+async function mutateDrafts(agentId, work) {
+  assertValidAgentId(agentId);
+  return draftQueue(agentId, work);
+}
+
+async function getDraftsPath(agentId) {
+  assertValidAgentId(agentId);
   await ensureDir(DRAFTS_DIR);
   return join(DRAFTS_DIR, `${agentId}.json`);
 }
@@ -55,7 +69,11 @@ export async function getDraft(agentId, draftId) {
 /**
  * Save a new draft
  */
-export async function createDraft(agentId, draft) {
+export function createDraft(agentId, draft) {
+  return mutateDrafts(agentId, () => createDraftUnlocked(agentId, draft));
+}
+
+async function createDraftUnlocked(agentId, draft) {
   const drafts = await loadDrafts(agentId);
   const entry = {
     id: uuidv4(),
@@ -80,7 +98,11 @@ export async function createDraft(agentId, draft) {
 /**
  * Update an existing draft
  */
-export async function updateDraft(agentId, draftId, updates) {
+export function updateDraft(agentId, draftId, updates) {
+  return mutateDrafts(agentId, () => updateDraftUnlocked(agentId, draftId, updates));
+}
+
+async function updateDraftUnlocked(agentId, draftId, updates) {
   const drafts = await loadDrafts(agentId);
   const idx = drafts.findIndex(d => d.id === draftId);
   if (idx === -1) return null;
@@ -97,7 +119,11 @@ export async function updateDraft(agentId, draftId, updates) {
 /**
  * Delete a draft
  */
-export async function deleteDraft(agentId, draftId) {
+export function deleteDraft(agentId, draftId) {
+  return mutateDrafts(agentId, () => deleteDraftUnlocked(agentId, draftId));
+}
+
+async function deleteDraftUnlocked(agentId, draftId) {
   const drafts = await loadDrafts(agentId);
   const filtered = drafts.filter(d => d.id !== draftId);
   if (filtered.length === drafts.length) return false;
