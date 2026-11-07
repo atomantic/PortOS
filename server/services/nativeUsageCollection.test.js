@@ -123,6 +123,18 @@ describe('collecting only what changed', () => {
     expect(second.evidenceHash).toBe(first.evidenceHash);
   });
 
+  it('keeps a vendor-flagged incomplete Grok turn flagged when it is served from the store', async () => {
+    const snapshot = JSON.parse(grokSnapshot('session'));
+    snapshot.turns[0].usageIsIncomplete = true;
+    await save('.grok/sessions/project/session/usage.json', JSON.stringify(snapshot));
+    await stored();
+    harness.opened.length = 0;
+    const report = await stored();
+    expect(sourcesOpened()).toEqual([]);
+    expect(entry(report, 'grok').findings).toContain('native-usage-incomplete');
+    await expectSameAsFullRead(report);
+  });
+
   it('re-reads only an appended file, and matches a fresh full read', async () => {
     const appended = await save(claudePath('active'), `${claudeLine('a')}\n`);
     await save(claudePath('old'), `${claudeLine('b')}\n`);
