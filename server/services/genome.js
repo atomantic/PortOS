@@ -2,6 +2,7 @@ import { noteReadinessChanged } from './readinessSignal.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, tryReadFileStrict, unlinkGuarded, unreadableStoreError } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
@@ -14,6 +15,9 @@ const META_FILE = join(GENOME_DIR, 'genome.json');
 let snpIndex = null;
 let indexBuiltAt = 0;
 const INDEX_TTL_MS = 60 * 60 * 1000; // 1 hour cache
+
+// Serializes every load→mutate→save cycle on META_FILE so overlapping writers cannot drop each other's changes.
+const queueMetaWrite = createFileWriteQueue();
 
 const DEFAULT_META = {
   uploaded: false,
@@ -140,7 +144,11 @@ export async function uploadGenome(content, filename) {
   return withBackupAssetPublication(() => storeGenome(content, filename, index, build));
 }
 
-async function storeGenome(content, filename, index, build) {
+function storeGenome(content, filename, index, build) {
+  return queueMetaWrite(() => storeGenomeUnqueued(content, filename, index, build));
+}
+
+async function storeGenomeUnqueued(content, filename, index, build) {
   // Refuse before replacing the raw file: the metadata that names it cannot be saved.
   await assertMetaWritable();
 
@@ -208,6 +216,10 @@ export async function scanCuratedMarkers() {
     return { error: 'No genome data uploaded. Upload a genome file first.' };
   }
 
+  return queueMetaWrite(() => scanWithIndex(index));
+}
+
+async function scanWithIndex(index) {
   const meta = await loadMeta({ forWrite: true });
   const results = [];
 
@@ -322,10 +334,7 @@ export async function searchSNP(rsid) {
  * Save a custom marker to the genome metadata.
  */
 export async function saveMarker(data) {
-  const meta = await loadMeta({ forWrite: true });
-  const id = randomUUID();
-
-  // Look up genotype from raw data if not provided
+  // Resolve the genotype first: a cold index parse must not hold up the write queue.
   let genotype = data.genotype || null;
   let chromosome = data.chromosome || '';
   let position = data.position || '';
@@ -342,60 +351,68 @@ export async function saveMarker(data) {
     }
   }
 
-  const marker = {
-    rsid: data.rsid,
-    genotype,
-    chromosome,
-    position,
-    status: data.status || 'typical',
-    category: data.category,
-    gene: data.gene || '',
-    name: data.name,
-    description: data.description || '',
-    implications: data.implications || '',
-    notes: data.notes || '',
-    references: data.references || [],
-    savedAt: new Date().toISOString()
-  };
+  return queueMetaWrite(async () => {
+    const meta = await loadMeta({ forWrite: true });
+    const id = randomUUID();
+    const marker = {
+      rsid: data.rsid,
+      genotype,
+      chromosome,
+      position,
+      status: data.status || 'typical',
+      category: data.category,
+      gene: data.gene || '',
+      name: data.name,
+      description: data.description || '',
+      implications: data.implications || '',
+      notes: data.notes || '',
+      references: data.references || [],
+      savedAt: new Date().toISOString()
+    };
 
-  meta.savedMarkers[id] = marker;
-  await saveMeta(meta);
-  console.log(`🧬 Marker saved: ${data.rsid} (${data.name})`);
+    meta.savedMarkers[id] = marker;
+    await saveMeta(meta);
+    console.log(`🧬 Marker saved: ${data.rsid} (${data.name})`);
 
-  return { id, ...marker };
+    return { id, ...marker };
+  });
 }
 
 /**
  * Update notes on a saved marker.
  */
 export async function updateMarkerNotes(id, notes) {
-  const meta = await loadMeta({ forWrite: true });
-  if (!meta.savedMarkers[id]) {
-    return { error: 'Marker not found' };
-  }
+  return queueMetaWrite(async () => {
+    const meta = await loadMeta({ forWrite: true });
+    if (!meta.savedMarkers[id]) {
+      return { error: 'Marker not found' };
+    }
 
-  meta.savedMarkers[id].notes = notes;
-  await saveMeta(meta);
-  console.log(`🧬 Marker notes updated: ${meta.savedMarkers[id].rsid}`);
+    meta.savedMarkers[id].notes = notes;
+    await saveMeta(meta);
+    console.log(`🧬 Marker notes updated: ${meta.savedMarkers[id].rsid}`);
 
-  return { id, ...meta.savedMarkers[id] };
+    return { id, ...meta.savedMarkers[id] };
+  });
 }
 
 /**
  * Delete a saved marker.
  */
 export async function deleteMarker(id) {
-  const meta = await loadMeta({ forWrite: true });
-  if (!meta.savedMarkers[id]) {
-    return { error: 'Marker not found' };
-  }
+  return queueMetaWrite(async () => {
+    const meta = await loadMeta({ forWrite: true });
+    if (!meta.savedMarkers[id]) {
+      return { error: 'Marker not found' };
+    }
 
-  const rsid = meta.savedMarkers[id].rsid;
-  delete meta.savedMarkers[id];
-  await saveMeta(meta);
-  console.log(`🧬 Marker deleted: ${rsid}`);
+    const rsid = meta.savedMarkers[id].rsid;
+    delete meta.savedMarkers[id];
+    await saveMeta(meta);
+    console.log(`🧬 Marker deleted: ${rsid}`);
 
-  return { success: true };
+    return { success: true };
+  });
 }
 
 /**
