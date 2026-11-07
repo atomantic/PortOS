@@ -331,6 +331,14 @@ describe('startAutonomousVideo', () => {
     expect(runOf().status).toBe('completed');
   });
 
+  it('fails the final delivery, rather than completing, when its render finished after the song changed (#15158)', async () => {
+    await service.startAutonomousVideo({ prompt: 'p' });
+    await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
+    await service.__testing.onProductionEvent({ projectId: 'mv-auto', runId: 'mvpr-1', run: { status: 'completed' } });
+    await service.__testing.onRenderEvent({ projectId: 'mv-auto', jobId: 'render-1', status: 'completed', abandoned: true });
+    expect(runOf()).toMatchObject({ status: 'failed', error: 'The song changed during the final render', errorCode: 'FINAL_RENDER_FAILED', stages: { produce: { status: 'failed' } } });
+  });
+
   it('fails the run when the final render cannot start after production, and Retry tries again', async () => {
     await service.startAutonomousVideo({ prompt: 'p' });
     await vi.waitFor(() => expect(runOf()?.output.productionRunId).toBe('mvpr-1'));
