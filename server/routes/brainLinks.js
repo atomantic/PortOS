@@ -207,6 +207,8 @@ router.post('/links/:id/clone', asyncHandler(async (req, res) => {
     });
   }
 
+  // Fast path only: the locked claim inside cloneRepoInBackground is the
+  // authority, and refuses an overlapping start with the same 409.
   if (link.cloneStatus === 'cloning') {
     throw new ServerError('Clone already in progress', {
       status: 409,
@@ -214,13 +216,12 @@ router.post('/links/:id/clone', asyncHandler(async (req, res) => {
     });
   }
 
-  // Start clone in background. Deliberately not awaited, so it needs its own
-  // catch: the setup steps before the clone's own handlers are armed (identity
-  // resolve, the `cloning` stamp) run outside the request lifecycle, and an
-  // unhandled rejection there would crash the process instead of logging.
-  brainService.cloneRepoInBackground(link.id, link.url).catch(err => {
-    console.error(`❌ Background clone setup failed for ${link.id}: ${err.message}`);
-  });
+  // Awaits the claim only; git runs in the background and records its own
+  // outcome on the link.
+  const claimed = await brainService.cloneRepoInBackground(link.id, link.url);
+  if (!claimed) {
+    throw new ServerError('Link not found', { status: 404, code: 'NOT_FOUND' });
+  }
 
   res.json({ message: 'Clone started', linkId: link.id });
 }));

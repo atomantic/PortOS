@@ -1022,6 +1022,7 @@ export * from './eventLoopLagProbe.js';
 export * from './persistentMindAttachmentOwnership.js';
 
 export * from './credentialEnvVars.js';
+export * from './brainInboxTransitions.js';
 export * from './brainLinkLocalFields.js';
 export * from './brainBridgeSource.js';
 
