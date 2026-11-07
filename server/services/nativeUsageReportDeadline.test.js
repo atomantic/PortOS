@@ -22,6 +22,7 @@ describe('explicit read deadline', () => {
     expect(contractVersion).toBe(5);
     const deadlines = [getNativeTranscriptCoverage.mock.calls[0][1], getNativeAgyUsageCoverage.mock.calls[0][0], getNativeGrokUsageCoverage.mock.calls[0][0]].map(({ deadline }) => deadline);
     expect(new Set(deadlines).size).toBe(1);
+    expect(deadlines[0] - started).toBeGreaterThanOrEqual(NATIVE_USAGE_DASHBOARD_LIMITS.milliseconds);
     expect(deadlines[0] - started).toBeLessThan(NATIVE_USAGE_DASHBOARD_LIMITS.milliseconds + 5000);
   });
 });
