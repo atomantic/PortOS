@@ -249,6 +249,21 @@ describe('askConversations', () => {
       expect(stored.turns.map((t) => t.content)).toEqual(['late answer']);
     });
 
+    it('omits a conversation deleted after the sweep first read it', async () => {
+      const gone = await convs.createConversation({ title: 'deleted mid-sweep' });
+      const { writeFileSync, readFileSync } = await import('fs');
+      const path = convs.__test.pathFor(gone.id);
+      const data = JSON.parse(readFileSync(path, 'utf-8'));
+      data.updatedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(path, JSON.stringify(data));
+
+      hooks.afterRead = { path, run: () => convs.deleteConversation(gone.id) };
+
+      const summaries = await convs.listConversations();
+      expect(hooks.afterRead).toBeNull();
+      expect(summaries.find((s) => s.id === gone.id)).toBeUndefined();
+    });
+
     it('keeps promoted conversations regardless of age', async () => {
       const promoted = await convs.createConversation({ title: 'pinned' });
       await convs.setPromoted(promoted.id, true);

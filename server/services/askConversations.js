@@ -98,12 +98,14 @@ async function isExpiredUnpinned(id, conv, now, expiryMs) {
 }
 
 // Runs inside the conversation's queue: a turn or pin that landed after the
-// listing's first read must win over that stale snapshot.
+// listing's first read must win over that stale snapshot. Returns the fresh
+// record to list, or null when the row must be left out (pruned, or unreadable).
 async function pruneIfStillExpired(id, expiryMs) {
   const fresh = await readConversation(id, { strict: false });
-  if (!fresh || !(await isExpiredUnpinned(id, fresh, Date.now(), expiryMs))) return false;
+  if (!fresh) return null;
+  if (!(await isExpiredUnpinned(id, fresh, Date.now(), expiryMs))) return fresh;
   await unlinkGuarded(pathFor(id)).catch(() => {});
-  return true;
+  return null;
 }
 
 export async function listConversations({ limit = 50 } = {}) {
@@ -156,8 +158,9 @@ export async function listConversations({ limit = 50 } = {}) {
     }
 
     if (await isExpiredUnpinned(id, conv, now, expiryMs)) {
-      const pruned = await queueConversationWrite(id, () => pruneIfStillExpired(id, expiryMs));
-      if (pruned) continue;
+      const current = await queueConversationWrite(id, () => pruneIfStillExpired(id, expiryMs));
+      if (!current) continue;
+      conv = current;
     }
 
     if (headSlot) {
