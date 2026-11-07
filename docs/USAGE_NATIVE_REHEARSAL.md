@@ -247,20 +247,26 @@ and dump-owned psql restriction/version headers. This preserves preinstalled
 extensions and lets the caller impose its own random psql restriction key. The
 receipt records this transformation and its omitted-range count while retaining
 the **original** dump hash. Replay uses `psql -X`, no password prompt,
-`ON_ERROR_STOP`, restricted mode and a single transaction. The scanner refuses
-all other out-of-data psql commands, including early exit and conditional commands
-that restricted mode alone can permit. Ambiguous backslashes in ordinary/escape
+`ON_ERROR_STOP`, restricted mode and a single transaction with explicit `-f -`
+stdin input. Restricted mode permits only `\unrestrict`, which the replay never
+issues. The scanner separately refuses all other out-of-data psql commands
+before execution. Ambiguous backslashes in ordinary/escape
 SQL strings or quoted identifiers are conservatively refused; this increment
 does not interpret changes to SQL lexical modes or encodings. COPY data,
-dollar-quoted payloads and comments retain their exact bytes. A random private
-end marker after all supplied input must appear in psql output, independently
-preventing a successful early exit from producing a receipt. Unrecognized or incompatible SQL fails rather than broadening privileges or rewriting it.
+dollar-quoted payloads and comments retain their exact bytes. A fixed SQL `SELECT`
+after all supplied input must return a fresh random token as an exact output line
+under `-At`; it never uses a prohibited `\echo` command or lifts the restriction.
+This independently proves the input reached its end. Unrecognized or incompatible
+SQL fails rather than broadening privileges or rewriting it.
 
 After commit, fresh sessions verify that all seven required tables are real
 ordinary/partitioned tables and can be queried. Only their fixed names and row
 counts are reported. A zero count is a measured empty restored table; it is not
 proof the original source was empty. No row contents, migration IDs, arbitrary
-SQL output, passwords, paths or raw database errors appear in the report.
+SQL output, passwords, paths or raw database errors appear in the report. Failures
+identify the fixed phase and category (for example, `replay:permission-denied`,
+`replay:client-error`, or `replay:division-by-zero`). psql uses SQLSTATE-only error
+verbosity; only allowlisted categories are surfaced, never raw diagnostics.
 
 The container is forcibly removed, including any volumes, on success, failure
 or a handled interruption. A successful daemon list must then affirm its absence

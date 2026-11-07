@@ -133,8 +133,8 @@ describe('inspectDatabaseDump', () => {
   });
 });
 
-// A successful psql exit does not prove complete replay if a supplied \quit or
-// conditional can skip the tail. This opt-in guard must not reject stored text.
+// Conservative rehearsal admission is separate from psql's restriction gate.
+// Command-looking COPY/dollar-quoted content must remain data.
 describe('detached rehearsal psql control-command refusal', () => {
   const tables = 'CREATE TABLE public.memories (\n id text\n);\nCREATE TABLE public.memory_links (\n id text\n);\n';
   it.each(['\\quit\n', '  \\quit\nSELECT 1;\n', '\\if false\nSELECT 1;\n\\endif\n', 'SELECT 1 \\gexec\n;\n', 'COPY public.memories (id) FROM stdin; \\quit\nrow\n\\.\n'])('refuses non-data control syntax %s', async command => {

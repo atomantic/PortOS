@@ -112,9 +112,9 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
           else if (c === '*' && next === '/') { blockDepth -= 1; i += 1; }
           continue;
         }
-        // Restricted psql still permits control flow/early exit. A detached
-        // rehearsal can forbid every non-data command after stripping only
-        // pg_dump's own restriction headers. Quotes/COPY/comments are data.
+        // Detached rehearsal admission rejects non-data commands before psql's
+        // own restriction gate. Only pg_dump's restriction headers were stripped
+        // above; command-looking content in quotes/COPY/comments remains data.
         if (c === '\\' && rejectPsqlCommands) unscannable = true;
         if (c === '-' && next === '-') break;
         if (c === '/' && next === '*') { blockDepth = 1; i += 1; continue; }

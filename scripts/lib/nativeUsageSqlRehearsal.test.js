@@ -18,11 +18,14 @@ let failWhen;
 let leftover;
 let transportFailure;
 let restorePlatform;
+let failureExitCode;
+let failureStderr;
 const rows = Object.fromEntries(NATIVE_USAGE_SNAPSHOT_TABLES.map(name => [name, '1']));
 beforeEach(async () => {
   restorePlatform = pinPlatform('linux');
   directory = await mkdtemp(join(tmpdir(), 'native-sql-test-'));
   calls = []; failWhen = () => false; leftover = false; transportFailure = null;
+  failureExitCode = 1; failureStderr = 'private SQL, private database credentials';
   vi.mocked(spawn).mockImplementation((binary, argv, options) => {
     const child = new EventEmitter();
     child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
@@ -40,7 +43,7 @@ beforeEach(async () => {
         const failed = failWhen(call);
         const sql = argv.at(-1);
         let output = argv.includes('--single-transaction') && transportFailure !== 'early-exit'
-          ? call.input.match(/\n\\echo (native_rehearsal_end_[a-f0-9]+)\n$/)?.[1] ?? '' : '';
+          ? call.input.match(/\nSELECT '(native_rehearsal_end_[a-f0-9]+)';\n$/)?.[1] ?? '' : '';
         if (sql.includes('json_build_object')) output = JSON.stringify(rows);
         else if (sql.includes('pg_class')) output = String(NATIVE_USAGE_SNAPSHOT_TABLES.length);
         if (argv.includes('ls') && leftover) output = 'synthetic-container-id';
@@ -49,9 +52,9 @@ beforeEach(async () => {
           if (transportFailure === 'spawn') child.emit('error', new Error('private spawn error'));
           if (transportFailure === 'output') child.stdout.write('x'.repeat(1024 * 1024 + 1));
         }
-        if (failed) child.stderr.write('private SQL, private database credentials');
+        if (failed) child.stderr.write(failureStderr);
         else child.stdout.write(output);
-        child.stdout.end(); child.stderr.end(); child.emit('close', failed ? 1 : 0);
+        child.stdout.end(); child.stderr.end(); child.emit('close', failed ? failureExitCode : 0);
       });
     });
     return child;
@@ -91,6 +94,11 @@ describe('SQL rehearsal CLI isolation and evidence contract (synthetic Docker tr
     const replay = calls.find(call => call.argv.includes('--single-transaction'));
     expect(replay.argv).toEqual(expect.arrayContaining(['65534:65534', '-X', '--no-password', 'ON_ERROR_STOP=1', 'rehearsal_restore']));
     expect(replay.input).toMatch(/^[a-f0-9]{64}\n\\restrict [a-f0-9]{64}\n/);
+    expect(replay.argv.slice(-5)).toEqual(['--single-transaction', '-q', '-At', '-f', '-']);
+    expect(replay.argv).toContain('VERBOSITY=sqlstate');
+    expect(replay.input).toMatch(/\nSELECT 'native_rehearsal_end_[a-f0-9]{64}';\n$/);
+    expect(replay.input).not.toContain('\\echo');
+    expect(replay.input).not.toContain('\\unrestrict');
     expect(replay.input).not.toContain('exampleDumpKey');
     expect(replay.input).not.toContain('DROP EXTENSION');
     expect(replay.input).not.toContain('COMMENT ON EXTENSION');
@@ -156,6 +164,30 @@ describe('SQL rehearsal CLI isolation and evidence contract (synthetic Docker tr
       : stage === 'check' ? call.argv.at(-1).includes('pg_class') : call.argv.includes(stage);
     await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-command-failed');
     expect(calls.at(-2).argv).toContain('--force');
+    expect(calls.at(-1).argv).toContain('ls');
+  });
+
+  it.each([
+    [1, 'client-error', 'private client details'],
+    [2, 'connection-error', 'private connection details'],
+    [3, 'permission-denied', 'psql:<stdin>:2: ERROR:  42501\nDETAIL: private SQL and secrets'],
+    [3, 'division-by-zero', 'psql:<stdin>:3: ERROR:  22012\n'],
+    [3, 'script-error', 'psql:<stdin>:4: ERROR:  P0001\nprivate exception text'],
+  ])('classifies replay exit %s as %s without returning raw diagnostics', async (code, category, diagnostic) => {
+    const fixture = await sqlFixture(directory);
+    failWhen = call => call.argv.includes('--single-transaction');
+    failureExitCode = code; failureStderr = diagnostic;
+    const error = await run(fixture.args).catch(value => value);
+    expect(error.message).toBe(`Native usage rehearsal refused: sql-rehearsal-command-failed:replay:${category}`);
+    expect(error.message).not.toMatch(/private|stdin|42501|22012|P0001/);
+    expect(calls.at(-1).argv).toContain('ls');
+  });
+
+  it('classifies a post-replay -c SQL failure even though psql returns exit one', async () => {
+    const fixture = await sqlFixture(directory);
+    failWhen = call => call.argv.at(-1).includes('json_build_object');
+    failureExitCode = 1; failureStderr = 'ERROR:  42501\nprivate relation details';
+    await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-command-failed:count-rows:permission-denied');
     expect(calls.at(-1).argv).toContain('ls');
   });
 

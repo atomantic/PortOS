@@ -21,7 +21,8 @@ const INIT = 'umask 077; IFS= read -r password; printf "%s\\n" "$password" > /tm
   + 'initdb -D /var/lib/postgresql/data -U rehearsal_admin --auth=scram-sha-256 --pwfile=/tmp/init-password --no-locale --encoding=UTF8 >/dev/null '
   + '&& rm /tmp/init-password && pg_ctl -D /var/lib/postgresql/data -l /tmp/postgres.log '
   + '-o "-c listen_addresses= -c unix_socket_directories=/tmp -c max_connections=10 -c shared_buffers=32MB" -w start';
-const PSQL = ['psql', '-X', '--no-password', '-v', 'ON_ERROR_STOP=1', '-h', '/tmp'];
+const PSQL = ['psql', '-X', '--no-password', '-v', 'ON_ERROR_STOP=1', '-v', 'VERBOSITY=sqlstate', '-h', '/tmp'];
+const SQL_FAILURES = { '42501': 'permission-denied', '42601': 'sql-syntax', '42P01': 'missing-table', '42704': 'missing-object', '22012': 'division-by-zero', '0A000': 'unsupported-sql' };
 const rowCountSql = `SELECT pg_catalog.json_build_object(${NATIVE_USAGE_SNAPSHOT_TABLES.map(name => `'${name}', (SELECT count(*)::text FROM public.${name})`).join(',')});`;
 const tableSql = `SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname IN (${NATIVE_USAGE_SNAPSHOT_TABLES.map(name => `'${name}'`).join(',')});`;
 
@@ -34,6 +35,7 @@ function docker(config, args, { input, signal, timeout = 15000 } = {}) {
       stdio: ['pipe', 'pipe', 'pipe'], signal, timeout, killSignal: 'SIGKILL',
     });
     let stdout = '';
+    let stderr = '';
     let outputBytes = 0;
     let failed = false;
     let inputDone = Promise.resolve();
@@ -42,13 +44,14 @@ function docker(config, args, { input, signal, timeout = 15000 } = {}) {
     child.on('close', code => {
       inputDone.then(() => {
         if (failed || signal?.aborted) reject(new Error('Native SQL rehearsal command failed or exceeded its limit'));
-        else resolve({ code, stdout: stdout.trim() });
+        else resolve({ code, stdout: stdout.trim(), sqlFailure: SQL_FAILURES[stderr.match(/\b(?:ERROR|FATAL):\s+([A-Z0-9]{5})\s*$/m)?.[1]] });
       }, () => reject(new Error('Native SQL rehearsal input failed')));
     });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => {
       outputBytes += chunk.length;
       if (outputBytes > 1024 * 1024) fail();
       else if (stream === child.stdout) stdout += chunk.toString();
+      else stderr += chunk.toString();
     });
     inputDone = pipeline(input ?? Readable.from([]), child.stdin).catch(() => { fail(); });
   });
@@ -77,15 +80,21 @@ async function replayInContainer(config, replayPath, signal) {
   const restorePassword = randomBytes(32).toString('hex');
   const restriction = randomBytes(32).toString('hex');
   const completion = `native_rehearsal_end_${randomBytes(32).toString('hex')}`;
-  const run = async (args, options = {}) => {
+  const run = async (args, { phase, sql = false, ...options } = {}) => {
     const result = await docker(config, args, { signal, ...options });
-    if (result.code !== 0) refuse('sql-rehearsal-command-failed');
+    if (result.code !== 0) {
+      // Only fixed categories leave this boundary. Raw SQL/client diagnostics
+      // can contain rows, identifiers, paths and secrets, even on failure.
+      const category = !sql ? 'process-error' : result.code === 2 ? 'connection-error'
+        : result.code === 1 || result.code === 3 ? result.sqlFailure ?? (result.code === 1 ? 'client-error' : 'script-error') : 'process-error';
+      refuse(`sql-rehearsal-command-failed:${phase}:${category}`);
+    }
     return result.stdout;
   };
-  const psql = (user, password, target, content, args = []) => run([
+  const psql = (phase, user, password, target, content, args = []) => run([
     'exec', '-i', '--user', user === ADMIN ? '999:999' : '65534:65534', name,
     'sh', '-c', AUTH_SHELL, 'sh', ...PSQL, '-U', user, '-d', target, ...args,
-  ], { input: authenticated(password, content), timeout: 15 * 60 * 1000 });
+  ], { phase, sql: true, input: authenticated(password, content), timeout: 15 * 60 * 1000 });
   let rows;
   let created = false;
   try {
@@ -96,27 +105,27 @@ async function replayInContainer(config, replayPath, signal) {
       '--pids-limit=64', '--memory=1g', '--memory-swap=1g', '--cpus=1', '--log-driver=none',
       '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,nodev,size=768m,uid=999,gid=999,mode=0700',
       '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777',
-      '--entrypoint', '/bin/sleep', NATIVE_USAGE_SQL_IMAGE, 'infinity']);
-    await run(['start', name]);
-    await run(['exec', '-i', '--user', '999:999', name, 'sh', '-c', INIT], { input: authenticated(adminPassword), timeout: 60000 });
-    await psql(ADMIN, adminPassword, 'postgres', `CREATE ROLE ${REPLAY} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${restorePassword}';`);
-    await psql(ADMIN, adminPassword, 'postgres', `CREATE DATABASE ${database} OWNER ${REPLAY};`);
-    await psql(ADMIN, adminPassword, database, 'CREATE EXTENSION vector; CREATE EXTENSION pgcrypto;');
+      '--entrypoint', '/bin/sleep', NATIVE_USAGE_SQL_IMAGE, 'infinity'], { phase: 'create' });
+    await run(['start', name], { phase: 'start' });
+    await run(['exec', '-i', '--user', '999:999', name, 'sh', '-c', INIT], { phase: 'initialize', input: authenticated(adminPassword), timeout: 60000 });
+    await psql('create-role', ADMIN, adminPassword, 'postgres', `CREATE ROLE ${REPLAY} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${restorePassword}';`);
+    await psql('create-database', ADMIN, adminPassword, 'postgres', `CREATE DATABASE ${database} OWNER ${REPLAY};`);
+    await psql('install-extensions', ADMIN, adminPassword, database, 'CREATE EXTENSION vector; CREATE EXTENSION pgcrypto;');
     const restrictedInput = Readable.from((async function* () {
       yield `\\restrict ${restriction}\n`;
       for await (const chunk of createReadStream(replayPath)) yield chunk;
-      yield `\n\\echo ${completion}\n`;
+      yield `\nSELECT '${completion}';\n`;
     })());
-    const output = await psql(REPLAY, restorePassword, database, restrictedInput, ['--single-transaction', '-q']);
-    // An exit code alone cannot distinguish a complete replay from psql's
-    // successful early exit. This private unpredictable marker follows all
-    // supplied bytes and is independent of the conservative lexical inspector.
+    const output = await psql('replay', REPLAY, restorePassword, database, restrictedInput, ['--single-transaction', '-q', '-At', '-f', '-']);
+    // Restricted psql rejects every meta-command except unrestrict, including
+    // echo. A SQL result proves the end of supplied input without relaxing that
+    // boundary; -At makes the private unpredictable token an exact output line.
     if (!output.split(/\r?\n/).includes(completion)) refuse('sql-rehearsal-input-end-not-reached');
     // Run new sessions after COMMIT. Only fixed table names/counts leave the
     // container; no source identifiers, migration ids, rows or SQL errors do.
-    const tables = await psql(REPLAY, restorePassword, database, '', ['-At', '-c', tableSql]);
+    const tables = await psql('verify-tables', REPLAY, restorePassword, database, '', ['-At', '-c', tableSql]);
     if (tables !== String(NATIVE_USAGE_SNAPSHOT_TABLES.length)) refuse('sql-rehearsal-table-check-failed');
-    rows = countRows(await psql(REPLAY, restorePassword, database, '', ['-At', '-c', rowCountSql]));
+    rows = countRows(await psql('count-rows', REPLAY, restorePassword, database, '', ['-At', '-c', rowCountSql]));
   } finally {
     if (created) {
       // Cleanup owns a fresh budget even after interruption/timeout. Success

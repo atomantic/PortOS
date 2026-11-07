@@ -90,8 +90,8 @@ describe.skipIf(process.env.PORTOS_NATIVE_SQL_LIVE !== '1')('real network-disabl
   }, 180000);
 
   it.each([
-    ['SQL privilege escalation', 'SET ROLE rehearsal_admin;'],
-    ['server command execution', "COPY (SELECT 1) TO PROGRAM 'id';"],
+    ['SQL privilege escalation', 'SET ROLE rehearsal_admin;', 'sql-rehearsal-command-failed:replay:permission-denied'],
+    ['server command execution', "COPY (SELECT 1) TO PROGRAM 'id';", 'sql-rehearsal-command-failed:replay:permission-denied'],
     ['psql reconnect to admin', '\\connect postgres rehearsal_admin', 'snapshot-database-replay-mismatch'],
     ['psql shell escape', '\\! cat /var/lib/postgresql/data/pg_hba.conf', 'snapshot-database-replay-mismatch'],
     ['disabled dump restriction escape', '\\unrestrict exampleDumpKey\n\\! id', 'snapshot-database-replay-mismatch'],
@@ -101,8 +101,8 @@ SELECT '\'';
 SELECT ';
 `, 'snapshot-database-replay-mismatch'],
     ['dollar delimiter inside identifier', 'SELECT 1 AS foo$tag$;\n\\quit\nSELECT $tag$;\n', 'snapshot-database-replay-mismatch'],
-    ['SQL error', 'SELECT 1/0;'],
-  ])('rejects %s and removes its container without a receipt', async (_name, attack, reason = 'sql-rehearsal-command-failed') => {
+    ['SQL error', 'SELECT 1/0;', 'sql-rehearsal-command-failed:replay:division-by-zero'],
+  ])('rejects %s and removes its container without a receipt', async (_name, attack, reason) => {
     const fixture = await sqlFixture(directory, sqlDump(attack));
     let stdout = '';
     await expect(runNativeUsageRehearsalCli(fixture.args, { stdout: value => { stdout += value; } })).rejects.toThrow(reason);
