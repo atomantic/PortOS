@@ -106,6 +106,20 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
 // A terminal project write: the status plus the cleared in-flight mark (#9010).
 const settled = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
+// Terminal writes settle on the freshest row inside the project mutation
+// (#15154): back it with one in-memory row per project, seeded from the
+// project the render read and the mark it wrote.
+const rows = new Map();
+const writes = [];
+const writesOf = (pid) => writes.filter(([id]) => id === pid).map(([, project]) => project);
+const expectSettled = (pid, status, extra) => expect(writesOf(pid)).toContainEqual(expect.objectContaining(settled(status, extra)));
+const backRows = () => mutateProjectRecord.mockImplementation(async (id, transform) => {
+  const current = rows.get(id) ?? { ...(await getProject(id)), status: 'rendering', renderingOn: 'inst-self' };
+  const outcome = await transform(current);
+  rows.set(id, outcome.project);
+  writes.push([id, outcome.project]);
+  return outcome;
+});
 
 const prime = (projectId) => {
   getProject.mockResolvedValue({
@@ -122,6 +136,9 @@ beforeEach(() => {
   h.procs.length = 0;
   seg.render = null;
   seg.plans.length = 0;
+  rows.clear();
+  writes.length = 0;
+  backRows();
 });
 
 describe('renderMusicVideo terminal handling (#2386)', () => {
@@ -143,7 +160,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
     expect(getRenderJobStatus(jobId).status).toBe('error');
     expect(getRenderJobStatus(jobId).error).toMatch(/Failed to spawn ffmpeg/);
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'Failed to spawn ffmpeg: spawn ENOENT' }));
+    expectSettled(pid, 'failed', { renderError: 'Failed to spawn ffmpeg: spawn ENOENT' });
 
     // Slot released — a re-render reaches spawn again instead of 409ing.
     const again = await renderMusicVideo(pid);
@@ -163,7 +180,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
     // NOT finalized: status stays running, project not marked failed, slot held.
     expect(getRenderJobStatus(jobId).status).toBe('running');
-    expect(updateProject).not.toHaveBeenCalledWith(pid, settled('failed'));
+    expect(writesOf(pid)).toEqual([]);
     await expect(renderMusicVideo(pid)).rejects.toMatchObject({
       status: 409, code: 'RENDER_IN_PROGRESS', context: { jobId },
     });
@@ -172,7 +189,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     proc.emit('close', 1, null);
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('error');
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'ffmpeg exit 1' }));
+    expectSettled(pid, 'failed', { renderError: 'ffmpeg exit 1' });
 
     // Slot now released.
     const again = await renderMusicVideo(pid);
@@ -190,11 +207,8 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     proc.emit('close', 1, null); // must not re-finalize / double-release
     await tick();
 
-    // updateProject('failed') fired exactly once for this project.
-    const failedCalls = updateProject.mock.calls.filter(
-      ([id, patch]) => id === pid && patch && patch.status === 'failed',
-    );
-    expect(failedCalls).toHaveLength(1);
+    // The 'failed' settle ran exactly once for this project.
+    expect(writesOf(pid).filter((project) => project.status === 'failed')).toHaveLength(1);
     expect(getRenderJobStatus(jobId).status).toBe('error');
   });
 
@@ -225,7 +239,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(events).toEqual([{ projectId: pid, jobId, status: 'canceled', error: 'Render cancelled' }]);
     expect(broadcastSse.mock.calls.filter(([job, frame]) => job.id === jobId && ['canceled', 'error'].includes(frame.type)))
       .toEqual([[expect.objectContaining({ id: jobId }), { type: 'canceled', error: 'Render cancelled' }]]);
-    expect(updateProject.mock.calls.filter(([id, patch]) => id === pid && patch.status === 'complete')).toEqual([[pid, settled('complete')]]);
+    expect(writesOf(pid)).toEqual([expect.objectContaining(settled('complete'))]);
     expect(unlink).toHaveBeenCalledWith(expect.stringMatching(/music-video-.*\.mp4$/));
     expect(maintenance.status().blockers).not.toContainEqual(expect.objectContaining({ resource: pid }));
     expect(cancelRender(jobId)).toBe(false);
@@ -244,7 +258,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     lastProc().emit('close', 0, null);
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expect(updateProject).toHaveBeenCalledWith(pid, expect.objectContaining(settled('complete', { renderHistoryId: jobId })));
+    expectSettled(pid, 'complete', { renderHistoryId: jobId });
   });
 
   it('a late stray error after a successful close does not clobber the completed job', async () => {
@@ -277,7 +291,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     await tick();
 
     expect(getRenderJobStatus(jobId).status).toBe('error');
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: `Finalize failed: ${failure}`.slice(0, 2000) }));
+    expectSettled(pid, 'failed', { renderError: `Finalize failed: ${failure}`.slice(0, 2000) });
     const again = await renderMusicVideo(pid);
     expect(again.jobId).not.toBe(jobId);
   });
@@ -289,9 +303,10 @@ describe('status write failures are logged, not swallowed (#8430)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const pid = 'write-1';
     prime(pid);
-    updateProject.mockImplementation(async (_id, patch) => {
-      if (patch.status === 'complete') throw new Error('disk full');
-      return {};
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      const outcome = await transform({ ...(await getProject(id)), status: 'rendering' });
+      if (outcome.project.status === 'complete') throw new Error('disk full');
+      return outcome;
     });
     const { jobId } = await renderMusicVideo(pid);
     const proc = lastProc();
@@ -302,7 +317,6 @@ describe('status write failures are logged, not swallowed (#8430)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
       && line.includes(pid) && line.includes('status→complete'))).toBe(true);
-    updateProject.mockImplementation(async () => ({}));
     errorSpy.mockRestore();
   });
 });
@@ -346,7 +360,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     prime('stamp-1');
     await renderMusicVideo('stamp-1');
     expect(updateProject).toHaveBeenCalledWith('stamp-1', {
-      status: 'rendering', renderingOn: 'inst-self', renderError: null, renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
+      status: 'rendering', renderingOn: 'inst-self', renderAudioRevision: 0, renderError: null, renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
     });
   });
 
@@ -600,7 +614,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('canceled');
     expect(seg.stitch).not.toHaveBeenCalled();
     expect(h.procs).toHaveLength(0);
-    expect(updateProject).toHaveBeenLastCalledWith('cancel-1', settled('complete', { renderError: null }));
+    expect(writesOf('cancel-1').at(-1)).toMatchObject(settled('complete', { renderError: null }));
     expect(cancelRender(jobId)).toBe(false);
     const again = await renderMusicVideo('cancel-1');
     expect(again.jobId).not.toBe(jobId);
@@ -621,7 +635,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(outputPath.replaceAll('\\', '/')).toMatch(/^\/data\/videos\/music-video-composed/);
     expect(generateThumbnail).toHaveBeenCalledWith(outputPath, jobId, { atSec: 1 });
     expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expect(updateProject).toHaveBeenCalledWith('composed-1', expect.objectContaining({ status: 'complete', renderHistoryId: jobId }));
+    expectSettled('composed-1', 'complete', { renderHistoryId: jobId });
     // Nothing is left to cancel once the render has finished.
     expect(cancelRender(jobId)).toBe(false);
   });
@@ -635,7 +649,7 @@ describe('composed render lifecycle (#8984)', () => {
     await tick();
     await tick();
     expect(getRenderJobStatus(jobId)).toEqual({ status: 'error', error: 'Shot 2: ffmpeg failed: boom' });
-    expect(updateProject).toHaveBeenLastCalledWith('composed-2', settled('failed', { renderError: 'Shot 2: ffmpeg failed: boom' }));
+    expect(writesOf('composed-2').at(-1)).toMatchObject(settled('failed', { renderError: 'Shot 2: ffmpeg failed: boom' }));
   });
 });
 
@@ -716,14 +730,14 @@ describe('film look finishing pass on a footage render', () => {
     expect(look.calls).toHaveLength(1);
     expect(look.calls[0]).toMatchObject({ jobId, path: lastProc().args.at(-1), project: expect.objectContaining({ id: pid }) });
     expect(getRenderJobStatus(jobId).status).toBe('running');
-    expect(updateProject).not.toHaveBeenCalledWith(pid, expect.objectContaining({ status: 'complete' }));
+    expect(writesOf(pid)).toEqual([]);
     look.calls[0].onProgress(0.5);
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'progress', progress: 0.75 });
     look.resolve(true);
     await tick();
     await tick();
     expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expect(updateProject).toHaveBeenCalledWith(pid, expect.objectContaining({ status: 'complete', renderHistoryId: jobId }));
+    expectSettled(pid, 'complete', { renderHistoryId: jobId });
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'complete' }));
   });
 
@@ -739,7 +753,7 @@ describe('film look finishing pass on a footage render', () => {
     expect(look.calls[0].signal.aborted).toBe(true);
     expect(getRenderJobStatus(jobId).status).toBe('canceled');
     expect(unlink).toHaveBeenCalledWith(look.calls[0].path);
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('complete'));
+    expectSettled(pid, 'complete');
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'canceled', error: 'Render cancelled' });
     // Slot released: a new render starts.
     expect((await renderMusicVideo(pid)).jobId).not.toBe(jobId);
@@ -755,6 +769,52 @@ describe('film look finishing pass on a footage render', () => {
     await tick();
     expect(getRenderJobStatus(jobId)).toEqual({ status: 'error', error: 'Film look pass failed: no browser' });
     expect(unlink).toHaveBeenCalledWith(look.calls[0].path);
-    expect(updateProject).toHaveBeenCalledWith(pid, settled('failed', { renderError: 'Film look pass failed: no browser' }));
+    expectSettled(pid, 'failed', { renderError: 'Film look pass failed: no browser' });
+  });
+});
+
+// #15154: a song change while a footage render runs. This instance's render is
+// canceled; a render another instance owns runs on, and neither settle marks
+// the project complete for the old song.
+describe('a song change during a footage render (#15154)', () => {
+  const changeSong = (pid, renderingOn) => {
+    const changed = { ...rows.get(pid), id: pid, status: 'draft', audioAnalysis: null, uploadedAudioFilename: 'new.wav', audioRevision: 1, renderingOn };
+    rows.set(pid, changed);
+    musicVideoEvents.emit('audio-changed', { projectId: pid, project: changed });
+  };
+
+  it("cancels this instance's render, and the cancel keeps the track change's draft", async () => {
+    const pid = 'song-local';
+    prime(pid);
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    changeSong(pid, 'inst-self');
+    await tick();
+    expect(killWithEscalation).toHaveBeenCalledWith(proc, expect.anything());
+    proc.emit('close', 255, null);
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expect(rows.get(pid)).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 1, renderingOn: null, renderPartialFilename: null });
+  });
+
+  it("leaves another instance's render running, and its finished file never completes the project", async () => {
+    const { mutateVideoHistory } = await import('../videoGen/local.js');
+    const pid = 'song-peer';
+    prime(pid);
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    changeSong(pid, 'inst-peer');
+    await tick();
+    expect(killWithEscalation).not.toHaveBeenCalled();
+    proc.emit('close', 0, null);
+    await tick();
+    await tick();
+    expect(rows.get(pid)).toMatchObject({ status: 'draft', audioRevision: 1, renderingOn: 'inst-peer' });
+    expect(rows.get(pid).renderHistoryId).toBeUndefined();
+    // The written file stays in the history, marked as abandoned.
+    const [, markAbandoned] = mutateVideoHistory.mock.calls.map(([fn]) => fn);
+    expect(markAbandoned([{ id: jobId }, { id: 'other' }])).toEqual([{ id: jobId, abandonedReason: 'audio-changed' }, { id: 'other' }]);
   });
 });

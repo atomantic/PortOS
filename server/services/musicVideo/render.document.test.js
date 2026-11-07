@@ -229,3 +229,47 @@ it.each(['error', 'canceled'])('persists document excerpt %s before notifying su
     broadcastSse.mockImplementation(broadcastOriginal);
   }
 });
+
+// #15154: a song change queued while a final render runs wins over its settle.
+describe('a song change during a document render', () => {
+  const renderAroundSongChange = async (id, beforeChange = async () => {}) => {
+    const encoderEntered = Promise.withResolvers();
+    let finishEncode;
+    encodeDocumentComposition.mockImplementationOnce(({ plan, signal }) => new Promise((resolve, reject) => {
+      finishEncode = () => resolve({ width: plan.width, height: plan.height, fps: 24, durationSec: plan.durationSec, startSec: 0, boundaryTimes: [0] });
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('Render cancelled'), { code: 'CANCELED' })), { once: true });
+      encoderEntered.resolve();
+    }));
+    return startAndWait(id, 'render', 'jobId', async () => {
+      const started = await renderMusicVideo(id);
+      await encoderEntered.promise;
+      expect(await projects.getProject(id)).toMatchObject({ status: 'rendering', renderingOn: 'instance-test', renderAudioRevision: 0 });
+      await beforeChange();
+      await writeFile(join(PATHS.music, 'other.wav'), Buffer.alloc(64));
+      await projects.updateProject(id, { uploadedAudioFilename: 'other.wav' });
+      finishEncode();
+      return started;
+    });
+  };
+
+  it("cancels this instance's render and keeps the new song's draft", async () => {
+    const id = await documentProject();
+    await importDocumentTemplate(id);
+    const settled = await renderAroundSongChange(id);
+    expect(settled.status).toBe('canceled');
+    const stored = await projects.getProject(id);
+    expect(stored).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 1, uploadedAudioFilename: 'other.wav', renderingOn: null, renderPartialFilename: null });
+    expect(stored.renderHistoryId).not.toBe(settled.jobId);
+  });
+
+  it("does not cancel a render another instance owns, and its finish does not complete the project", async () => {
+    const id = await documentProject();
+    await importDocumentTemplate(id);
+    // A peer sync handed the mark to another machine.
+    const settled = await renderAroundSongChange(id, () => projects.mutateProjectRecord(id, (current) => ({ project: { ...current, renderingOn: 'instance-peer' } })));
+    expect(settled.status).toBe('completed');
+    const stored = await projects.getProject(id);
+    expect(stored).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 1, renderingOn: 'instance-peer' });
+    expect(stored.renderHistoryId).not.toBe(settled.jobId);
+  });
+});
