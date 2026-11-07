@@ -649,7 +649,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // than spending a round trip on it; the tombstones still have to be applied
   // or the retirement never propagates.
   const snapshot = manifest?.slots.length === 0
-    ? { data: { instances: {}, tombstones: manifest.tombstones }, portosMeta: manifest.portosMeta, checksum: manifest.checksum }
+    ? { data: { instances: {}, tombstones: manifest.tombstones, ...(manifest.cutover && { cutover: manifest.cutover }) }, portosMeta: manifest.portosMeta, checksum: manifest.checksum }
     : await fetchPeer(peer, `/api/sync/${category}/snapshot${forPeerQs}${slotsQsOf(manifest, forPeerQs)}`);
   if (!snapshot?.data) return { totalApplied: 0, checksum: null };
 
@@ -716,6 +716,9 @@ async function resolveStaleSlots(peer, category, forPeerQs) {
     // Tombstones ride the manifest, so a retirement propagates even on a cycle
     // where no slot advanced.
     tombstones: Array.isArray(remote.data.tombstones) ? remote.data.tombstones : [],
+    // An older peer still running the retired cutover barrier stamps `cutover` while
+    // fenced; forwarded so applyUsageRemote skips that payload, tombstones included.
+    cutover: isPlainObjectShallow(remote.data.cutover) ? remote.data.cutover : null,
     // Carried so the empty-payload shortcut above still runs the same
     // schema-version gate a fetched snapshot would.
     portosMeta: remote.portosMeta,

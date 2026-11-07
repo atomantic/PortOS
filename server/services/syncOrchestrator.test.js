@@ -1518,6 +1518,22 @@ describe('syncOrchestrator', () => {
       expect(result.usage.checksum).toBe('remote-manifest');
     });
 
+    // A fenced peer one version behind serves empty `instances` plus a `cutover`
+    // stamp; the shortcut must hand the stamp on so the receiver skips it whole.
+    it('forwards an older peer\'s cutover stamp through the no-slot shortcut', async () => {
+      const cutover = { migrationEpoch: 'epoch-a', state: 'fenced', barrierSchema: 1 };
+      const tombstones = [{ instanceId: 'inst-a', deletedAt: '2026-09-02T00:00:00.000Z' }];
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/usage/checksum')) return { ok: true, json: async () => ({ checksum: 'fenced' }) };
+        if (url.includes('/usage/manifest')) return { ok: true, json: async () => ({ data: { instances: {}, tombstones, cutover }, checksum: 'fenced' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      expect(urlFor('snapshot')).toBeUndefined();
+      expect(dataSync.applyRemote).toHaveBeenCalledWith('usage', { instances: {}, tombstones, cutover }, expect.anything());
+    });
+
     it('applies the tombstones without a snapshot fetch when no slot moved', async () => {
       // A retirement advances no capturedAt, so the checksum moves and the
       // manifest diff comes back empty — the tombstones still have to land.
