@@ -2,14 +2,16 @@ import {
   MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoConditioningReferences, musicVideoFrameReferenceFiles,
   musicVideoLimitReferenceFiles, musicVideoReferenceCapacity, musicVideoStyleImages,
 } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideoGreybox.js';
 
 /** A conditional preview: the server still resolves the actual renderer at submission. */
 export default function SceneFrameReferenceLimitNotice({ project, scene, castMedia, greybox, sourceImageId = null }) {
   const auto = !Array.isArray(scene.frameReferenceIds);
-  const choices = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
+  const greyboxFiles = musicVideoGreyboxReferences(greybox).map((ref) => ref.imageId);
+  const choices = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + greyboxFiles.length });
   const requested = musicVideoFrameReferenceFiles(sourceImageId,
     musicVideoConditioningReferences(project, scene, castMedia, greybox), MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: auto });
-  const greyboxIndex = greybox?.reference ? requested.indexOf(greybox.reference.imageId) : -1;
+  const greyboxIndex = Math.max(-1, ...greyboxFiles.map((file) => requested.indexOf(file)));
   const capacity = musicVideoReferenceCapacity('codex');
   const retained = musicVideoLimitReferenceFiles(requested, capacity, {
     panelImageId: auto ? scene.panelArt : null,
