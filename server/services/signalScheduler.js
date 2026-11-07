@@ -30,5 +30,5 @@ export const startSignalScheduler = createSyncScheduler({
   source: 'signalScheduler',
   getConfig: getSignalConfig,
   runSync,
-  getLastRunAt: async () => (await readSyncState()).lastRunAt,
+  getLastRunAt: async () => (await readSyncState().catch(() => null))?.lastRunAt ?? null,
 });

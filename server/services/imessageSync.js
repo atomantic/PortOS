@@ -24,7 +24,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { statSync } from 'node:fs';
 
-import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { expandHome, dataPath, atomicWrite } from '../lib/fileUtils.js';
+import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCursorState.js';
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
@@ -240,13 +241,7 @@ function stateFilePath() {
 // Machine-local incremental cursor. NOT federated — chat.db and its ROWIDs are
 // per-machine, so this state must never sync to a peer.
 export async function readSyncState() {
-  const raw = await tryReadFile(stateFilePath());
-  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
-  return {
-    cursorRowid: Number.isFinite(parsed?.cursorRowid) ? parsed.cursorRowid : 0,
-    lastRunAt: parsed?.lastRunAt || null,
-    lastResult: parsed?.lastResult || null,
-  };
+  return readSyncCursorState(stateFilePath(), 'cursorRowid');
 }
 
 async function writeSyncState(state) {
@@ -479,6 +474,6 @@ async function doRunSync() {
 
 // Status for the settings UI: config + cursor state (no chat.db open).
 export async function getStatus() {
-  const [config, state] = await Promise.all([getImessageConfig(), readSyncState()]);
-  return { config, state };
+  const [config, { state, stateError }] = await Promise.all([getImessageConfig(), readSyncCursorStateForStatus(stateFilePath(), 'cursorRowid')]);
+  return { config, state, ...(stateError ? { stateError } : {}) };
 }

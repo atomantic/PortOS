@@ -33,7 +33,7 @@ vi.mock('./humanActivity.js', async (importOriginal) => ({
 }));
 vi.mock('./tribe.js', () => ({ autoLogTouchpoints: mocks.autoLogTouchpoints }));
 
-import { checkSetup, runSync, readSyncState } from './signalSync.js';
+import { checkSetup, runSync, readSyncState, getStatus } from './signalSync.js';
 import { getSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -167,6 +167,21 @@ describe('Signal authenticated snapshot ingestion', () => {
     expect(mocks.recordEvents.mock.calls[1][0]).toEqual([]);
     expect((await readSyncState()).cursorRowid).toBe(8);
     expectSnapshotsRemoved();
+  });
+
+  it('refuses a corrupt sync-state file without ingesting or overwriting it, and getStatus stays usable', async () => {
+    const statePath = join(mocks.root, 'signal-sync-state.json');
+    const corrupt = '{"cursorRowid": 7';
+    writeFileSync(statePath, corrupt);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(runSync()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(mocks.autoLogTouchpoints).not.toHaveBeenCalled();
+    expect(readFileSync(statePath, 'utf8')).toBe(corrupt);
+    const status = await getStatus();
+    expect(status.stateError).toBe('UNREADABLE_STORE');
+    expect(status.state.cursorRowid).toBeNull();
   });
 
   it('refuses queryable later-page body corruption before writes and preserves the prior cursor', async () => {

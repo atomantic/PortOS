@@ -30,5 +30,5 @@ export const startImessageScheduler = createSyncScheduler({
   source: 'imessageScheduler',
   getConfig: getImessageConfig,
   runSync,
-  getLastRunAt: async () => (await readSyncState()).lastRunAt,
+  getLastRunAt: async () => (await readSyncState().catch(() => null))?.lastRunAt ?? null,
 });

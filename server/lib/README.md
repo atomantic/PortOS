@@ -601,6 +601,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerUrl.js` | Build the base URL for a peer. |
 | `perpetualSkipCauses.js` | `formatSkipCauses(skipCauses, maxCauses?, excludeCause?)` — renders a perpetual work-detector's per-cause skip map (`{ 'needs-input': 49, blocked: 17 }`) as a compact largest-first string; the one definition shared by the park log line, the on-demand toast, and the work-item picker. Re-exported at `client/src/lib/perpetualSkipCauses.js`. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
+| `syncCursorState.js` | `readSyncCursorState(path, cursorKey)` strict reader for iMessage/Signal/Spotify incremental cursor files: missing file starts at 0, unreadable/corrupt/non-integer cursor throws `UNREADABLE_STORE` instead of rewinding; `readSyncCursorStateForStatus` returns a null-cursor state plus `stateError` for status endpoints. |
 | `syncIntegrity.js` | Pure diff of local vs remote manifest lists. `computeRecordIntegrity` reports record status and, for differently written clocks that tie at LWW precision, an `unknown` assessment with a conservative `diverged` status for older clients. No I/O. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build, and return a normalized backend/MagicDNS/peer snapshot (`getTailscaleStatus` / `isTailscaleUp`). |

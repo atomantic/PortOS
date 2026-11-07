@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { join } from 'path';
-import { rmSync } from 'fs';
+import { rmSync, readFileSync, writeFileSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 
 const { recordEventsMock, autoLogTouchpointsMock } = vi.hoisted(() => ({
@@ -50,7 +50,7 @@ vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: autoLogTouchpointsMock,
 }));
 
-import { runSync, checkSetup } from './imessageSync.js';
+import { runSync, checkSetup, getStatus } from './imessageSync.js';
 
 const APPLE_EPOCH_OFFSET_MS = 978307200000;
 const FIXTURE_DB = join(dataRoot, 'fixture-chat.db');
@@ -144,6 +144,24 @@ describe('runSync cursor/persistence contract', () => {
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b); // same result object — the pass ran once
     expect(recordEventsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('corrupt sync-state file', () => {
+  it('aborts without scanning or overwriting the file, and getStatus stays usable', async () => {
+    const statePath = join(dataRoot, 'imessage-sync-state.json');
+    const corrupt = '{"cursorRowid": 11';
+    writeFileSync(statePath, corrupt);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(runSync()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect(recordEventsMock).not.toHaveBeenCalled();
+    expect(autoLogTouchpointsMock).not.toHaveBeenCalled();
+    expect(readFileSync(statePath, 'utf8')).toBe(corrupt);
+
+    const status = await getStatus();
+    expect(status.stateError).toBe('UNREADABLE_STORE');
+    expect(status.state.cursorRowid).toBeNull();
   });
 });
 
