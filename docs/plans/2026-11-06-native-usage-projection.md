@@ -134,21 +134,21 @@ that history is complete or permission to activate staged history.
 ## Read-only local and configured-peer dashboard matrix
 
 The Usage page's **Read native sources** action uses `GET /api/usage/native-matrix`
-to capture all four current readers and pass that v4 report through the same
-account-selection matrix. Each retained provider has a 128 MiB / 100,000-record /
-5-second dashboard budget, with bounded line size, inventory and depth. Scan limits
-and unknown coverage stay visible. This is a diagnostic subset, not the standalone
-capture's full-history budget or a staged replacement for the active ledger.
+to capture all four current readers into a v5 report and sum it with any peer reports.
+A read uses the standalone capture's budgets for bytes, lines, entries and records, so
+it covers the whole retained history. All providers share one 45-second deadline. Scan
+limits and unknown coverage stay visible. This is not a staged replacement for the
+active ledger.
 
 The default endpoint reads the local instance only. The URL-backed **Configured
 peers** scope uses `GET /api/usage/native-matrix?scope=fleet` on an explicit read.
 Changing scope does not read sources or show a snapshot from the old scope.
 Neither scope creates account selections or maps machines by matching counters.
 Existing operator selections are applied as stored. Missing selected participants are
-listed explicitly; retained-account unions refuse their totals when any required
-report is missing. A locally authoritative Codex account snapshot may still be
-shown once, with missing member reports visible. Neither case claims complete
-history or verified account identity.
+listed explicitly and never count as zero; a retained-file sum adds the reports that
+arrived and carries a `member-report-missing` finding. A locally authoritative Codex
+account snapshot may still be shown once, with missing member reports visible. Neither
+case claims complete history or verified account identity.
 
 Fleet collection contacts at most eight registered peers, two at a time, and
 lists at most 64 registry entries with explicit inventory/collection limits.
@@ -156,10 +156,12 @@ Only enabled, user-established, paired peers with effective `usage` sharing
 qualify. No configuration or pairing is created. The existing usage-category
 policy still applies when the older content-sync master switch is off.
 
-`GET /api/usage/native-report/v1?challenge=<64 hex>` exchanges only a local v4
-report with a currently authenticated paired usage peer. A domain-separated HMAC
-binds the report to its source, audience and fresh challenge. Strict schemas,
-content/evidence hashes, a 16 MiB byte limit, a 60-second whole-request deadline,
+`GET /api/usage/native-report/v2?challenge=<64 hex>` exchanges only a local v5
+report with a currently authenticated paired usage peer. `v1` answers a v4 report for
+peers that have not upgraded, and a collector asks for it when `v2` answers 404 or
+403. A domain-separated HMAC binds the report to its source, audience and fresh
+challenge. Strict schemas, content/evidence hashes, a 1 GiB memory-safety bound, a
+60-second whole-request deadline,
 a five-second body-idle deadline, and five-minute capture freshness with a
 30-second future allowance constrain each response. A response cannot redirect
 credentials, fall back to Basic auth, impersonate another participant or forward
@@ -172,10 +174,10 @@ reports are omitted from matrix inputs, never converted to zero. A successful
 collection means the requested reports arrived; it proves neither historical
 completeness nor membership in the same provider account.
 
-Only aggregate counters, coverage, safe participant keys, selected-account
-diagnostics and refusal reasons reach the UI. Per-record projections and native
-record identities travel only as strict hashed accounting projections on the
-pair-authenticated report protocol, never in browser output. Grok cost ticks
+Only aggregate counters, coverage, safe participant keys, machine sums and refusal
+reasons reach the UI. A v5 report holds no record identity. Per-record projections
+travel only in a v4 report answering a peer that has not upgraded, never in browser
+output. Grok cost ticks
 are an unverified native signal, not dollars or subscription spend. Antigravity's
 input, output, cache and output-decomposition counters stay separate because the
 combined total remains unverified. Native and legacy counters are never added.
@@ -188,6 +190,19 @@ perform deployment. Reports are neither persisted nor forwarded. Durable capture
 for staging, account-map verification and live checks on each participant remain
 tracked by #15097; this read-only UI does
 not close that issue or the staged recovery in #15031.
+
+### Machine rollups (report version 5)
+
+Each machine resolves its own copies and reports per-day, per-model rollups instead of
+a record list. The rollup block is specified in
+[the model attribution record](./2026-11-07-native-usage-model-attribution.md), and
+`server/lib/nativeUsageRollups.js` implements it. The Usage view adds machine totals
+under `machineRollups`, because no vendor documentation read for #15230 describes
+syncing these files between machines. A transcript copied to a second machine by hand
+counts twice, and the Usage page says so, along with the fact that Claude cloud sessions
+may be missing. Antigravity has no validated model labels, so its buckets carry the
+reason `model-unverified` and no combined total. The sections below describe the record
+lists that the standalone capture and its staged matrix still use.
 
 ## Antigravity native CLI capture (report version 4)
 

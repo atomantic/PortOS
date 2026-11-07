@@ -1,6 +1,6 @@
 {
   "fixtureVersion": 1,
-  "status": "proposal-not-production",
+  "status": "production-contract",
   "syntheticOnly": true,
   "claude": [
     {

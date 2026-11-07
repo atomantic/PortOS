@@ -5,6 +5,8 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
+import { unionNativeClaudeRecords } from '../lib/nativeUsageRecords.js';
+import { buildNativeUsageRollup, claudeModelEvidence, joinModelEvidence } from '../lib/nativeUsageRollups.js';
 
 // Bounded retained-record reads only. No ledger, estimates, or provider calls.
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
@@ -28,7 +30,7 @@ function project(family, entry, parts) {
     return { key: identity(entry.message?.id) ? entry.message.id : null, at: date(entry.timestamp),
       values: ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].map(key => usage?.[key]),
       requestId: identity(entry.requestId) ? entry.requestId : null, final: identity(entry.message?.stop_reason),
-      version: entry.version,
+      version: entry.version, model: entry.message?.model,
       inconsistent: Boolean(breakdown) && (breakdown.ephemeral_5m_input_tokens ?? 0) + (breakdown.ephemeral_1h_input_tokens ?? 0) !== usage.cache_creation_input_tokens };
   }
   if (family === 'agy') {
@@ -82,7 +84,7 @@ function isTranscript(family, parts) {
  * even after an exhaustive scan of today's files. Internal limits are injectable
  * for synthetic boundary tests; no HTTP parameter can change roots or limits.
  */
-export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false } = {}) {
+export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false, modelLimits } = {}) {
   if (!Object.hasOwn(roots, family)) throw new Error('Unsupported native transcript family');
   const limits = { ...LIMITS, ...overrides };
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
@@ -132,7 +134,10 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     const signature = hash([record.values, record.usageShape]);
     const prior = records.get(key);
     if (!prior && records.size >= identityLimit) { identityLimitReached = true; stop(); return; }
+    // Labels stay out of the identity and the copy signature, so one can never create or hide a conflict.
+    const evidence = family === 'claude' ? claudeModelEvidence(record.model) : null;
     if (prior) {
+      if (evidence) prior.evidence = joinModelEvidence(prior.evidence, evidence);
       coverage.duplicateRecords++;
       prior.copies++;
       if (record.at && (!prior.at || record.at < prior.at)) prior.at = record.at;
@@ -147,7 +152,7 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
         coverage.conflictingRecords++;
       }
     } else {
-      records.set(key, { signature, values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
+      records.set(key, { evidence, signature, values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
         requestId: record.requestId ?? null, final: record.final === true, partialsDiffer: false, costTicks: record.costTicks === true,
         inconsistent: record.inconsistent === true, at: record.at, copies: 1, maximumCopies: 1 });
       if (family === 'agy') { const tally = conversation(parts[0]); if (measured) tally.measured++; else tally.unmeasured++; }
@@ -160,7 +165,10 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     if (!stat?.isFile()) { coverage.unreadableFiles++; await handle.close(); return; }
     coverage.files++;
     const stream = handle.createReadStream({ highWaterMark: 64 * 1024, autoClose: true });
-    let pending = Buffer.alloc(0);
+    // Pieces of the current line, joined only when it ends: rescanning one growing
+    // buffer per chunk costs quadratic time on a line of many megabytes.
+    let pending = [];
+    let pendingBytes = 0;
     // One oversized record must not end the scan: most are attachments that carry
     // no usage. It stays reported, because this line was not read.
     let skippingLine = false;
@@ -169,25 +177,32 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       for await (const chunk of stream) {
         bytes += chunk.length;
         if (exhausted()) break;
-        pending = Buffer.concat([pending, chunk]);
+        let start = 0;
         let newline;
-        while ((newline = pending.indexOf(10)) !== -1) {
+        while ((newline = chunk.indexOf(10, start)) !== -1) {
           if (skippingLine) skippingLine = false;
-          else if (newline > limits.lineBytes) oversized();
-          else consume(pending.subarray(0, newline).toString('utf8'), parts);
-          pending = pending.subarray(newline + 1);
+          else if (pendingBytes + newline - start > limits.lineBytes) oversized();
+          else consume(Buffer.concat([...pending, chunk.subarray(start, newline)]).toString('utf8'), parts);
+          pending = [];
+          pendingBytes = 0;
+          start = newline + 1;
           if (exhausted()) break;
         }
-        if (pending.length > limits.lineBytes) {
-          if (!skippingLine) oversized();
-          skippingLine = true;
-          pending = Buffer.alloc(0);
+        if (coverage.stoppedEarly) break;
+        if (!skippingLine && start < chunk.length) {
+          pending.push(chunk.subarray(start));
+          pendingBytes += chunk.length - start;
+          if (pendingBytes > limits.lineBytes) {
+            oversized();
+            skippingLine = true;
+            pending = [];
+            pendingBytes = 0;
+          }
         }
-        if (exhausted()) break;
       }
       // A trailing non-newline record may be an in-progress append, not a
       // completed emission. Never silently count it as authoritative.
-      if (!coverage.stoppedEarly && !skippingLine && pending.length) coverage.invalidLines++;
+      if (!coverage.stoppedEarly && !skippingLine && pendingBytes) coverage.invalidLines++;
     })().catch(() => { coverage.unreadableFiles++; });
     stream.destroy();
   };
@@ -246,6 +261,15 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       conversationsPartiallyMeasured: [...conversations.values()].filter(({ measured, unmeasured }) => measured && unmeasured).length };
   }
   const totalTokens = totals.reduce((sum, value) => sum + value, 0);
+  const projected = includeRecords && family === 'claude'
+    ? [...records].sort(([a], [b]) => a.localeCompare(b)).map(([recordKey, record]) => ({
+      recordKey,
+      requestKey: !record.conflict && record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null,
+      // Retain the identity but no arbitrary winning counters for a conflict.
+      values: record.conflict ? [null, null, null, null] : record.values,
+      final: !record.conflict && record.final,
+      conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
+    })) : null;
   const overflow = !totals.every(counter) || (family === 'claude' && !counter(totalTokens));
   const partial = coverage.capped || coverage.missingUsageRecords || coverage.missingIdentityRecords || coverage.conflictingRecords
     || coverage.invalidLines || coverage.unreadableFiles || coverage.undatedRecords || coverage.skippedLinks || coverage.unfinalizedRecords
@@ -266,17 +290,12 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       totalTokens: family === 'claude' ? totalTokens : null,
       tokensIn: totals[0], tokensOut: totals[1], cacheReadTokens: totals[2], cacheWriteTokens: family === 'agy' ? null : totals[3],
     },
-    ...(includeRecords ? { recordProjection: family === 'claude' ? {
-      version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000,
-      records: [...records].sort(([a], [b]) => a.localeCompare(b)).slice(0, 100000).map(([recordKey, record]) => ({
-        recordKey,
-        requestKey: !record.conflict && record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null,
-        // Retain the identity but no arbitrary winning counters for a conflict.
-        values: record.conflict ? [null, null, null, null] : record.values,
-        final: !record.conflict && record.final,
-        conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
-      })),
+    ...(includeRecords ? { recordProjection: projected ? {
+      version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000, records: projected.slice(0, 100000),
     } : null } : {}),
+    // Covers every accepted record: the list limit above applies only to v4 reports.
+    ...(projected ? { rollup: buildNativeUsageRollup('claude', unionNativeClaudeRecords([{ records: projected }]).records
+      .map(({ recordKey, values, at }) => ({ at, values, evidence: records.get(recordKey).evidence })), modelLimits) } : {}),
     coverage, cost: { usd: null, kind: 'unknown' },
     reason: !coverage.records ? unavailableReason : family === 'grok'
       ? 'Turn counters are retained, but per-turn versus cumulative semantics are unvalidated. No authoritative total is calculated.'

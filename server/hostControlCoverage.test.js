@@ -1678,6 +1678,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/usage/native-coverage', 'Fixed Codex account/usage/read probe; no caller-controlled command, config, thread or inference.'],
   ['GET /api/usage/native-matrix', 'Fixed Codex account/read and account/usage/read probes plus bounded local file reads; no caller-controlled command, source path, config, thread or inference.'],
   ['GET /api/usage/native-report/v1', 'Freshly authenticated paired usage peer only; fixed Codex account reads and bounded native file reads, with no caller-controlled path, command, config or inference.'],
+  ['GET /api/usage/native-report/v2', 'Freshly authenticated paired usage peer only; fixed Codex account reads and bounded native file reads, with no caller-controlled path, command, config or inference.'],
   ['GET /api/providers/codex/models', PROVIDER_STATUS],
   ['GET /api/providers/comparison', TOOLKIT_INJECTED],
   ['GET /api/providers/composites/:id', PROVIDER_STATUS],
