@@ -104,24 +104,38 @@ async function sortUndecided(account, env) {
     });
     const decided = outcome.verdict ? decisionFromVerdict(outcome.verdict) : null;
     if (!decided && !FINAL_SKIPS.has(outcome.skipped)) outcome.retryAfter = new Date(Date.now() + RETRY_SKIPPED_MS).toISOString();
-    await withTransaction(async (client) => {
-      await client.query(
+    // The model call took seconds: record the verdict only on the row it read.
+    // An operator hand-off, learned decision or fresh triage meanwhile wins.
+    const applied = await withTransaction(async (client) => {
+      const { rowCount } = await client.query(
         `UPDATE github_notifications SET decision = COALESCE($3, decision),
            evidence = evidence || jsonb_build_object('rule', COALESCE($4, evidence->>'rule'), 'ai', $5::jsonb), updated_at = NOW()
-         WHERE account_id = $1 AND thread_id = $2`,
-        [account.id, row.thread_id, decided?.decision ?? null, decided?.rule ?? null, toPgJson(outcome)],
+         WHERE account_id = $1 AND thread_id = $2
+           AND state = 'open' AND decision IS NOT DISTINCT FROM $6 AND evidence = $7::jsonb`,
+        [account.id, row.thread_id, decided?.decision ?? null, decided?.rule ?? null, toPgJson(outcome), row.decision, toPgJson(row.evidence)],
       );
-      if (decided) {
+      if (rowCount && decided) {
         await client.query(
           `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'triaged', $3::jsonb)`,
           [account.id, row.thread_id, toPgJson({ decision: decided.decision, rule: decided.rule, mode: account.mode })],
         );
       }
+      return rowCount > 0;
     });
-    if (decided) sorted += 1;
+    if (!applied) console.log(`⏭️ GitHub notification ${row.thread_id} changed while Assist sorted it; its verdict was dropped`);
+    else if (decided) sorted += 1;
     else console.log(`⏭️ GitHub notification ${row.thread_id} left for the operator: ${outcome.skipped}`);
   }
   return sorted;
+}
+
+async function stillAsRead(accountId, row) {
+  const { rowCount } = await query(
+    `SELECT 1 FROM github_notifications WHERE account_id = $1 AND thread_id = $2 AND state = 'open'
+       AND decision IS NOT DISTINCT FROM $3`,
+    [accountId, row.thread_id, row.decision],
+  );
+  return rowCount > 0;
 }
 
 /**
@@ -157,6 +171,9 @@ export async function assistAccountNotifications(account, env, { act }) {
     // is still done).
     const action = ruleAction({ account, row }) || (ACTIONABLE_DECISIONS.includes(row.decision) ? assistAction(row) : null);
     if (!action) continue;
+    // The batch was read before earlier GitHub writes in this loop; an operator
+    // hand-off or manual decision since then must not be marked done over.
+    if (!(await stillAsRead(account.id, row))) continue;
     const ok = await act(row.thread_id, action, { decision: row.decision, rule: row.rule })
       .then(() => true)
       .catch((error) => {
