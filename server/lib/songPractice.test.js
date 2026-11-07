@@ -100,6 +100,16 @@ describe('nextSongStage', () => {
   });
 });
 
+describe('applySongPractice across UTC midnight', () => {
+  it('promotes once per local day in the user timezone', () => {
+    const tz = 'America/Los_Angeles';
+    const first = applySongPractice(song(), 5, new Date('2026-11-06T23:50:00.000Z'), tz);
+    const again = applySongPractice(song(first), 5, new Date('2026-11-07T00:10:00.000Z'), tz);
+    expect(again.stage).toBe(first.stage);
+    expect(again.practice.intervalDays).toBe(first.practice.intervalDays);
+  });
+});
+
 describe('applySongPractice', () => {
   it('returns only the fields to persist', () => {
     expect(Object.keys(applySongPractice(song(), 5, NOW)).sort()).toEqual(['practice', 'stage']);
