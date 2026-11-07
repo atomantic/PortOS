@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -65,7 +65,7 @@ const {
   getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest,
   resolveModelCapabilities, SANDBOX_FILES, __resetFixtureCaches,
 } = await import('./modelCapabilityTests.js');
-const { loadResults } = await import('./modelCapabilityTestStore.js');
+const { loadResults, saveResult, deleteResult } = await import('./modelCapabilityTestStore.js');
 const { RHETORIC_REFERENCE_SET } = await import('../lib/postRhetoric.js');
 
 const OPENCODE_LLAMA = {
@@ -414,6 +414,38 @@ describe('the machine-wide heavy-job claim', () => {
     })).rejects.toThrow(/progress consumer disconnected/);
     expect(release).toHaveBeenCalledOnce();
     expect(runLocalLlmTest).not.toHaveBeenCalled();
+  });
+});
+
+describe('the capability result store', () => {
+  const result = (testId) => ({ backend: 'lmstudio', modelId: 'vlm', testId, output: 'ok', transcript: '' });
+
+  it('refuses saves and deletes with 503 when the file cannot be read, without parking it', async () => {
+    // A directory in place of the file fails the read with a filesystem error
+    // (not ENOENT, not malformed JSON) on every platform.
+    await mkdir(join(TEST_ROOT, 'local-llm', 'capability-tests.json'), { recursive: true });
+    await expect(saveResult(result('a'))).rejects.toMatchObject({ status: 503, code: 'UNREADABLE_STORE' });
+    await expect(deleteResult('lmstudio', 'vlm', 'a')).rejects.toMatchObject({ status: 503, code: 'UNREADABLE_STORE' });
+    expect((await readdir(join(TEST_ROOT, 'local-llm'))).filter((f) => f.includes('.corrupt-'))).toEqual([]);
+  });
+
+  it('parks a malformed file and starts a fresh store on save', async () => {
+    await mkdir(join(TEST_ROOT, 'local-llm'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'local-llm', 'capability-tests.json'), '{ not json');
+    await saveResult(result('a'));
+    expect((await readdir(join(TEST_ROOT, 'local-llm'))).filter((f) => f.includes('.corrupt-'))).toHaveLength(1);
+    expect(await loadResults()).toHaveLength(1);
+  });
+
+  it('serializes overlapping saves and deletes so none drops another record', async () => {
+    await Promise.all(['a', 'b', 'c', 'd'].map((id) => saveResult(result(id))));
+    await Promise.all([
+      deleteResult('lmstudio', 'vlm', 'a'),
+      saveResult(result('e')),
+      deleteResult('lmstudio', 'vlm', 'c'),
+      saveResult(result('f')),
+    ]);
+    expect((await loadResults()).map((r) => r.testId).sort()).toEqual(['b', 'd', 'e', 'f']);
   });
 });
 
