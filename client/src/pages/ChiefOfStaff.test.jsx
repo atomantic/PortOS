@@ -291,6 +291,58 @@ describe('ChiefOfStaff mobile tab navigation', () => {
   });
 });
 
+// #15237 — on a landscape phone the stacked agent panel consumed the whole
+// viewport height, so every tab but Tasks showed no content until the chevron
+// was found. A short viewport now starts collapsed, tracks rotation, and never
+// overrides an explicit toggle.
+describe('ChiefOfStaff agent panel on a short viewport (#15237)', () => {
+  const stubViewport = (short) => {
+    const listeners = new Set();
+    const media = {
+      get matches() { return short.value; },
+      addEventListener: (_type, fn) => listeners.add(fn),
+      removeEventListener: (_type, fn) => listeners.delete(fn),
+    };
+    vi.stubGlobal('matchMedia', vi.fn((query) => (query === '(max-height: 500px)'
+      ? media
+      : { matches: false, addEventListener: () => {}, removeEventListener: () => {} })));
+    return () => act(() => { listeners.forEach((fn) => fn()); });
+  };
+  const panelToggle = () => document.querySelector('button[aria-controls="cos-agent-panel"]');
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('starts collapsed in landscape and stays expanded in portrait', async () => {
+    stubViewport({ value: true });
+    const { unmount } = await renderSettledAt('agents');
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'false');
+    unmount();
+
+    stubViewport({ value: false });
+    await renderSettledAt('agents');
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('collapses on rotation until the user toggles the panel', async () => {
+    const short = { value: false };
+    const notify = stubViewport(short);
+    await renderSettledAt('agents');
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
+
+    short.value = true;
+    notify();
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(panelToggle());
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
+    short.value = false;
+    notify();
+    short.value = true;
+    notify();
+    expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
 describe('ChiefOfStaff mind tab layout', () => {
   it('fills leftover desktop height so the chat can use the viewport', async () => {
     const { container } = await renderSettledAt('mind');
