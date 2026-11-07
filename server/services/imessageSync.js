@@ -30,6 +30,7 @@ import { identityFromHandle } from '../lib/tribeMatch.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
 import { getSettings } from './settings.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
+import { readBlocklist, withImessagePrivacyLock } from './imessagePrivacy.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -394,12 +395,14 @@ function readMessages(db, cursorRowid, limit) {
  * Re-entrancy guarded: a manual "Sync now" overlapping a scheduler tick would
  * double-read the same cursor (deduped, but doubled work, and the slower writer
  * could stamp a stale cursor over the fresher one) — so concurrent callers share
- * the in-flight pass instead.
+ * the in-flight pass instead. The pass also runs under the privacy lock shared
+ * with blocklist/purge mutations, so an in-flight batch cannot re-insert rows a
+ * completed purge or block just removed.
  */
 let syncInFlight = null;
 export async function runSync() {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  syncInFlight = withImessagePrivacyLock(doRunSync).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 
@@ -435,9 +438,11 @@ async function doRunSync() {
   const touchpointCandidates = imessageTouchpointCandidates(batch.messages, timezone);
 
   // PortOS-side blocklist: skip spam handles before they land in the activity
-  // store or Tribe touchpoint log. Apple's chat.db is never mutated.
-  const blocklist = await manage.readBlocklist().catch(() => ({ handles: [] }));
-  const blockedKeys = new Set(blocklist.handles || []);
+  // store or Tribe touchpoint log. Apple's chat.db is never mutated. An
+  // unreadable blocklist throws UNREADABLE_STORE (fail closed): ingesting with an
+  // empty list would persist blocked handles and advance the cursor past them.
+  const blocklist = await readBlocklist();
+  const blockedKeys = new Set(blocklist.handles);
   const activityFiltered = manage.filterBlockedActivityCandidates(activityCandidates, blockedKeys);
   const touchpointFiltered = manage.filterBlockedTouchpointCandidates(touchpointCandidates, blockedKeys);
 

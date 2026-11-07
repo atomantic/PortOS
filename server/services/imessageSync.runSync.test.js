@@ -13,13 +13,24 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { join } from 'path';
-import { rmSync } from 'fs';
+import { rmSync, writeFileSync, existsSync } from 'fs';
 import { DatabaseSync } from 'node:sqlite';
 
 const { recordEventsMock, autoLogTouchpointsMock } = vi.hoisted(() => ({
   recordEventsMock: vi.fn(),
   autoLogTouchpointsMock: vi.fn(),
 }));
+
+const lockEntries = vi.hoisted(() => []);
+vi.mock('../lib/createKeyCachedQueue.js', async (original) => {
+  const { createKeyCachedQueue } = await original();
+  return {
+    createKeyCachedQueue: () => {
+      const queue = createKeyCachedQueue();
+      return (key, work) => { lockEntries.push(key); return queue(key, work); };
+    },
+  };
+});
 
 const dataRoot = vi.hoisted(() => {
   // Inline mkdtemp to avoid importing helpers inside the hoisted block.
@@ -51,6 +62,7 @@ vi.mock('./tribe.js', () => ({
 }));
 
 import { runSync, checkSetup } from './imessageSync.js';
+import { setBlocklist } from './imessageManage.js';
 
 const APPLE_EPOCH_OFFSET_MS = 978307200000;
 const FIXTURE_DB = join(dataRoot, 'fixture-chat.db');
@@ -89,6 +101,8 @@ beforeEach(() => {
   autoLogTouchpointsMock.mockReset();
   // Fresh cursor per test — remove the persisted state file.
   rmSync(join(dataRoot, 'imessage-sync-state.json'), { force: true });
+  rmSync(join(dataRoot, 'imessage-blocklist.json'), { force: true });
+  lockEntries.length = 0;
 });
 
 describe('runSync cursor/persistence contract', () => {
@@ -144,6 +158,44 @@ describe('runSync cursor/persistence contract', () => {
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b); // same result object — the pass ran once
     expect(recordEventsMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('privacy lock and blocklist fail-closed contract (#15171)', () => {
+  it('refuses to ingest or advance the cursor while the blocklist is unreadable', async () => {
+    writeFileSync(join(dataRoot, 'imessage-blocklist.json'), '{truncated');
+    await expect(runSync()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect(recordEventsMock).not.toHaveBeenCalled();
+    expect(autoLogTouchpointsMock).not.toHaveBeenCalled();
+    expect(existsSync(join(dataRoot, 'imessage-sync-state.json'))).toBe(false);
+
+    // Repaired file: the same batch ingests from the untouched cursor.
+    writeFileSync(join(dataRoot, 'imessage-blocklist.json'), JSON.stringify({ handles: [] }));
+    recordEventsMock.mockResolvedValue({ recorded: 2, skipped: 0 });
+    autoLogTouchpointsMock.mockResolvedValue({ created: 0, matched: 0 });
+    const result = await runSync();
+    expect(result).toMatchObject({ ok: true, scanned: 2, cursorRowid: 11 });
+  });
+
+  it('a blocklist change lands only after the in-flight pass has finished writing', async () => {
+    const order = [];
+    const { promise: persisting, resolve: persistStarted } = Promise.withResolvers();
+    const { promise: gate, resolve: release } = Promise.withResolvers();
+    recordEventsMock.mockImplementation(async () => {
+      persistStarted();
+      await gate;
+      order.push('sync-persisted');
+      return { recorded: 2, skipped: 0 };
+    });
+    autoLogTouchpointsMock.mockResolvedValue({ created: 0, matched: 0 });
+
+    const sync = runSync();
+    await persisting;
+    const save = setBlocklist(['+15551234567']).then(() => order.push('blocklist-saved'));
+    release();
+    await Promise.all([sync, save]);
+    expect(order).toEqual(['sync-persisted', 'blocklist-saved']);
+    expect(lockEntries).toEqual(['imessage', 'imessage']); // the pass and the mutation share one lock
   });
 });
 
