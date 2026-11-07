@@ -25,7 +25,7 @@ const PICKER_HINT = 'Each render sends the shot\'s references in order, up to it
  * older shot that saved a Casting cast member (`characterVariant`, #12763) still
  * leads with that member's guides, from `castMedia`; no picker sets it any more.
  */
-export default function SceneFrameReferences({ project, scene, castMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
+export default function SceneFrameReferences({ project, scene, castMedia = null, onReloadCastMedia = null, greybox = null, onEditLocal, onSave, disabled = false }) {
   const [adding, setAdding] = useState(false);
   // The reference shown large: hovering a chip with a mouse, or long-pressing it on a phone.
   const [preview, setPreview] = useState(null);
@@ -68,6 +68,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   };
   // Until the cast member's guides load, an edit would save the row without them.
   const locked = disabled || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
+  const failedCastIds = castMedia ? musicVideoSceneCastIds(project, scene).filter((id) => castMedia[id] === null) : [];
   const set = (picked) => {
     const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
     onEditLocal(scene.sceneId, { frameReferenceIds: next });
@@ -123,6 +124,12 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
           </li>
         )}
       </ul>
+      {failedCastIds.length > 0 && onReloadCastMedia && (
+        <p className="text-[11px] text-port-warning">
+          Cast guides could not be loaded, so frames will not render.{' '}
+          <button type="button" onClick={onReloadCastMedia} className="underline min-h-[44px] sm:min-h-0">Retry</button>
+        </p>
+      )}
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}
       {chosen.length === 0 && <p className="text-[11px] text-port-text-muted">No shot references selected. Mood-board images may fill available slots.</p>}

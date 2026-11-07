@@ -77,7 +77,7 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onApplyCameos = null,
 }) {
@@ -258,7 +258,7 @@ export default function SceneFrames({
         onChange={async (setReference) => { const saved = await onSave(scene.sceneId, { setReference }); if (saved !== false) onEditLocal(scene.sceneId, { setReference }); return saved; }} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />
       {project && <SceneResearchSeed project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />}
-      <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />
+      <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />
       {endFrames ? (
         <div role="group" aria-label="Start and end frames" className="grid gap-3 @sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column('start')}

@@ -131,6 +131,32 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     expect(generateImage).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches a failed cast-guide read letting a paid frame or end-frame render go out without the guides.
+  it('blocks frame and end-frame renders with a toast after a failed guide read, until reloadCastMedia succeeds', async () => {
+    const { default: toast } = await import('../components/ui/Toast');
+    toast.error.mockClear();
+    listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+    const cast = {
+      id: 'p4',
+      concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
+      scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', endFramePrompt: 'dusk', referenceImageId: null, takes: [], characterVariant: { ingredientId: 'cat-chr-x', age: 7 } }],
+    };
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
+    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());
+    let a; let b;
+    await act(async () => { a = await result.current.generateFrame(cast.scenes[0]); b = await result.current.generateEndFrame(cast.scenes[0]); });
+    expect(a).toEqual({ ok: false });
+    expect(b).toEqual({ ok: false });
+    expect(toast.error).toHaveBeenCalledWith('Cast guides could not be loaded for Example Lead. Retry before rendering.');
+    expect(generateImage).not.toHaveBeenCalled();
+
+    listCatalogIngredientMedia.mockResolvedValueOnce([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]);
+    await act(async () => { result.current.reloadCastMedia(); });
+    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
+    await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
+    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
+  });
+
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.
   it('keeps the loaded guides when a reload on refocus fails', async () => {
     listCatalogIngredientMedia.mockResolvedValueOnce([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]);

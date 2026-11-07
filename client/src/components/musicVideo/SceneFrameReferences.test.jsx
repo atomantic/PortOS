@@ -10,6 +10,19 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1' };
 
 describe('a shot\'s References row', () => {
+  // Uniquely catches a failed cast-guide read showing nothing, so a frame render looks possible with no way to retry.
+  it('warns with a Retry for a cast member whose guides failed to load, and leaves the row editable', () => {
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const onReload = vi.fn();
+    const { rerender } = render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } }} castMedia={{ 'cat-chr-kit': null }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/Cast guides could not be loaded/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+    rerender(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } }} castMedia={{ 'cat-chr-kit': [] }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/Cast guides could not be loaded/)).toBeNull();
+  });
+
   // Uniquely catches a linked character whose face and character sheets never reach the picker.
   it('offers every approved catalog asset of a linked character, and saves the pick', () => {
     const onSave = vi.fn();

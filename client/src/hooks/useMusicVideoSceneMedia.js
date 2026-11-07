@@ -195,9 +195,17 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
     return () => { active = false; };
   }, [castIds, castRefresh]);
-  // A render before the shot's cast guides load would silently go out without them.
+  const reloadCastMedia = () => setCastRefresh((n) => n + 1);
+  // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.
   const castGuidesPending = (scene) => {
-    if (musicVideoSceneCastIds(project, scene).every((id) => castMedia[id] !== undefined)) return false;
+    const ids = musicVideoSceneCastIds(project, scene);
+    const failed = ids.find((id) => castMedia[id] === null);
+    if (failed) {
+      const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === failed)?.name || failed;
+      toast.error(`Cast guides could not be loaded for ${name}. Retry before rendering.`);
+      return true;
+    }
+    if (ids.every((id) => castMedia[id] !== undefined)) return false;
     toast.error('Cast guides are still loading. Try again in a moment.');
     return true;
   };
@@ -597,6 +605,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     videoBatch,
     conditioning,
     castMedia,
+    reloadCastMedia,
     greyboxPlaces,
     generateFrame,
     generateEndFrame,
