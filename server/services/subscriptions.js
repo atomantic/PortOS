@@ -4,6 +4,7 @@ import { normalizeSubscriptionCosts } from './subscriptionCosts.js';
 import { PROVIDER_FAMILIES, familyForProvider, familyLabel } from '../lib/providerFamilies.js';
 import { normalizePlanTier } from '../lib/subscriptionPlanTiers.js';
 import { mergeFamilyMap, normalizeFamilyMap } from '../lib/familySettingsMap.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 /**
  * The subscription plans this install pays for: which ones are switched on,
@@ -143,7 +144,15 @@ export async function getSubscriptionOverview() {
  * (not those already disabled) so that turning it back ON restores only those,
  * not providers the user had individually disabled.
  */
-export async function setSubscriptionEnabled(family, enabled) {
+// One toggle per family at a time: an off and an on for the same family read and
+// rewrite the same restore record, so their interleaving would decide what is restored.
+const familyToggleQueue = createKeyCachedQueue();
+
+export function setSubscriptionEnabled(family, enabled) {
+  return familyToggleQueue(family, () => applyFamilyToggle(family, enabled));
+}
+
+async function applyFamilyToggle(family, enabled) {
   const members = groupProvidersByFamily(await listProviders()).get(family) || [];
   const changed = [];
 

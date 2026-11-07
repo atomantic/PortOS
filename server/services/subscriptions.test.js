@@ -270,6 +270,19 @@ describe('setSubscriptionEnabled', () => {
     expect(providerRecords.find((p) => p.id === 'codex-2').enabled).toBe(false);
   });
 
+  it('orders an off and an on for the same family, so the on restores the off\'s providers', async () => {
+    // Regression: an on that read the restore list before a concurrent off wrote it
+    // found no record and enabled every provider in the family, including one the
+    // user had disabled by hand.
+    providerRecords = [claudeCli, { ...claudeAlt, enabled: false }];
+    await Promise.all([
+      setSubscriptionEnabled('claude', false),
+      setSubscriptionEnabled('claude', true),
+    ]);
+    expect(providerRecords.find((p) => p.id === 'claude-code').enabled).toBe(true);
+    expect(providerRecords.find((p) => p.id === 'claude-code-alt').enabled).toBe(false);
+  });
+
   it('keeps the first toggle-off record when the family is turned off again', async () => {
     // Regression: a repeat off finds nothing left enabled and overwrote the
     // record with [], so the next on restored nothing yet reported enabled.
