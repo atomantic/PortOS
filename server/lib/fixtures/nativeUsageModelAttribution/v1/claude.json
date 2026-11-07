@@ -1,0 +1,265 @@
+{
+  "fixtureVersion": 1,
+  "family": "claude",
+  "syntheticOnly": true,
+  "sourceContract": "Claude Code projects/**/*.jsonl assistant entries: message.id, requestId, message.model, message.stop_reason, message.usage. Internal format, observed. Synthetic values.",
+  "rejectedLabelExamples": [
+    "../private/example-model",
+    "arn:aws:bedrock:us-east-1:000000000000:inference-profile/example-model",
+    "alice@example.com",
+    "example-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "example model"
+  ],
+  "scenarios": [
+    {
+      "name": "one final copy attributes its whole record to its label",
+      "covers": ["single-label"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "partial and final copies listed final-first keep the final counters once",
+      "covers": ["partial-final-copies", "reversed-copy-order"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:00Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": null, "usage": { "input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "file and subagent copies of one response count once",
+      "covers": ["duplicate-copies"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "responses from two models fill two buckets",
+      "covers": ["multiple-models"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": "example-model-beta", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 4, "cache_creation_input_tokens": 0 } } }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }, { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "attributed", "label": "example-model-beta" }],
+        "providerTotals": { "tokensIn": 11, "tokensOut": 22, "cacheReadTokens": 7, "cacheWriteTokens": 7, "totalTokens": 47 },
+        "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "example-model-beta": { "tokensIn": 1, "tokensOut": 2, "cacheReadTokens": 4, "cacheWriteTokens": 0, "totalTokens": 7 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "attributionHash": "4ffa0f4bbddce112cff342f9bc8bfd2354934e6eadf75c24783eb2cf2bd86592"
+      }
+    },
+    {
+      "name": "a label on only one copy names the response",
+      "covers": ["missing-model", "partial-final-copies"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:00Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": null, "usage": { "input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "absent, null and blank labels stay unknown and keep the total",
+      "covers": ["missing-model"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": null, "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-3", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-3", "model": "  ", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-missing" }, { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "model-missing" }, { "identity": "msg-3", "recordKey": "de05c8fdf635a4fc59240671e692a8f46fe30bd9af746a59c72badcc1a4a4587", "outcome": "model-missing" }],
+        "providerTotals": { "tokensIn": 3, "tokensOut": 3, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 6 },
+        "models": {},
+        "unknown": { "model-missing": { "tokensIn": 3, "tokensOut": 3, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 6 } },
+        "unallocated": {},
+        "refused": {},
+        "attributionHash": "d67bbc20af3821d20b93b6c3b1d97afe23bf64bb21816021a3f7975b569f4112"
+      }
+    },
+    {
+      "name": "the synthetic placeholder is not a model",
+      "covers": ["sentinel"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "<synthetic>", "stop_reason": "stop_sequence", "usage": { "input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": "<synthetic>", "stop_reason": "stop_sequence", "usage": { "input_tokens": 2, "output_tokens": 3, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }] }],
+      "expect": {
+        "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-sentinel" }, { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "model-sentinel" }],
+        "providerTotals": { "tokensIn": 2, "tokensOut": 3, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 5 },
+        "models": {},
+        "unknown": { "model-sentinel": { "tokensIn": 2, "tokensOut": 3, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 5 } },
+        "unallocated": {},
+        "refused": {},
+        "attributionHash": "b3f1d84b375712d6b1766adaa5666776e485a8420e7292b7a9f06043fafcfb3f"
+      }
+    },
+    {
+      "name": "a placeholder copy never competes with a real label",
+      "covers": ["sentinel", "missing-model"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "<synthetic>", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "contradictory labels on identical counters keep the total and name no winner",
+      "covers": ["conflicting-model", "reversed-copy-order"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-beta", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-conflict" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": {}, "unknown": {}, "unallocated": { "model-conflict": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "refused": {}, "attributionHash": "d4d4a76956d6e10673a5e2726d4472d412a897b6c9fe7460b50848592f5d4f6b" }
+    },
+    {
+      "name": "partial and final copies naming different models are a conflict",
+      "covers": ["conflicting-model", "partial-final-copies"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:00Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": null, "usage": { "input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-beta", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-conflict" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": {}, "unknown": {}, "unallocated": { "model-conflict": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "refused": {}, "attributionHash": "d4d4a76956d6e10673a5e2726d4472d412a897b6c9fe7460b50848592f5d4f6b" }
+    },
+    {
+      "name": "a copy from another request is refused even when labels agree",
+      "covers": ["provider-refusal"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "refused", "finding": "conflicting-records" }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "conflicting-records": 1 }, "attributionHash": "06b65aaf49d2d7fe6f0901731bf6aa759745b340b95909c05b2978ce1b1dc655" }
+    },
+    {
+      "name": "a response with no final copy stays refused and its label is unused",
+      "covers": ["provider-refusal", "partial-final-copies"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": null, "usage": { "input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "refused", "finding": "unfinalized-records" }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "unfinalized-records": 1 }, "attributionHash": "7338742aa3470ef11fb9d47832ba288cd1ea597866eba94ae6f751b7a497a376" }
+    },
+    {
+      "name": "a response with a missing counter stays refused",
+      "covers": ["provider-refusal"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "refused", "finding": "missing-record-fields" }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "missing-record-fields": 1 }, "attributionHash": "5b906a7e7df90d6112dce0d4c50c8037d20ab32025eed0604fbf3802e4ab8a26" }
+    },
+    {
+      "name": "an undated response stays refused",
+      "covers": ["provider-refusal"],
+      "reports": [{ "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "refused", "finding": "undated-records" }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "undated-records": 1 }, "attributionHash": "0168243db5cf45b5d8409f986e087369893a64764af81af77a115bd23b69310d" }
+    },
+    {
+      "name": "labels that could leak private values are refused and never copied",
+      "covers": ["invalid-label", "privacy-bound"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "../private/example-model", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": "arn:aws:bedrock:us-east-1:000000000000:inference-profile/example-model", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-3", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-3", "model": "alice@example.com", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-4", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-4", "model": "example-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-5", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-5", "model": 7, "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-6", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-6", "model": "example model", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }]
+        }
+      ],
+      "expect": {
+        "records": [
+          { "identity": "msg-4", "recordKey": "1096e3dfeeb543b98d140ea9cdd43295a702a83ff0b83811f4e71e48996a900c", "outcome": "model-label-invalid" },
+          { "identity": "msg-6", "recordKey": "22725e233b304848530ca7922250e82853a1f639c82d5ebbf9109c1e0725f171", "outcome": "model-label-invalid" },
+          { "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-label-invalid" },
+          { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "model-label-invalid" },
+          { "identity": "msg-5", "recordKey": "c511ba9633620a4929723c1073aabdab6333b02c15fa69f1b39bfdfbaf954c89", "outcome": "model-label-invalid" },
+          { "identity": "msg-3", "recordKey": "de05c8fdf635a4fc59240671e692a8f46fe30bd9af746a59c72badcc1a4a4587", "outcome": "model-label-invalid" }
+        ],
+        "providerTotals": { "tokensIn": 6, "tokensOut": 6, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 12 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-label-invalid": { "tokensIn": 6, "tokensOut": 6, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 12 } },
+        "refused": {},
+        "attributionHash": "5f3c309da9af3c1e65ac934b456cc3d766cffad57eb4acf744fd80b342a95935"
+      }
+    },
+    {
+      "name": "an unusable label contradicts a valid one",
+      "covers": ["invalid-label", "conflicting-model"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "../private/example-model", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-conflict" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": {}, "unknown": {}, "unallocated": { "model-conflict": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "refused": {}, "attributionHash": "d4d4a76956d6e10673a5e2726d4472d412a897b6c9fe7460b50848592f5d4f6b" }
+    },
+    {
+      "name": "routed labels stay verbatim and are never aliased",
+      "covers": ["label-grammar"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "us.anthropic.example-model-v1:0", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": "example-model@20260101", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-3", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-3", "model": "example-model", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-4", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-4", "model": "Example-Model", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }]
+        }
+      ],
+      "expect": {
+        "records": [
+          { "identity": "msg-4", "recordKey": "1096e3dfeeb543b98d140ea9cdd43295a702a83ff0b83811f4e71e48996a900c", "outcome": "attributed", "label": "Example-Model" },
+          { "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "us.anthropic.example-model-v1:0" },
+          { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "attributed", "label": "example-model@20260101" },
+          { "identity": "msg-3", "recordKey": "de05c8fdf635a4fc59240671e692a8f46fe30bd9af746a59c72badcc1a4a4587", "outcome": "attributed", "label": "example-model" }
+        ],
+        "providerTotals": { "tokensIn": 4, "tokensOut": 4, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 8 },
+        "models": { "Example-Model": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 }, "example-model": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 }, "example-model@20260101": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 }, "us.anthropic.example-model-v1:0": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "attributionHash": "13c5bd28eefb8d2106ec854316661476e31171d33ef91015dd77eae91ee7c402"
+      }
+    },
+    {
+      "name": "an old report alone cannot carry a model",
+      "covers": ["old-report"],
+      "reports": [{ "capability": "none", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "report-without-model-capability" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": {}, "unknown": { "report-without-model-capability": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unallocated": {}, "refused": {}, "attributionHash": "81f3b4fa8d1d42f11d8f802fb122e8f5c7f1ab294dd139383b4f94d7fe891ab8" }
+    },
+    {
+      "name": "an old copy adds no evidence and no tokens beside a labeled new copy",
+      "covers": ["mixed-report-capability", "duplicate-copies"],
+      "reports": [
+        { "capability": "none", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] },
+        { "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }
+      ],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unknown": {}, "unallocated": {}, "refused": {}, "attributionHash": "2625f9545777f387e70bbf8cf161c22d37aebdcc952f293a6bf6eb24321189a1" }
+    },
+    {
+      "name": "a new copy with no label reports missing, not lost capability",
+      "covers": ["mixed-report-capability", "missing-model"],
+      "reports": [{ "capability": "none", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }, { "capability": "model-attribution-v1", "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }] }],
+      "expect": { "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "model-missing" }], "providerTotals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 }, "models": {}, "unknown": { "model-missing": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }, "unallocated": {}, "refused": {}, "attributionHash": "1be519f89149dda185baea6e207e57b882f48b92d02747c65fa4e9480d879cce" }
+    },
+    {
+      "name": "the label cap keeps the smallest labels whatever order they arrive",
+      "covers": ["label-limit", "reversed-copy-order"],
+      "limits": { "maxLabelsPerProjection": 1 },
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "entries": [{ "type": "assistant", "version": "2.1.0", "requestId": "req-2", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-2", "model": "example-model-beta", "stop_reason": "end_turn", "usage": { "input_tokens": 1, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 } } }, { "type": "assistant", "version": "2.1.0", "requestId": "req-1", "timestamp": "2026-03-01T00:00:01Z", "message": { "id": "msg-1", "model": "example-model-alpha", "stop_reason": "end_turn", "usage": { "input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 7 } } }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "msg-1", "recordKey": "aa08ef66a8ef6bbff90758c1607b49f6ed77eabfc2c897dabae55cd56d5538ca", "outcome": "attributed", "label": "example-model-alpha" }, { "identity": "msg-2", "recordKey": "b8145ccfb36365ce4b630685945e0021dadc4b5f6cc90747ab6bee50a00a7583", "outcome": "model-label-limit" }],
+        "providerTotals": { "tokensIn": 11, "tokensOut": 21, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 42 },
+        "models": { "example-model-alpha": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } },
+        "unknown": {},
+        "unallocated": { "model-label-limit": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 } },
+        "refused": {},
+        "attributionHash": "fc689624c8326c87ada2d288e4ef084a218ab1c5be3111e4831b24c1215a4f5b"
+      }
+    }
+  ]
+}

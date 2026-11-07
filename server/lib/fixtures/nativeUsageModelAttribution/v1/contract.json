@@ -1,0 +1,44 @@
+{
+  "fixtureVersion": 1,
+  "status": "proposal-not-production",
+  "syntheticOnly": true,
+  "decisionRecord": "docs/plans/2026-11-07-native-usage-model-attribution.md",
+  "labelPattern": "^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}(?:@(?:[0-9]{8}|default))?$",
+  "sentinels": [
+    "<synthetic>"
+  ],
+  "limits": {
+    "maxLabelLength": 105,
+    "maxLabelsPerProjection": 64,
+    "maxRowsPerRecord": 16
+  },
+  "unknownReasons": [
+    "model-missing",
+    "model-sentinel",
+    "report-without-model-capability"
+  ],
+  "unallocatedReasons": [
+    "model-conflict",
+    "model-label-invalid",
+    "model-label-limit",
+    "model-rows-invalid",
+    "model-sum-mismatch"
+  ],
+  "providerFindings": [
+    "conflicting-records",
+    "missing-record-fields",
+    "undated-records",
+    "unfinalized-records"
+  ],
+  "hashScheme": "portos-native-model-attribution/1",
+  "requiredCoverage": [
+    "conflicting-model",
+    "inconsistent-per-model-sum",
+    "missing-model",
+    "mixed-report-capability",
+    "multi-model-turn",
+    "partial-final-copies",
+    "reversed-copy-order",
+    "single-model-turn"
+  ]
+}

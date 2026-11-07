@@ -1,0 +1,475 @@
+{
+  "fixtureVersion": 1,
+  "family": "grok",
+  "syntheticOnly": true,
+  "sourceContract": "Grok sessions/<cwd>/<session>/usage.json: session, turns[].modelUsage, primaryModelId, usageIsIncomplete. Same envelope as grok usage <session-id>; field semantics observed. Synthetic values.",
+  "rejectedLabelExamples": [
+    "../private/example-model"
+  ],
+  "scenarios": [
+    {
+      "name": "a single-model turn allocates every counter without adding cache or reasoning again",
+      "covers": ["single-model-turn", "no-double-count"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "primaryModelId": "example-grok-large", "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "36b06d88aa30a135749be9124496e2136761e381442eb97defb4a8d073133115"
+      }
+    },
+    {
+      "name": "a multi-model turn splits by its rows, not by its primary label",
+      "covers": ["multi-model-turn", "primary-label"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "primaryModelId": "example-grok-large", "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2], ["example-grok-small", 30, 10, 10, 0, 1, 40, 1]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 }, "example-grok-small": { "tokensIn": 30, "tokensOut": 10, "cacheReadTokens": 10, "cacheWriteTokens": 0, "reasoningTokens": 1, "modelCalls": 1, "totalTokens": 40 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "760480f80beca2327e48d931238a1a073fb42c89ca394a341d180f280a5425a3"
+      }
+    },
+    {
+      "name": "session rows are never added to turn rows or used as allocation evidence",
+      "covers": ["per-turn-counters", "no-double-count"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 150, "outputTokens": 30, "cachedReadTokens": 80, "cacheCreationTokens": 0, "reasoningTokens": 7, "totalTokens": 180, "modelCalls": 3, "costUsdTicks": 20, "turnCount": 2, "primaryModelId": "example-grok-small", "modelUsage": { "example-grok-small": { "inputTokens": 150, "outputTokens": 30, "cachedReadTokens": 80, "cacheCreationTokens": 0, "reasoningTokens": 7, "totalTokens": 180, "modelCalls": 3, "costUsdTicks": 10 } } }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }, { "turnNumber": 2, "endedAt": "2026-03-01T00:02:00Z", "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }, { "identity": "session-a/2", "recordKey": "e939febbe47d35aa4a6c7dbe76f57987bf86c62e83667cb8fd679fa05c4a0b57", "outcome": "attributed", "rows": [["example-grok-large", 50, 10, 20, 0, 2, 60, 1]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 150, "tokensOut": 30, "cacheReadTokens": 80, "cacheWriteTokens": 0, "reasoningTokens": 7, "modelCalls": 3, "totalTokens": 180 },
+        "models": { "example-grok-large": { "tokensIn": 150, "tokensOut": 30, "cacheReadTokens": 80, "cacheWriteTokens": 0, "reasoningTokens": 7, "modelCalls": 3, "totalTokens": 180 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "37c882b20970a4156568f2e0e3eb578bfe75f25a3c5270fd2ccd59f3e06bcf60"
+      }
+    },
+    {
+      "name": "rows shaped like a cumulative stream fail per-turn reconciliation",
+      "covers": ["per-turn-counters", "inconsistent-per-model-sum"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 150, "outputTokens": 30, "cachedReadTokens": 80, "cacheCreationTokens": 0, "reasoningTokens": 7, "totalTokens": 180, "modelCalls": 3, "costUsdTicks": 20, "turnCount": 2 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }, { "turnNumber": 2, "endedAt": "2026-03-01T00:02:00Z", "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 150, "outputTokens": 30, "cachedReadTokens": 80, "cacheCreationTokens": 0, "reasoningTokens": 7, "totalTokens": 180, "modelCalls": 3, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }, { "identity": "session-a/2", "recordKey": "e939febbe47d35aa4a6c7dbe76f57987bf86c62e83667cb8fd679fa05c4a0b57", "outcome": "model-sum-mismatch", "incomplete": false }],
+        "providerTotals": { "tokensIn": 150, "tokensOut": 30, "cacheReadTokens": 80, "cacheWriteTokens": 0, "reasoningTokens": 7, "modelCalls": 3, "totalTokens": 180 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": { "model-sum-mismatch": { "tokensIn": 50, "tokensOut": 10, "cacheReadTokens": 20, "cacheWriteTokens": 0, "reasoningTokens": 2, "modelCalls": 1, "totalTokens": 60 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "3082dc328f758f91381fdfb1547821fd266028df7005bb06d0bdcb1317a53e8f"
+      }
+    },
+    {
+      "name": "one wrong per-model cache field moves the whole turn to unallocated",
+      "covers": ["inconsistent-per-model-sum", "multi-model-turn"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "primaryModelId": "example-grok-large", "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 9, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-sum-mismatch", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-sum-mismatch": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "522c2565ac6fac6de033eba6a9cd52650fef52272e752ef5f0fff4cf256f5cff"
+      }
+    },
+    {
+      "name": "a model-call mismatch also refuses the split",
+      "covers": ["inconsistent-per-model-sum"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 0, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-sum-mismatch", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-sum-mismatch": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "522c2565ac6fac6de033eba6a9cd52650fef52272e752ef5f0fff4cf256f5cff"
+      }
+    },
+    {
+      "name": "a row that adds cache and reasoning into its total is refused",
+      "covers": ["no-double-count", "malformed-rows"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 185, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-rows-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-rows-invalid": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "e1a9b55b129d6680ccc3740eb906000aefac657629561387538bc4403901d4ec"
+      }
+    },
+    {
+      "name": "a row missing a counter is not an allocation",
+      "covers": ["malformed-rows"],
+      "reports": [{ "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20 } } }] }] }],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-rows-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-rows-invalid": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "e1a9b55b129d6680ccc3740eb906000aefac657629561387538bc4403901d4ec"
+      }
+    },
+    {
+      "name": "rows whose sums match but whose own totals are wrong are refused",
+      "covers": ["malformed-rows"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 130, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 30, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-rows-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-rows-invalid": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "e1a9b55b129d6680ccc3740eb906000aefac657629561387538bc4403901d4ec"
+      }
+    },
+    {
+      "name": "more rows than the per-record cap are refused whole",
+      "covers": ["malformed-rows", "label-limit"],
+      "limits": { "maxRowsPerRecord": 1 },
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-rows-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-rows-invalid": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "e1a9b55b129d6680ccc3740eb906000aefac657629561387538bc4403901d4ec"
+      }
+    },
+    {
+      "name": "a primary label with empty rows stays unknown",
+      "covers": ["primary-label", "missing-model"],
+      "reports": [{ "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 10, "outputTokens": 2, "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0, "totalTokens": 12, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 10, "outputTokens": 2, "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0, "totalTokens": 12, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1, "primaryModelId": "example-grok-large", "modelUsage": {} }] }] }],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-missing", "incomplete": false }],
+        "providerTotals": { "tokensIn": 10, "tokensOut": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "reasoningTokens": 0, "modelCalls": 1, "totalTokens": 12 },
+        "models": {},
+        "unknown": { "model-missing": { "tokensIn": 10, "tokensOut": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "reasoningTokens": 0, "modelCalls": 1, "totalTokens": 12 } },
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "8d1fe24e14765cc50b71c963cc00f7ffabe9c3363b9ee6bce24203f1d19ac157"
+      }
+    },
+    {
+      "name": "a turn that reached no model has nothing to allocate",
+      "covers": ["missing-model"],
+      "reports": [{ "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 0, "outputTokens": 0, "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0, "totalTokens": 0, "modelCalls": 0, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 0, "outputTokens": 0, "cachedReadTokens": 0, "cacheCreationTokens": 0, "reasoningTokens": 0, "totalTokens": 0, "modelCalls": 0, "costUsdTicks": 10, "turnCount": 1 }] }] }],
+      "expect": { "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-missing", "incomplete": false }], "providerTotals": { "tokensIn": 0, "tokensOut": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "reasoningTokens": 0, "modelCalls": 0, "totalTokens": 0 }, "models": {}, "unknown": { "model-missing": { "tokensIn": 0, "tokensOut": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "reasoningTokens": 0, "modelCalls": 0, "totalTokens": 0 } }, "unallocated": {}, "refused": {}, "incompleteRecords": 0, "attributionHash": "8d1fe24e14765cc50b71c963cc00f7ffabe9c3363b9ee6bce24203f1d19ac157" }
+    },
+    {
+      "name": "a primary label with no row is ignored when the rows reconcile",
+      "covers": ["primary-label"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "primaryModelId": "example-grok-small", "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "36b06d88aa30a135749be9124496e2136761e381442eb97defb4a8d073133115"
+      }
+    },
+    {
+      "name": "one unusable row label refuses the whole turn and is never copied",
+      "covers": ["invalid-label", "privacy-bound"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "../private/example-model": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-label-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-label-invalid": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "a6f525d9f5093bedcf03dd3bcfc55bc68fa15c2001da41ab4aed601984665891"
+      }
+    },
+    {
+      "name": "a turn flagged incomplete reconciles as a marked lower bound",
+      "covers": ["incomplete-usage"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "usageIsIncomplete": true }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "usageIsIncomplete": true } }, "usageIsIncomplete": true }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": true }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 1,
+        "attributionHash": "8094a2749eeb3e9a86dd3cc73eb55561656ab428f6192cd362fef3372fd76aac"
+      }
+    },
+    {
+      "name": "cost ticks do not reconcile and never enter a model bucket",
+      "covers": ["cost-excluded"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 999, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 999, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 1 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 2 } }, "costIsPartial": true }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2], ["example-grok-small", 30, 10, 10, 0, 1, 40, 1]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 }, "example-grok-small": { "tokensIn": 30, "tokensOut": 10, "cacheReadTokens": 10, "cacheWriteTokens": 0, "reasoningTokens": 1, "modelCalls": 1, "totalTokens": 40 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "760480f80beca2327e48d931238a1a073fb42c89ca394a341d180f280a5425a3"
+      }
+    },
+    {
+      "name": "copied snapshots with reversed row order count once",
+      "covers": ["reversed-copy-order", "duplicate-copies"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }, { "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 }, "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2], ["example-grok-small", 30, 10, 10, 0, 1, 40, 1]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 }, "example-grok-small": { "tokensIn": 30, "tokensOut": 10, "cacheReadTokens": 10, "cacheWriteTokens": 0, "reasoningTokens": 1, "modelCalls": 1, "totalTokens": 40 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "760480f80beca2327e48d931238a1a073fb42c89ca394a341d180f280a5425a3"
+      }
+    },
+    {
+      "name": "two different splits of identical totals are a conflict with no winner",
+      "covers": ["conflicting-model", "multi-model-turn"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }, { "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 90, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 110, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 40, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 50, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-conflict", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-conflict": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "627954757cf45d4ba3eb2587ee51d67e3a8d13930fd90e038d60375e64589a46"
+      }
+    },
+    {
+      "name": "a reconciling copy and a mismatched copy are a conflict in either order",
+      "covers": ["conflicting-model", "inconsistent-per-model-sum", "reversed-copy-order"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 3, "costUsdTicks": 10 } } }] }, { "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 }, "example-grok-small": { "inputTokens": 30, "outputTokens": 10, "cachedReadTokens": 10, "cacheCreationTokens": 0, "reasoningTokens": 1, "totalTokens": 40, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-conflict", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-conflict": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "627954757cf45d4ba3eb2587ee51d67e3a8d13930fd90e038d60375e64589a46"
+      }
+    },
+    {
+      "name": "a copy without rows adds nothing beside a reconciling copy",
+      "covers": ["missing-model", "duplicate-copies"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }] }, { "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "36b06d88aa30a135749be9124496e2136761e381442eb97defb4a8d073133115"
+      }
+    },
+    {
+      "name": "contradictory counter copies are refused and their rows unused",
+      "covers": ["provider-refusal"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }, { "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 50, "outputTokens": 10, "cachedReadTokens": 20, "cacheCreationTokens": 0, "reasoningTokens": 2, "totalTokens": 60, "modelCalls": 1, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "refused", "finding": "conflicting-records", "incomplete": false }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "conflicting-records": 1 }, "incompleteRecords": 0, "attributionHash": "e5a848a0724f020ddbde94f4ef7c0fd050b862a36a7a82e4af4f07e156cc0f6a" }
+    },
+    {
+      "name": "a snapshot whose session total disagrees refuses its turns despite clean rows",
+      "covers": ["provider-refusal"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 101, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 121, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "refused", "finding": "conflicting-records", "incomplete": false }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "conflicting-records": 1 }, "incompleteRecords": 0, "attributionHash": "e5a848a0724f020ddbde94f4ef7c0fd050b862a36a7a82e4af4f07e156cc0f6a" }
+    },
+    {
+      "name": "an undated turn travels as a provider tombstone and stays refused",
+      "covers": ["provider-refusal"],
+      "reports": [
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": { "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "refused", "finding": "conflicting-records", "incomplete": false }], "providerTotals": null, "models": {}, "unknown": {}, "unallocated": {}, "refused": { "conflicting-records": 1 }, "incompleteRecords": 0, "attributionHash": "e5a848a0724f020ddbde94f4ef7c0fd050b862a36a7a82e4af4f07e156cc0f6a" }
+    },
+    {
+      "name": "an old report alone cannot carry a model",
+      "covers": ["old-report"],
+      "reports": [{ "capability": "none", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }] }] }],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "report-without-model-capability", "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": {},
+        "unknown": { "report-without-model-capability": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "c5d069d0c6b8be4ca256ccc174a2f21ae538359191128eb8e14369d5cbac0675"
+      }
+    },
+    {
+      "name": "an old copy adds no evidence and no tokens beside a reconciling new copy",
+      "covers": ["mixed-report-capability", "duplicate-copies"],
+      "reports": [
+        { "capability": "none", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }] }] },
+        {
+          "capability": "model-attribution-v1",
+          "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10 } } }] }]
+        }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "attributed", "rows": [["example-grok-large", 100, 20, 60, 0, 5, 120, 2]], "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": { "example-grok-large": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unknown": {},
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "36b06d88aa30a135749be9124496e2136761e381442eb97defb4a8d073133115"
+      }
+    },
+    {
+      "name": "a new copy with no rows reports missing, not lost capability",
+      "covers": ["mixed-report-capability", "missing-model"],
+      "reports": [
+        { "capability": "none", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }] }] },
+        { "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 60, "cacheCreationTokens": 0, "reasoningTokens": 5, "totalTokens": 120, "modelCalls": 2, "costUsdTicks": 10, "turnCount": 1 }] }] }
+      ],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-missing", "incomplete": false }],
+        "providerTotals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+        "models": {},
+        "unknown": { "model-missing": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        "unallocated": {},
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "8d1fe24e14765cc50b71c963cc00f7ffabe9c3363b9ee6bce24203f1d19ac157"
+      }
+    }
+  ]
+}
