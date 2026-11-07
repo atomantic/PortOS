@@ -4,10 +4,12 @@ import toast from '../ui/Toast';
 import { generateImage } from '../../services/apiSystem';
 import {
   attachWritersRoomSceneImage,
+  getWritersRoomAnalysis,
   reserveWritersRoomRenderPreview,
 } from '../../services/apiWritersRoom';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
+import useMediaJobReconnectSettle from '../../hooks/useMediaJobReconnectSettle';
 import { WR_IMAGE_DEFAULTS, buildSceneRenderPayload } from '../../lib/wrImageDefaults';
 import { sceneAtCursor } from '../../lib/wrSceneCursor';
 import {
@@ -152,6 +154,24 @@ export default function LiveRenderPanel({
     // bridge is read through onAttachedRef. Re-bind when workId changes so the
     // scene-image gate matches the current work.
   }, [mountedRef, workId]);
+
+  // A terminal event emitted while the socket was down is never replayed, which
+  // would leave the button on "Rendering…" until reload (#15167). On reconnect the
+  // pending job is re-read and settled exactly like the event would have; a
+  // completed render also re-reads the analysis, standing in for the missed
+  // `writers-room:scene-image` event (the attach itself was filed server-side).
+  useMediaJobReconnectSettle(
+    () => (pendingJobRef.current ? [pendingJobRef.current.jobId] : []),
+    (_jobId, job) => {
+      const pending = pendingJobRef.current;
+      pendingJobRef.current = null;
+      setGenStatus('idle');
+      if (job.status !== 'completed' || !workId || !pending?.analysisId) return;
+      getWritersRoomAnalysis(workId, pending.analysisId, { silent: true })
+        .then((analysis) => { if (mountedRef.current && analysis) onAttachedRef.current?.(analysis); })
+        .catch((err) => { console.warn(`⚠️ live render refresh failed: ${err.message}`); });
+    },
+  );
 
   const renderCursorScene = useCallback(async () => {
     if (reserving || genStatus === 'running') return;

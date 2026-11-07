@@ -298,18 +298,19 @@ function StoryboardPanel({
   // reactively (no refetch) — only when the attach targeted the analysis we're
   // currently showing (a stale attach against a since-replaced analysis is
   // dropped). The merged-in snapshot supersedes the prior sceneImages.
+  const mergeSceneImages = useCallback((analysis) => {
+    if (!analysis?.id || !analysis.sceneImages) return;
+    setLatestScript((prev) => (
+      prev && prev.id === analysis.id
+        ? { ...prev, sceneImages: { ...prev.sceneImages, ...analysis.sceneImages } }
+        : prev
+    ));
+  }, []);
   useEffect(() => {
     if (!registerSceneImageMerge) return undefined;
-    registerSceneImageMerge((analysis) => {
-      if (!analysis?.id || !analysis.sceneImages) return;
-      setLatestScript((prev) => (
-        prev && prev.id === analysis.id
-          ? { ...prev, sceneImages: { ...prev.sceneImages, ...analysis.sceneImages } }
-          : prev
-      ));
-    });
+    registerSceneImageMerge(mergeSceneImages);
     return () => registerSceneImageMerge(null);
-  }, [registerSceneImageMerge]);
+  }, [registerSceneImageMerge, mergeSceneImages]);
 
   const catalogErrors = (
     <>
@@ -435,6 +436,7 @@ function StoryboardPanel({
             hotRef={hotRef}
             onSceneHover={onSceneHover}
             onSceneRenderStart={onSceneRenderStart}
+            onSceneImageAttached={mergeSceneImages}
             dirty={dirty}
           />
         )}

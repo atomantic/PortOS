@@ -3,6 +3,7 @@ import socket from '../services/socket';
 import { cancelImageGen } from '../services/apiImageVideo';
 import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
 import toast from '../components/ui/Toast';
+import useMediaJobReconnectSettle from './useMediaJobReconnectSettle';
 
 // useImageGenQueue — work-scoped live queue of in-flight image renders.
 //
@@ -186,6 +187,20 @@ export default function useImageGenQueue() {
       socket.off('image-gen:failed', onFailed);
     };
   }, [applyEvent]);
+
+  // A terminal event emitted while the socket was down is never replayed, which
+  // would leave the row counted as rendering forever (#15167). On reconnect each
+  // live row is re-read and settled as its terminal event would have.
+  useMediaJobReconnectSettle(
+    () => queueRef.current
+      .filter((q) => q.status === 'queued' || q.status === 'running' || q.status === 'canceling')
+      .map((q) => q.jobId),
+    (jobId, job) => {
+      if (job.status === 'completed') applyEvent(jobId, { status: 'done', progress: 1 }, true);
+      else if (job.status === 'failed') applyEvent(jobId, { status: 'error', error: job.error || null }, true);
+      else applyEvent(jobId, { status: 'canceled' }, true);
+    },
+  );
 
   useEffect(() => () => {
     for (const t of pruneTimersRef.current.values()) clearTimeout(t);
